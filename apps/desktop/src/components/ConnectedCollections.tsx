@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { catalogCache, patchConnectionProgress } from "../lib/catalogCache";
+import { openCatalogMenu } from "../lib/openCatalogMenu";
 import { originalDeletionFor, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { invalidateCatalog, observeCatalogChanges, useCatalogRevision, subscribeConnectionProgress, waitingForConnectionScan } from "../lib/useCatalogRevision";
 import { ChevronDown, ChevronRight, Folder, Link2, MoreHorizontal, Plus, RefreshCw, Unlink } from "lucide-react";
@@ -91,7 +92,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const shownEntries = useRef(new Map<string, string>());
   const onBrowseGroup = useCallback((head: string, shown: string | null) => { if (shown) shownEntries.current.set(head, shown); else shownEntries.current.delete(head); }, []);
   const displayedIds = (ids: string[]) => ids.map(id => shownEntries.current.get(id) ?? id);
-  const assetsChanged = useCallback((assets: Asset[]) => onAssetsChange?.([...new Map(assets.flatMap(asset => [asset, ...(asset as EntryAsset).connectionGroup ?? []]).map(asset => [asset.id, asset])).values()]), [onAssetsChange]);
+  const loadedMenuEntries = useRef<{ key: string; entries: Map<string, ConnectionEntry> }>();
   const dragSelection = useRef<ConnectionEntry[]>([]);
   const pendingDeletion = usePendingOriginalDeletion();
   const pendingJump = useRef<string | null>(null);
@@ -108,6 +109,11 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const filter = useMemo<CatalogFilter & { grouped: boolean }>(() => ({ grouped: true, kind: "connections", id: null, projectId: scope, media, query: "", generated: (media === "all" || media === "images" || media === "videos") && generatedFilter ? generatedFilter === "source:generated" : null, color: media === "images" ? color : null }), [scope, media, generatedFilter, color]);
   const filterKey = JSON.stringify(filter);
   const filterRef = useRef(filterKey); filterRef.current = filterKey;
+  const assetsChanged = useCallback((assets: Asset[]) => {
+    const entries = assets.flatMap(asset => [asset as EntryAsset, ...((asset as EntryAsset).connectionGroup ?? [])]);
+    loadedMenuEntries.current = { key: filterKey, entries: new Map(entries.map(asset => [entryKey(asset), entryOf(asset)])) };
+    onAssetsChange?.([...new Map(entries.map(asset => [asset.id, asset])).values()]);
+  }, [filterKey, onAssetsChange]);
   const readPage = useCallback(async (id: string, offset: number, limit: number) => (await folderConnections.page(id, offset, limit, media, scope, filter)).map(entryAsset), [media, scope, filter]);
   const activeRef = useRef(active); activeRef.current = active;
   const refresh = useCallback(() => { void folderConnections.refresh(activeRef.current).catch(reason => notifyError(reason, "无法检查文件夹")); }, []);
@@ -257,26 +263,31 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (canShowOverlay()) setPreview({ asset, path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! }); });
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
-    const entry = entryOf(asset), key = filterRef.current;
-    void run(async () => {
-      const entryIds = selected.has(entry.id) ? [...selected] : [entry.id];
-      const entries = (entryIds.length > 1 ? await folderConnections.resolve(entryIds) : [entry]).filter(visibleEntry);
-      if (!canShowOverlay() || filterRef.current !== key) return;
-      const move = () => setMoveEntries({ entryIds, entries });
-      if (entries.length !== entryIds.length) {
-        (onAssetContextMenu ?? useStore.getState().openContextMenu)(x, y, asset.id, { asset, moveIncompleteSelection: move });
-        return;
-      }
-      const fileSelection = {
-        assets: assetsOf(entries), openReferences: () => setReferences(true),
-        onComplete: () => { finishSelection(); invalidateCatalog(); },
-        select: () => { anchor.current = location; setSelected(previous => new Set([...previous, ...entries.map(item => item.id)])); setMultiple(true); },
-        entries: { count: entries.length, available: entries.every(item => item.available),
-          rename: () => setOperation({ kind: "rename-entry", entries }), move,
-          removeReferences: entries.every(item => item.is_reference) ? () => setOperation({ kind: "remove-references", entries }) : undefined },
-      };
-      ownedMenu.current = fileSelection;
-      (onAssetContextMenu ?? useStore.getState().openContextMenu)(x, y, asset.id, { asset, generationGroup: [...shownEntries.current.values()].includes(entry.id) ? { assetId: asset.id } : undefined, libraryProjectId: scope ?? undefined, fileSelection });
+    const entry = entryOf(asset);
+    const entryIds = selected.has(entry.id) ? [...selected] : [entry.id];
+    openCatalogMenu({
+      ids: entryIds, hit: entry, cached: loadedMenuEntries.current?.key === filterKey ? loadedMenuEntries.current.entries : undefined,
+      keyOf: target => target.id, visible: visibleEntry, lookup: folderConnections.resolve,
+      inScope: () => canShowOverlay() && filterRef.current === filterKey && revision === catalogCache.revision(!!filter.color),
+      present(entries) {
+        const open = onAssetContextMenu ?? useStore.getState().openContextMenu;
+        const move = () => setMoveEntries({ entryIds, entries });
+        if (entries.length !== entryIds.length) {
+          open(x, y, asset.id, { asset, moveIncompleteSelection: move });
+          return;
+        }
+        const fileSelection = {
+          assets: assetsOf(entries), openReferences: () => setReferences(true),
+          onComplete: () => { finishSelection(); invalidateCatalog(); },
+          select: () => { anchor.current = location; setSelected(previous => new Set([...previous, ...entries.map(item => item.id)])); setMultiple(true); },
+          entries: { count: entries.length, available: entries.every(item => item.available),
+            rename: () => setOperation({ kind: "rename-entry", entries }), move,
+            removeReferences: entries.every(item => item.is_reference) ? () => setOperation({ kind: "remove-references", entries }) : undefined },
+        };
+        ownedMenu.current = fileSelection;
+        open(x, y, asset.id, { asset, generationGroup: [...shownEntries.current.values()].includes(entry.id) ? { assetId: asset.id } : undefined, libraryProjectId: scope ?? undefined, fileSelection });
+      },
+      failed: reason => notifyError(reason, "操作未完成，请重试"),
     });
   }
   function hidden(folder: FolderConnection) {

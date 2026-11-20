@@ -18,6 +18,7 @@ import "../../../src/components/IndustrialMenus.css";
 import type { CatalogFilter } from "../../../src/lib/materialCatalog";
 const w = window as any;
 const listeners = new Map<number, (event: unknown) => void>();
+const eventNames = new Map<number, string>();
 let callbackId = 0;
 const thumb = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160"><rect width="240" height="160" fill="#7b9eaa"/></svg>');
 w.total ??= 300000; w.requests = []; w.inFlight = 0; w.maxInFlight = 0; w.failOffset = -1; w.delay = 0;
@@ -40,9 +41,10 @@ w.__TAURI_INTERNALS__ = {
   transformCallback: (fn: (event: unknown) => void) => { listeners.set(++callbackId, fn); return callbackId; },
   convertFileSrc: (path: string) => path,
   invoke: async (command: string, args: any = {}) => {
-    if (command === "plugin:event|listen") return args.handler;
-    if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
+    if (command === "plugin:event|listen") { eventNames.set(args.handler, args.event); return args.handler; }
+    if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); eventNames.delete(args.eventId); return; }
     w.requests.push({command,args});
+    if (command.startsWith("semantic_") && w.semanticInvoke) return w.semanticInvoke(command, args);
     if (w.catalogGate && ["catalog_overview", "catalog_page", "list_generation_groups"].includes(command)) await w.catalogGate;
     if (command === "list_library_view") return { assets: [{ ...asset(0), thumb_path: thumb }, asset(1)], memberships: [{ projectId: "p", assetId: "asset-0" }, { projectId: "q", assetId: "asset-1" }], total: 2 };
     if (command === "project_covers") return { p: { asset_count: 1, paths: [thumb] }, q: { asset_count: 1, paths: [thumb] } };
@@ -89,6 +91,7 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 w.refresh = () => listeners.forEach(fn => fn({payload:null}));
+w.emitFixtureEvent = (event: string, payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === event) fn({ event, id, payload }); });
 useStore.setState({activeProjectId:null,libraryThumbnailWidth:150, projects: ["p", "q"].map((id, i) => ({ id, name: `项目${i ? "B" : "A"}`, kind: "blank", workspace_path: `blank:${id}`, asset_count: 1, created_at: 1, updated_at: 1 }))});
 function Fixture() {
   const [visible, setVisible] = React.useState(true);
@@ -111,7 +114,7 @@ function NavigationFixture() {
   w.changeProject = setProject;
   React.useEffect(() => { useLocalFileMode.getState().setProjectContext(project ? "p" : null); useStore.setState({ activeProjectId: project ? "p" : null }); }, [project]);
   return <div style={{ position: "fixed", inset: 0 }}><LibraryCatalogTransition key={`${source}:${media}`} kind={mode === "all" || mode === "tags" ? mode : "collections"}
-    media={media} projectId={project ? "p" : null} projectScope={source === "project"}
+    media={media} projectId={project ? "p" : null} projectScope={source === "project"} semanticSearchEnabled={new URLSearchParams(location.search).has("semantic")}
     navigation={<header className="library-browser-heading"><div className="library-floating-navigation"><LibrarySourceTabs project={project} value={source} onChange={value => useLocalFileMode.getState().openSource(value as LibrarySource)}/></div></header>}
     onClose={() => {}}/><AssetContextMenu/></div>;
 }

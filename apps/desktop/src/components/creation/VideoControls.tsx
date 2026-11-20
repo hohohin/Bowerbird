@@ -1,10 +1,11 @@
+import { Crop, Film, Gauge, Timer } from "lucide-react";
 import { generationProviderIssue } from "../../lib/generationAvailability";
 import { useStore } from "../../store";
 import { SELECTABLE_VIDEO_MODELS, VIDEO_RATIOS, videoDurationRange, videoModelLabel, videoProvider, videoResolutions, videoSupportsRatio, type VideoOptions } from "../../lib/videoGeneration";
 import { DreaminaBalance } from "./DreaminaCredits";
 import { ModelSelect, type ModelOption } from "./ModelSelect";
 import { TacticalSelect } from "../TacticalSelect";
-import { canUseComfyVideo, comfyVideoMode, comfyVideoOptionsForMode, type ComfyVideoMode, type ComfyVideoOptions } from "../../lib/comfyVideo";
+import { canUseComfyVideo, comfyVideoMode, comfyVideoOptionsForMode, H3_VIDEO_RESOLUTIONS, type ComfyVideoMode, type ComfyVideoOptions } from "../../lib/comfyVideo";
 
 type VideoChannel = "jimeng" | "cloud";
 export function VideoControls({ options, onChange, ratio, onRatioChange, channel = "jimeng", composer = false, local, menuClassName, card = false }: {
@@ -40,30 +41,31 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
   const status = !local?.options && channel === "jimeng" && <>
     {channel === "jimeng" && <><DreaminaBalance /><span className="text-[11px] text-muted">暂无官方生成前报价；提交后显示任务消耗</span></>}
   </>;
-  const field = (label: string, content: import("react").ReactNode) => card
-    ? <div className="workflow-video-field"><span>{label}</span>{content}</div> : content;
   const fields = <>
-    {field("视频模型", <ModelSelect kind="视频" menuClassName={menuClassName} value={local?.options ? "local:h3" : `${channel}:${options.model_version}`} label={local?.options ? (composer || card ? "H3" : "本地部署 · H3") : videoModelLabel(model)} source={local?.options ? "local" : channel === "cloud" ? "cloud" : "personal"}
+    <ModelSelect kind="视频" menuClassName={menuClassName} value={local?.options ? "local:h3" : `${channel}:${options.model_version}`} label={local?.options ? (composer || card ? "H3" : "本地部署 · H3") : videoModelLabel(model)} source={local?.options ? "local" : channel === "cloud" ? "cloud" : "personal"}
       cloudBalance={entitlement ? balance : null} cloudLoggedIn={auth?.logged_in}
-      options={modelOptions} onChange={selectModel} footer={composer || card ? status : undefined} quotaDetail={local?.options ? "本地 H3 视频，不消耗积分" : channel === "cloud" ? "使用 Bowerbird 账号积分" : "使用自有即梦账号额度，不扣 Bowerbird 积分"} />)}
+      options={modelOptions} onChange={selectModel} footer={composer || card ? status : undefined} quotaDetail={local?.options ? "本地 H3 视频，不消耗积分" : channel === "cloud" ? "使用 Bowerbird 账号积分" : "使用自有即梦账号额度，不扣 Bowerbird 积分"} />
     {local?.options ? local.onChange && <>
       <TacticalSelect aria-label="本地视频模式" value={comfyVideoMode(local.options)} onValueChange={value => local.onChange?.(comfyVideoOptionsForMode(local.options!, value as ComfyVideoMode))}><option value="frames">首尾帧</option><option value="reference">单图</option><option value="text">文生视频</option></TacticalSelect>
-      <TacticalSelect aria-label="本地视频分辨率" value={local.options.resolution} onValueChange={value => local.onChange?.({ ...local.options!, resolution: Number(value) as ComfyVideoOptions["resolution"] })}>{(comfyVideoMode(local.options) === "frames" ? [0.6, 0.8, 1] : [0.6, 0.8, 0.98, 1]).map(value => <option key={value} value={value}>{value === 0.98 ? "768p" : `${value} MP`}</option>)}</TacticalSelect>
+      <TacticalSelect aria-label="本地视频分辨率" value={local.options.resolution === 1 ? 0.98 : local.options.resolution} onValueChange={value => local.onChange?.({ ...local.options!, resolution: Number(value) as ComfyVideoOptions["resolution"] })}>{H3_VIDEO_RESOLUTIONS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}</TacticalSelect>
       <label className="flex items-center gap-1 text-xs text-muted"><input aria-label="本地视频时长（秒）" type="number" min={1} max={15} step={1} className={`${control} w-12`} value={local.options.seconds} onChange={event => local.onChange?.({ ...local.options!, seconds: Number(event.target.value) })} />秒</label>
       <TacticalSelect aria-label="本地视频比例" value={local.options.ratio} onValueChange={value => local.onChange?.({ ...local.options!, ratio: value as ComfyVideoOptions["ratio"] })}>{[...(comfyVideoMode(local.options) === "text" ? [] : ["auto"]), "9:16", "16:9", "4:3", "3:4", "1:1"].map(value => <option key={value} value={value}>{value === "auto" ? "自动" : value}</option>)}</TacticalSelect>
     </> : <>
-    {field("分辨率", <TacticalSelect aria-label="视频分辨率" className={control} value={options.video_resolution} onValueChange={value => onChange({ ...options, video_resolution: value as VideoOptions["video_resolution"] })}>
+    <TacticalSelect aria-label="视频分辨率" title="视频分辨率" icon={card && <Gauge size={14} />} className={control} value={options.video_resolution} onValueChange={value => onChange({ ...options, video_resolution: value as VideoOptions["video_resolution"] })}>
       {!resolutions.includes(options.video_resolution) && <option value={options.video_resolution} disabled>{options.video_resolution} · 不支持</option>}
       {resolutions.map(value => <option key={value} value={value}>{value}</option>)}
-    </TacticalSelect>)}
-    {field("生成模式", <TacticalSelect aria-label="视频生成模式" title={options.kind === "frames2video" ? "按参考顺序使用首帧、尾帧" : `自动识别：${options.kind === "text2video" ? "文生视频" : options.kind === "image2video" ? "单图生视频" : "多参考"}`} className={control} value={options.kind === "frames2video" ? "frames2video" : "auto"} onValueChange={value => onChange({ ...options, kind: value === "frames2video" ? "frames2video" : "text2video" })}>
-      <option value="auto">{composer ? "自动" : "自动识别"}</option><option value="frames2video">首尾帧</option>
-    </TacticalSelect>)}
-    {field("时长", <label className="flex items-center gap-1 text-xs text-muted"><span className={card ? "sr-only" : "video-duration-label"}>时长</span><input aria-label="视频时长（秒）" type="number" min={minDuration} max={maxDuration} step={1} className={`${control} w-16`}
-      value={options.duration} onChange={event => onChange({ ...options, duration: Number(event.target.value) })} />秒</label>)}
-    {field("画幅", videoSupportsRatio(options) ? <TacticalSelect aria-label="视频比例" className={control} value={ratio || "16:9"} onValueChange={value => onRatioChange(value)}>
+    </TacticalSelect>
+    <TacticalSelect aria-label="视频生成模式" icon={card && <Film size={14} />} title={options.kind === "frames2video" ? "按参考顺序使用首帧、尾帧" : `自动识别：${options.kind === "text2video" ? "文生视频" : options.kind === "image2video" ? "单图生视频" : "多参考"}`} className={control} value={options.kind === "frames2video" ? "frames2video" : "auto"} onValueChange={value => onChange({ ...options, kind: value === "frames2video" ? "frames2video" : "text2video" })}>
+      <option value="auto">{composer || card ? "自动" : "自动识别"}</option><option value="frames2video">首尾帧</option>
+    </TacticalSelect>
+    {card ? <TacticalSelect aria-label="视频时长（秒）" title="视频时长" icon={<Timer size={14} />} className={control} value={options.duration} onValueChange={value => onChange({ ...options, duration: Number(value) })}>
+      {Array.from({ length: maxDuration - minDuration + 1 }, (_, i) => minDuration + i).map(seconds => <option key={seconds} value={seconds}>{seconds} 秒</option>)}
+    </TacticalSelect> : <label className="flex items-center gap-1 text-xs text-muted"><span className="video-duration-label">时长</span><input aria-label="视频时长（秒）" type="number" min={minDuration} max={maxDuration} step={1} className={`${control} w-16`}
+      value={options.duration} onChange={event => onChange({ ...options, duration: Number(event.target.value) })} />秒</label>}
+    {videoSupportsRatio(options) ? <TacticalSelect aria-label="视频比例" title="视频比例" icon={card && <Crop size={14} />} className={control} value={ratio || "16:9"} onValueChange={value => onRatioChange(value)}>
       {VIDEO_RATIOS.map(value => <option key={value} value={value}>{value}</option>)}
-    </TacticalSelect> : <span className="text-[11px] text-muted">比例由{options.kind === "frames2video" ? "首帧" : "输入图"}决定</span>)}
+    </TacticalSelect> : card ? <span className="workflow-video-ratio-status" title={`比例由${options.kind === "frames2video" ? "首帧" : "输入图"}决定`}><Crop size={14} aria-hidden="true" />随图</span>
+      : <span className="text-[11px] text-muted">比例由{options.kind === "frames2video" ? "首帧" : "输入图"}决定</span>}
     </>}
   </>;
   return <>

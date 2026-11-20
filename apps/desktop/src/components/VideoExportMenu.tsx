@@ -10,19 +10,24 @@ export function VideoExportMenu({ label, icon, disabled, portal, items }: {
 }) {
   const inheritedPortal = usePortalTarget();
   const trigger = useRef<HTMLButtonElement>(null);
-  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  const [open, setOpen] = useState(false);
+  const anchor = trigger.current;
+  // The modal shell is outside the preview figure's animated transform.
+  const menuPortal = portal && document.fullscreenElement === portal
+    ? portal
+    : anchor?.closest<HTMLElement>('[aria-modal="true"]') ?? portal ?? inheritedPortal;
   return <div className="video-export-menu" onClick={event => event.stopPropagation()}>
-    <button ref={trigger} disabled={disabled} aria-haspopup="menu" aria-expanded={!!position}
-      onClick={() => { const rect = trigger.current!.getBoundingClientRect(); setPosition(position ? null : { x: rect.left, y: rect.bottom + 4 }); }}>
+    <button ref={trigger} disabled={disabled} aria-haspopup="menu" aria-expanded={open && !disabled}
+      onClick={() => setOpen(current => !current)}>
       {icon}{label}<ChevronDown size={13} aria-hidden="true" />
     </button>
-    {position && !disabled && <PortalTargetContext.Provider value={portal ?? inheritedPortal}>
-      <ContextMenu {...position} label={label} trigger={trigger.current} onClose={() => setPosition(null)} className="video-export-popup">
+    {open && !disabled && anchor && <PortalTargetContext.Provider value={menuPortal}>
+      <ContextMenu anchor={anchor} label={label} onClose={() => setOpen(false)} className="video-export-popup">
         {items.map(item => <button key={item.label} role="menuitem" className="app-context-item px-2 py-1.5" disabled={item.disabled}
           onClick={() => {
             // Saving disables the trigger, so return focus to the player before closing.
             portal?.focus({ preventScroll: true });
-            setPosition(null); item.run();
+            setOpen(false); item.run();
           }}>{item.label}</button>)}
       </ContextMenu>
     </PortalTargetContext.Provider>}

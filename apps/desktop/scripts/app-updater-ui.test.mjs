@@ -29,6 +29,16 @@ try {
   await page.clock.install();
   await page.goto(`${fixture}?startup&mode=current`);
   await page.waitForFunction(() => window.updater.getState().phase === "current");
+  const cardStatus = page.getByText("当前已是最新版本。", { exact: true });
+  const beforePoll = await cardStatus.boundingBox();
+  await page.evaluate(() => { window.holdCheck = true; window.mode = "offline"; });
+  await page.clock.fastForward(300_000);
+  await page.waitForFunction(() => !!window.releaseCheck);
+  assert.equal(await button("检查更新").isEnabled(), true);
+  assert.deepEqual(await cardStatus.boundingBox(), beforePoll, "polling must not move or hide the visible version status");
+  await page.evaluate(() => { window.holdCheck = false; window.releaseCheck(); });
+  await page.waitForFunction(() => window.updater.getState().phase === "current");
+  assert.deepEqual(await cardStatus.boundingBox(), beforePoll, "offline polling retains the last result");
   await page.evaluate(() => { window.mode = "available"; });
   await page.clock.fastForward(300_000);
   await page.waitForFunction(() => window.updater.getState().update?.version === "26.9.18");

@@ -1,3 +1,5 @@
+import { announceContextMenu } from "./contextMenuOwnership";
+
 /** Give text editing and selected reading text the WebView's native edit menu. */
 export function installTextContextMenu() {
   const contextMenu = (event: MouseEvent) => {
@@ -18,6 +20,7 @@ export function installTextContextMenu() {
       }
     }
     if (textField || editable || selectedText) {
+      announceContextMenu("native-text");
       // Stop card/React/Plate handlers, but keep the default native copy/cut/paste action.
       event.stopImmediatePropagation();
     }

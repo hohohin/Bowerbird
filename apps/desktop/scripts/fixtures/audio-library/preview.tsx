@@ -42,6 +42,7 @@ const filtered = (filter: any = {}) => w.assets.filter((asset: Asset) => (!filte
 const entries = (args: any) => w.entries.filter((entry: any) => (!args.folderId || entry.folder_id === args.folderId) && (!args.media || kind(entry.asset) === args.media));
 const tags = [{ id: "tag-music", name: "音乐", description: "", count: 1, projectCount: 0 }];
 const manualTags = new Map<string, string[]>();
+const createdLabels: { id: string; name: string; description: string; enabled: boolean; count: number; has_examples: boolean }[] = [];
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.__TAURI_INTERNALS__ = {
   transformCallback: (fn: (event: unknown) => void) => { listeners.set(++callbackId, fn); return callbackId; },
@@ -82,6 +83,17 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "list_asset_tags") return (manualTags.get(args.assetId) ?? []).map((name: string) => ({ name, source: "manual", origin: "manual" }));
     if (command === "set_asset_tags") { manualTags.set(args.assetId, args.tags ?? args.names); return; }
+    if (command === "local_classification_labels") return [...createdLabels];
+    if (command === "local_classification_save_label") {
+      const id = `tag-${args.name}`;
+      createdLabels.push({ id, name: args.name, description: "", enabled: true, count: 0, has_examples: false });
+      return id;
+    }
+    if (command === "local_classification_example") {
+      const label = createdLabels.find(item => item.id === args.tagId);
+      if (label && args.positive) for (const id of args.assetIds) manualTags.set(id, [label.name]);
+      return;
+    }
     if (["list_analyses_by_asset", "list_asset_collections", "list_generation_group", "list_folders"].includes(command)) return [];
     if (command === "generation_history") return { turns: [], references: [], products: [] };
     if (command === "codex_health") return { ok: false, reason: "隔离验证" };

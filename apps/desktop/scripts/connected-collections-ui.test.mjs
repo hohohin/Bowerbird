@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-import { checkContextRangeSelection } from './helpers/catalog-context-selection.mjs';
+import { checkContextLookup, checkContextRangeSelection } from './helpers/catalog-context-selection.mjs';
 
 const server = await createServer({ cacheDir: '.tmp/connected-collections/vite', server: { host: '127.0.0.1', port: 17951, strictPort: true, hmr: false, watch: null } });
 await server.listen();
@@ -21,6 +21,8 @@ try {
   await page.goto('http://127.0.0.1:17951/scripts/fixtures/connected-collections/preview.html');
   await page.getByRole('tab', { name: '文件夹', exact: true }).click();
   await card('root-0').waitFor();
+  await checkContextLookup(page, index => card(`root-${index}`), page.getByRole('button', { name: '取消选择', exact: true }),
+    { idsCommand: 'connection_entry_ids', lookupCommand: 'resolve_connection_entries', firstId: 'root-0', secondId: 'root-1', coldId: 'root-124' });
   await checkContextRangeSelection(page, index => card(`root-${index}`), page.locator('.catalog-selection').getByRole('button', { name: '取消选择', exact: true }));
   await card('root-0').click({ modifiers: ['Shift'] });
   await card('root-1').click();

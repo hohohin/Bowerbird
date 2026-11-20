@@ -17,7 +17,7 @@ try {
     const { newWorkflowNode, emptyWorkflow } = await import('/src/lib/canvasWorkflow.ts');
     const canvas = window.snapshot(), base = canvas.nodes.find(node => node.id === 'old');
     const pair = { canvasNodeId: 'table', cellId: 'pair' };
-    const solo = { assetId: 'c' };
+    const solo = { assetId: 'c', assetNodeId: 'explicit-reference' };
     const draw = { ...newWorkflowNode('generation', 550, 130, 'codex'), id: 'draw',
       inputs: { image: [pair, solo] }, prompt: '主体 @[pair-ref]，背景 @[solo-ref]',
       promptReferences: [{ id: 'pair-ref', type: 'image', input: pair, label: '图片来源 1' },
@@ -26,7 +26,8 @@ try {
       payloadJson: JSON.stringify({ schema_version: 1, note_type: 'text', text: '', member_ids: [], cells: [[{
         id: 'pair', content_type: 'image', text: '', image_refs: [{ token: '@图片1', asset_id: 'a' }, { token: '@图片2', asset_id: 'b' }],
       }]] }) };
-    canvas.nodes = [table];
+    canvas.nodes = [table, { ...base, id: 'explicit-reference', assetId: 'c', x: 400, y: 530 },
+      { ...base, id: 'unbound-copy', assetId: 'd', x: 720, y: 530 }];
     canvas.view = { ...canvas.view, zoom: 0.85, panX: 60, panY: 40 };
     sessionStorage.setItem('reference-fixture', JSON.stringify(canvas));
     sessionStorage.setItem('workflow-p', JSON.stringify({ revision: 1, document: { ...emptyWorkflow(), nodes: [draw] } }));
@@ -55,7 +56,8 @@ try {
       window.store.setState({ codexHealth: { ok: true, reason: '' },
         cloudEntitlement: { policy: { can_use_byo: true, max_parallel_jobs: 3 }, balances: { daily: 0, topup: 0, sub: 0 } } });
       api.codexCreateImage = async args => {
-        requests.push({ ids: args.referenceImages.map(path => assets.find(a => a.store_path === path)?.id), prompt: args.prompt });
+        requests.push({ ids: args.referenceImages.map(path => assets.find(a => a.store_path === path)?.id),
+          referenceNodeIds: args.referenceNodeIds, prompt: args.prompt });
         return null;
       };
       await controller.start('draw', true);
@@ -80,7 +82,8 @@ try {
   });
   await page.reload();
   await expectOrder(['b', 'c', 'a']);
-  assert.deepEqual(await generate(), [{ ids: ['b', 'c', 'a'], prompt: '主体 @图片3 @图片1，背景 @图片2' }]);
+  assert.deepEqual(await generate(), [{ ids: ['b', 'c', 'a'], referenceNodeIds: [null, 'explicit-reference', null],
+    prompt: '主体 @图片3 @图片1，背景 @图片2' }], 'library references reach the provider without creating canvas nodes');
   // A shared template carries positions across different sources and asset identities.
   const rebound = await page.evaluate(async () => {
     const { compileGenerationPrompt, generationInputNode, workflowInputValues } = await import('/src/lib/canvasWorkflow.ts');
@@ -107,7 +110,8 @@ try {
     window.emitChange();
   });
   await expectOrder(['existing', 'c', 'd']);
-  assert.deepEqual(await generate(), [{ ids: ['existing', 'c', 'd'], prompt: '主体 @图片3 @图片1，背景 @图片2' }]);
+  assert.deepEqual(await generate(), [{ ids: ['existing', 'c', 'd'], referenceNodeIds: [null, 'explicit-reference', null],
+    prompt: '主体 @图片3 @图片1，背景 @图片2' }], 'an unbound copy does not acquire a conversation edge');
 
   assert.equal(await card.locator('.workflow-bindings button').count(), 0, 'image sources have no separate name chips');
   const remove = id => card.locator(`[data-workflow-reference-remove="${id}"]`);
@@ -174,7 +178,7 @@ try {
   const [videoRequest] = await Promise.all([simulatedVideo, checkLock()]);
   assert.deepEqual(videoRequest, { mode: 'frames2video', ids: ['b', 'a'] });
   assert.deepEqual(errors, []);
-  console.log('PASS thumbnail drag, undo, reload, template rebinding, dynamic inputs, prompt numbering, keyboard reorder, frame order and running lock');
+  console.log('PASS thumbnail drag, undo, reload, template rebinding, canvas reference origins, dynamic inputs, prompt numbering, keyboard reorder, frame order and running lock');
 } finally {
   await browser.close();
   await server.close();

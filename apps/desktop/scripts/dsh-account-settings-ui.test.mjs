@@ -73,6 +73,19 @@ try {
   await card.getByRole('button', {name:'退出登录'}).click();
   await card.getByRole('button', {name:'重新检测 DSH 登录状态'}).click();
   await card.getByText('未登录', {exact:true}).waitFor();
+  await card.getByRole('button', {name:'服务连接设置'}).click();
+  const setup = page.getByRole('dialog', {name:'DSH 设置'});
+  await setup.getByRole('button', {name:'手动配置服务地址'}).click();
+  const authLink = setup.getByLabel('登录链接（可选）');
+  const originalTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await authLink.evaluate(element => Promise.all(element.getAnimations().map(animation => animation.finished)));
+    assert.equal(await authLink.inputValue(), '');
+    assert.match(await authLink.evaluate(element => getComputedStyle(element).borderBottomColor), /^rgb\(/);
+  }
+  await page.evaluate(value => { document.documentElement.dataset.theme = value; }, originalTheme);
+  await setup.getByRole('button', {name:'取消', exact:true}).click();
   await login.click();
   await page.waitForFunction(() => window.attempts === 4 && window.opens.length === 4);
   assert.ok(await page.evaluate(url => window.opens.every(link => link === url), official));

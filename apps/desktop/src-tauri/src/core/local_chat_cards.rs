@@ -703,7 +703,7 @@ fn compile(
                     || !(1..=15).contains(&seconds)
                     || !matches!(ratio, "auto" | "9:16" | "16:9" | "4:3" | "3:4" | "1:1")
                     || !matches!(mode, "text" | "reference" | "frames")
-                    || !(if mode == "frames" { &[0.6, 0.8, 1.0][..] } else { &[0.6, 0.8, 0.98, 1.0][..] }).contains(&resolution)
+                    || ![0.6, 0.8, 0.98, 1.0].contains(&resolution)
                     || (mode == "text" && (first_frame_alias.is_some() || last_frame_alias.is_some()))
                     || (mode == "reference" && last_frame_alias.is_some())
                 {

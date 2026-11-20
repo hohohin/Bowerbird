@@ -111,6 +111,8 @@ pub struct Environment {
 }
 struct Job { owner: String, state: Environment, cancel: Arc<AtomicBool> }
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
+struct VideoProcess { child: std::process::Child, log: PathBuf, installation: PathBuf }
+static VIDEO_PROCESSES: Mutex<Option<std::collections::HashMap<String, VideoProcess>>> = Mutex::new(None);
 fn err(message: impl Into<String>) -> AppError { AppError::Other(message.into()) }
 fn active(state: &Environment) -> bool { matches!(state.phase.as_str(), "installing" | "starting") }
 fn retain_setup_outcome(state: &mut Environment, previous: Option<&Environment>) {
@@ -223,7 +225,11 @@ async fn probe(http: &reqwest::Client, base: &str, mode: Mode) -> Option<AppResu
     }
     Some(mode.check(http, base).await)
 }
+#[cfg(test)]
 async fn detect(root: &Path, preferred: &str, existing: Vec<Installation>, mode: Mode) -> AppResult<Environment> {
+    detect_scoped(root, preferred, existing, mode, false, false).await
+}
+async fn detect_scoped(root: &Path, preferred: &str, existing: Vec<Installation>, mode: Mode, exact: bool, pinned: bool) -> AppResult<Environment> {
     let preferred = comfy_video::endpoint(preferred)?;
     let mut state = plan(root, mode);
     state.existing = existing;
@@ -231,6 +237,11 @@ async fn detect(root: &Path, preferred: &str, existing: Vec<Installation>, mode:
     let mut endpoints = vec![preferred, mode.endpoint().into(), "http://127.0.0.1:18189".into(), "http://127.0.0.1:8000".into(), "http://127.0.0.1:8188".into()];
     if mode.image() { endpoints.extend([MANAGED_ENDPOINT.into(),mode.existing_service().1.into()]); }
     endpoints.extend(state.existing.iter().map(|i| i.endpoint.clone()));
+    if exact { endpoints.truncate(1); }
+    else if pinned {
+        endpoints = vec![mode.existing_service().1.into()];
+        endpoints.extend(state.existing.iter().map(|i| i.endpoint.clone()));
+    }
     let mut seen = std::collections::HashSet::new(); endpoints.retain(|value| seen.insert(value.clone()));
     use futures_util::StreamExt;
     let mut pending: futures_util::stream::FuturesOrdered<_> = endpoints.iter().map(|base| probe(&http, base, mode)).collect();
@@ -240,7 +251,12 @@ async fn detect(root: &Path, preferred: &str, existing: Vec<Installation>, mode:
         if matches!(result, Some(Ok(()))) { state.phase = "ready".into(); state.endpoint = base.clone(); state.message = "本机环境已就绪 · 模型与节点可用".into(); return Ok(state); }
         results.push(result);
     }
-    if let Some((base, Some(Err(error)))) = endpoints.iter().zip(&results).find(|(base, r)| r.is_some() && (!mode.image() || base.as_str() == mode.endpoint())) {
+    if let Some((base, Some(Err(error)))) = endpoints.iter().zip(&results).find(|(base, r)| {
+        r.is_some() && if mode.image() { base.as_str() == mode.endpoint() } else {
+            // The dedicated image service may be up while the independently startable video service is stopped.
+            ![Mode::Image.endpoint(), Mode::Image.existing_service().1].contains(&base.as_str())
+        }
+    }) {
         state.phase = "unavailable".into(); state.endpoint = base.clone();
         state.message = format!("服务尚未通过检查（{base}）：{error}");
         // An owned running installation can add this mode's missing model without replacing its runtime.
@@ -251,6 +267,17 @@ async fn detect(root: &Path, preferred: &str, existing: Vec<Installation>, mode:
             }
             state.existing.clear();
         }
+        if !mode.image() && !state.can_add_models && [mode.endpoint(), mode.existing_service().1].contains(&base.as_str()) {
+            state.message.push_str("。若视频服务一直无响应，请在 ComfyUI Desktop 或任务管理器中结束该实例，再重新检测。");
+        }
+        return Ok(state);
+    }
+    let launch_endpoint = if !state.existing.is_empty() { mode.existing_service().1 } else { mode.endpoint() };
+    if !mode.image() && (!exact || launch_endpoint == endpoints[0])
+        && video_port_occupied(launch_endpoint).await {
+        state.phase = "unavailable".into();
+        state.endpoint = launch_endpoint.into();
+        state.message = format!("视频启动端口 {launch_endpoint} 已被占用，服务未通过检查。请在 ComfyUI Desktop 或任务管理器中确认占用程序，关闭后点击重新检测。");
         return Ok(state);
     }
     if mode.image() {
@@ -270,6 +297,11 @@ async fn detect(root: &Path, preferred: &str, existing: Vec<Installation>, mode:
         } else if instance.models_found < mode.names().len() {
             format!("已找到 {}，磁盘检查仅定位到 {}/{} 个所需模型。可点击启动进一步检查；若仍提示缺失，请在已有 ComfyUI 中补齐模型后返回应用。", instance.name, instance.models_found, mode.names().len())
         } else { format!("已找到 {}，但服务未启动。可直接启动已有环境，无需重新下载。", instance.name) };
+        return Ok(state);
+    }
+    if !mode.image() && state.installed {
+        state.can_install = true;
+        state.message = "已找到视频环境。运行时会自动启动。".into();
         return Ok(state);
     }
     let hardware = driver::detect().await;
@@ -411,10 +443,13 @@ async fn write_licenses(root: &Path) -> AppResult<()> {
     ] { tokio::fs::write(directory.join(name), content).await?; }
     Ok(())
 }
-async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str, mode: Mode) -> AppResult<()> {
-    prerequisites(&driver::detect().await).map_err(err)?;
+async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str, mode: Mode, allow_download: bool) -> AppResult<()> {
     let state = plan(root, mode);
-    if !state.installed { check_disk_space(free_bytes(root)?, state.required_bytes)?; }
+    if !allow_download && !state.installed { return Err(err("已安装环境的文件有变动，请重新检测并补齐缺失的文件。")); }
+    if !state.installed {
+        prerequisites(&driver::detect().await).map_err(err)?;
+        check_disk_space(free_bytes(root)?, state.required_bytes)?;
+    }
     let marker = root.join("bowerbird-setup.txt");
     check_destination(root)?;
     tokio::fs::create_dir_all(root).await?;
@@ -483,7 +518,7 @@ async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str,
     let mut cmd = command(portable(root).join("python_embeded/python.exe"));
     cmd.current_dir(portable(root)).args(["-s", "ComfyUI/main.py", "--windows-standalone-build", "--listen", "127.0.0.1", "--port", mode.port(), "--disable-auto-launch", "--extra-model-paths-config"])
         .arg(root.join("models.yaml"));
-    launch(app, cmd, mode.endpoint(), &root.join("startup.log"), cancel, owner, mode).await
+    launch(app, cmd, mode.endpoint(), root, &root.join("startup.log"), cancel, owner, mode).await
 }
 fn startup_log_tail(path: &Path) -> String {
     use std::io::{Read, Seek, SeekFrom};
@@ -501,7 +536,82 @@ fn startup_failure(log: &str, path: &Path) -> AppError {
     let detail: String = detail.chars().take(600).collect();
     err(format!("ComfyUI 启动失败：{detail}。日志：{}", path.display()))
 }
-async fn launch(app: &AppHandle, mut cmd: std::process::Command, endpoint: &str, log_path: &Path, cancel: &AtomicBool, owner: &str, mode: Mode) -> AppResult<()> {
+fn video_exit_message(log: &str) -> &'static str {
+    if log.lines().rev().take(80).any(|line| {
+        let line = line.to_ascii_lowercase();
+        line.contains("out of memory") || line.contains("outofmemoryerror") || line.contains("cuda_error_out_of_memory")
+    }) {
+        "本机视频进程在显存不足后中止。运行时会尝试恢复服务。重新生成前请关闭占用显存的应用，或降低视频分辨率。"
+    } else {
+        "本机视频进程已异常中止，运行时会尝试恢复。"
+    }
+}
+async fn video_port_occupied(endpoint: &str) -> bool {
+    let Some(address) = endpoint.strip_prefix("http://") else { return false; };
+    matches!(tokio::time::timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(address)).await, Ok(Ok(_)))
+}
+
+fn fatal_video_log(log: &str) -> bool {
+    log.lines().any(|line| line.starts_with("Fatal Python error:"))
+}
+
+pub(super) fn video_abort_detected(endpoint: &str) -> bool {
+    VIDEO_PROCESSES.lock().unwrap().as_ref().and_then(|processes| processes.get(endpoint))
+        .is_some_and(|process| fatal_video_log(&startup_log_tail(&process.log)))
+}
+
+pub(super) fn video_installation(endpoint: &str) -> Option<PathBuf> {
+    let mut registry = VIDEO_PROCESSES.lock().unwrap();
+    let process = registry.as_mut()?.get_mut(endpoint)?;
+    if !matches!(process.child.try_wait(), Ok(None)) { return None; }
+    Some(process.installation.clone())
+}
+
+fn watch_video_exit(endpoint: String, pid: u32) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let mut registry = VIDEO_PROCESSES.lock().unwrap();
+            let Some(processes) = registry.as_mut() else { return; };
+            let Some(process) = processes.get_mut(&endpoint).filter(|p| p.child.id() == pid) else { return; };
+            match process.child.try_wait() {
+                Ok(None) => continue,
+                Ok(Some(exit)) => {
+                    use std::io::Write;
+                    if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&process.log) {
+                        let _ = writeln!(file, "\n[Bowerbird] ComfyUI video process exited: {exit}");
+                    }
+                }
+                Err(_) => return,
+            }
+            processes.remove(&endpoint);
+            return;
+        }
+    });
+}
+
+// Reap only a process launched by this application and conclusively aborted by Python.
+fn reap_aborted_video(endpoint: &str) -> AppResult<bool> {
+    let mut registry = VIDEO_PROCESSES.lock().unwrap();
+    let Some(processes) = registry.as_mut() else { return Ok(false); };
+    let Some(process) = processes.get_mut(endpoint) else { return Ok(false); };
+    if process.child.try_wait()?.is_some() {
+        processes.remove(endpoint);
+        return Ok(false);
+    }
+    if !fatal_video_log(&startup_log_tail(&process.log)) { return Ok(false); }
+    #[cfg(windows)]
+    {
+        // venv's Python launcher may own a second Python process that holds the listening socket.
+        let id = process.child.id().to_string();
+        let _ = command("taskkill.exe").args(["/PID", &id, "/T", "/F"]).output();
+    }
+    if process.child.try_wait()?.is_none() { process.child.kill()?; }
+    process.child.wait()?;
+    processes.remove(endpoint);
+    Ok(true)
+}
+async fn launch(app: &AppHandle, mut cmd: std::process::Command, endpoint: &str, installation: &Path, log_path: &Path, cancel: &AtomicBool, owner: &str, mode: Mode) -> AppResult<()> {
     cancelled(cancel)?;
     let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(30)).build().map_err(|e| err(e.to_string()))?;
     let log = std::fs::File::create(log_path)?;
@@ -515,7 +625,18 @@ async fn launch(app: &AppHandle, mut cmd: std::process::Command, endpoint: &str,
             let log = startup_log_tail(log_path);
             return Err(startup_failure(&log, log_path));
         }
-        match mode.check(&http, endpoint).await { Ok(()) => return Ok(()), Err(error) => reason = error.to_string() }
+        match mode.check(&http, endpoint).await {
+            Ok(()) => {
+                if !mode.image() {
+                    let pid = child.id();
+                    VIDEO_PROCESSES.lock().unwrap().get_or_insert_with(Default::default)
+                        .insert(endpoint.into(), VideoProcess { child, log: log_path.to_path_buf(), installation: installation.to_path_buf() });
+                    watch_video_exit(endpoint.into(), pid);
+                }
+                return Ok(());
+            }
+            Err(error) => reason = error.to_string(),
+        }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     let _ = child.kill(); let _ = child.wait();
@@ -532,7 +653,7 @@ async fn start_existing(app: &AppHandle, instance: &Installation, cancel: &Atomi
         .args(["--listen", "127.0.0.1", "--port", port, "--disable-auto-launch"])
         .args(existing_launch_args(&instance.launch_args, mode));
     if !instance.model_configs.is_empty() { cmd.arg("--extra-model-paths-config").args(&instance.model_configs); }
-    launch(app, cmd, endpoint, &logs.join(if mode.image() { "image-startup.log" } else { "startup.log" }), cancel, owner, mode).await
+    launch(app, cmd, endpoint, &instance.path, &logs.join(if mode.image() { "image-startup.log" } else { "startup.log" }), cancel, owner, mode).await
 }
 
 fn existing_launch_args(args: &[String], mode: Mode) -> Vec<&str> {
@@ -559,11 +680,16 @@ fn preparation_target(state: &Environment, action: &str) -> AppResult<Option<Ins
 pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, action: String, endpoint: String, directory: Option<String>, existing_directory: Option<String>, mode: Option<Mode>) -> AppResult<Environment> {
     let owner = comfy_video::account(&auth, &entitlement).await?;
     let mode = mode.unwrap_or_default();
-    if !matches!(action.as_str(), "detect" | "status" | "prepare" | "install" | "cancel" | "select_existing" | "start_existing" | "driver") { return Err(err("不支持的环境操作")); }
+    if !matches!(action.as_str(), "detect" | "status" | "prepare" | "recover" | "install" | "cancel" | "select_existing" | "start_existing" | "driver") { return Err(err("不支持的环境操作")); }
+    let recovering = action == "recover";
+    let endpoint = comfy_video::endpoint(&endpoint)?;
+    if recovering && (mode.image() || ![mode.endpoint(), mode.existing_service().1].contains(&endpoint.as_str())) {
+        return Err(err("请在原 ComfyUI 中恢复此任务使用的服务，再继续取回。"));
+    }
     let previous = {
         let job = JOB.lock().unwrap();
         if let Some(job) = job.as_ref() {
-            if active(&job.state) {
+            if active(&job.state) && (job.state.mode == mode || !matches!(action.as_str(), "detect" | "status")) {
                 if job.owner != owner { return Err(err("另一个账号的环境安装正在进行")); }
                 if job.state.mode != mode { return Err(err("另一个工作流的环境准备正在进行，请完成后重新检测")); }
                 if action == "cancel" { job.cancel.store(true, Ordering::Relaxed); }
@@ -575,15 +701,18 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
     };
     let selection_file = config(&app, mode)?.with_file_name(if mode.image() { "comfy-image-existing-location.json" } else { "comfy-existing-location.json" });
     let saved: Option<PathBuf> = std::fs::read(&selection_file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok());
-    let selected = existing_directory.map(PathBuf::from).or(saved);
+    let requested = existing_directory.map(PathBuf::from);
+    let selected = requested.clone().or(saved);
     let config_dirs = comfy_discovery::desktop_config_dirs();
     let names = mode.names();
     let mut existing = comfy_discovery::discover(&config_dirs, selected.as_deref(), names);
-    if selected.is_none() { existing.sort_by_key(|item| item.models_found < names.len()); }
+    existing.sort_by_key(|item| item.models_found < names.len());
     if matches!(action.as_str(), "select_existing" | "start_existing") {
         let first = existing.first().ok_or_else(|| err("所选文件夹未找到 ComfyUI。请选择 Desktop 安装总目录、具体实例目录或便携版目录"))?;
         std::fs::create_dir_all(selection_file.parent().unwrap())?;
-        std::fs::write(&selection_file, serde_json::to_vec(&first.path)?)?;
+        let temp = selection_file.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        std::fs::write(&temp, serde_json::to_vec(&first.path)?)?;
+        std::fs::rename(&temp, &selection_file)?;
     }
     // Older UI called this "更换位置". Never interpret an existing installation as a download destination.
     if let Some(directory) = directory.as_deref() {
@@ -593,8 +722,40 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
             existing = located;
         }
     }
-    let root = location(&app, directory, mode)?;
-    let mut state = detect(&root, &endpoint, existing, mode).await?;
+    let pinned = !mode.image() && selected.is_some() && (directory.is_none() || matches!(action.as_str(), "prepare" | "recover"))
+        && !(recovering && endpoint == mode.endpoint());
+    let root = if recovering && endpoint == mode.endpoint() && requested.is_some() {
+        requested.unwrap()
+    } else { location(&app, directory, mode)? };
+    if pinned && existing.is_empty() {
+        let path = selected.as_deref().unwrap();
+        let mut state = plan(&root, mode);
+        state.phase = "unavailable".into();
+        state.directory = path.to_string_lossy().into_owned();
+        state.message = format!("无法访问已选择的 ComfyUI：{}。请连接原磁盘，或点击「选择已有 ComfyUI」重新定位。", path.display());
+        return Ok(state);
+    }
+    if recovering && endpoint == mode.endpoint() { existing.clear(); }
+    let mut state = detect_scoped(&root, &endpoint, existing.clone(), mode, recovering, pinned).await?;
+    if state.phase == "ready" && (pinned || recovering) {
+        let expected = if recovering && endpoint == mode.endpoint() { Some(root.as_path()) }
+            else if state.endpoint == mode.existing_service().1 { existing.first().map(|instance| instance.path.as_path()) }
+            else { None };
+        if let (Some(process_path), Some(expected)) = (video_installation(&state.endpoint), expected) {
+            if process_path != expected && process_path.canonicalize().ok() != expected.canonicalize().ok() {
+                state.phase = "unavailable".into();
+                state.message = format!("视频端口正由另一套 ComfyUI 使用（{}）。请关闭该实例后重新检测，或重新选择这套环境。", process_path.display());
+            }
+        }
+    }
+    if !mode.image() && matches!(action.as_str(), "prepare" | "recover") && state.phase == "unavailable" {
+        if auth.snapshot().user_id.as_deref() != Some(owner.as_str()) { return Err(err("账号已切换，请重新检测环境")); }
+        let target = if existing.is_empty() { mode.endpoint() } else { mode.existing_service().1 };
+        if state.endpoint == target && (!recovering || endpoint == target)
+            && tokio::task::spawn_blocking(move || reap_aborted_video(target)).await.map_err(|e| err(e.to_string()))?? {
+            state = detect_scoped(&root, &endpoint, existing, mode, recovering, pinned).await?;
+        }
+    }
     if action == "driver" {
         if let Some(hardware) = state.hardware.as_ref().filter(|v| v.driver_required) {
             let download = driver::lookup(hardware).await;
@@ -605,15 +766,24 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
         }
         return Ok(state);
     }
-    if !matches!(action.as_str(), "prepare" | "install" | "start_existing") {
+    if !matches!(action.as_str(), "prepare" | "recover" | "install" | "start_existing") {
         retain_setup_outcome(&mut state, previous.as_ref());
+        if !mode.image() && state.phase == "unavailable" && video_abort_detected(&state.endpoint) {
+            state.phase = "recoverable".into();
+            if let Some(process) = VIDEO_PROCESSES.lock().unwrap().as_ref().and_then(|processes| processes.get(&state.endpoint)) {
+                state.message = video_exit_message(&startup_log_tail(&process.log)).into();
+            }
+        }
         return Ok(state);
     }
     if state.phase == "ready" { return Ok(state); }
     // Prerequisites may have changed since the UI check. Return the actual blocker to the UI
     // instead of converting it into an IPC error that invites another detection-only click.
     if action == "install" && !state.can_install && state.existing.is_empty() { return Ok(state); }
-    let start = preparation_target(&state, &action)?;
+    let start = preparation_target(&state, if recovering { "prepare" } else { &action })?;
+    if recovering && if start.is_some() { endpoint != mode.existing_service().1 } else { endpoint != mode.endpoint() } {
+        return Err(err("原任务使用的视频环境暂时不可启动，请核对已登记的 ComfyUI。"));
+    }
     let cancel = Arc::new(AtomicBool::new(false));
     state.phase = if start.is_some() || state.installed { "starting" } else { "installing" }.into();
     state.message = if state.phase == "starting" { "正在启动已有 ComfyUI 并检查模型…" } else { "正在准备本机环境…" }.into();
@@ -626,6 +796,7 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
         }
         *job = Some(Job { owner: owner.clone(), state: state.clone(), cancel: cancel.clone() });
     }
+    let allow_download = action == "install";
     tauri::async_runtime::spawn(async move {
         // Downloads may take hours. Stop promptly on logout/account switch, including mid-file.
         let watcher_app = app.clone(); let watcher_owner = owner.clone(); let watcher_cancel = cancel.clone();
@@ -636,7 +807,7 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
                 if !login.logged_in || login.user_id.as_deref() != Some(watcher_owner.as_str()) { watcher_cancel.store(true, Ordering::Relaxed); break; }
             }
         });
-        let result = if let Some(instance) = &start { start_existing(&app, instance, &cancel, &owner, mode).await } else { install(&app, &root, &cancel, &owner, mode).await };
+        let result = if let Some(instance) = &start { start_existing(&app, instance, &cancel, &owner, mode).await } else { install(&app, &root, &cancel, &owner, mode, allow_download).await };
         watcher.abort();
         if let Some(job) = JOB.lock().unwrap().as_mut() {
             let remaining = plan(&root, mode);
@@ -718,6 +889,45 @@ mod tests {
         let reason = check_disk_space(10_000_000_000, 56_900_000_000).unwrap_err().to_string();
         assert!(reason.contains("56.9 GB") && reason.contains("10.0 GB") && reason.contains("46.9 GB"));
         assert!(check_disk_space(56_900_000_000, 56_900_000_000).is_ok());
+    }
+    #[test]
+    fn h3_setup_requires_fatal_evidence_before_reaping() {
+        assert!(!fatal_video_log("Starting server\nCUDA out of memory. Trying again.\n"));
+        assert!(fatal_video_log("Fatal Python error: Aborted\n"));
+        assert!(!fatal_video_log("Windows fatal exception: access violation\n"));
+        assert!(video_exit_message("CUDA out of memory\nFatal Python error: Aborted").contains("显存不足"));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn h3_setup_reaps_only_its_own_aborted_process() {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("startup.log");
+        let endpoint = "http://127.0.0.1:0";
+        let child = command("cmd.exe").args(["/D", "/C", "ping -n 30 127.0.0.1 >NUL"]).spawn().unwrap();
+        VIDEO_PROCESSES.lock().unwrap().get_or_insert_with(Default::default)
+            .insert(endpoint.into(), VideoProcess { child, log: log.clone(), installation: root.path().into() });
+        std::fs::write(&log, "CUDA out of memory; retrying").unwrap();
+        assert!(!reap_aborted_video(endpoint).unwrap());
+        assert!(video_installation(endpoint).is_some());
+        std::fs::write(&log, "Fatal Python error: Aborted\n").unwrap();
+        assert!(reap_aborted_video(endpoint).unwrap());
+        assert!(video_installation(endpoint).is_none());
+    }
+    #[tokio::test]
+    async fn h3_setup_distinguishes_foreign_listener_from_absent_service() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let base = format!("http://{address}");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/system_stats", get(|| async { "other application" }))).await.unwrap();
+        });
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        assert!(probe(&http, &base, Mode::Frames).await.is_none());
+        assert!(video_port_occupied(&base).await);
+        assert!(!reap_aborted_video(&base).unwrap());
+        server.abort();
+        let _ = server.await;
+        assert!(!video_port_occupied(&base).await);
     }
     #[test]
     fn h3_setup_startup_failure_reports_actual_error_from_bounded_log_tail() {

@@ -365,6 +365,78 @@ impl Database {
     pub fn resolve_external_paths(&self, references: &[String]) -> AppResult<Vec<String>> {
         self.resolve_external_files(references, false)
     }
+    /// Read an original for reveal, outgoing drag or export without changing its registration.
+    /// Destructive operations must keep using their own confirmed-path validation.
+    pub fn resolve_asset_original(&self, id: &str) -> AppResult<PathBuf> {
+        let registration = || -> AppResult<_> {
+            Ok(self.conn.lock().unwrap().query_row(
+                "SELECT a.store_path,COALESCE(NULLIF(e.fingerprint,''),NULLIF(f.sha256,'')),
+                    EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id)
+                    OR EXISTS(SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id)
+                 FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id
+                 LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",
+                [id], |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, bool>(2)?)),
+            ).optional()?)
+        };
+        let record = registration()?.ok_or_else(|| invalid("素材已不存在，请刷新后重试"))?;
+        if record.2 {
+            return Err(invalid("原文件已回收或条目已清理，恢复原件后请重新扫描"));
+        }
+        let stored = record.0.as_deref().ok_or_else(|| invalid("原文件位置不可用，请重新定位"))?;
+        let expected = record.1.as_deref();
+        let owns_alias = |alias: &Path, canonical: &Path| -> AppResult<bool> {
+            let names = connection_path_spellings(alias, canonical);
+            Ok(self.conn.lock().unwrap().query_row(
+                "SELECT EXISTS(SELECT 1 FROM external_asset_paths WHERE asset_id=?1 AND path IN (?2,?3,?4))
+                 AND NOT EXISTS(SELECT 1 FROM assets WHERE id<>?1 AND store_path IN (?2,?3,?4))
+                 AND NOT EXISTS(SELECT 1 FROM external_asset_paths WHERE asset_id<>?1 AND path IN (?2,?3,?4))",
+                params![id,names[0],names[1],names[2]], |row| row.get(0))?)
+        };
+        let (resolved, alias) = match fs::symlink_metadata(stored) {
+            Ok(_) => {
+                let path = original(Path::new(stored))?;
+                fs::File::open(&path)?;
+                (path, None)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let expected = expected.ok_or_else(|| invalid("原文件缺失且没有可核验的原件信息，请重新定位"))?;
+                let aliases: Vec<String> = {
+                    let conn = self.conn.lock().unwrap();
+                    let mut statement = conn.prepare("SELECT path FROM external_asset_paths WHERE asset_id=?1 AND path<>?2 ORDER BY path")?;
+                    let rows = statement.query_map(params![id, stored], |row| row.get(0))?.collect::<Result<_, _>>()?;
+                    rows
+                };
+                let mut found = None;
+                let mut unreadable = None;
+                for alias in aliases {
+                    if !Path::new(&alias).is_absolute() { continue; }
+                    let checked = (|| -> AppResult<Option<PathBuf>> {
+                        let path = fs::canonicalize(&alias)?;
+                        if !fs::metadata(&path)?.is_file() { return Ok(None); }
+                        let path = original(&path)?;
+                        if owns_alias(Path::new(&alias), &path)? && fingerprint(&path)? == expected { Ok(Some(path)) }
+                        else { Ok(None) }
+                    })();
+                    match checked {
+                        Ok(Some(path)) => { found = Some((path, Some(alias))); break; }
+                        Ok(None) => (),
+                        Err(AppError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => (),
+                        Err(error @ (AppError::Io(_) | AppError::Db(_))) => unreadable = Some(error),
+                        Err(_) => (),
+                    }
+                }
+                found.ok_or_else(|| unreadable.unwrap_or_else(|| invalid("原文件失联，请接回原目录或重新定位")))?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if registration()?.as_ref() != Some(&record) {
+            return Err(invalid("素材状态已变化，请刷新后重试"));
+        }
+        if let Some(alias) = alias {
+            if !owns_alias(Path::new(&alias), &resolved)? { return Err(invalid("原文件位置已变化，请刷新后重试")); }
+        }
+        Ok(resolved)
+    }
     pub fn resolve_external_image_paths(&self, references: &[String]) -> AppResult<Vec<String>> {
         self.resolve_external_files(references, true)
     }
@@ -551,6 +623,78 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+    #[test]
+    fn asset_original_uses_the_registered_file_then_a_verified_alias_without_writes() {
+        let f = Fixture::new();
+        let asset = f.index();
+        let alias = f.root.join("旧项目 原件.png");
+        fs::copy(&f.original, &alias).unwrap();
+        {
+            let conn = f.db.conn.lock().unwrap();
+            conn.execute("INSERT INTO external_asset_paths(asset_id,path) VALUES(?1,?2)", params![asset.id, alias.to_string_lossy()]).unwrap();
+            conn.execute("UPDATE assets SET origin_path=?2,thumb_path=?2 WHERE id=?1", params![asset.id, alias.to_string_lossy()]).unwrap();
+        }
+        let writes = f.db.conn.lock().unwrap().total_changes();
+        assert_eq!(f.db.resolve_asset_original(&asset.id).unwrap(), f.original);
+        fs::remove_file(&f.original).unwrap();
+        assert_eq!(f.db.resolve_asset_original(&asset.id).unwrap(), alias);
+        assert_eq!(f.db.conn.lock().unwrap().total_changes(), writes);
+        assert_eq!(f.db.get_asset(&asset.id).unwrap().unwrap().store_path, asset.store_path);
+        let reopened = Database::open(&f.paths.db).unwrap();
+        assert_eq!(reopened.resolve_asset_original(&asset.id).unwrap(), alias);
+        let deletion = f.db.preview_asset_originals(&[asset.id]).unwrap();
+        assert!(deletion[0].missing, "deletion still targets the missing registration");
+        assert_eq!(deletion[0].path, f.original.to_string_lossy());
+    }
+
+    #[test]
+    fn asset_original_rejects_untrusted_or_unverified_fallbacks_and_keeps_current_edits() {
+        let f = Fixture::new();
+        let asset = f.index();
+        let alias = f.root.join("alias.png");
+        fs::copy(&f.original, &alias).unwrap();
+        let bytes = fs::read(&f.original).unwrap();
+        fs::remove_file(&f.original).unwrap();
+        f.db.conn.lock().unwrap().execute("UPDATE assets SET origin_path=?2,thumb_path=?2 WHERE id=?1", params![asset.id, alias.to_string_lossy()]).unwrap();
+        assert!(f.db.resolve_asset_original(&asset.id).is_err(), "origin and thumbnail paths are not registered aliases");
+        f.db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,store_path,created_at) VALUES('other','other',?1,1)", [alias.to_string_lossy()]).unwrap();
+        f.db.conn.lock().unwrap().execute("INSERT INTO external_asset_paths(asset_id,path) VALUES('other',?1)", [alias.to_string_lossy()]).unwrap();
+        assert!(f.db.resolve_asset_original(&asset.id).is_err(), "another asset's matching bytes do not transfer identity");
+        f.db.conn.lock().unwrap().execute("INSERT INTO external_asset_paths(asset_id,path) VALUES(?1,?2)", params![asset.id, alias.to_string_lossy()]).unwrap();
+        assert!(f.db.resolve_asset_original(&asset.id).is_err(), "a path claimed by another asset must not be used as fallback");
+        f.db.conn.lock().unwrap().execute("DELETE FROM assets WHERE id='other'", []).unwrap();
+        fs::write(&alias, b"replaced alias").unwrap();
+        assert!(f.db.resolve_asset_original(&asset.id).is_err());
+        fs::write(&alias, &bytes).unwrap();
+        fs::write(&f.original, b"replaced original").unwrap();
+        assert_eq!(f.db.resolve_asset_original(&asset.id).unwrap(), f.original, "current edits remain usable at their registered path");
+        fs::remove_file(&f.original).unwrap();
+        f.db.conn.lock().unwrap().execute("UPDATE external_assets SET fingerprint='' WHERE asset_id=?1", [&asset.id]).unwrap();
+        assert!(f.db.resolve_asset_original(&asset.id).is_err(), "fallback needs a recorded SHA-256");
+        assert!(f.db.resolve_asset_original("unknown").is_err());
+    }
+
+    #[test]
+    fn asset_original_markers_block_existing_files_and_valid_aliases() {
+        for (trashed, cleaned) in [(true, false), (false, true), (true, true)] {
+            let f = Fixture::new();
+            let asset = f.index();
+            let alias = f.root.join("alias.png");
+            fs::copy(&f.original, &alias).unwrap();
+            {
+                let conn = f.db.conn.lock().unwrap();
+                conn.execute("INSERT INTO external_asset_paths(asset_id,path) VALUES(?1,?2)", params![asset.id, alias.to_string_lossy()]).unwrap();
+                if trashed { conn.execute("INSERT INTO trashed_asset_originals(asset_id,path,fingerprint) VALUES(?1,?2,?3)", params![asset.id, asset.store_path, fingerprint(&alias).unwrap()]).unwrap(); }
+                if cleaned { conn.execute("INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)", params![asset.id, asset.store_path]).unwrap(); }
+            }
+            let writes = f.db.conn.lock().unwrap().total_changes();
+            assert!(f.db.resolve_asset_original(&asset.id).is_err());
+            fs::remove_file(&f.original).unwrap();
+            assert!(f.db.resolve_asset_original(&asset.id).is_err());
+            assert_eq!(f.db.conn.lock().unwrap().total_changes(), writes);
+            assert!(alias.is_file());
         }
     }
     #[test]

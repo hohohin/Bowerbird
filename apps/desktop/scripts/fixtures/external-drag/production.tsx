@@ -31,7 +31,7 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:event|listen") return args.handler;
     if (command === "get_assets_by_ids") return assets.filter(asset => args.assetIds.includes(asset.id));
     if (command === "audio_waveform") return { sourceVersion: "test", duration: 2, sampleRate: 48000, channels: 1, framesPerPeak: 1500, totalFrames: 96000, peaks: Array(64).fill([-.4, .4]) };
-    if (command === "folder_connections") return [{ id: "folder", parent_id: null, root_id: "folder", name: "目标集合", path: "C:/target", available: true, count: 0, scanning: false, error: null }];
+    if (command === "folder_connections") return [{ id: "folder", parent_id: null, root_id: "folder", name: "目标文件夹", path: "C:/target", available: true, count: 0, scanning: false, error: null }];
     if (command === "connection_entries") return [];
     if (command === "file_preview") return picture;
     if (command === "plugin:event|unlisten") return;

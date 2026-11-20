@@ -5,7 +5,8 @@
 .is-tag-catalog .catalog-sidebar-heading { padding:8px; }
 .is-tag-catalog .catalog-sort-note { padding-inline:8px; font-size:10px; }
 .catalog-sidebar-resize { position:absolute; inset:0 -4px 0 auto; width:8px; cursor:col-resize; touch-action:none; z-index:15; }
-.catalog-sidebar-resize:hover,.catalog-sidebar-resize:focus-visible { background:color-mix(in srgb, var(--bb-blue) 25%, transparent); outline:none; }
+.catalog-sidebar-resize:hover,.catalog-sidebar-resize:focus-visible { background:color-mix(in srgb, var(--bb-blue) 25%, transparent); }
+.catalog-sidebar-resize:focus-visible { outline:2px solid var(--bb-blue); outline-offset:-2px; }
 .catalog-contact-index { position:relative; display:flex; flex:1; min-height:0; }
 .catalog-alphabet { display:flex; flex:0 0 20px; flex-direction:column; padding:4px 0; min-height:0; touch-action:none; user-select:none; }
 .catalog-alphabet button { flex:1; min-height:0; max-height:22px; font-size:10px; line-height:1; font-weight:600; color:var(--bb-blue); }
@@ -21,7 +22,7 @@
 .catalog-tag-list .catalog-row { padding:8px 5px; }
 .catalog-row[aria-current=location] { background:var(--bb-selection-bg); color:var(--bb-blue); }
 .catalog-letter-heading { padding:10px 5px 3px; font-size:11px; color:var(--bb-muted); }
-.catalog-letter-bubble { position:absolute; left:28px; top:40%; display:grid; place-items:center; width:48px; height:48px; border-radius:12px; background:var(--bb-blue); color:white; font-size:26px; pointer-events:none; z-index:20; box-shadow:0 4px 16px rgb(var(--bb-shadow-rgb) / 20%); }
+.catalog-letter-bubble { position:absolute; left:28px; top:40%; display:grid; place-items:center; width:48px; height:48px; border-radius:12px; background:var(--bb-blue); color:var(--bb-surface); font-size:26px; pointer-events:none; z-index:20; box-shadow:0 4px 16px rgb(var(--bb-shadow-rgb) / 20%); }
 .catalog-sections > section::after { content:""; display:block; height:16px; }
 .catalog-section-heading { position:sticky; top:0; z-index:2; height:40px; padding:12px 8px 0; pointer-events:none; }
 .catalog-section-title { display:inline-block; height:28px; max-width:var(--catalog-title-max-width, 100%); padding:0 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; line-height:26px; font-weight:600; pointer-events:auto; }

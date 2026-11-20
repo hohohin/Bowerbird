@@ -1723,7 +1723,12 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           <button key={port} disabled={busy && port !== "completion" && port !== "signal"} title="断开此输入" onClick={event => chooseDisconnect({ nodeId: node.id, port }, { x: event.clientX, y: event.clientY }, true)}>{node.kind === "loop" && bindings.length === 1 ? sourceLabel(bindings[0]).label : node.kind === "voice" && port === "image" ? "参考录音" : port === "completion" ? "完成触发" : port === "signal" ? "触发器" : port === "text" ? "文本" : port === "visual-profile" ? "视觉规范" : port === "first-frame" ? node.comfyVideo?.mode === "reference" ? "参考图" : "首帧" : port === "last-frame" ? "尾帧" : portMediaLabel(bindings)}{(node.kind !== "loop" || bindings.length > 1) && ` · ${bindings.length} 个来源`} <X size={11} /></button>)}
       </div>;
       const presentation = WORKFLOW_CARD_PRESENTATION[videoCard ? "comfy-video" : node.kind], CardIcon = node.kind === "trigger" ? TRIGGER_MODES.find(mode => mode.id === triggerMode)!.icon : presentation.icon;
-      const optimizationActions = <H3OptimizationActions nodeId={node.id} runs={workflowRuns(document)} disabled={busy || !node.prompt.trim()} busy={starting === "optimize" || (run?.status === "running" && !!step?.comfyOptimization)} retryDisabled={busy && !(run?.status === "waiting" && !!step?.comfyOptimization)} onOptimize={() => handle(controller.optimizeComfyPrompt(node.id, referenceIds.length))} onRetry={() => handle(controller.retryComfyPrompt(node.id))} restoreDisabled={busy} onRestore={(runId, source) => handle(controller.restoreComfyPrompt(node.id, runId, source))} />;
+      const optimization = step?.comfyOptimization;
+      const optimizationActions = <H3OptimizationActions nodeId={node.id} runs={workflowRuns(document)} disabled={busy || !node.prompt.trim()}
+        busy={starting === "optimize" || (run?.status === "running" && !!optimization && !optimization.result)}
+        retryDisabled={busy && !(run?.status === "waiting" && !!optimization && !step?.comfyAutoGeneration)}
+        onOptimize={() => handle(controller.optimizeComfyPrompt(node.id, referenceIds.length))} onRetry={() => handle(controller.retryComfyPrompt(node.id))}
+        restoreDisabled={busy} onRestore={(runId, source) => handle(controller.restoreComfyPrompt(node.id, runId, source))} />;
       const running = !!starting || chatBusy || run?.status === "running" && step?.status === "running";
       const videoControls = videoCard && <VideoControls card menuClassName="canvas-tactical-model-menu" options={videoOptions} channel={node.generation?.videoChannel ?? "jimeng"}
         onChange={(options, channel) => {
@@ -1896,22 +1901,20 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
                 <ProviderSelect environmentInHeader value={node.provider} onChange={provider => patch(node.id, { provider })} codexHealth={state.codexHealth} dreaminaHealth={state.dreaminaHealth}
                   cloudAuth={state.cloudAuth} cloudEntitlement={state.cloudEntitlement} menuClassName="canvas-tactical-model-menu" /></fieldset>
             </div>}
-            {videoCard && <fieldset className="workflow-video-controls" disabled={busy} onPointerDown={event => event.stopPropagation()}>
+            {videoCard && <fieldset className="workflow-video-parameters workflow-video-controls" aria-label="视频参数" disabled={busy} onPointerDown={event => event.stopPropagation()}>
               {videoControls}
-              {videoOptions.kind === "frames2video" && <p>第一张参考图作首帧，第二张作尾帧。</p>}
             </fieldset>}
           </div>}
           {localVideo && <ComfyVideoCard node={node} modelControl={videoControls}
-                step={step?.comfyOptimization ? step : [...workflowRuns(document)].reverse().find(item => item.steps[node.id]?.comfyOptimization?.result)?.steps[node.id]}
-                disabled={busy} readCurrentPrompt={readCurrentPrompt} optimizing={starting === "optimize" || (run?.status === "running" && !!step?.comfyOptimization)}
-                assets={assets} inputImages={inputImages} onChange={changes => patch(node.id, changes)} onOptimize={() => handle(controller.optimizeComfyPrompt(node.id))} optimizationActions={optimizationActions} />}
+                disabled={busy} readCurrentPrompt={readCurrentPrompt}
+                assets={assets} inputImages={inputImages} onChange={changes => patch(node.id, changes)} optimizationActions={optimizationActions} />}
           {hasAgentMessages && <button type="button" className="workflow-agent-task-edit" aria-expanded={agentPromptEditors.has(node.id)}
             onPointerDown={event => event.stopPropagation()} onClick={() => setAgentPromptEditors(current => {
               const next = new Set(current);
               if (next.has(node.id)) next.delete(node.id); else next.add(node.id);
               return next;
             })}>任务要求</button>}
-          {(node.kind === "generation" || node.kind === "agent" && (!hasAgentMessages || agentPromptEditors.has(node.id))) && <WorkflowPromptEditor cardNames={cardNames} node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} disabled={busy && !creating} readCurrentPrompt={readCurrentPrompt} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} />}
+          {(node.kind === "generation" || node.kind === "agent" && (!hasAgentMessages || agentPromptEditors.has(node.id))) && <WorkflowPromptEditor fitContent={videoCard} cardNames={cardNames} node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} disabled={busy && !creating} readCurrentPrompt={readCurrentPrompt} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} />}
           {node.kind === "generation" && node.generation?.media !== "video" && node.provider === H3_IMAGE &&
             optimizationActions}
           {node.kind !== "director3d" && node.kind !== "planner" && node.kind !== "trigger" && node.kind !== "loop" && node.kind !== "generation" && node.kind !== "agent" && node.kind !== "comfy-video" && node.kind !== "voice" && !(node.kind === "instruction" && node.action !== "describe") && !(node.kind === "visual-profile" && node.profileId) && <CanvasTextarea aria-label={node.kind === "instruction" ? "反推要求" : node.kind === "visual-profile" ? "视觉要求" : "卡片指令"}
@@ -1957,7 +1960,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
               <tbody>{contentTableRows(node.outputs[port.id].table!).map((row, r) => <tr key={r}>{row.map((text, c) => <td key={c}>{text}</td>)}</tr>)}</tbody>
             </table></div> : <p>{node.outputs[port.id].text}</p>}
           </details>)}
-          {node.kind !== "loop" && bindings}
+          {node.kind !== "loop" && !videoCard && bindings}
           {failure && !failure.dismissed && <p className="workflow-error" role="alert">
             {userErrorMessage(failure.diagnostic?.message ?? step?.error, "这一步未完成，请查看问题并重试。")}
             {failure.diagnostic && <button onClick={() => controller.showIssue(failure.diagnostic!)}>查看问题</button>}
@@ -1983,7 +1986,14 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
                 && (run.order.find(id => run!.steps[id].status !== "done") ?? (run.triggerQueue?.length ? run.startId : null)) === node.id
                 && <button aria-label="继续工作流" onClick={() => handle(controller.continue(run?.id))}><Play size={13} />继续</button>}
               <button disabled={!!step?.comfyStopping} aria-label="停止工作流" title={node.kind === "comfy-video" ? "取消排队或中断本次生成" : "停止工作流"} onClick={() => handle(controller.stop(run?.id))}><Square size={12} /></button>
-            </> : node.kind !== "agent" && node.kind !== "trigger" && <button disabled={busy || !!providerIssue} aria-label="运行此卡片" onClick={() => handle(controller.start(node.id, true))}><Play size={13} />运行此卡片</button>}
+            </> : node.kind !== "agent" && node.kind !== "trigger" && <>
+              {localVideo && <label className="workflow-video-auto-optimize" title="运行前通过 Cloud DSH 优化一次提示词，可能消耗 Bowerbird 积分。" onPointerDown={event => event.stopPropagation()}>
+                <input type="checkbox" checked={!!node.comfyAutoOptimize} disabled={busy} onChange={event => patch(node.id, { comfyAutoOptimize: event.target.checked }, false)} />
+                自动优化提示词
+              </label>}
+              <button disabled={busy || !!providerIssue} aria-label={videoCard ? "运行" : "运行此卡片"} title={localVideo ? "本机算力·不扣额度" : undefined}
+                onClick={() => handle(controller.start(node.id, true))}><Play size={13} aria-hidden="true" />{videoCard ? "运行" : "运行此卡片"}</button>
+            </>}
             {node.kind === "trigger" && triggerMode === "manual" && <button disabled={creating || !!providerIssue} aria-label="触发下游" onClick={() => handle(controller.start(node.id))}><Play size={13} />触发下游</button>}
             {node.kind === "agent" && <button type="button" aria-label={hasAgentMessages ? "按当前输入重跑" : "运行此卡片"} disabled={busy || !!providerIssue}
               onClick={() => handle(handleAgentCard(node, conversationId, "run"))}><Play size={13} />{hasAgentMessages ? "按当前输入重跑" : "运行"}</button>}

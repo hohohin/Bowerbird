@@ -184,12 +184,14 @@ html[data-theme] .canvas-tactical .canvas-chat-node { box-shadow:var(--hud-shado
 html[data-theme] .canvas-tactical .canvas-chat-node:is(:hover,:focus-within,.is-selected,.is-focused) { box-shadow:var(--hud-shadow-active); }
 
 /* Align the visible option text to its field caption in generation cards. */
-html[data-theme] .canvas-tactical .canvas-plane .workflow-card :is(.workflow-video-field,.comfy-option,.workflow-media-settings) :is(.tactical-select-trigger,.model-select .model-select-trigger,button[title="选择画面比例"]) {
+html[data-theme] .canvas-tactical .canvas-plane .workflow-card .workflow-generation-parameters :is(.tactical-select-trigger,.model-select .model-select-trigger,button[title="选择画面比例"]) {
   justify-content:flex-start; text-align:left; padding-inline-start:0; border-inline-start-width:0;
 }
-html[data-theme] .canvas-tactical .canvas-plane .workflow-card :is(.workflow-video-field,.workflow-media-settings) .model-select .model-select-trigger::before { display:none; }
-.workflow-card :is(.workflow-video-field,.workflow-media-settings) .model-select-name,
-.workflow-card :is(.comfy-option,.workflow-media-settings) button[title="选择画面比例"] > span:not([aria-hidden="true"]) { order:-1; }
+html[data-theme] .canvas-tactical .canvas-plane .workflow-card .workflow-generation-parameters .model-select .model-select-trigger::before { display:none; }
+html[data-theme] .canvas-tactical .canvas-plane .workflow-card .workflow-video-parameters .model-select .model-select-trigger { padding-inline:3px; }
+html[data-theme] .canvas-tactical .canvas-plane .workflow-card .workflow-video-parameters .model-select .model-select-trigger::before { display:none; }
+.workflow-card .workflow-generation-parameters .model-select-name,
+.workflow-card .workflow-generation-parameters button[title="选择画面比例"] > span:not([aria-hidden="true"]) { order:-1; }
 
 /* Current models are identified by a small state mark instead of a filled provider row. */
 html[data-theme] .canvas-tactical .canvas-plane .workflow-card .model-select .model-select-trigger,

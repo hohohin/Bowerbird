@@ -49,7 +49,7 @@ try {
   assert.deepEqual((await snapshot()).groups, before.groups, "expansion does not persist display dimensions");
   assert.deepEqual((await snapshot()).groupItems, before.groupItems);
   await member("member-5").click();
-  await page.getByRole("dialog", { name: "媒体预览，1 / 1" }).waitFor();
+  await page.getByRole("dialog", { name: "图片与会话预览" }).waitFor();
   await page.keyboard.press("Escape");
   await group.getByRole("button", { name: "收起素材组" }).click();
   assert.equal(await group.getAttribute("aria-expanded"), "false");
@@ -59,12 +59,16 @@ try {
   await group.focus(); await page.keyboard.press("Enter");
   await member("member-5").waitFor();
   assert.deepEqual(await page.evaluate(() => window.picks), [], "creation mode folder click must not add every image");
-  await member("member-1").click();
+  await member("member-1").dblclick();
   assert.deepEqual(await page.evaluate(() => window.picks.map(item => item.assetId)), ["b"]);
   await page.evaluate(() => window.store.setState({ promptedAssets: [{ ...window.store.getState().assets.find(asset => asset.id === "a"), sections: [{ title: "色彩", body: "蓝色" }] }] }));
-  await member("member-5").click();
+  await member("member-5").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "维度", exact: true }).click();
   assert.deepEqual(await page.evaluate(() => window.picks.map(item => item.assetId)), ["b"]);
-  assert.deepEqual(await page.evaluate(() => window.peeks), [{ assetId: "a", instance: "member-5" }]);
+  assert.deepEqual(await page.evaluate(() => window.peeks.map(item => item.assetId)), ["a"]);
+  await page.keyboard.press("Escape");
+  await member("member-5").dblclick();
+  assert.deepEqual(await page.evaluate(() => window.picks.at(-1)), { assetId: "a", canvasNodeId: "member-5" });
 
   // The expanded rectangle also participates in dropping, beyond the folded bounds.
   const incoming = await page.locator('[data-canvas-node-id="member-6"]').boundingBox();
@@ -92,7 +96,6 @@ try {
   assert.deepEqual(await page.evaluate(() => window.picks.map(item => item.assetId).sort()), ["a", "b", "c", "d", "existing"]);
 
   await member("member-5").click({ button: "right" });
-  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: "解散素材组", exact: true }).click();
   await page.waitForFunction(() => window.snapshot().groups.length === 0);
   assert.equal(await page.locator(".canvas-node.is-asset").count(), 7);

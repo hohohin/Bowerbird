@@ -39,9 +39,9 @@ try {
       const menuBox = await menu.boundingBox();
       assert.ok(menuBox.width <= 401, `context menu should stay compact, got ${menuBox.width}px`);
       assert.equal(await menu.locator(".asset-context-column").count(), 2);
-      assert.equal(await menu.getByRole("menuitem", { name: "删除当前项", exact: true }).locator("svg").count(), 2);
-      await menu.getByRole("menuitem", { name: "删除当前项", exact: true }).click();
-      assert.equal(await page.getByRole("menu", { name: "删除当前项", exact: true }).getByRole("menuitem", { name: "移出画布", exact: true }).locator("svg").count(), 0);
+      assert.equal(await menu.getByRole("menuitem", { name: "移出画布", exact: true }).count(), 1);
+      await menu.getByRole("menuitem", { name: "项目与原文件", exact: true }).click();
+      assert.equal(await page.getByRole("menu", { name: "项目与原文件", exact: true }).getByRole("menuitem", { name: "移出画布", exact: true }).count(), 0);
       if (mode === "keep") {
         const moveOutOfProject = page.getByRole("menuitem", { name: "移出项目", exact: true });
         assert.equal(await moveOutOfProject.getAttribute("title"), "移除后，进入全局素材");

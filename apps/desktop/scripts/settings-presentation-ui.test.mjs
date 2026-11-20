@@ -6,7 +6,7 @@ const server = await createServer({ server: { host: '127.0.0.1', port: 1798, str
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {
-  const page = await browser.newPage({ viewport: { width: 1100, height: 850 } });
+  const page = await browser.newPage({ viewport: { width: 600, height: 300 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('http://127.0.0.1:1798/scripts/fixtures/redemption/preview.html');
@@ -15,6 +15,20 @@ try {
   assert.equal(await page.getByText('资料文件夹', {exact:true}).count(), 1);
   await page.getByTitle('选择项目与随图资料的保存位置，或将历史素材按项目迁入当前位置。').waitFor();
   await page.getByText('当前版本', {exact:true}).waitFor();
+  assert.equal(await page.getByText(/界面明暗，切换后立即生效/).count(), 0);
+  const modalBody = page.locator('.settings-dialog .app-modal-body');
+  const scrolling = await modalBody.evaluate(body => {
+    const content = body.querySelector('.overscroll-contain');
+    return {
+      overlay: document.documentElement.classList.contains('industrial-overlay-scrollbars'),
+      bodyOverflow: body.scrollHeight - body.clientHeight,
+      contentOverflow: content.scrollHeight - content.clientHeight,
+      heights: [innerHeight, getComputedStyle(body.parentElement).maxHeight, body.parentElement.clientHeight, body.clientHeight, content.clientHeight],
+      layout: [getComputedStyle(body).display, getComputedStyle(content.parentElement).height, getComputedStyle(content).overflowY],
+    };
+  });
+  assert.ok(scrolling.overlay && scrolling.bodyOverflow === 0 && scrolling.contentOverflow > 0, JSON.stringify(scrolling));
+  await page.setViewportSize({ width: 1100, height: 850 });
   await page.getByRole('radio', { name: /夜间模式/ }).click();
   assert.deepEqual(await page.evaluate(() => { const s = window.store.getState().settings; return [s.board_shift_pick, s.hide_project_assets, s.dreamina_model_version]; }), [true, true, '4.7']);
   await page.getByRole('button', { name: '模型设置', exact: true }).click();

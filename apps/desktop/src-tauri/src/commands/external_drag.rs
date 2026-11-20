@@ -97,7 +97,10 @@ pub async fn start_external_drag(
                     || intent.begin(),
                 )
                 .map(|(dropped, _)| dropped)
-                .map_err(|error| error.to_string());
+                .map_err(|error| {
+                    tracing::warn!(%error, "Windows Shell could not start outgoing file drag");
+                    "Windows 无法拖出所选文件，请重试或使用导出。".to_owned()
+                });
                 let _ = sender.send(result);
             }
             #[cfg(target_os = "macos")]

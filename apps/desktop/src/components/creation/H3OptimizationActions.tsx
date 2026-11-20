@@ -11,7 +11,7 @@ export function H3OptimizationActions({ nodeId, runs, disabled, busy, retryDisab
   restoreDisabled: boolean; onRestore: (runId: string, source: "original" | "result") => void;
 }) {
   const [open, setOpen] = useState(false);
-  const history = [...runs].reverse().filter(run => run.steps[nodeId]?.comfyOptimization);
+  const history = [...runs].reverse().filter(run => run.steps[nodeId]?.comfyOptimization && !run.steps[nodeId].comfyAutoGeneration);
   return <div className="h3-optimization-actions" onPointerDown={event => event.stopPropagation()}>
     <H3OptimizeButton disabled={disabled} busy={busy} onClick={onOptimize} />
     <button type="button" className="h3-optimization-icon" aria-label="重试优化提示词" title="按上次原文重试优化提示词"

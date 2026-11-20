@@ -29,9 +29,12 @@ export const folderConnections = {
     }
     return result;
   },
-  resolve: async (ids: string[]) => {
+  resolve: async (ids: string[], isCurrent = () => true) => {
     const result: ConnectionEntry[] = [];
-    for (let offset = 0; offset < ids.length; offset += 2000) result.push(...await invoke<ConnectionEntry[]>("resolve_connection_entries", { ids: ids.slice(offset, offset + 2000) }));
+    for (let offset = 0; offset < ids.length; offset += 2000) {
+      if (!isCurrent()) return [];
+      result.push(...await invoke<ConnectionEntry[]>("resolve_connection_entries", { ids: ids.slice(offset, offset + 2000) }));
+    }
     return result;
   },
   references: (assetIds: string[], folderId: string) => entryBatches("create_material_references", assetIds, "assetIds", { folderId }),

@@ -366,7 +366,15 @@ pub async fn refresh_folder_connections(
     folder_id: Option<String>,
     force: Option<bool>,
 ) -> AppResult<()> {
-    queue_refresh(app, db.inner().clone(), paths.inner().clone(), None, folder_id, force.unwrap_or(true));
+    let force = force.unwrap_or(true);
+    if force {
+        let db = db.inner().clone();
+        let folder = folder_id.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::core::semantic_search::index::request_connection_verification(&db, folder.as_deref())
+        }).await.map_err(|error| AppError::Other(error.to_string()))??;
+    }
+    queue_refresh(app, db.inner().clone(), paths.inner().clone(), None, folder_id, force);
     Ok(())
 }
 #[derive(Default)]

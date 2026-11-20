@@ -53,7 +53,7 @@ try {
       await dock.getByLabel('本地视频模式', { exact: true }).click();
       await page.getByRole('option', { name: mode === 'text' ? '文生视频' : '单图', exact: true }).click();
       assert.equal(await dock.getByLabel('本地视频时长（秒）').inputValue(), '5');
-      assert.equal(await dock.getByLabel('本地视频分辨率', { exact: true }).innerText(), '768p');
+      assert.equal(await dock.getByLabel('本地视频分辨率', { exact: true }).innerText(), '高');
     }
     if (mode === 'text') {
       assert.equal(await page.getByRole('dialog', { name: '首尾帧预览', exact: true }).count(), 0);

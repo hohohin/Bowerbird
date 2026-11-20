@@ -126,7 +126,7 @@ try {
   await h3.getByRole('button', {name:'上一张生成素材'}).click();
   assert.equal(await h3.getAttribute('data-frequent-asset-id'), 'h3-old');
   await h3.focus(); await page.keyboard.press('Enter');
-  const videoPreview = page.getByRole('dialog', {name:/媒体预览/});
+  const videoPreview = page.getByRole('dialog', {name:'视频与会话预览', exact:true});
   await videoPreview.waitFor();
   assert.equal(new URL(await videoPreview.locator('video').getAttribute('src'), page.url()).pathname, '/h3-old.mp4');
   await page.keyboard.press('Escape');

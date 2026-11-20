@@ -59,7 +59,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
     setOpen(false);
     setOpenGroup(null);
     groupFocus.current = null;
-    if (restore) trigger.current?.focus();
+    if (restore) trigger.current?.focus({ preventScroll: true });
   }
   useLayoutEffect(() => {
     if (!open) return;
@@ -99,10 +99,12 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
   useEffect(() => {
     if (!open) return;
     function outside(event: PointerEvent) {
-      if (!menu.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) close();
+      const target = event.target;
+      if (target instanceof Node && !menu.current?.contains(target) && !trigger.current?.contains(target)) close();
     }
-    document.addEventListener("pointerdown", outside);
-    return () => document.removeEventListener("pointerdown", outside);
+    // Canvas cards stop bubbling pointer events to keep pointer gestures local.
+    window.addEventListener("pointerdown", outside, true);
+    return () => window.removeEventListener("pointerdown", outside, true);
   }, [open]);
   useEffect(() => { if (open && trigger.current?.matches(":disabled")) close(); });
 

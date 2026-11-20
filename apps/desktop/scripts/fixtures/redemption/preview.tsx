@@ -3,6 +3,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { SidebarAccount } from "../../../src/components/SidebarAccount";
 import { AccountOnboarding } from "../../../src/components/AccountOnboarding";
+import { OverlayScrollbars } from "../../../src/components/OverlayScrollbars";
 import { SettingsDialog } from "../../../src/components/SettingsDialog";
 import { useStore } from "../../../src/store";
 
@@ -63,7 +64,7 @@ useStore.setState({ cloudAuth: { cloud_available: true, logged_in: true, user_id
   display_name: null, avatar_url: null, access_expires_at: null, reason: null }, cloudEntitlement: free,
   cloudBusy: false, loadSettings: async () => {}, defaultProvider: "codex",
   settings: { theme: 'light', auto_analyze_on_ingest: false, auto_analyze_prompt: '', board_shift_pick: true, hide_project_assets: true, dreamina_model_version: '4.7', screenshot_shortcuts: { capture: 'F1', paste: 'F3' } } as any });
-createRoot(document.getElementById("root")!).render(location.search === "?journey" ? <><SidebarAccount placement="topbar" /><AccountOnboarding /></> : <SettingsDialog onClose={() => {}} />);
+createRoot(document.getElementById("root")!).render(location.search === "?journey" ? <><SidebarAccount placement="topbar" /><AccountOnboarding /></> : <><OverlayScrollbars /><SettingsDialog onClose={() => {}} /></>);
 
 import "../../../src/components/TacticalDialogs.css";
 import "../../../src/components/CanvasSecondaryTactical.css";

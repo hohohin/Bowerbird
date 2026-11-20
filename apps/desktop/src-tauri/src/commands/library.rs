@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rusqlite::OptionalExtension;
 use tauri::{AppHandle, Emitter, Manager, State};
 use ulid::Ulid;
 
@@ -480,6 +479,9 @@ pub(super) fn readable_image_path(paths: &LibraryPaths, db: &Database, path: &st
 #[cfg(test)]
 #[path = "library_image_read_tests.rs"]
 mod image_read_tests;
+#[cfg(all(test, windows))]
+#[path = "library_shell_tests.rs"]
+mod shell_tests;
 
 fn empty_asset(id: String) -> Asset {
     Asset {
@@ -1023,39 +1025,15 @@ pub async fn rename_asset(
     Ok(())
 }
 
-/// 右键「打开所在文件夹」：原始位置（origin_path）优先，不存在则回退素材库内位置（store_path）。
-/// 跨平台定位并选中该文件（与画板节点「在资源管理器中定位」同一条路径）：
-/// Windows `explorer /select,`、macOS `open -R`（Finder 选中）、Linux 打开所在目录。
+/// Locate the same verified original that outgoing drag and export use.
 #[tauri::command]
 pub async fn reveal_asset_folder(db: State<'_, Arc<Database>>, id: String) -> Result<(), AppError> {
     let db = db.inner().clone();
-    let id_for_query = id.clone();
-    let (origin, store) = tokio::task::spawn_blocking(move || {
-        let conn = db.conn.lock().unwrap();
-        let (origin, store): (Option<String>, Option<String>) = conn
-            .query_row(
-                "SELECT origin_path, store_path FROM assets WHERE id = ?1",
-                rusqlite::params![id_for_query],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?
-            .unwrap_or((None, None));
-        Ok::<_, AppError>((origin, store))
-    })
+    let target = tokio::task::spawn_blocking(move || db.resolve_asset_original(&id))
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
 
-    // 原始位置优先；原始文件不在时（扩展临时目录/生成图缓存已删）回退素材库内文件。
-    let target = [origin.as_deref(), store.as_deref()]
-        .into_iter()
-        .flatten()
-        .map(Path::new)
-        .find(|p| p.exists());
-
-    let Some(target) = target else {
-        return Err(AppError::NotFound(format!("asset 文件: {id}")));
-    };
-    spawn_locate_or_open(target, true).await
+    spawn_locate_or_open(&target, true).await
 }
 
 /// 取某资产所属生成会话的全部图（含自己），按 id ASC（过程顺序）。详情页轮播用。
@@ -1313,7 +1291,7 @@ pub async fn recompute_colors(
 
 // --- 系统交互：在资源管理器中定位 / 用默认程序打开 ---
 // 右键图片菜单的后端。前端把 asset.store_path 传来（Thumb 已持有，不必查 DB）；
-// 后端 Rust 直接 spawn 子进程，不经 shell plugin scope，故 capabilities 无需改动。
+// 后端直接调用平台定位／打开接口。
 
 /// 校验文件存在并返回 PathBuf（路径失效时给前端明确报错，而非让 explorer 弹系统对话框）。
 fn require_existing_file(path: &str) -> Result<PathBuf, AppError> {
@@ -1338,8 +1316,8 @@ pub async fn open_path_with_system(path: String) -> Result<(), AppError> {
     spawn_locate_or_open(&p, false).await
 }
 
-/// 跨平台启动资源管理器定位 / 默认程序打开。spawn 后立即返回（fire-and-forget，不 wait）。
-///   Windows  reveal → explorer.exe /select,<path>（在资源管理器里选中）
+/// Cross-platform file reveal/open. Windows reveal awaits the Shell result.
+///   Windows  reveal → SHOpenFolderAndSelectItems（在资源管理器里选中，返回壳层结果）
 ///   Windows  open   → cmd /C start "" <path>（ShellExecute 用关联程序打开，CREATE_NO_WINDOW 防闪黑窗）
 ///   macOS    reveal → open -R；open → open <path>
 ///   Linux    reveal → xdg-open 父目录（无统一「定位选中」协议，退化为打开所在目录）；open → xdg-open <path>
@@ -1353,10 +1331,12 @@ async fn spawn_locate_or_open(path: &Path, reveal: bool) -> Result<(), AppError>
     #[cfg(target_os = "windows")]
     {
         if reveal {
-            tokio::process::Command::new("explorer.exe")
-                .arg(format!("/select,{path_str}"))
-                .spawn()
-                .map_err(|e| AppError::Other(format!("{action}失败: {e}")))?;
+            let path = path.to_path_buf();
+            tokio::task::spawn_blocking(move || crate::windows_shell::reveal(&path)
+                .map_err(|error| {
+                    tracing::warn!(%error, "Windows Shell could not reveal registered original");
+                    AppError::Other("Windows 无法定位这个文件，请检查文件夹权限后重试。".into())
+                })).await.map_err(|error| AppError::Other(error.to_string()))??;
         } else {
             tokio::process::Command::new("cmd.exe")
                 .args(["/D", "/C", "start", "", &path_str])

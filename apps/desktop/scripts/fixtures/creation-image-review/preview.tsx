@@ -19,6 +19,10 @@ const assets: Asset[] = [
   { id: "review-one", name: "城市肖像 · 画面一", store_path: "/src-tauri/resources/samples/preset-13.png", width: 941, height: 1672, ext: "png", generation_session_id: "review-session" },
   { id: "review-two", name: "花影 · 画面二", store_path: "/src-tauri/resources/samples/preset-14.png", width: 1086, height: 1448, ext: "png", generation_session_id: "review-session" },
 ];
+if (new URLSearchParams(location.search).has("contrast")) {
+  assets[1].source_url = "https://example.com/image";
+  useStore.setState({ cloudAuth: { cloud_available: true, logged_in: true } as ReturnType<typeof useStore.getState>["cloudAuth"] });
+}
 if (new URLSearchParams(location.search).has("thumbnail")) assets[1].thumb_path = `${assets[1].store_path}?thumbnail=1`;
 const job: GenJob = {
   id: "review-job", projectId: "review-project", sessionId: "review-session", provider: "codex",

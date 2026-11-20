@@ -38,6 +38,49 @@ try {
   await page.getByRole('tab', { name: '全部素材', exact: true }).click();
   await page.getByRole('dialog', { name: '文本编辑器', exact: true }).focus();
   await card('img1').waitFor();
+  const block = editor.locator('.slate-blockWrapper').first();
+  const plateAction = page.getByRole('menuitem', { name: '复制段落', exact: true });
+  const assetMenu = page.getByRole('menu', { name: '素材操作', exact: true });
+  const openBlockMenu = async () => {
+    const bounds = await block.boundingBox();
+    await block.dispatchEvent('contextmenu', { button: 2, clientX: bounds.x + 24, clientY: bounds.y + 12 });
+    await plateAction.waitFor();
+  };
+  const openAssetMenu = async () => {
+    const bounds = await card('img1').boundingBox();
+    await card('img1').dispatchEvent('contextmenu', { button: 2, clientX: bounds.x + 24, clientY: bounds.y + 12 });
+    await assetMenu.waitFor();
+  };
+  await editor.locator('.slate-blockWrapper').last().locator('[data-slate-string]').first().click();
+  await block.click({ button: 'right', position: { x: 24, y: 12 } });
+  await page.getByRole('menuitem', { name: 'Agent', exact: true }).click();
+  const agentPrompt = page.getByPlaceholder('让 Agent 帮你写作…');
+  await agentPrompt.waitFor();
+  await page.keyboard.press('Escape');
+  await agentPrompt.waitFor({ state: 'hidden' });
+  await openAssetMenu();
+  await openBlockMenu();
+  await assetMenu.waitFor({ state: 'hidden', timeout: 2000 });
+  await openAssetMenu();
+  await plateAction.waitFor({ state: 'hidden', timeout: 2000 });
+  await page.waitForFunction(() => document.activeElement?.closest('[role="menu"]')?.getAttribute('aria-label') === '素材操作');
+  await page.keyboard.press('Escape');
+  await assetMenu.waitFor({ state: 'hidden' });
+  await openBlockMenu();
+  await page.keyboard.press('Escape');
+  await plateAction.waitFor({ state: 'hidden' });
+  await openAssetMenu();
+  assert.equal(await editor.evaluate(async element => {
+    const { installTextContextMenu } = await import('/src/lib/textContextMenu.ts');
+    const uninstall = installTextContextMenu();
+    try {
+      return element.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }));
+    } finally {
+      uninstall();
+    }
+  }), true, 'native text menu stays unprevented');
+  await assetMenu.waitFor({ state: 'hidden' });
+  await page.getByRole('dialog', { name: '文本编辑器', exact: true }).focus();
   assert.equal(await catalog.locator('.file-view-heading').evaluate(element => getComputedStyle(element).display), 'flex', 'shared catalog heading styles load in the isolated editor');
   assert.equal(await catalog.locator('.folder-floating-controls').evaluate(element => getComputedStyle(element).display), 'flex', 'shared responsive toolbar styles load in the isolated editor');
   const background = await backgroundSnapshot();
@@ -126,7 +169,7 @@ try {
   await page.keyboard.press('Tab');
   assert.equal(await detail.evaluate(element => element.contains(document.activeElement)), true, 'ordinary Tab stays within local detail');
   await detail.getByRole('img', { name: '画面参考', exact: true }).click({ button: 'right' });
-  await page.getByRole('menuitem', { name: '图片标注', exact: true }).waitFor();
+  await page.getByRole('menuitem', { name: '编辑', exact: true }).waitFor();
   assert.equal(await page.getByRole('menu', { name: /已选/ }).count(), 0, 'local detail keeps a single-asset menu despite matching background multi-selection');
   assert.deepEqual(await backgroundSnapshot(), background, 'local detail context menu preserves background manage selection');
   await page.waitForFunction(() => !!document.activeElement?.closest('[role="menu"]'));
@@ -299,7 +342,7 @@ try {
   await replaceBody('标注前保留的草稿');
   await page.evaluate(() => { window.annotationCalls = []; window.store.setState({ openAnnotator: assetId => window.annotationCalls.push(assetId) }); });
   await card('img1').click({ button: 'right' });
-  await page.getByRole('menuitem', { name: '图片标注', exact: true }).click();
+  await page.getByRole('menuitem', { name: '编辑', exact: true }).click();
   await page.getByRole('dialog', { name: '文本编辑器', exact: true }).waitFor({state:'hidden'});
   assert.deepEqual(await page.evaluate(() => window.annotationCalls), ['img1']);
   await button('放大编辑').click(); await editor.waitFor();

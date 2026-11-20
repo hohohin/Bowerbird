@@ -20,7 +20,7 @@ fn invalid(value: impl Into<String>) -> AppError {
 fn string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
-fn registered_path_spelling(path: &Path) -> PathBuf {
+pub(crate) fn registered_path_spelling(path: &Path) -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         let raw = string(path).replace('/', "\\");
@@ -933,12 +933,13 @@ impl Database {
                 }
                 seen.insert(string(&file));
                 let processed = (|| -> AppResult<bool> {
-                    let old:Option<(String,i64,String,bool)>=self.conn.lock().unwrap().query_row(
-                        "SELECT e.asset_id,COALESCE(e.size,-1),COALESCE(e.mtime,''),EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=e.asset_id UNION ALL SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=e.asset_id)
-                         FROM connected_entries e WHERE e.path=?1",[string(&file)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+                    let old:Option<(String,i64,String,bool,Option<i64>)>=self.conn.lock().unwrap().query_row(
+                        "SELECT e.asset_id,COALESCE(e.size,-1),COALESCE(e.mtime,''),EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=e.asset_id UNION ALL SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=e.asset_id),
+                           (SELECT j.generation FROM semantic_jobs j JOIN semantic_index_state s ON s.model_key=j.model_key WHERE j.asset_id=e.asset_id AND j.verify_registered=1 AND s.run_state<>'off')
+                         FROM connected_entries e WHERE e.path=?1",[string(&file)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
                     let reference_target = if reference(&file) {
                         old.as_ref()
-                            .and_then(|(asset, _, _, _)| self.get_asset(asset).ok().flatten())
+                            .and_then(|(asset, _, _, _, _)| self.get_asset(asset).ok().flatten())
                             .and_then(|a| a.store_path)
                     } else {
                         None
@@ -957,13 +958,13 @@ impl Database {
                     let reference_resolved = !reference(&file)
                         || old
                             .as_ref()
-                            .and_then(|(asset, _, _, _)| self.get_asset(asset).ok().flatten())
+                            .and_then(|(asset, _, _, _, _)| self.get_asset(asset).ok().flatten())
                             .and_then(|a| a.store_path)
                             .is_some_and(|p| Path::new(&p).is_file());
                     if reference_resolved
                         && old
                             .as_ref()
-                            .is_some_and(|(_, s, m, marked_missing)| !marked_missing && *s == size && *m == mtime)
+                            .is_some_and(|(_, s, m, marked_missing, verification)| !marked_missing && verification.is_none() && *s == size && *m == mtime)
                     {
                         let changed = self.conn.lock().unwrap().execute(
                             "UPDATE connected_entries SET available=1 WHERE path=?1 AND available=0",
@@ -980,7 +981,7 @@ impl Database {
                         };
                         asset
                     } else {
-                        self.register_connected_asset(paths, &file, old.as_ref().map(|(id, _, _, _)| id.as_str()))?
+                        self.register_connected_asset(paths, &file, old.as_ref().map(|(id, _, _, _, _)| id.as_str()))?
                     };
                     if !reference(&file) && file_stamp()? != (size, mtime.clone()) {
                         return Err(invalid("文件正在变化，请稍后刷新"));
@@ -1008,13 +1009,16 @@ impl Database {
                         let tx = conn.unchecked_transaction()?;
                         tx.execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference,size,mtime) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(path) DO UPDATE SET asset_id=excluded.asset_id,available=1,size=excluded.size,mtime=excluded.mtime",params![id(),folder_id,asset.id,string(&file),file_name,reference(&file),size,mtime])?;
                         tx.execute("DELETE FROM disconnected_library_assets WHERE asset_id=?1", [&asset.id])?;
+                        if let Some((id, _, _, _, Some(generation))) = &old {
+                            tx.execute("UPDATE semantic_jobs SET verify_registered=0 WHERE asset_id=?1 AND generation=?2 AND model_key=(SELECT model_key FROM semantic_index_state WHERE id=1)", params![id,generation])?;
+                        }
                         tx.commit()?;
                     }
                     // Refresh preserves explicit project removals. A new entry/identity joins
                     // connected projects; explicitly reconnecting a folder restores cached members.
                     if old
                         .as_ref()
-                        .is_none_or(|(previous, _, _, _)| previous != &asset.id)
+                        .is_none_or(|(previous, _, _, _, _)| previous != &asset.id)
                     {
                         self.connect_entry_projects(&folder_id, &asset.id)?;
                     }

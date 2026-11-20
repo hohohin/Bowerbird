@@ -724,6 +724,19 @@ impl Database {
         Ok(())
     }
 
+    /// Recheck a selected capture target before discarding newly received content.
+    /// File IO happens before the database lock; the final query checks current ownership.
+    pub(super) fn reusable_capture_asset(&self, id: &str, expected_path: &str) -> AppResult<Option<Asset>> {
+        let Ok(file) = std::fs::File::open(expected_path) else { return Ok(None); };
+        let Ok(metadata) = file.metadata() else { return Ok(None); };
+        if !metadata.is_file() || metadata.len() == 0 { return Ok(None); }
+        let conn = self.conn.lock().unwrap();
+        let visible = super::material_catalog::catalog_visibility(false);
+        let sql = format!("SELECT {ASSET_COLS_A} FROM assets a
+            WHERE a.id=?1 AND a.store_path=?2 AND a.library_hidden=0 AND {visible}");
+        Ok(conn.query_row(&sql, rusqlite::params![id, expected_path], asset_from_row).optional()?)
+    }
+
     /// 按 dHash 阈值找「近似重复」的已有资产（采集去重）。
     ///
     /// 同一张图被以不同分辨率采集（Pinterest 236w 网格缩略图 vs 原图 / srcset 变体）时，
@@ -738,13 +751,17 @@ impl Database {
             // 新图低熵：退化哈希不可信，不去重（否则会误并两张不同的纯色图）。
             return Ok(None);
         }
-        let conn = self.conn.lock().unwrap();
-        let sql = format!("SELECT {ASSET_COLS} FROM assets WHERE phash IS NOT NULL");
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([], asset_from_row)?;
+        let candidates = {
+            let conn = self.conn.lock().unwrap();
+            let visible = super::material_catalog::catalog_visibility(false);
+            let sql = format!("SELECT {ASSET_COLS_A} FROM assets a
+                WHERE a.phash IS NOT NULL AND a.library_hidden=0 AND {visible}");
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map([], asset_from_row)?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
         let mut best: Option<Asset> = None;
-        for row in rows {
-            let asset = row?;
+        for asset in candidates {
             let Some(candidate) = asset.phash.as_deref() else {
                 continue;
             };
@@ -758,6 +775,12 @@ impl Database {
             if dist > crate::media::phash::DEDUP_HAMMING_MAX {
                 continue;
             }
+            // Historical hashes survive file removal. Reusing one must still provide an original.
+            // Probe only near matches, outside the SQLite mutex (a path may be on a slow disk).
+            let Some(path) = asset.store_path.as_deref() else { continue; };
+            let Ok(file) = std::fs::File::open(path) else { continue; };
+            let Ok(metadata) = file.metadata() else { continue; };
+            if !metadata.is_file() || metadata.len() == 0 { continue; }
             let area = |a: &Asset| a.width.unwrap_or(0).saturating_mul(a.height.unwrap_or(0));
             if best.as_ref().is_none_or(|b| area(b) < area(&asset)) {
                 best = Some(asset);

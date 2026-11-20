@@ -34,7 +34,9 @@ try {
     let resultMode = 'succeeded';
     const asset = { id: 'optimized-video', store_path: '/synthetic.mp4', ext: 'mp4', width: 768, height: 1344 };
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
-      if (command === 'comfy_video_environment') return { phase: 'ready', endpoint: args.endpoint, message: '就绪' };
+      if (command === 'comfy_video_environment') return args.action === 'prepare' && window.h3PrepareFails
+        ? { phase: 'failed', endpoint: args.endpoint, message: '模拟本机启动失败' }
+        : { phase: 'ready', endpoint: args.endpoint, message: '就绪' };
       if (command === 'comfy_video') { calls.push(args); return { status: args.action === 'cancel' ? 'cancelled' : 'done', message: '模拟', asset }; }
       return invoke(command, args);
     };
@@ -185,10 +187,77 @@ try {
       'both optimization attempts retain their original input');
     const reloaded = new CanvasWorkflowController(retryCard.projectId); await reloaded.load();
     check(reloaded.document.runs.filter(run => run.steps.h3?.comfyOptimization).length === 2, 'optimization history survives reload');
+
+    const automatic = await controller({ ...node, comfyAutoOptimize: true });
+    const autoStartCount = starts.length, autoLocalCount = calls.length;
+    let allowResult;
+    const pausedResult = new Promise(resolve => { allowResult = resolve; });
+    api.cloudAgentGet = async runId => { await pausedResult; return get(runId); };
+    resultMode = 'succeeded';
+    const autoRunning = automatic.start('h3', true);
+    try {
+      for (let attempt = 0; starts.length === autoStartCount && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+      check(starts.length === autoStartCount + 1, 'opted-in Run starts one Cloud optimization');
+      check(calls.length === autoLocalCount, 'local video waits for a valid optimization result');
+    } finally { allowResult(); await autoRunning; api.cloudAgentGet = get; }
+    check(automatic.document.run.status === 'done' && calls.length === autoLocalCount + 1 && calls.at(-1).input.prompt === optimized,
+      'one opted-in Run immediately generates video with the optimized prompt');
+    check(automatic.document.nodes[0].prompt === original, 'auto optimization only changes the text for this run');
+
+    const interruptedAuto = await controller({ ...node, comfyAutoOptimize: true });
+    resultMode = 'offline';
+    await interruptedAuto.start('h3', true);
+    check(interruptedAuto.document.run.status === 'waiting' && calls.length === autoLocalCount + 1, 'auto run waits on the original optimization after a connection error');
+    const autoRunId = interruptedAuto.document.run.steps.h3.agentRunId;
+    const reconnect = new CanvasWorkflowController(interruptedAuto.projectId); await reconnect.load();
+    resultMode = 'succeeded';
+    await reconnect.continue();
+    check(reconnect.document.nodes[0].comfyAutoOptimize === true && reconnect.document.run.steps.h3.agentRunId === autoRunId &&
+      starts.length === autoStartCount + 2 && calls.length === autoLocalCount + 2 && calls.at(-1).input.prompt === optimized,
+      'reload restores the checkbox and resumes the same optimization before generating once');
+
+    const failedAuto = await controller({ ...node, comfyAutoOptimize: true });
+    resultMode = 'failed'; await failedAuto.start('h3', true);
+    check(failedAuto.document.run.status === 'failed' && calls.length === autoLocalCount + 2, 'a failed auto optimization cannot submit a local video');
+    resultMode = 'succeeded';
+
+    const stopAuto = await controller({ ...node, comfyAutoOptimize: true });
+    const pendingCloud = Promise.withResolvers();
+    api.cloudAgentStart = input => { starts.push(input); return pendingCloud.promise; };
+    const autoCloudBeforeStop = starts.length;
+    const pendingAuto = stopAuto.start('h3', true);
+    try {
+      for (let attempt = 0; starts.length === autoCloudBeforeStop && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+      check(starts.length === autoCloudBeforeStop + 1, 'auto optimization begins before cancelling');
+      const stopping = stopAuto.stop();
+      pendingCloud.resolve({ runId: 'late-auto-cloud' });
+      await stopping;
+    } finally {
+      pendingCloud.resolve({ runId: 'late-auto-cloud' });
+      await pendingAuto;
+      api.cloudAgentStart = start;
+    }
+    check(cancels.includes('late-auto-cloud') && stopAuto.document.run.status === 'stopped' && calls.length === autoLocalCount + 2,
+      'stop during auto optimization cancels the original Cloud receipt without generating');
+
+    const wholeWorkflow = await controller({ ...node, comfyAutoOptimize: true });
+    const beforeWorkflow = starts.length;
+    await wholeWorkflow.start('h3');
+    check(starts.length === beforeWorkflow && calls.at(-1).input.prompt === original,
+      'only an opted-in explicit card Run starts paid optimization');
+    const environmentAuto = await controller({ ...node, comfyAutoOptimize: true });
+    const beforeEnvironment = calls.length;
+    window.h3PrepareFails = true;
+    try { await environmentAuto.start('h3', true); }
+    finally { window.h3PrepareFails = false; }
+    check(environmentAuto.document.run.status === 'waiting' && environmentAuto.document.run.steps.h3.comfyOptimization.result === optimized &&
+      calls.length === beforeEnvironment, 'local startup failure preserves the paid result for recovery');
+    await environmentAuto.continue();
+    check(environmentAuto.document.run.status === 'done' && starts.length === beforeWorkflow + 1 &&
+      calls.length === beforeEnvironment + 1 && calls.at(-1).input.prompt === optimized, 'retrying local startup never repeats the Cloud request');
     const ui = canvasWorkflowController('p'); await ui.load(); await ui.edit([{ ...node, x: 800 }]);
   });
   const card = page.locator('[data-workflow-card="h3"]');
-  assert.equal(await card.getByRole('checkbox').count(), 0);
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -234,7 +303,7 @@ try {
   assert.equal(await card.locator('details.comfy-optimization-result').count(), 0);
   const field = await card.locator('.comfy-video-prompt').boundingBox();
   const action = await card.getByRole('button', { name: '优化提示词', exact: true }).boundingBox();
-  assert.ok(action.y > field.y + field.height / 2 && action.x + action.width <= field.x + field.width && action.y + action.height <= field.y + field.height);
+  assert.ok(action.y >= field.y + field.height - 1 && action.x + action.width <= field.x + field.width + 1);
   for (const theme of ['dark', 'light']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await page.waitForFunction(theme => {
@@ -246,7 +315,8 @@ try {
   assert.match(await card.getByLabel('卡片指令', { exact: true }).inputValue(), /单一连续镜头/);
   await card.getByLabel('卡片指令', { exact: true }).fill('用户修改后的提示词');
   await page.evaluate(() => { window.dispatchTrace.length = 0; });
-  await card.getByRole('button', { name: '运行此卡片', exact: true }).evaluate(button => { button.click(); button.click(); });
+  const runButton = card.getByRole('button', { name: '运行', exact: true });
+  await runButton.evaluate(button => { button.click(); button.click(); });
   await page.waitForFunction(n => window.h3Calls.length > n, before.local);
   const directReads = await page.evaluate(() => window.dispatchTrace.slice(0,window.dispatchTrace.findIndex(row => row.key === 'localDispatch')).filter(row=>row.key==='projectCanvasGet').length);
   console.log('single text-only H3: native canvas reads before dispatch',directReads);
@@ -257,6 +327,16 @@ try {
   assert.equal(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), '用户修改后的提示词');
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), before.cloud + 1);
   assert.equal(await card.getByText('查看优化结果', { exact: true }).count(), 0);
+  const autoCheckbox = card.getByRole('checkbox', { name: '自动优化提示词', exact: true });
+  assert.equal(await autoCheckbox.isChecked(), false);
+  const autoBefore = await page.evaluate(() => ({ local: window.h3Calls.length, cloud: window.optimizeStarts.length }));
+  await autoCheckbox.check();
+  await runButton.click();
+  await page.waitForFunction(({ local, cloud }) => window.h3Calls.length === local + 1 && window.optimizeStarts.length === cloud + 1 &&
+    JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', autoBefore);
+  assert.equal(await page.evaluate(() => window.optimizeStarts.at(-1).textRewrite.source), '用户修改后的提示词');
+  assert.match(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), /单一连续镜头/);
+  assert.equal(await card.getByLabel('卡片指令', { exact: true }).inputValue(), '用户修改后的提示词');
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
@@ -314,6 +394,6 @@ try {
       && doc.nodes.find(node => node.id === 'image-h3').prompt === '透明玻璃杯，杯沿反射窗边的柔光。';
   });
   assert.deepEqual(errors, []);
-  console.log('H3 explicit optimization: no automatic Cloud/local chain; direct replacement/edit then manual generation; three modes, entitlement, stop, account, invalid output, unknown submission and recovery passed');
+  console.log('H3 explicit and opted-in optimization: manual editing, chained generation, stop, account, failure and original-job recovery passed');
 } catch (error) { console.error(error); throw error; }
 finally { await browser.close(); await server.close(); }

@@ -27,9 +27,10 @@ const schema = new Schema({ nodes: {
 const serialize = (doc: PMNode) => doc.textBetween(0, doc.content.size, "\n", node => node.type.name === "reference" ? workflowReferenceToken(node.attrs.id) : "");
 interface Candidate { reference: Omit<WorkflowPromptReference, "id">; preview: string; assetIds?: string[]; unavailable?: boolean }
 
-export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disabled, readCurrentPrompt, onChange, action }: {
+export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disabled, readCurrentPrompt, onChange, action, fitContent = false }: {
   node: WorkflowNode; nodes: WorkflowNode[]; graphNodes: CanvasNode[]; disabled: boolean;
   action?: ReactNode;
+  fitContent?: boolean;
   cardNames?: Record<string, string>;
   readCurrentPrompt: () => string;
   onChange: (prompt: string, references: WorkflowPromptReference[]) => void;
@@ -183,7 +184,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
     onChange(serialize(state.doc), [...(node.promptReferences ?? []), reference]);
     setMenu(null); editor.focus();
   }
-  const editorField = <div ref={host} className="workflow-prompt-editor" onPointerDown={event => event.stopPropagation()} />;
+  const editorField = <div ref={host} className="workflow-prompt-editor" data-fit-content={fitContent || undefined} onPointerDown={event => event.stopPropagation()} />;
   return <>{action ? <div className="workflow-prompt-with-action">{editorField}{action}</div> : editorField}
     {menu && !disabled && createPortal(<div className="workflow-reference-menu" role="listbox" aria-label="收到的内容" style={{ left: Math.max(8, Math.min(menu.left, window.innerWidth - 300)), top: Math.min(menu.top + 6, window.innerHeight - 280) }} onPointerDown={event => { event.preventDefault(); event.stopPropagation(); }}>
       <strong>收到的内容</strong>{!inputCandidates.length && <p>连接图片或文本输入后，可在这里引用</p>}

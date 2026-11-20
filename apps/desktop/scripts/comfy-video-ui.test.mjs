@@ -74,7 +74,7 @@ try {
   assert.equal(await page.locator('.workflow-card.is-comfy-video').count(),0,'tool arms placement first');
   await page.mouse.click(890,180);
   const card=page.locator('.workflow-card.is-comfy-video');await card.waitFor();
-  assert.equal(await card.locator('.provider-quota[data-quota="local"]').innerText(), '本机算力 · 不扣额度');
+  assert.equal(await card.getByRole('button', { name: '运行', exact: true }).getAttribute('title'), '本机算力·不扣额度');
   await card.screenshot({path:'.tmp/comfy-video/quota-local.png'});
   const dot=card.locator('.comfy-environment-dot');
   const panel=page.getByRole('dialog',{name:'本地部署工作流环境设置',exact:true});
@@ -92,7 +92,7 @@ try {
   await card.locator('.comfy-environment-dot:not(.is-ready)').waitFor();
   await dot.click();await panel.waitFor();
   await page.waitForFunction(()=>!document.querySelector('.comfy-environment-actions > :last-child button').disabled);
-  assert.deepEqual(await panel.getByRole('button').allTextContents(),['安装位置','安装']);
+  assert.deepEqual(await panel.getByRole('button').allTextContents(),['选择已有 ComfyUI','安装位置','安装']);
   await page.screenshot({path:'.tmp/comfy-video/setup-missing.png'});
   await panel.getByRole('button',{name:'安装位置',exact:true}).click();
   await page.waitForFunction(()=>window.environmentCalls.some(call=>call.directory==='D:\\Local-Workflows'));
@@ -108,7 +108,7 @@ try {
   assert.equal(await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='detect').length),detectsBeforeInstallFocus,'focus must not replace an in-flight installation with another detection');
   await page.evaluate(()=>{window.holdInstall=false;window.finishInstall();delete window.finishInstall;});
   await panel.getByLabel('环境下载进度',{exact:true}).waitFor();
-  assert.deepEqual(await panel.getByRole('button').allTextContents(),['安装位置','安装中…'],'no extra controls');
+  assert.deepEqual(await panel.getByRole('button').allTextContents(),['选择已有 ComfyUI','安装位置','安装中…']);
   assert.equal((await page.evaluate(()=>window.environmentCalls)).find(call=>call.action==='install').directory,'D:\\Local-Workflows');
   assert.equal(await panel.getByRole('button',{name:'安装中…',exact:true}).isDisabled(),true);
   assert.equal(await panel.getByRole('button',{name:'安装位置',exact:true}).isDisabled(),true);
@@ -201,7 +201,8 @@ try {
   const driverButton=panel.getByRole('button',{name:'下载显卡驱动',exact:true});
   await driverButton.waitFor();assert.equal(await driverButton.isDisabled(),false);
   await panel.getByText(/RTX 3060.*显存 12.0 GB.*576.80/).waitFor();
-  assert.equal(await panel.getByRole('button').count(),2,'driver assistance reuses existing action');
+  assert.deepEqual(await panel.getByRole('button').allTextContents(), ['选择已有 ComfyUI', '安装位置', '下载显卡驱动'],
+    'driver assistance reuses the primary environment action');
   await page.screenshot({path:'.tmp/comfy-video/driver-update.png'});
   const beforeDriver=await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='install').length);
   await driverButton.click();
@@ -250,11 +251,12 @@ try {
   await card.getByLabel('H3 比例').click();
   await page.getByRole('option',{name:'自动',exact:true}).click();
   await card.getByLabel('H3 分辨率').click();
-  assert.deepEqual(await page.getByRole('option').allTextContents(),['0.6','0.8','1.0']);
+  assert.deepEqual(await page.getByRole('option').allTextContents(),['低','中','高']);
   await page.keyboard.press('Escape');
-  await card.getByLabel('H3 时长').fill('11');
+  await card.getByLabel('H3 时长').click();
+  await page.getByRole('option',{name:'11 秒',exact:true}).click();
   await card.getByLabel('H3 分辨率').click();
-  await page.getByRole('option',{name:'0.6',exact:true}).click();
+  await page.getByRole('option',{name:'低',exact:true}).click();
   await card.getByLabel('卡片指令',{exact:true}).fill('镜头平稳推进，主体自然转动');
   await page.evaluate(async()=>{const {setDragAssets}=await import('/src/lib/dragPayload.ts');setDragAssets(['existing']);});
   await card.getByLabel('首帧输入',{exact:true}).dispatchEvent('drop',{dataTransfer:await page.evaluateHandle(()=>new DataTransfer())});
@@ -266,30 +268,30 @@ try {
   const layout=await card.evaluate(el=>{
     const rect=selector=>{const r=el.querySelector(selector).getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right};};
     return {cardWidth:parseFloat(getComputedStyle(el).width),width:el.querySelector('.comfy-video-card').clientWidth,scroll:el.querySelector('.comfy-video-card').scrollWidth,
-      header:rect('header'),provider:rect('.model-select-trigger'),prompt:rect('.comfy-video-prompt'),options:rect('.comfy-video-options'),frames:rect('.comfy-frame-slots'),
+      header:rect('header'),provider:rect('.model-select-trigger'),prompt:rect('.comfy-video-prompt'),actions:rect('.comfy-prompt-actions'),frames:rect('.comfy-frame-slots'),
       title:rect('header strong'),status:rect('.comfy-environment-dot'),copy:rect('button[aria-label="复制卡片"]')};
   });
   assert.equal(layout.cardWidth,320);
   assert.ok(layout.scroll<=layout.width+2, 'H3 settings fit the shared video card width');
   assert.ok(layout.title.right<=layout.status.left+1 && layout.status.right<=layout.copy.left+1, 'header actions fit beside the title');
   assert.ok(layout.provider.top>=layout.header.bottom && layout.frames.top>=layout.provider.bottom,'provider precedes its frame controls');
-  assert.ok(layout.prompt.top>=layout.frames.bottom && layout.options.top>=layout.prompt.bottom,'frames, prompt and parameters remain accessible');
+  assert.ok(layout.prompt.top>=layout.frames.bottom && layout.actions.top>=layout.prompt.bottom,'frames, prompt and optimization actions remain accessible');
   await page.screenshot({path:'.tmp/comfy-video/card-light.png'});
   await page.reload();await card.waitFor();await installMock();
-  assert.equal(await card.getByLabel('H3 时长').inputValue(),'11');
+  assert.equal(await card.getByLabel('H3 时长').innerText(),'11 秒');
   assert.match(await card.getByLabel('H3 比例').innerText(),/自动/);
   assert.equal((await snapshot()).nodes[0].comfyVideo.ratio,'auto');
-  assert.equal(await card.getByLabel('H3 分辨率').innerText(),'0.6');
+  assert.equal(await card.getByLabel('H3 分辨率').innerText(),'低');
   assert.equal((await snapshot()).nodes[0].inputs['last-frame'][0].assetId,'b');
   // Simulate losing a ready installation between detection and preparation.
   await page.evaluate(()=>{window.prepareError=true;});
-  await card.getByRole('button',{name:'运行此卡片',exact:true}).click();
+  await card.getByRole('button',{name:'运行',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='failed');
   assert.equal((await snapshot()).run.steps[(await snapshot()).nodes[0].id].jobId,undefined);
   assert.equal(await page.evaluate(()=>window.comfyCalls.length),0);
   // Stopping during automatic startup must never submit a video, even if startup later succeeds.
   await page.evaluate(()=>{window.prepareError=false;window.environmentPhase='stopped';window.holdStartup=true;});
-  await card.getByRole('button',{name:'运行此卡片',exact:true}).click();
+  await card.getByRole('button',{name:'运行',exact:true}).click();
   await card.getByText('正在自动启动测试环境',{exact:true}).waitFor();
   await card.getByRole('button',{name:'停止',exact:true}).click();
   await page.evaluate(()=>{window.holdStartup=false;});
@@ -297,7 +299,7 @@ try {
   assert.equal(await page.evaluate(()=>window.comfyCalls.length),0);
   assert.equal(await card.getByRole('button',{name:'取回上次视频'}).count(),0);
   await page.evaluate(()=>{window.environmentPhase='stopped';});
-  await card.getByRole('button',{name:'运行此卡片',exact:true}).click();
+  await card.getByRole('button',{name:'运行',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='waiting');
   let calls=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('comfy-calls')));
   const submitted=calls.find(call=>call.action==='start');
@@ -318,8 +320,11 @@ try {
   assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.command==='cancel_codex_create').length),0,'stop never cancels unrelated generators');
   await page.evaluate(()=>{window.comfyMode='done';window.failNodeSave=true;});
   await card.getByRole('button',{name:'取回上次视频'}).click();
-  await card.getByText(/模拟草稿卡片保存失败/).waitFor();
-  assert.equal((await snapshot()).run.status,'waiting','delivery failure is recoverable without generation');
+  await page.waitForFunction(() => {
+    const { run } = JSON.parse(sessionStorage.getItem('workflow-p')).document;
+    return run.status === 'waiting' && Object.values(run.steps).some(step => step.error?.includes('模拟草稿卡片保存失败'));
+  });
+  await card.getByRole('button', { name: '继续工作流' }).waitFor();
   await page.evaluate(()=>{window.failNodeSave=false;});
   await card.getByRole('button',{name:'继续工作流'}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='done');
@@ -341,7 +346,7 @@ try {
   await card.locator('.comfy-frame-slot[aria-label="尾帧输入"]').hover();
   await card.getByRole('button',{name:'断开尾帧',exact:true}).click();
   await page.evaluate(()=>{window.environmentPhase='ready';});
-  await card.getByRole('button',{name:'运行此卡片',exact:true}).click();
+  await card.getByRole('button',{name:'运行',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('comfy-calls')).filter(call=>call.action==='start').length===2);
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='done');
   const single=(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('comfy-calls')))).filter(call=>call.action==='start')[1];
@@ -391,7 +396,7 @@ try {
   // Real step counts, phase reset, failed cancellation and confirmed interruption.
   await page.reload();await card.waitFor();await installMock();
   await page.evaluate(()=>{window.environmentPhase='ready';window.comfyMode='running';window.comfyProgress={label:'生成视频',value:3,max:8};});
-  await card.getByRole('button',{name:'运行此卡片',exact:true}).click();
+  await card.getByRole('button',{name:'运行',exact:true}).click();
   const progress=card.getByLabel('本地视频当前阶段进度',{exact:true});
   await page.waitForFunction(()=>document.querySelector('.comfy-progress-bar')?.getAttribute('aria-valuenow')==='37.5');
   assert.equal(await progress.getAttribute('aria-valuemax'),'100');
@@ -417,19 +422,20 @@ try {
   const finalCalls=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('comfy-calls')));
   const finalStart=finalCalls.filter(call=>call.action==='start').at(-1);
   assert.ok(finalCalls.filter(call=>call.action==='cancel').slice(-2).every(call=>call.requestId===finalStart.requestId),'stop targets the exact current request');
-  // Stop during POST waits for its response before cancelling; nothing can submit after cancellation.
+  // The original request reaches native cancellation while the start response is still pending.
   await page.evaluate(()=>{window.holdSubmission=true;});
-  await card.getByRole('button',{name:'运行此卡片',exact:true}).click();
+  await card.getByRole('button',{name:'运行',exact:true}).click();
   await page.waitForFunction(()=>typeof window.finishSubmission==='function');
   await card.getByRole('button',{name:'停止工作流'}).click();
-  assert.equal(await card.getByRole('button',{name:'停止工作流'}).isDisabled(),true);
-  assert.equal(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('comfy-calls')).filter(call=>call.action==='cancel').length),finalCalls.filter(call=>call.action==='cancel').length);
-  await page.evaluate(()=>window.finishSubmission());
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='stopped');
+  const stoppedDuringStart=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('comfy-calls')).slice(-2));
+  assert.deepEqual(stoppedDuringStart.map(call=>call.action),['start','cancel']);
+  assert.equal(stoppedDuringStart[0].requestId,stoppedDuringStart[1].requestId);
+  await page.evaluate(()=>window.finishSubmission());
   assert.equal((await snapshot()).run.steps[(await snapshot()).nodes[0].id].comfyCancelled,true);
   await page.reload();await card.waitFor();await installMock();
   assert.equal(await card.getByRole('button',{name:'取回上次视频'}).count(),0,'confirmed cancellation survives reload');
   assert.deepEqual(errors,[]);
-  console.log('H3 UI: header status dot, two-button setup, install/retry, keyboard dismissal, frame inputs, one-click run and durable recovery passed');
+  console.log('H3 UI: header status, environment setup, keyboard dismissal, compact card, generation and durable recovery passed');
 } catch(error) { console.error(errors);await page.screenshot({path:'.tmp/comfy-video/failure.png'});throw error; }
 finally { await browser.close();await server.close(); }

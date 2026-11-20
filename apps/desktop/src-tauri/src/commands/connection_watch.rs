@@ -2,7 +2,10 @@
 use super::{queue_refresh, request_originals_check};
 use crate::core::folder_connections::connection_root_readable;
 use crate::{core::paths::LibraryPaths, db::Database, error::AppResult};
-use notify::{Event, EventKind, RecursiveMode, Watcher};
+use notify::{
+    event::{ModifyKind, RenameMode},
+    Event, EventKind, RecursiveMode, Watcher,
+};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -56,6 +59,39 @@ fn ignored(path: &Path) -> bool {
             || value.to_ascii_lowercase().starts_with(".bowerbird-")
     })
 }
+
+fn collect_original_changes(event: &Event, generated: &[PathBuf], changed: &mut HashSet<PathBuf>) {
+    let ambiguous_rename = matches!(
+        event.kind,
+        EventKind::Modify(ModifyKind::Name(RenameMode::Any))
+    );
+    let paths = match (event.kind, event.paths.as_slice()) {
+        (EventKind::Modify(ModifyKind::Name(RenameMode::Both)), [_, destination]) => {
+            std::slice::from_ref(destination)
+        }
+        (
+            EventKind::Create(_)
+            | EventKind::Any
+            | EventKind::Modify(
+                ModifyKind::Any
+                | ModifyKind::Data(_)
+                | ModifyKind::Name(RenameMode::To | RenameMode::Any),
+            ),
+            paths,
+        ) => paths,
+        _ => return,
+    };
+    changed.extend(
+        paths.iter().filter(|path| {
+            !ignored(path)
+                && !generated.iter().any(|dir| path.starts_with(dir))
+                // FSEvents leaves rename direction unspecified. Re-verify an
+                // original at the reported name without assuming a missing source was edited.
+                && (!ambiguous_rename || path.is_file())
+        }).cloned(),
+    );
+}
+
 fn affected(event: &Event, roots: &[Root]) -> HashSet<String> {
     if matches!(event.kind, EventKind::Access(_)) {
         return HashSet::new();
@@ -209,6 +245,25 @@ impl Pending {
         None
     }
 }
+
+fn queue_lost_notifications(
+    db: &Database,
+    roots: HashSet<String>,
+    pending: &mut Pending,
+    now: Instant,
+) {
+    // The normal scan can skip files whose stamps match. When the OS or our
+    // bounded channel reports dropped events, verify originals in those roots.
+    for root in &roots {
+        if let Err(error) =
+            crate::core::semantic_search::index::request_connection_verification(db, Some(root))
+        {
+            tracing::warn!(%error, "semantic index lost-notification verification");
+        }
+    }
+    pending.add(roots, now);
+}
+
 pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
     if let Some(main) = app.get_webview_window("main") {
         let (app, db, paths) = (app.clone(), db.clone(), paths.clone());
@@ -310,15 +365,24 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                     }
                     sync_at = now;
                 }
+                let mut changed_originals = HashSet::new();
+                let mut lost_roots = HashSet::new();
                 while let Ok(event) = receive.try_recv() {
                     match event {
                         Ok(mut event) => {
+                            // Classify a paired rename before removing generated
+                            // paths, so a generated origin cannot shift its destination.
+                            collect_original_changes(&event, &generated, &mut changed_originals);
                             event.paths.retain(|path| {
                                 !generated
                                     .iter()
                                     .any(|generated| path.starts_with(generated))
                             });
-                            pending.add(affected(&event, &known_roots), now);
+                            if event.need_rescan() {
+                                lost_roots.extend(known_roots.iter().map(|root| root.id.clone()));
+                            } else {
+                                pending.add(affected(&event, &known_roots), now);
+                            }
                             // A root can be removed and recreated between availability polls.
                             // Reattach its OS handle even when the same path already exists again.
                             for path in invalidated_watches(&event, &watched) {
@@ -344,11 +408,19 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                         }
                     }
                 }
+                if !changed_originals.is_empty() {
+                    let paths: Vec<_> = changed_originals.into_iter().collect();
+                    match crate::core::semantic_search::index::note_original_changes(&db, &paths) {
+                        Ok(true) => super::changed(&app),
+                        Ok(false) => (),
+                        Err(error) => tracing::warn!(%error, "semantic index change notice"),
+                    }
+                }
                 if overflow.swap(false, Ordering::AcqRel) {
-                    pending.add(
-                        known_roots.iter().map(|root| root.id.clone()).collect(),
-                        now,
-                    );
+                    lost_roots.extend(known_roots.iter().map(|root| root.id.clone()));
+                }
+                if !lost_roots.is_empty() {
+                    queue_lost_notifications(&db, lost_roots, &mut pending, now);
                 }
                 // Native notifications can be absent on NAS mounts. A bounded fallback plus
                 // focus/manual checks also recover missed events without a hot full-tree poll.
@@ -384,7 +456,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{AccessKind, ModifyKind};
+    use notify::event::AccessKind;
     #[test]
     fn removable_root_round_trip() {
         use std::fs;
@@ -658,7 +730,7 @@ mod tests {
     }
     #[test]
     fn root_replacement_invalidates_only_affected_watch_handles() {
-        use notify::event::{RemoveKind, RenameMode};
+        use notify::event::RemoveKind;
         let watched = HashMap::from([
             (PathBuf::from("/media"), RecursiveMode::Recursive),
             (PathBuf::from("/other"), RecursiveMode::Recursive),
@@ -679,6 +751,155 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn replacement_events_mark_only_the_destination_and_coalesce_duplicates() {
+        let from = PathBuf::from("/media/.bowerbird-temporary/preview.png");
+        let to = PathBuf::from("/media/reference.png");
+        let generated = PathBuf::from("/generated");
+        let event = |mode| Event::new(EventKind::Modify(ModifyKind::Name(mode)));
+        let mut changed = HashSet::new();
+        collect_original_changes(
+            &event(RenameMode::From).add_path(to.clone()),
+            &[],
+            &mut changed,
+        );
+        assert!(changed.is_empty());
+        collect_original_changes(
+            &event(RenameMode::Both).add_path(from.clone()).add_path(generated.join("skip.png")),
+            std::slice::from_ref(&generated),
+            &mut changed,
+        );
+        assert!(changed.is_empty());
+        collect_original_changes(
+            &event(RenameMode::Both).add_path(from).add_path(to.clone()),
+            &[],
+            &mut changed,
+        );
+        collect_original_changes(
+            &event(RenameMode::To).add_path(to.clone()),
+            &[],
+            &mut changed,
+        );
+        assert_eq!(changed, HashSet::from([to]));
+    }
+
+    #[test]
+    fn native_watcher_detects_same_size_and_mtime_atomic_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let original = root.join("original.png");
+        let replacement = root.join("incoming.tmp");
+        std::fs::write(&original, b"before").unwrap();
+        std::fs::write(&replacement, b"after!").unwrap();
+        let before = std::fs::metadata(&original).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_modified(before.modified().unwrap())
+            .unwrap();
+
+        let (send, receive) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(send).unwrap();
+        watcher.watch(&root, RecursiveMode::Recursive).unwrap();
+        std::fs::rename(&replacement, &original).unwrap();
+        let after = std::fs::metadata(&original).unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            let event = receive
+                .recv_timeout(until.saturating_duration_since(Instant::now()))
+                .unwrap()
+                .unwrap();
+            if matches!(event.kind, EventKind::Modify(ModifyKind::Name(_))) {
+                let mut changed = HashSet::new();
+                collect_original_changes(&event, &[], &mut changed);
+                if changed.contains(&original) {
+                    assert!(!changed.contains(&replacement));
+                    break;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lost_notification_scan_recovers_same_stamp_unsupported_original() {
+        use crate::core::semantic_search::index;
+        use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+        use sha2::{Digest, Sha256};
+        use std::{fs, io::Cursor};
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("originals");
+        fs::create_dir(&source).unwrap();
+        let original = source.join("asset.png");
+        let encode = |format, side| {
+            let image =
+                DynamicImage::ImageRgb8(RgbImage::from_pixel(side, side, Rgb([12, 91, 180])));
+            let mut out = Cursor::new(Vec::new());
+            image.write_to(&mut out, format).unwrap();
+            out.into_inner()
+        };
+        let mut unsupported = encode(ImageFormat::Bmp, 1);
+        let supported = encode(ImageFormat::Png, 4);
+        assert!(supported.len() > unsupported.len());
+        unsupported.resize(supported.len(), 0);
+        fs::write(&original, &unsupported).unwrap();
+        let stamp = fs::metadata(&original).unwrap().modified().unwrap();
+
+        let paths = LibraryPaths::init(temp.path().join("internal")).unwrap();
+        let db = Database::open(&paths.db).unwrap();
+        db.migrate().unwrap();
+        let root = db
+            .connect_directory(&fs::canonicalize(&source).unwrap(), None)
+            .unwrap();
+        db.scan_connection(&paths, &root).unwrap();
+        let identity = || {
+            let conn = db.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT asset_id,fingerprint FROM external_assets",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            ).unwrap()
+        };
+        let prior = identity();
+        index::control(&db, "start").unwrap();
+        index::run_one(&db, |_| panic!("unsupported source must not reach image encoder"))
+            .unwrap();
+        assert_eq!(index::status(&db).unwrap().unsupported, 1);
+
+        fs::write(&original, &supported).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&original)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        let after = fs::metadata(&original).unwrap();
+        assert_eq!(after.len(), unsupported.len() as u64);
+        assert_eq!(after.modified().unwrap(), stamp);
+        db.scan_connection(&paths, &root).unwrap();
+        assert_eq!(identity(), prior, "ordinary scan skips the same stamp");
+
+        let mut pending = Pending::default();
+        let now = Instant::now();
+        queue_lost_notifications(&db, HashSet::from([root]), &mut pending, now);
+        for id in pending.take_ready(now + Duration::from_secs(1)).unwrap() {
+            db.scan_connection(&paths, &id).unwrap();
+        }
+        assert_eq!(identity(), (prior.0, format!("{:x}", Sha256::digest(&supported))));
+        index::run_one(&db, |_| {
+            let mut vector = vec![0.0; 768];
+            vector[0] = 1.0;
+            Ok(vector)
+        }).unwrap();
+        let status = index::status(&db).unwrap();
+        assert_eq!((status.indexed, status.unsupported), (1, 0));
+    }
+
     #[test]
     fn native_watcher_detects_real_temporary_file_changes() {
         let temp = tempfile::tempdir().unwrap();

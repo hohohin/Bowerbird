@@ -20,6 +20,7 @@ mod macos_terminal;
 pub mod library;
 pub mod media_import;
 pub mod material_catalog;
+pub(crate) mod semantic_search;
 pub mod asset_archive;
 pub mod layers;
 pub mod layer_text;

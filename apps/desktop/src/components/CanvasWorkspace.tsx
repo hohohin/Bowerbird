@@ -27,7 +27,7 @@ import { CANVAS_ARTBOARD_FROM_IMAGE, artboardComposition, containArtboardImage, 
 import { CanvasToolbox } from "./CanvasToolbox";
 import { VideoReplicationDialog } from "./VideoReplicationDialog";
 import { CanvasWorkflowLayer, WindingKey, type WorkflowLayerHandle, type WorkflowGeometry, type MaterialAnchor } from "./CanvasWorkflowLayer";
-import { GenerationGroupMenuItem, MergeGenerationGroupMenuItem } from "./GenerationGroupMenuItem";
+import { CanvasContextMenu, type CanvasContextMenuState, type CanvasMenuImage } from "./CanvasContextMenu";
 import { GALLERY_MERGED_EVENT, type GalleryMerge } from "../lib/generationGallery";
 import { canvasConversationCards, canvasConversationGroupTarget } from "../lib/canvasConversationCards";
 import { CanvasConnectionHandle } from "./CanvasConnectionHandle";
@@ -45,8 +45,8 @@ import { replicationWorkflow } from "../lib/replicationWorkflow";
 import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasLibraryResize } from "./CanvasLibraryResize";
-import { AssetTransferMenuItems, useAssetTransferDialogs } from "./AssetTransferMenuItems";
-import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
+import { useAssetTransferDialogs } from "./AssetTransferMenuItems";
+import { buildCanvasContextMenu, type CanvasMenuAction } from "../lib/canvasContextMenu";
 import { CANVAS_LAYER_STEP_EVENT, stepCanvasLayers, type CanvasLayerStepDetail } from "../lib/canvasLayers";
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
 import "./CanvasNotes.css";
@@ -88,7 +88,6 @@ import {
   type SyntheticEvent,
   type WheelEvent,
 } from "react";
-import { ContextMenu, ContextSubmenu, DeleteSubmenu } from "./ContextMenu";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "@tauri-apps/api/core";
 import {
@@ -117,13 +116,10 @@ import {
   Hand,
   PanelLeftClose,
   PanelLeftOpen,
-  PenTool,
   Palette,
   Repeat2,
   Plus,
   Sparkles,
-  Trash2,
-  Ungroup,
   Undo2,
   X,
 } from "lucide-react";
@@ -656,7 +652,7 @@ export function CanvasWorkspace({
   const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; assetIds?: Array<string | null>; index: number } | null>(null);
   const videoFrameSaves = useRef(new Map<string, () => Promise<void>>());
   const videoTrimSaves = useRef(new Map<string, () => Promise<Asset>>());
-  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
+  const [promptMenu, setPromptMenu] = useState<CanvasContextMenuState | null>(null);
   const transfer = useAssetTransferDialogs();
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
   const viewSaveTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -2981,8 +2977,34 @@ export function CanvasWorkspace({
     return () => { alive = false; cleanup?.(); };
   }, [projectId]);
 
-  const menuSection = promptMenu?.section && graphNodes.find(node => node.id === promptMenu.section!.id);
-  const menuSectionNote = menuSection && readCanvasNote(menuSection);
+  function captureCanvasMenu(
+    x: number, y: number, point: CanvasPoint | null, nodeIds: string[], node: ProjectGraphNode | null,
+    folderId?: string, sectionNode?: ProjectGraphNode | null,
+  ) {
+    const note = sectionNode && readCanvasNote(sectionNode);
+    const section: CanvasContextMenuState["section"] = sectionNode && note?.note_type === "section" ? {
+      id: sectionNode.id,
+      name: point ? note.text.trim() || "分区" : note.text,
+      kind: note.workflow_container ? "container" : note.artboard ? "artboard" : "section",
+      color: note.section_color ?? SECTION_COLORS[0][1],
+    } : undefined;
+    const { assetIds, images } = canvasMediaForSelection(nodeIds);
+    const exportable = new Set(nodeIds.length ? workflowNodes.filter(card => !["trigger", "text", "planner"].includes(card.kind)).map(card => card.id) : []);
+    const dissolveTarget = nodeIds.length === 1 ? canvasConversationGroupTarget(conversationCardsRef.current.cards.get(nodeIds[0])) : undefined;
+    const model = buildCanvasContextMenu({
+      blank: point !== null, nodeCount: nodeIds.length, cardKind: node?.kind ?? null, hasFolder: !!folderId, section,
+      assetCount: assetIds.length, imageCount: images.length, hasDissolvableGroup: !!dissolveTarget,
+      interactive: workflowInteractive,
+      canExportWorkflow: nodeIds.some(id => exportable.has(id)),
+      canSaveTemplate: WORKFLOW_TEMPLATE_LIBRARY_ENABLED && [...expandCanvasSections(new Set(nodeIds), graphNodes)].some(id => exportable.has(id)),
+      selectionLocked: nodeIds.some(id => workflowRef.current?.isLocked(id)),
+      sessionRunning: node?.kind === "prompt" && nodeIds.length === 1 && promptSessionJobs(node).some(job => job.running),
+    });
+    setPromptMenu({
+      x, y, point, node, nodeIds, folderId, section, projectId: activeCanvasRef.current.id, sourceProjectId: projectId,
+      assetIds, images, canAdjustLayer: nodeIds.length > 0 && canAdjustMenuLayers(nodeIds), dissolveTarget, model,
+    });
+  }
 
   function openCanvasNodeMenu(event: React.MouseEvent<HTMLElement>, nodeId: string, node: ProjectGraphNode | null = null) {
     event.preventDefault();
@@ -2990,9 +3012,72 @@ export function CanvasWorkspace({
     useStore.getState().closeContextMenu();
     const nodeIds = selectedCanvasNodeIdsRef.current.has(nodeId) ? [...selectedCanvasNodeIdsRef.current] : [nodeId];
     const folder = nodesRef.current.find((candidate): candidate is CanvasFolderNode => candidate.id === nodeId && candidate.kind === "folder");
-    const section = graphNodesRef.current.find(candidate => candidate.id === nodeId && candidate.kind === "note" && readCanvasNote(candidate).note_type === "section");
-    setPromptMenu({ node, nodeIds, folder, x: event.clientX, y: event.clientY, point: null,
-      ...(section ? { section: { id: section.id, name: readCanvasNote(section).text } } : {}) });
+    const section = graphNodesRef.current.find(candidate => candidate.id === nodeId && candidate.kind === "note");
+    captureCanvasMenu(event.clientX, event.clientY, null, nodeIds, node, folder?.id, section);
+  }
+
+  function selectCanvasMenuAction(action: CanvasMenuAction, menu: CanvasContextMenuState) {
+    if (menu.projectId !== activeCanvasRef.current.id || useStore.getState().projectRoutePending) {
+      setPromptMenu(null);
+      return;
+    }
+    switch (action) {
+      case "draft":
+        if (menu.point) newDraftAt(menu.point);
+        return;
+      case "artboard":
+        if (menu.point) createCanvasNote({ ...menu.point, width: 480, height: 360 }, "section", { base_asset_id: null });
+        break;
+      case "import-package":
+        workflowRef.current?.templates(true);
+        break;
+      case "paste": {
+        const point = menu.point ?? toBoardPoint(menu.x, menu.y);
+        void navigator.clipboard.readText().catch(() => canvasClipboardText).then(text => {
+          const value = parseCanvasClipboard(text);
+          if (value) return pasteCanvasSelection(value, point);
+          notify("剪贴板中没有可粘贴的画板卡片", "info");
+        });
+        break;
+      }
+      case "copy":
+        void copyCanvasSelection(menu.nodeIds);
+        break;
+      case "encapsulate":
+        workflowRef.current?.saveTemplate(menu.nodeIds, "container");
+        break;
+      case "save-template":
+        workflowRef.current?.saveTemplate(menu.nodeIds);
+        break;
+      case "export-package":
+        workflowRef.current?.saveTemplate(menu.nodeIds, "package");
+        break;
+      case "reuse":
+        if (menu.node) reuseCanvasPrompt(menu.node);
+        return;
+      case "remove-section":
+        if (menu.section) removeNodes([menu.section.id]);
+        break;
+      case "ungroup-folder":
+        if (menu.folderId) ungroupFolder(menu.folderId);
+        break;
+      case "remove-nodes":
+        removeNodes(menu.nodeIds);
+        break;
+      case "delete-session":
+        if (menu.node) deletePromptSession(menu.node);
+        return;
+    }
+    setPromptMenu(null);
+  }
+
+  function setCanvasMenuSectionColor(sectionId: string, color: string) {
+    const section = graphNodesRef.current.find(node => node.id === sectionId && node.kind === "note" && node.hiddenAt == null);
+    if (!section) return;
+    const note = readCanvasNote(section);
+    if (note.note_type === "section" && !note.artboard && !note.workflow_container && (note.section_color ?? SECTION_COLORS[0][1]) !== color) {
+      updateCanvasNote(section.id, { ...note, section_color: color });
+    }
   }
 
   useEffect(() => {
@@ -3280,28 +3365,32 @@ export function CanvasWorkspace({
     }
   }
 
-  function canvasImagesForSelection(nodeIds: Iterable<string>, includeAllMedia = false) {
+  function canvasMediaForSelection(nodeIds: Iterable<string>) {
     const ids = new Set(nodeIds);
+    if (!ids.size) return { assetIds: [], images: [] };
     for (const id of [...ids]) {
       const card = conversationCardsRef.current.cards.get(id);
       if (card?.anchor.kind !== "asset") for (const output of card?.outputs ?? []) ids.add(output.id);
     }
-    const images = new Map<string, { assetId: string; canvasNodeId: string }>();
+    const assetIds = new Set<string>();
+    const images = new Map<string, CanvasMenuImage>();
     for (const node of shownMaterials) {
       if (!ids.has(node.id)) continue;
       for (const asset of node.kind === "asset" ? [(displayedMaterial(node) as CanvasAssetNode).asset] : node.assets) {
-        if (asset.assetId && (includeAllMedia || (asset.storePath && !isVideoPath(asset.storePath) && !isAudioPath(asset.storePath))) && !images.has(asset.assetId)) {
+        if (!asset.assetId) continue;
+        assetIds.add(asset.assetId);
+        if (asset.storePath && !isVideoPath(asset.storePath) && !isAudioPath(asset.storePath) && !isTextPath(asset.storePath) && !images.has(asset.assetId)) {
           images.set(asset.assetId, { assetId: asset.assetId, canvasNodeId: asset.id });
         }
       }
     }
-    return [...images.values()];
+    return { assetIds: [...assetIds], images: [...images.values()] };
   }
 
-  function addCanvasImagesToBoard(nodeIds: Iterable<string>) {
+  function addCanvasImagesToBoard(images: readonly CanvasMenuImage[]) {
     if (loadingRef.current || useStore.getState().projectRoutePending) return;
     setPromptMenu(null);
-    for (const asset of canvasImagesForSelection(nodeIds)) {
+    for (const asset of images) {
       window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: asset }));
     }
     setSelectedCanvasNodeIds(new Set());
@@ -3321,6 +3410,11 @@ export function CanvasWorkspace({
   }
 
   const removeMenuNodes = useLatestCallback(removeNodes);
+
+  function canAdjustMenuLayers(nodeIds: readonly string[]) {
+    const workflowCards = workflowRef.current?.bounds();
+    return !nodeIds.some(id => workflowCards?.some(node => node.id === id));
+  }
 
   function openCanvasAssetContextMenu(
     event: React.MouseEvent<HTMLElement>,
@@ -3344,27 +3438,36 @@ export function CanvasWorkspace({
     const itemId = selectedAsset.id;
     const groupTarget = members && (selectionNode.kind === "folder" || members.length > 1) ? {
       assetIds: [...new Set(members.flatMap(member => member.assetId ? [member.assetId] : []))],
+      count: selectionNode.kind === "folder" && storedFolder?.kind === "folder" ? storedFolder.assets.length : members.length,
       removeFromCanvas: () => removeMenuNodes([selectionNode.id]),
     } : undefined;
+    const nodeIds = [...selectedIds];
+    const { assetIds, images } = canvasMediaForSelection(nodeIds);
+    const targets = selectedIds.size > 1 ? assetIds : [selectedAsset.assetId];
     openContextMenu(event.clientX, event.clientY, selectedAsset.assetId, {
       generationGroup: canvasConversationGroupTarget(card),
       ungroupCanvasFolder: selectionNode.kind === "folder" ? () => ungroupFolder(selectionNode.id) : undefined,
       addCanvasImagesToBoard: {
-        count: canvasImagesForSelection(selectedIds).length,
-        run: () => addCanvasImagesToBoard(selectedIds),
+        count: images.length,
+        run: () => addCanvasImagesToBoard(images),
       },
       asset: assetById.get(selectedAsset.assetId),
       canvasSelection: {
         projectId: activeCanvasRef.current.id,
-        nodeIds: [...selectedIds],
+        nodeIds,
+        canAdjustLayer: canAdjustMenuLayers(nodeIds),
+        removeSelectionFromCanvas: nodeIds.length > 1 ? () => removeMenuNodes(nodeIds) : undefined,
         deletionTargets: {
           item: { assetIds: [selectedAsset.assetId], removeFromCanvas: () => removeMenuNodes([onlyMember ? selectionNode.id : itemId], onlyMember) },
           group: groupTarget,
         },
         prepareProjectRemoval: ids => prepareCanvasProjectRemoval(ids, [selectionNode.id]),
-        assetIds: selectedIds.size > 1
-          ? canvasImagesForSelection(selectedIds, true).map(asset => asset.assetId)
-          : [selectedAsset.assetId],
+        assetIds: targets,
+        assets: targets.flatMap(id => {
+          const asset = assetById.get(id);
+          return asset ? [asset] : [];
+        }),
+        imageOnly: nodeIds.length > 1 && targets.length > 0 && images.length === targets.length,
       },
     });
   }
@@ -3385,6 +3488,7 @@ export function CanvasWorkspace({
         ...item, generation_ref: undefined, image_refs: item.image_refs?.filter(ref => !ids.includes(ref.asset_id)),
       })) });
     }
+    const mediaPath = asset?.store_path ?? event.currentTarget.dataset.filePath;
     openContextMenu(event.clientX, event.clientY, assetId, {
       asset, singleAsset: true, generationGroup: canvasConversationGroupTarget(card),
       canvasSelection: {
@@ -3396,10 +3500,13 @@ export function CanvasWorkspace({
               if (!canvasWorkflowController(node.projectId).isLocked(node.id)) removeMenuNodes([outputId], false);
             } else clearCell([assetId]);
           } },
-          group: assetIds.length > 1 ? { assetIds, removeFromCanvas: () => clearCell(assetIds) } : undefined,
+          group: assetIds.length > 1 ? { assetIds, count: assetIds.length, removeFromCanvas: () => clearCell(assetIds) } : undefined,
         },
       },
-      addCanvasImagesToBoard: { count: isVideoPath(asset?.store_path ?? event.currentTarget.dataset.filePath) ? 0 : 1, run: () => window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: assetId })) },
+      addCanvasImagesToBoard: {
+        count: mediaPath && !isVideoPath(mediaPath) && !isAudioPath(mediaPath) && !isTextPath(mediaPath) ? 1 : 0,
+        run: () => window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: assetId })),
+      },
     });
   }
 
@@ -5342,7 +5449,7 @@ export function CanvasWorkspace({
           });
         }}>
         <div id={`${sourcePanelId}-content`} className="canvas-source-content">
-          <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode === "all" || fileMode === "tags" ? fileMode : "collections"} media={libraryMedia} projectId={projectId}
+          <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode === "all" || fileMode === "tags" ? fileMode : "collections"} media={libraryMedia} projectId={projectId} semanticSearchEnabled={!sourceCollapsed}
             projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>
         </div>
         <CanvasFrequentAssets library={frequentLibrary} projectId={projectId} picking={frequentPicking} onPickingChange={setFrequentPicking}/>
@@ -5573,9 +5680,7 @@ export function CanvasWorkspace({
             // 让「移除分区」在分区内部也可用，而不必精确点中标题条或窄边。
             const point = toBoardPoint(event.clientX, event.clientY);
             const section = sectionUnderPoint(point);
-            setPromptMenu({ node: null, nodeIds: [...selectedCanvasNodeIdsRef.current],
-              section: section ? { id: section.id, name: readCanvasNote(section).text.trim() || "分区" } : null,
-              x: event.clientX, y: event.clientY, point });
+            captureCanvasMenu(event.clientX, event.clientY, point, [...selectedCanvasNodeIdsRef.current], null, undefined, section);
           }}
           onPointerMove={movePan}
           onPointerUp={endPan}
@@ -6180,98 +6285,10 @@ export function CanvasWorkspace({
           </ProjectInspectorShell>
         )}
         {transfer.dialogs}
-        {promptMenu && <ContextMenu key={`${promptMenu.x}:${promptMenu.y}`} x={promptMenu.x} y={promptMenu.y}
-          label={promptMenu.node?.kind === "agent_group" ? "Agent 执行组菜单" : promptMenu.node ? "生成指令菜单" : "画板节点菜单"}
-          onClose={() => setPromptMenu(null)}>
-            {promptMenu.point && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => newDraftAt(promptMenu.point!)}>
-              <PenTool size={14} /> 新建草稿
-            </button>}
-            {promptMenu.point && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
-              createCanvasNote({ ...promptMenu.point!, width: 480, height: 360 }, "section", { base_asset_id: null }); setPromptMenu(null);
-            }}><Scan size={14} /> 新建画板</button>}
-            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
-              void copyCanvasSelection(promptMenu.nodeIds); setPromptMenu(null);
-            }}><Copy size={14} /> 复制所选卡片</button>}
-            <AssetTransferMenuItems assetIds={canvasImagesForSelection(promptMenu.nodeIds, true).map(asset => asset.assetId)}
-              sourceProjectId={projectId} onClose={() => setPromptMenu(null)} dialogs={transfer} />
-            {promptMenu.nodeIds.length > 0 && <button type="button" disabled={!workflowInteractive} role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
-              workflowRef.current?.saveTemplate(promptMenu.nodeIds, "container"); setPromptMenu(null);
-            }}><Frame size={14} /> 封装为容器</button>}
-            {WORKFLOW_TEMPLATE_LIBRARY_ENABLED && [...expandCanvasSections(new Set(promptMenu.nodeIds), graphNodes)].some(id => workflowNodes.some(node => node.id === id && !["trigger", "text", "planner"].includes(node.kind))) &&
-              <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
-                workflowRef.current?.saveTemplate(promptMenu.nodeIds); setPromptMenu(null);
-              }}><Copy size={14} /> 存为模板</button>}
-            {promptMenu.nodeIds.some(id => workflowNodes.some(node => node.id === id && !["trigger", "text", "planner"].includes(node.kind))) &&
-              <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
-                workflowRef.current?.saveTemplate(promptMenu.nodeIds, "package"); setPromptMenu(null);
-              }}><Copy size={14} /> 导出工作流数据包</button>}
-            <button type="button" disabled={!workflowInteractive} role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
-              workflowRef.current?.templates(true); setPromptMenu(null);
-            }}><Copy size={14} /> 导入工作流数据包</button>
-            <button type="button" disabled={!workflowInteractive} role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
-              const point = promptMenu.point ?? toBoardPoint(promptMenu.x, promptMenu.y); setPromptMenu(null);
-              void navigator.clipboard.readText().catch(() => canvasClipboardText).then(text => {
-                const value = parseCanvasClipboard(text);
-                if (value) return pasteCanvasSelection(value, point);
-                notify("剪贴板中没有可粘贴的画板卡片", "info");
-              });
-            }}><Copy size={14} /> 粘贴卡片</button>
-            {promptMenu.nodeIds.length > 0 && !promptMenu.nodeIds.some(id => workflowRef.current?.bounds().some(node => node.id === id)) && <CanvasLayerMenuItem projectId={activeCanvasRef.current.id} nodeIds={promptMenu.nodeIds}
-              className="app-context-item px-2 py-1.5" />}
-            {canvasImagesForSelection(promptMenu.nodeIds).length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => addCanvasImagesToBoard(promptMenu.nodeIds)}>
-              <Images size={14} className="shrink-0" /> {canvasImagesForSelection(promptMenu.nodeIds).length > 1
-                ? `添加所选 ${canvasImagesForSelection(promptMenu.nodeIds).length} 张图片到对话框`
-                : "添加到对话框"}
-            </button>}
-            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
-              arrangeNodes(promptMenu.nodeIds);
-              setPromptMenu(null);
-            }}>
-              <LayoutDashboard size={14} /> 整理
-            </button>}
-            {promptMenu.nodeIds.length > 1 && <MergeGenerationGroupMenuItem assetIds={canvasImagesForSelection(promptMenu.nodeIds, true).map(asset => asset.assetId)} nodeIds={promptMenu.nodeIds} projectId={activeCanvasRef.current.id} onComplete={() => setPromptMenu(null)} />}
-            {promptMenu.nodeIds.length === 1 && <GenerationGroupMenuItem target={canvasConversationGroupTarget(conversationCards.cards.get(promptMenu.nodeIds[0]))} onComplete={() => setPromptMenu(null)} />}
-            {promptMenu.node && promptMenu.nodeIds.length === 1 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => reuseCanvasPrompt(promptMenu.node!)}>
-              <Copy size={14} /> 复用提示词
-            </button>}
-            {menuSection && menuSectionNote?.note_type === "section" && !menuSectionNote.artboard && !menuSectionNote.workflow_container &&
-              <ContextSubmenu label="分区颜色" icon={<Palette size={14} />}>
-                {SECTION_COLORS.map(([label, color]) => <button type="button" key={color} role="menuitemradio"
-                  aria-checked={(menuSectionNote.section_color ?? SECTION_COLORS[0][1]) === color} className="app-context-item px-2 py-1.5"
-                  onClick={() => {
-                    if ((menuSectionNote.section_color ?? SECTION_COLORS[0][1]) !== color) updateCanvasNote(menuSection.id, { ...menuSectionNote, section_color: color });
-                    setPromptMenu(null);
-                  }}><span className="canvas-section-swatch" style={{ backgroundColor: color }} />{label}</button>)}
-              </ContextSubmenu>}
-            {(promptMenu.section || promptMenu.nodeIds.length > 0) && <><div className="app-context-divider" /><DeleteSubmenu>
-            {promptMenu.section && <button type="button" disabled={!workflowInteractive} role="menuitem" title="移除分区框，保留其中的卡片" className="app-context-item is-danger px-2 py-1.5" onClick={() => {
-              removeNodes([promptMenu.section!.id]);
-              setPromptMenu(null);
-            }}>
-              <Trash2 size={14} className="shrink-0" /> {graphNodes.some(node => node.id === promptMenu.section!.id && readCanvasNote(node).workflow_container) ? "解封容器" : graphNodes.some(node => node.id === promptMenu.section!.id && readCanvasNote(node).artboard) ? "移除画板" : "移除分区"}「{promptMenu.section.name}」
-            </button>}
-            {promptMenu.folder && promptMenu.nodeIds.length === 1 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
-              ungroupFolder(promptMenu.folder!.id);
-              setPromptMenu(null);
-            }}>
-              <Ungroup size={14} /> 解散素材组
-            </button>}
-            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item is-danger px-2 py-1.5" disabled={!workflowInteractive || promptMenu.nodeIds.some(id => workflowRef.current?.isLocked(id))} onClick={() => {
-              removeNodes(promptMenu.nodeIds);
-              setPromptMenu(null);
-            }}>
-              <Trash2 size={14} className="shrink-0" /> {promptMenu.nodeIds.length > 1
-                ? `从画布移出所选 ${promptMenu.nodeIds.length} 项`
-                : "从画布移出"}
-            </button>}
-            {promptMenu.node?.kind === "prompt" && promptMenu.nodeIds.length === 1 && <button type="button" role="menuitem" className="app-context-item is-danger px-2 py-1.5 disabled:opacity-40"
-              disabled={promptSessionJobs(promptMenu.node).some((job) => job.running)}
-              title={promptSessionJobs(promptMenu.node).some((job) => job.running) ? "生成中，请结束后再删除会话" : "删除会话记录及指令卡片，保留已生成图片"}
-              onClick={() => deletePromptSession(promptMenu.node!)}>
-              <Trash2 size={14} /> 删除会话
-            </button>}
-            </DeleteSubmenu></>}
-        </ContextMenu>}
+        {promptMenu && <CanvasContextMenu key={`${promptMenu.x}:${promptMenu.y}`} menu={promptMenu} transfer={transfer}
+          onClose={() => setPromptMenu(current => current === promptMenu ? null : current)}
+          onSelect={action => selectCanvasMenuAction(action, promptMenu)} onAddImages={addCanvasImagesToBoard}
+          onSectionColor={setCanvasMenuSectionColor} />}
         {artboardDialog && <CanvasArtboardDialog composition={artboardDialog.composition} onClose={() => setArtboardDialog(null)}
           onSubmit={async (prompt, instruction, references, provider) => {
             const origin = artboardDialog;

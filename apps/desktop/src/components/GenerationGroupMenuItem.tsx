@@ -4,12 +4,12 @@ import { api } from "../lib/api";
 import { notifyError } from "../lib/notify";
 import { reportGalleryMerge } from "../lib/generationGallery";
 
-export function MergeGenerationGroupMenuItem({ assetIds, nodeIds, projectId, onComplete, disabled }: {
-  assetIds: string[]; nodeIds?: string[]; projectId: string | null; onComplete: () => void; disabled?: boolean;
+export function MergeGenerationGroupMenuItem({ assetIds, nodeIds, projectId, onComplete, disabled, title }: {
+  assetIds: string[]; nodeIds?: string[]; projectId: string | null; onComplete: () => void; disabled?: boolean; title?: string;
 }) {
   const [busy, setBusy] = useState(false);
   if (new Set(assetIds).size < 2) return null;
-  return <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" disabled={disabled || busy}
+  return <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" disabled={disabled || busy} title={title}
     onClick={async () => {
       setBusy(true);
       try { const edit = await api.mergeGenerationGalleries({ assetIds, nodeIds, projectId }); reportGalleryMerge(edit, projectId); onComplete(); }

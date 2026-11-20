@@ -2,18 +2,17 @@
 import { CanvasTextarea } from "./CanvasTextarea";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState } from "react";
-import { ArrowLeftRight, Check, CircleAlert, Ellipsis, X } from "lucide-react";
+import { ArrowLeftRight, Check, CircleAlert, Ellipsis, Film, Gauge, Timer, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, type ComfyEnvironment, type ComfyVideoOptions, type ComfyVideoMode } from "../lib/comfyVideo";
+import { comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_VIDEO_RESOLUTIONS, type ComfyEnvironment, type ComfyVideoOptions, type ComfyVideoMode } from "../lib/comfyVideo";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError } from "../lib/notify";
 import type { Asset } from "../lib/types";
 import type { WorkflowNode, WorkflowStep } from "../lib/canvasWorkflow";
 import "./ComfyVideoCard.css";
-import { ProviderQuota } from "./creation/ProviderQuota";
 import { TacticalSelect } from "./TacticalSelect";
 import { RatioSelect } from "./creation/RatioSelect";
 import { RATIOS } from "./creation/ratios";
@@ -140,7 +139,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
     : failed ? "重试安装" : environment.phase === "cancelled" ? "继续安装" : "安装";
   const actionDisabled = disabled || checking || acting || preparing || ready || (!recheck && !needsDriver && !canPrepare && !environment?.canInstall);
   const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
-  const message = connectionError ? userErrorMessage(connectionError, "暂时无法检查本地生成环境，请重新检测。") : (checking ? "正在检查本机环境…" : ready && environment?.phase !== "ready" && environment?.phase !== "starting"
+  const message = connectionError ? userErrorMessage(connectionError, "暂时无法检查本地生成环境，请重新检测。") : (checking ? "正在检查本机环境…" : ready && environment?.phase !== "ready" && environment?.phase !== "starting" && environment?.phase !== "recoverable"
     ? "环境已就绪，运行卡片时会自动启动" : userErrorMessage(environment?.message, "环境未就绪，请重新检测或检查安装位置。"));
   const busyHint = disabled ? "当前生成任务正在执行，请等待任务结束或停止任务后再调整环境。"
     : driverOpening ? "正在匹配官方显卡驱动，请稍候，勿重复点击。"
@@ -153,6 +152,26 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
     : canPrepare ? `${message}。点击启动已有环境并检查模型，无需重新下载。`
     : `${failed ? `${message}。` : ""}点击下载并安装所需环境，已下载的资源会校验后继续使用。`);
   useEffect(() => { onStatusChange?.({ ready: ready && !checking && !acting, checking, message }); }, [ready, checking, acting, message, onStatusChange]);
+  async function selectExisting() {
+    if (actionInFlight.current) return;
+    const selected = await open({ directory: true, multiple: false, title: "选择已有 ComfyUI" }).catch(error => {
+      if (mounted.current) setConnectionError(String(error));
+      return null;
+    });
+    if (typeof selected !== "string" || !mounted.current || actionInFlight.current) return;
+    actionInFlight.current = true;
+    request.current++;
+    setActing(true);
+    try {
+      const state = await comfyEnvironment("select_existing", endpoint, undefined, selected, mode);
+      if (mounted.current) { setDirectory(undefined); accept(state); }
+    } catch (error) {
+      if (mounted.current) setConnectionError(String(error));
+    } finally {
+      actionInFlight.current = false;
+      if (mounted.current) { setChecking(false); setActing(false); if (mode !== latest.current.mode) setRefresh(value => value + 1); }
+    }
+  }
   async function install() {
     if (actionDisabled || actionInFlight.current) return;
     if (recheck) { setChecking(true); setRefresh(value => value + 1); return; }
@@ -192,7 +211,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
       {environment?.hardware?.gpus.map((gpu, index) => <p key={index} className="comfy-install-path">{gpu.name}
         {gpu.memoryMib != null && ` · 显存 ${(gpu.memoryMib / 1024).toFixed(1)} GB`}
         {` · 驱动 ${gpu.driver ?? "未识别"}`}</p>)}
-      <p className="comfy-install-path">{environment?.directory || directory || "正在读取安装位置…"}</p>
+      <p className="comfy-install-path">{(!environment?.installed && !preparing && existing[0]?.path) || environment?.directory || directory || "正在读取安装位置…"}</p>
       <details><summary>MiniMax H3 使用许可</summary><p>点击安装即同意以下许可（含适用地区及用途限制）。许可与来源文件将保存在安装目录的 licenses 文件夹。</p><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 180, overflow: "auto" }}>{imageMode ? imageLicense : h3License}</pre></details>
       {environment && !ready && !existing.length && !environment.installed && !preparing && <small>下载 {gb(environment.downloadBytes)} · 需空闲 {gb(environment.requiredBytes)}</small>}
       {environment?.phase === "installing" && <>
@@ -200,6 +219,8 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
         <small>{gb(environment.completedBytes)} / {gb(environment.totalBytes)} · 关闭面板后继续安装</small>
       </>}
       <div className="comfy-environment-actions">
+        <EnvironmentAction label="选择已有 ComfyUI" disabled={disabled || checking || acting || preparing}
+          hint={busyHint || "保存已有 ComfyUI 的位置，供下次检测和启动使用。"} onClick={() => void selectExisting()} />
         <EnvironmentAction label="安装位置" disabled={disabled || checking || acting || preparing || ready}
           hint={busyHint || "选择安装位置后，应用会创建独立目录并检查磁盘空间。"} onClick={async () => {
           try { const selected = await open({ directory: true, multiple: false, title: "选择本地部署工作流的安装位置" }); if (typeof selected === "string" && selected !== directory) { setChecking(true); setDirectory(selected); } }
@@ -212,28 +233,31 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
 }
 
 export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImages, readCurrentPrompt, onChange, optimizationActions }: {
-  optimizationActions?: React.ReactNode; modelControl: React.ReactNode; node: WorkflowNode; step?: WorkflowStep; disabled: boolean; assets: Asset[];
+  optimizationActions?: React.ReactNode; modelControl: React.ReactNode; node: WorkflowNode; disabled: boolean; assets: Asset[];
   inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput) => string[];
   onChange: (patch: Partial<WorkflowNode>) => void;
-  readCurrentPrompt: () => string; onOptimize: () => void; optimizing?: boolean;
+  readCurrentPrompt: () => string;
 }) {
   const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
   const mode = comfyVideoMode(options);
   const ports = mode === "text" ? [] : mode === "reference" ? ["first-frame"] : ["first-frame", "last-frame"];
   function update(patch: Partial<ComfyVideoOptions>) { onChange({ comfyVideo: { ...options, ...patch } }); }
   return <section className="comfy-video-card" aria-label="本地 H3 视频设置">
-    <fieldset disabled={disabled} className="comfy-video-options">
+    <fieldset disabled={disabled} className="workflow-video-parameters comfy-video-options" aria-label="视频参数">
       {modelControl}
-      <div className="comfy-option"><span>模式</span><TacticalSelect aria-label="H3 模式" value={mode} onValueChange={value => onChange({ comfyVideo: comfyVideoOptionsForMode(options, value as ComfyVideoMode) })}>
+      <TacticalSelect aria-label="H3 模式" title="生成模式" icon={<Film size={14} />} value={mode} onValueChange={value => onChange({ comfyVideo: comfyVideoOptionsForMode(options, value as ComfyVideoMode) })}>
         <option value="frames">首尾帧</option><option value="reference">单图</option><option value="text">文生视频</option>
-      </TacticalSelect></div>
-      <label>时长<input aria-label="H3 时长" type="number" min={1} max={15} step={1} value={options.seconds} onChange={event => update({ seconds: Number(event.target.value) })} />秒</label>
-      <div className="comfy-option"><span>画幅</span><RatioSelect ariaLabel="H3 比例" value={options.ratio === "auto" ? null : options.ratio} ratios={H3_RATIOS}
+      </TacticalSelect>
+      <TacticalSelect aria-label="H3 时长" title="视频时长" icon={<Timer size={14} />} value={options.seconds} onValueChange={value => update({ seconds: Number(value) })}>
+        {Array.from({ length: 15 }, (_, i) => <option value={i + 1} key={i}>{i + 1} 秒</option>)}
+      </TacticalSelect>
+      <RatioSelect ariaLabel="H3 比例" value={options.ratio === "auto" ? null : options.ratio} ratios={H3_RATIOS}
         allowAuto={mode !== "text"} autoTitle="按运行时输入图片的实际宽高比生成，尺寸按模型要求对齐"
-        onChange={ratio => update({ ratio: (ratio ?? "auto") as ComfyVideoOptions["ratio"] })} /></div>
-      <div className="comfy-option"><span>分辨率</span><TacticalSelect aria-label="H3 分辨率" title="分辨率（MP）" value={options.resolution} onValueChange={value => update({ resolution: Number(value) as ComfyVideoOptions["resolution"] })}>
-        {(mode === "frames" ? [0.6, 0.8, 1] : [0.6, 0.8, 0.98, 1]).map(value => <option value={value} key={value}>{value === 0.98 ? "768p" : `${value.toFixed(1)} MP`}</option>)}
-      </TacticalSelect></div>
+        onChange={ratio => update({ ratio: (ratio ?? "auto") as ComfyVideoOptions["ratio"] })} />
+      <TacticalSelect aria-label="H3 分辨率" title="生成分辨率" icon={<Gauge size={14} />} value={options.resolution === 1 ? 0.98 : options.resolution}
+        onValueChange={value => update({ resolution: Number(value) as ComfyVideoOptions["resolution"] })}>
+        {H3_VIDEO_RESOLUTIONS.map(({ value, label }) => <option value={value} key={value}>{label}</option>)}
+      </TacticalSelect>
     </fieldset>
     {ports.length > 0 && <div className="comfy-frame-slots">{ports.map((port, index) => {
       const label = mode === "reference" ? "参考图" : index ? "尾帧" : "首帧";
@@ -249,13 +273,13 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
           if (ids?.length !== 1) { notifyError(null, "每个帧输入只接收一张图片"); return; }
           onChange({ inputs: { ...node.inputs, [port]: [{ assetId: ids[0] }] } });
         }}>
-        <strong className="comfy-frame-badge">{index ? "尾帧 · 可选" : label}</strong>
+        <strong className="comfy-frame-badge" title={index ? "尾帧 · 可选" : undefined}>{label}</strong>
         {bindings.length > 0 && <button type="button" className="comfy-frame-action comfy-frame-disconnect"
           aria-label={`断开${label}`} title={`断开${label}`} disabled={disabled}
           onPointerDown={event => event.stopPropagation()}
           onClick={() => onChange({ inputs: { ...node.inputs, [port]: [] } })}><X size={14} /></button>}
-        {path ? <img alt={label} src={path.startsWith("data:") ? path : convertFileSrc(path)} draggable={false} />
-          : <span>{bindings.length ? "已连接 · 等待上游" : "拖入图片或连接端口"}</span>}
+        {path ? <ComfyFrameThumbnail label={label} path={path} previewPath={asset?.store_path ?? path} />
+          : <span className="comfy-frame-placeholder" title={bindings.length ? "已连接，等待上游结果" : "拖入图片或连接端口"}>{bindings.length ? "待输入" : "拖入图片"}</span>}
       </div>;
     })}
       {mode === "frames" && !!node.inputs["first-frame"]?.length && !!node.inputs["last-frame"]?.length &&
@@ -265,12 +289,22 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
           <ArrowLeftRight size={14} /></button>}
     </div>}
     <div className="comfy-prompt-field">
-    <span className="comfy-prompt-caption">提示词</span>
-    <CanvasTextarea className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
+    <CanvasTextarea fitContent className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
       placeholder={mode === "reference" ? "用 <Picture 1> 指代参考图主体，不固定首尾画面…" : "输入视频提示词，也可从文本端口接入…"} value={node.prompt}
       readCurrentValue={readCurrentPrompt} onValueChange={prompt => onChange({ prompt })} />
-    {optimizationActions}
     </div>
-    <ProviderQuota source="local" badge />
+    <div className="comfy-prompt-actions">{optimizationActions}</div>
   </section>;
+}
+
+function ComfyFrameThumbnail({ label, path, previewPath }: { label: string; path: string; previewPath: string }) {
+  const [preview, setPreview] = useState(false);
+  const src = (file: string) => file.startsWith("data:") ? file : convertFileSrc(file);
+  return <>
+    <img className="comfy-frame-thumbnail" alt={label} src={src(path)} draggable={false} tabIndex={0}
+      onPointerEnter={() => setPreview(true)} onPointerLeave={() => setPreview(false)}
+      onFocus={() => setPreview(true)} onBlur={() => setPreview(false)}
+      onKeyDown={event => { if (event.key === "Escape" && preview) { event.stopPropagation(); setPreview(false); } }} />
+    {preview && <img className="comfy-frame-preview" src={src(previewPath)} alt="" aria-hidden="true" draggable={false} />}
+  </>;
 }

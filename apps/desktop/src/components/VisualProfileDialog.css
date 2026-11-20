@@ -81,7 +81,6 @@
 .bv-history-row { display: flex; align-items: center; gap: 8px; }
 .bv-history-row .bv-history-item { flex: 1; min-width: 0; }
 .bv-history-row .bv-icon-button { flex-shrink: 0; }
-.visual-profile-dialog .bv-delete-button { color: #ce6a64; }
 .bv-saved-sources { margin-bottom: 24px; }
 .bv-saved-sources .bv-image-grid { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); }
 .bv-saved-sources h4 { margin: 0 0 12px; font-size: 12px; font-weight: 500; }

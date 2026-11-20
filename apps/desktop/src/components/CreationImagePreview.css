@@ -64,7 +64,7 @@ html[data-theme="light"] .creation-image-preview-backdrop { background: linear-g
 }
 .creation-image-preview :is(.creation-image-preview-hud, .creation-image-preview-conversation-head) button:enabled:active { background: rgb(var(--industrial-accent-rgb) / .22); }
 .creation-image-preview :is(.creation-image-preview-hud, .creation-image-preview-conversation-head) button:disabled { opacity: .35; cursor: default; }
-.creation-image-preview button:enabled:hover { color: var(--bb-blue); }
+.creation-image-preview button:enabled:hover:not(.asset-detail-primary) { color: var(--bb-blue); }
 .creation-image-preview button:focus-visible, .creation-image-preview [tabindex]:focus-visible { outline: 1px solid var(--bb-blue); outline-offset: 3px; }
 .creation-image-preview-image { min-width: 0; display: flex; justify-content: center; padding-bottom: 14px; }
 .creation-image-preview-figure {

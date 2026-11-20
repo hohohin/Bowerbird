@@ -1,0 +1,21 @@
+SigLIP 2, Google Research and Google DeepMind
+License: Apache License 2.0. See Apache-2.0.txt.
+
+Original checkpoint and tokenizer
+https://huggingface.co/google/siglip2-base-patch16-224/tree/75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2
+Checkpoint: model.safetensors, SHA-256 612923381c76ec5a9bed335d1c48827e3f2e506ac31b044b63b2031fadee6a0b.
+
+The separate FP32 text and vision ONNX exports were published by Hugging Face
+staff in ONNX Community. The model card identifies the Google checkpoint above
+as the base model. The converted files were uploaded on 2025-02-21 at 17:45 UTC,
+after Google's 04:03 UTC revision. Google's history shows a single weight upload
+before this conversion, followed by processor, config and README updates.
+The pinned Google and ONNX Community tokenizer blobs are byte-identical.
+
+ONNX conversion reference
+https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX/tree/ba1f3b0843f24bc5417d38e19c37b287d719b2f4
+
+Bowerbird uses the exported towers without modifying the model weights.
+ONNX Runtime comes from Microsoft's official PyPI 1.28.0 package. Its license
+and notices are included in the runtime directory.
+https://pypi.org/project/onnxruntime/1.28.0/

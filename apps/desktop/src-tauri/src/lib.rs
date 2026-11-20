@@ -14,6 +14,8 @@ mod installation;
 mod media;
 mod prompt;
 mod quick_transfer;
+#[cfg(windows)]
+mod windows_shell;
 
 pub use media::thumb::video_thumbnail_worker;
 pub use media::probe::video_probe_worker;
@@ -400,6 +402,10 @@ pub fn run() {
             let recovery_paths = paths.clone();
             let orphan_scan_db = db.clone();
 
+            let semantic = Arc::new(core::semantic_search::runtime::SemanticSearch::new(file_config_root));
+            semantic.clone().watch(app.handle().clone(), db.clone());
+            app.manage(semantic);
+
             app.manage(Arc::new(core::local_classification::LocalClassifier::new(
                 file_config_root.to_path_buf()
                     .join("local-classification")
@@ -742,6 +748,13 @@ pub fn run() {
             commands::library::set_asset_tags,
             commands::library::reclassify_all,
             commands::local_classification::local_classification_status,
+            commands::semantic_search::semantic_status,
+            commands::semantic_search::semantic_model_control,
+            commands::semantic_search::semantic_index_control,
+            commands::semantic_search::semantic_search_start,
+            commands::semantic_search::semantic_search_page,
+            commands::semantic_search::semantic_search_ids,
+            commands::semantic_search::semantic_search_cancel,
             commands::local_classification::local_classification_source,
             commands::local_classification::folder_classification_view,
             commands::local_classification::global_classification_view,

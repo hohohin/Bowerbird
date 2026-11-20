@@ -21,7 +21,7 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 try {
-  await page.goto('http://127.0.0.1:17950/scripts/fixtures/creation-image-review/preview.html?deferred');
+  await page.goto('http://127.0.0.1:17950/scripts/fixtures/creation-image-review/preview.html?deferred&contrast');
   await page.waitForFunction(() => window.__reviewPending?.length >= 4);
   const historyReads = await page.evaluate(() => {
     window.__reviewHold.clear(); window.__reviewPending.forEach(item => item.resolve());
@@ -62,6 +62,42 @@ try {
       setTimeout(() => { observer.disconnect(); resolve(count); }, 400);
     }));
     assert.equal(idleWrites, 0, 'the idle preview does not keep writing animation styles');
+    for (const theme of ['dark', 'light']) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      for (const name of ['在应用内浏览来源', '反推']) {
+        const action = modal.getByRole('button', { name, exact: true });
+        assert.ok(await action.isEnabled());
+        const ratio = () => action.evaluate(button => {
+          const context = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+          const luminance = color => {
+            context.fillStyle = color;
+            context.fillRect(0, 0, 1, 1);
+            const data = context.getImageData(0, 0, 1, 1).data;
+            return [0.2126, 0.7152, 0.0722].reduce((sum, weight, index) => {
+              const value = data[index] / 255;
+              return sum + weight * (value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+            }, 0);
+          };
+          const style = getComputedStyle(button);
+          const colors = [luminance(style.backgroundColor), luminance(style.color)].sort((a, b) => b - a);
+          return { ratio: (colors[0] + .05) / (colors[1] + .05), color: style.color, background: style.backgroundColor };
+        });
+        async function checkContrast(state) {
+          const result = await ratio();
+          assert.ok(result.ratio >= 4.5, `${theme}: ${name}, ${state}: ${JSON.stringify(result)}`);
+        }
+        await page.mouse.move(0, 0);
+        await checkContrast('rest');
+        await action.hover();
+        await checkContrast('hover');
+        await page.mouse.move(0, 0);
+        await page.keyboard.press('Tab');
+        await action.focus();
+        assert.ok(await action.evaluate(button => button.matches(':focus-visible')));
+        await checkContrast('focus');
+        await action.blur();
+      }
+    }
     await page.emulateMedia({ reducedMotion: 'reduce' });
     assert.equal(await inspector.evaluate(el => getComputedStyle(el).transform), 'none');
     await modal.getByRole('button', { name: '关闭预览', exact: true }).click();

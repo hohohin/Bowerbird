@@ -42,7 +42,7 @@ Bowerbird 是本地优先的 AI 图像素材库与创作工作台：收集、浏
 - 中央素材 `assets` 与文件夹位置、收藏夹/项目成员分别管理。同一素材可出现在多个画板实例；移除实例不隐式删除原文件。`library_hidden` 允许仅画板可见，最后实例移除后恢复库内可见性。
 - 当前创作数据围绕 caption `sections`、维度稳定 ID、编辑器显式引用及 `generation_meta`。旧 `asset_prompts` CRUD 保留兼容，不作为新功能枢纽。
 - 项目是唯一一级工作区；新意图新建线程，续轮/重试/分支沿用原线程。provider session、Cloud job 和 Agent Run 各自负责执行恢复，不冒充画板身份。旧用户可见会话不做 backfill，见 [项目画板契约](PROJECT-CANVAS-PLAN.md)。
-- 搜索同步 `name / prompt_body / annotation`；当前多维度查询使用 LIKE，标签/颜色走关联表；不做 CLIP 向量搜索。分类走本地模型包，见 [LOCAL-CLASSIFICATION.md](LOCAL-CLASSIFICATION.md)。
+- 关键词搜索使用 LIKE，标签和颜色使用关联表，`name / prompt_body / annotation` 继续同步到 FTS5。以文搜图使用独立的本机 SigLIP2 图文模型。`core/semantic_search` 维护素材版本和可恢复索引，借用 `CatalogFilter::sql` 缩小范围后排序。模型、SQLite 0060、Tauri 命令和 UI 入口见[复用地图](reuse/SERVICES.md#以文搜图)。本地分类沿现有模型包，见 [LOCAL-CLASSIFICATION.md](LOCAL-CLASSIFICATION.md)。
 
 ## 生成与理解
 

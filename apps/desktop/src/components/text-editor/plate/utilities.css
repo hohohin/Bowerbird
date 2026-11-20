@@ -4228,6 +4228,16 @@
     }
   }
 }
+.dark\:\*\*\:\[\.hljs-bullet\]\:text-\[\#c7b16b\]:is(.text-plate-ui, .text-plate-ui *) {
+  &:where([data-theme=dark], [data-theme=dark] *) {
+    :is(& *) {
+      &:is(.hljs-bullet) {
+        color: #c7b16b;
+      }
+    }
+  }
+}
+
 .\*\*\:\[\.hljs-comment\,\.hljs-code\,\.hljs-formula\]\:text-\[\#6a737d\]:is(.text-plate-ui, .text-plate-ui *) {
   :is(& *) {
     &:is(.hljs-comment,.hljs-code,.hljs-formula) {
@@ -4235,11 +4245,11 @@
     }
   }
 }
-.dark\:\*\*\:\[\.hljs-comment\,\.hljs-code\,\.hljs-formula\]\:text-\[\#6a737d\]:is(.text-plate-ui, .text-plate-ui *) {
+.dark\:\*\*\:\[\.hljs-comment\,\.hljs-code\,\.hljs-formula\]\:text-\[\#a1aab4\]:is(.text-plate-ui, .text-plate-ui *) {
   &:where([data-theme=dark], [data-theme=dark] *) {
     :is(& *) {
       &:is(.hljs-comment,.hljs-code,.hljs-formula) {
-        color: #6a737d;
+        color: #a1aab4;
       }
     }
   }

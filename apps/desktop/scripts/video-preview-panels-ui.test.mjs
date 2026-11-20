@@ -16,7 +16,7 @@ const server = await createServer({ cacheDir: `${directory}/vite`, optimizeDeps:
   server: { host: '127.0.0.1', port: 1676, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
-const page = await browser.newPage({ viewport: { width: 1400, height: 900 }, reducedMotion: 'reduce' });
+const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 try {
@@ -80,13 +80,35 @@ try {
   await page.keyboard.press('Escape');
   assert.equal(await modal.isVisible(), true, 'Escape from fullscreen keeps the preview open');
   if (await player.getByRole('button', { name: '退出全屏' }).isVisible()) await player.getByRole('button', { name: '退出全屏' }).click();
-  await player.getByRole('button', { name: '导出帧' }).click();
+  const exportFrame = player.getByRole('button', { name: '导出帧' });
+  const exportMenu = modal.getByRole('menu', { name: '导出帧' });
+  const assertAnchored = () => page.waitForFunction(() => {
+    const trigger = document.querySelector('.creation-image-preview button[aria-expanded="true"][aria-haspopup="menu"]');
+    const menu = document.querySelector('.creation-image-preview .video-export-popup');
+    if (!trigger || !menu) return false;
+    const button = trigger.getBoundingClientRect(), popup = menu.getBoundingClientRect();
+    const left = Math.max(8, Math.min(button.left, innerWidth - popup.width - 8));
+    return Math.abs(popup.left - left) <= 1 &&
+      (Math.abs(popup.top - button.bottom - 4) <= 1 || Math.abs(button.top - popup.bottom - 4) <= 1) &&
+      popup.top >= 7 && popup.bottom <= innerHeight - 7;
+  }, null, { timeout: 3000 });
+  await exportFrame.click();
+  await exportMenu.waitFor();
+  await assertAnchored();
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await assertAnchored();
+  await page.keyboard.press('Escape');
+  await exportMenu.waitFor({ state: 'hidden' });
+  assert.equal(await exportFrame.evaluate(element => document.activeElement === element), true);
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await exportFrame.click();
   await page.getByRole('menuitem', { name: '添加该帧到画板' }).click();
   await page.waitForFunction(() => window.calls.some(call => call.command === 'import_image_bytes'
     && call.args.videoFrame?.sourcePath.endsWith('/plain.mp4')));
   await page.waitForFunction(() => !document.fullscreenElement && !document.querySelector('.video-export-popup'));
   await close();
 
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await open('generated');
   await history.waitFor();
   await history.locator('[data-generation-turn-key="generated"]').getByText('所选视频的原提示词').waitFor();

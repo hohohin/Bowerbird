@@ -517,9 +517,9 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
       onClose={onClose}
     >
       {/* 固定高度：不随分区内容多少变化；右列内部滚动 */}
-      <div className="flex h-[480px] gap-4 text-sm">
+      <div className="flex h-[480px] min-h-0 gap-4 text-sm">
         {/* 左列：分区导航 */}
-        <nav className="settings-nav flex w-36 shrink-0 flex-col gap-0.5" aria-label="设置分区">
+        <nav className="settings-nav flex w-36 shrink-0 flex-col gap-0.5 overflow-y-auto" aria-label="设置分区">
           {sections.map((s) => (
             <button
               key={s.key}
@@ -534,7 +534,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
         </nav>
 
         {/* 右列：具体内容（内容超出时列内滚动） */}
-        <div key={section} className="min-w-0 flex-1 space-y-3 overflow-y-auto [scrollbar-gutter:stable]">
+        <div key={section} className="min-w-0 flex-1 space-y-3 overflow-y-auto overscroll-contain">
           {settingsSaveError != null && <p role="alert" className="settings-card px-3 py-2 text-sm">
             {userErrorMessage(settingsSaveError, "设置未保存，请重试。")} <button type="button" onClick={() => void retrySettings().catch(() => {})}>重试保存</button>
           </p>}
@@ -544,7 +544,6 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
               {/* 外观：后端 settings.json 持久化；夜间模式沿用原有黑色 UI。 */}
               <div className="settings-card px-3 py-2.5">
                 <div className="text-ink">外观</div>
-                <p className="mt-1 text-xs text-muted">选择 Bowerbird 的界面明暗，切换后立即生效。</p>
                 <div className="mt-2 grid grid-cols-2 gap-2" role="radiogroup" aria-label="应用外观">
                   {([
                     { value: "light" as const, label: "日间模式", icon: Sun },

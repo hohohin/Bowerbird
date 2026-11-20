@@ -253,7 +253,11 @@ w.__TAURI_INTERNALS__ = {
       if (args.createdContent && !snapshot.nodes.some((node: any) => node.id === args.createdContent.id)) snapshot.nodes.push({ ...args.createdContent, hiddenAt: null, createdAt: 10, updatedAt: 10 });
       sessionStorage.setItem(`workflow-${args.projectId}`, JSON.stringify({ revision, document: args.document })); return revision;
     }
-    if (command === "generation_history") return { turns: [{ prompt: "保持产品主体，生成清晨场景" }], references: [assets[0]] };
+    if (command === "generation_history") return {
+      session_id: null,
+      turns: [{ prompt: "保持产品主体，生成清晨场景", images: assets.filter(asset => asset.id === args.assetId).map(asset => asset.store_path) }],
+      references: [assets[0]],
+    };
     if (command === "project_thread_create") return args.value;
     if (command === "get_settings") return JSON.parse(sessionStorage.getItem("canvas-settings") || "{}");
     if (command === "update_settings") { sessionStorage.setItem("canvas-settings", JSON.stringify(args.settings)); return null; }

@@ -43,6 +43,7 @@ export interface WorkflowNode {
   action: WorkflowAction; skill: string; prompt: string; ratio: string | null; provider: string;
   generation?: import("./videoGeneration").GenerationSettings;
   comfyVideo?: import("./comfyVideo").ComfyVideoOptions;
+  comfyAutoOptimize?: boolean;
   /** Reversible rendering of ordinary @ mentions in the H3 text editor. */
   videoPrompt?: { ordinary: string; local: string };
   /** Ordinary input positions assigned to each H3 frame, including after its source is replaced. */
@@ -85,6 +86,8 @@ export interface WorkflowStep {
   comfyProgress?: import("./comfyVideo").ComfyVideoProgress;
   comfyCancelled?: boolean;
   comfyStopping?: boolean;
+  /** An opted-in manual Run, with the local inputs frozen before dispatching Cloud optimization. */
+  comfyAutoGeneration?: { input?: import("./comfyVideo").ComfyVideoInput };
   comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput | import("./h3PromptOptimization").H3ImagePromptInput; instruction: string; inputBindings?: string; createdAt?: number; submissionStarted?: boolean; keptOriginal?: boolean; result?: string };
   agentInput?: { prompt: string; source: string; assetIds: string[]; visualProfile?: import("./types").VisualProfileDetail | null };
   chatInput?: import("./localChat").LocalChatSendInput;
@@ -804,7 +807,7 @@ export function workflowCardWidth(node: Pick<WorkflowNode, "kind">) {
 export function workflowPortY(node: WorkflowNode, side: "input" | "output", portId: string): number {
   if (node.kind === "trigger") return node.y + 46;
   const ports = side === "input" ? workflowInputs(node) : workflowOutputs(node);
-  // H3: two 4:3 frame previews above the prompt (34px card inset, 8px gap, 10px row gap).
-  const frameRowOffset = node.kind === "comfy-video" && comfyVideoMode(node.comfyVideo) !== "text" ? (workflowCardWidth(node) - 42) * 3 / 8 + 10 : 0;
+  // Keep the ports aligned with the compact frame row above the prompt.
+  const frameRowOffset = node.kind === "comfy-video" && comfyVideoMode(node.comfyVideo) !== "text" ? 64 : 0;
   return node.y + frameRowOffset + (node.kind === "comfy-video" ? 74 : 94) + Math.max(0, ports.findIndex(port => port.id === portId)) * (node.kind === "comfy-video" ? 24 : 30);
 }

@@ -19,6 +19,8 @@ interface AppUpdaterState {
   restart: () => Promise<void>;
 }
 
+let backgroundChecking = false;
+
 // Keep the resource and progress across closing/reopening Settings. Nothing is
 // persisted: after an app restart the release must be checked and verified again.
 export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
@@ -31,18 +33,35 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
       if (get().startupChecked) return;
       set({ startupChecked: true });
     }
-    if (!["idle", "current", "available"].includes(get().phase)) return;
-    if (background && get().startupPrompt) return;
-    const previous = get().update;
-    set({ phase: "checking", error: null });
+    const before = get();
+    if (!["idle", "current", "available"].includes(before.phase)) return;
+    if (background) {
+      if (backgroundChecking || before.startupPrompt) return;
+      backgroundChecking = true;
+    } else {
+      set({ phase: "checking", error: null });
+    }
     try {
       const update = await check({ timeout: 30_000 });
+      // Keep the visible result during polling, and leave concurrent user actions in control.
+      if (background && (
+        get() !== before ||
+        (update ? update.version === before.update?.version : before.phase === "current")
+      )) {
+        await update?.close().catch(() => {});
+        return;
+      }
       set({ update, phase: update ? "available" : "current", downloaded: 0, total: null,
-        startupPrompt: startup && update !== null });
-      await previous?.close().catch(() => {});
+        startupPrompt: startup && update !== null, error: null });
+      await before.update?.close().catch(() => {});
     } catch (error) {
       console.warn("[updater] check failed", error);
-      set({ phase: previous ? "available" : "idle", error: startup || background ? null : userErrorMessage(error, "暂时无法检查更新，请稍后再试。") });
+      if (!background) {
+        set({ phase: before.update ? "available" : before.phase,
+          error: startup ? null : userErrorMessage(error, "暂时无法检查更新，请稍后再试。") });
+      }
+    } finally {
+      if (background) backgroundChecking = false;
     }
   },
   download: async () => {

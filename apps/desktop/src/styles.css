@@ -982,7 +982,7 @@ body:has(.explore-workspace.is-open) .toast-viewport { left: auto; right: 12px; 
   padding: 6px 14px;
   border-bottom: 1px solid rgb(239 68 68 / 20%);
   background: rgb(239 68 68 / 8%);
-  color: rgb(220 38 38);
+  color: var(--bb-danger);
   font-size: 11px;
 }
 

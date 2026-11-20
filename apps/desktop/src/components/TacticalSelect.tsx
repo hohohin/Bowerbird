@@ -10,11 +10,12 @@ export interface TacticalSelectProps extends Omit<ButtonHTMLAttributes<HTMLButto
   onValueChange?: (value: string) => void;
   menuClassName?: string;
   portalContainer?: HTMLElement | null;
+  icon?: ReactNode;
 }
 
 export const TacticalSelect = forwardRef<HTMLButtonElement, TacticalSelectProps>(function TacticalSelect({
   children, value, defaultValue, onValueChange, disabled, className = "", id, name, form,
-  onClick, onKeyDown, onPointerDown, onMouseDown, menuClassName = "", portalContainer, ...buttonProps
+  onClick, onKeyDown, onPointerDown, onMouseDown, menuClassName = "", portalContainer, icon, ...buttonProps
 }, forwardedRef) {
   const options = useMemo(() => parseTacticalOptions(children), [children]);
   const first = options.find(option => !option.disabled && !option.hidden);
@@ -147,13 +148,13 @@ export const TacticalSelect = forwardRef<HTMLButtonElement, TacticalSelectProps>
     for (let element: HTMLElement | null = trigger.current; element; element = element.parentElement) {
       if (element === trigger.current || element.tagName === "FIELDSET") observer.observe(element, { attributes: true, attributeFilter: ["disabled"] });
     }
-    document.addEventListener("pointerdown", outside);
+    window.addEventListener("pointerdown", outside, true);
     document.addEventListener("focusin", focusMoved);
     window.addEventListener("scroll", moved, true);
     window.addEventListener("resize", moved);
     return () => {
       observer.disconnect();
-      document.removeEventListener("pointerdown", outside);
+      window.removeEventListener("pointerdown", outside, true);
       document.removeEventListener("focusin", focusMoved);
       window.removeEventListener("scroll", moved, true);
       window.removeEventListener("resize", moved);
@@ -193,6 +194,7 @@ export const TacticalSelect = forwardRef<HTMLButtonElement, TacticalSelectProps>
       onPointerDown={event => { onPointerDown?.(event); event.stopPropagation(); }}
       onMouseDown={event => { onMouseDown?.(event); event.stopPropagation(); }}
       onClick={event => { onClick?.(event); if (!event.defaultPrevented) { if (open) close(); else show(); } }}>
+      {icon && <span className="tactical-select-icon" aria-hidden="true">{icon}</span>}
       <span className="tactical-select-value">{selected?.label ?? ""}</span><ChevronDown size={12} className="tactical-select-chevron" aria-hidden="true" />
     </button>
     {name && <input type="hidden" name={name} form={form} value={currentValue} disabled={disabled} />}

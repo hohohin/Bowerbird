@@ -12,6 +12,7 @@ use std::{
     sync::Arc,
 };
 use tauri::State;
+use rusqlite::OptionalExtension;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 #[tauri::command]
@@ -64,15 +65,15 @@ fn originals(db: &Database, ids: &[String]) -> AppResult<Vec<ExportOriginal>> {
     }
     let mut entries = Vec::with_capacity(assets.len());
     for asset in assets {
-        let path = asset
-            .store_path
-            .ok_or_else(|| AppError::Other(format!("{}：原文件不可用", asset.name)))?;
-        let paths = db.resolve_external_paths(&[path])?;
-        let source = fs::canonicalize(&paths[0]).map_err(|error| {
+        let source = db.resolve_asset_original(&asset.id).map_err(|error| {
             AppError::Other(format!("{}：无法读取原文件（{error}）", asset.name))
         })?;
-        if !source.is_file() {
-            return Err(AppError::Other("部分原文件不可用，请重新选择".into()));
+        let expected: Option<String> = db.conn.lock().unwrap().query_row(
+            "SELECT fingerprint FROM external_assets WHERE asset_id=?1", [&asset.id], |row| row.get(0)).optional()?;
+        if let Some(expected) = expected {
+            if crate::core::external_files::fingerprint(&source)? != expected {
+                return Err(AppError::Other("外部参考图已修改，请先确认更新引用".into()));
+            }
         }
         let extension = source
             .extension()
@@ -369,5 +370,37 @@ mod tests {
         assert!(write_archive(&db, &["a".into()], &output.join("所选内容.zip")).is_err());
         assert_eq!(fs::read_dir(output).unwrap().count(), 0);
         assert_eq!(fs::read(source).unwrap(), b"replacement");
+    }
+
+    #[test]
+    fn export_uses_verified_aliases_and_blocks_cleaned_assets_without_changing_registration() {
+        let (root, db) = fixture();
+        let original = root.path().join("a.png");
+        let alias = root.path().join("原件 重定位.png");
+        fs::rename(&original, &alias).unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO external_assets(asset_id,fingerprint) VALUES('a',?1)", [crate::core::external_files::fingerprint(&alias).unwrap()]).unwrap();
+            conn.execute("INSERT INTO external_asset_paths(asset_id,path) VALUES('a',?1)", [alias.to_string_lossy()]).unwrap();
+        }
+        let output = root.path().join("导出");
+        fs::create_dir(&output).unwrap();
+        assert_eq!(write_directory(&db, &["a".into()], &output).unwrap(), 1);
+        assert_eq!(fs::read(output.join("风景.png")).unwrap(), b"original-a");
+        let zip = root.path().join("alias.zip");
+        assert_eq!(write_archive(&db, &["a".into()], &zip).unwrap(), 1);
+        let mut archive = zip::ZipArchive::new(File::open(zip).unwrap()).unwrap();
+        let mut entry = archive.by_name("风景.png").unwrap();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"original-a");
+        assert_eq!(db.get_asset("a").unwrap().unwrap().store_path.as_deref(), original.to_str());
+
+        db.conn.lock().unwrap().execute("INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES('a',?1)", [original.to_string_lossy()]).unwrap();
+        assert!(write_directory(&db, &["a".into()], &output).is_err());
+        assert!(write_archive(&db, &["a".into()], &root.path().join("blocked.zip")).is_err());
+        assert_eq!(fs::read_dir(&output).unwrap().count(), 1);
+        assert!(!root.path().join("blocked.zip").exists());
+        assert_eq!(fs::read(alias).unwrap(), b"original-a");
     }
 }

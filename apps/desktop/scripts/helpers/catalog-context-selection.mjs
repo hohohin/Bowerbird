@@ -31,3 +31,52 @@ export async function checkContextRangeSelection(page, card, cancel) {
   assert.equal(await card(10).getAttribute('aria-pressed'), 'true');
   await cancel.click();
 }
+
+export async function checkContextLookup(page, card, cancel, { idsCommand, lookupCommand, firstId, secondId, coldId }) {
+  await card(0).click({ modifiers: ['Control'] });
+  await card(1).click({ modifiers: ['Control'] });
+  await cancel.waitFor();
+  const openContext = index => card(index).evaluate(element => {
+    element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 96, clientY: 96 }));
+    return window.store.getState().contextMenu?.fileSelection?.assets.map(asset => asset.id);
+  });
+  assert.deepEqual(await openContext(0), [firstId, secondId], 'loaded selection opens synchronously');
+  await page.keyboard.press('Escape');
+  await cancel.click();
+
+  await page.evaluate(({ idsCommand, lookupCommand, firstId, secondId, coldId }) => {
+    const bridge = window.__TAURI_INTERNALS__;
+    const invoke = bridge.invoke;
+    window.restoreMenuLookup = () => { bridge.invoke = invoke; };
+    bridge.invoke = async (command, args) => {
+      if (command === idsCommand) return [firstId, secondId, coldId];
+      const ids = args.ids ?? args.assetIds;
+      if (command === lookupCommand && ids.includes(coldId) && ids.length === 1) {
+        window.coldMenuIds = [...ids];
+        await new Promise(resolve => { window.releaseMenuLookup = () => { window.releaseMenuLookup = null; resolve(); }; });
+        const rows = await invoke(command, args);
+        window.menuLookupFinished = true;
+        return rows;
+      }
+      return invoke(command, args);
+    };
+  }, { idsCommand, lookupCommand, firstId, secondId, coldId });
+  try {
+    await card(0).click({ modifiers: ['Control'] });
+    await page.getByRole('button', { name: '全选', exact: true }).click();
+    await page.getByText('3 项', { exact: true }).waitFor();
+    await card(0).click({ button: 'right' });
+    await page.waitForFunction(() => window.releaseMenuLookup);
+    assert.deepEqual(await page.evaluate(() => window.coldMenuIds), [coldId], 'only the missing ID is resolved');
+    await card(2).click({ button: 'right' });
+    await page.getByRole('menu', { name: '素材操作', exact: true }).waitFor();
+    const newest = await page.evaluate(() => window.store.getState().contextMenu.assetId);
+    await page.evaluate(() => window.releaseMenuLookup());
+    await page.waitForFunction(() => window.menuLookupFinished);
+    assert.equal(await page.evaluate(() => window.store.getState().contextMenu.assetId), newest, 'late reply preserves newer menu');
+    await page.keyboard.press('Escape');
+    await cancel.click();
+  } finally {
+    await page.evaluate(() => window.restoreMenuLookup());
+  }
+}

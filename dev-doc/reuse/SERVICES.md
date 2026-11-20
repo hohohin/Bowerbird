@@ -4,6 +4,7 @@
 
 - **入口**：`apps/code-reader-mcp/core.mjs` 的 `TOOLS`／`callTool`／`validateSnapshot` 是四个只读代码工具的公共实现；`export.mjs` 负责本机安全读取、脱敏、依赖补齐及覆盖门禁，`dependencies.mjs` 负责静态引用解析和相关测试识别。stdio 的 `server.mjs` 与 Gemini 的 `http-app.mjs` 共用同一套工具，传输层各自处理协议和授权。
 - **边界**：只属于私有开发工具，运行在本机受限 Node 进程；不能拿官网产品鉴权、Cloud Worker 或用户库权限替代快照限制。Gemini OAuth／SSH／Nginx 接入及部署边界见 [只读 MCP](../../apps/code-reader-mcp/README.md#gemini-网页端已部署账号连接待验收)。
+- **Gemini 授权恢复**：`run-gemini.mjs` 通过 `oauth-state-file.mjs` 读写本机固定授权状态文件，`http-app.mjs` 校验并恢复客户端注册和令牌摘要。MCP HTTP 子进程保持只读文件权限。
 
 自有订阅「即梦」二级菜单中的 Seedream 图片模型 复用项目生成任务、探索浏览器资料目录和生成图入库。网页表单适配在 [jimeng_web.js](../../apps/desktop/src-tauri/src/codex/jimeng_web.js)，选择、默认值、首轮和续轮均携带具体模型键。每个任务的 WebView、登录和一次性下载由 [jimeng_web.rs](../../apps/desktop/src-tauri/src/codex/jimeng_web.rs) 管理。网页作业中断后查看即梦创作记录，应用不自动重提。入口仅支持单张 2K。
 
@@ -14,6 +15,8 @@ Cloud 图片新增模型复用 [modelForService／arkImageRequestBody](../../app
 ## 读取或修改本机业务数据
 
 素材菜单和画板导出所选原件时，复用 [assetArchive.ts](../../apps/desktop/src/lib/assetArchive.ts) 的 `exportAssetsToDirectory` 或 `exportAssetArchive`。两个入口在系统选择框打开前固定素材 ID，并共用[原生导出命令](../../apps/desktop/src-tauri/src/commands/asset_archive.rs)中的原件解析、命名和复制校验。目录中有同名项目时，副本自动加编号。
+
+按素材 ID 定位、拖出或导出原件共用 [external_files.rs](../../apps/desktop/src-tauri/src/core/external_files.rs) 的 `Database::resolve_asset_original`。它只读当前登记，阻断已回收／已清理记录；登记路径缺失时，仅尝试同素材的历史路径别名并核对已登记 SHA-256。删除仍使用 `preview_asset_originals` 的确认路径协议。
 
 画板自动接线用 `api.projectCanvasVisibleNodes(projectId, nodeIds)` 读取当前项目指定可见实例的原始节点及内容卡数据。需要恢复会话归组、判断历史完成状态时用 `api.projectCanvasGet`。[画板服务实现](../../apps/desktop/src-tauri/src/core/project_canvas.rs)
 
@@ -68,6 +71,8 @@ H3 图片文生图／编辑共用直接提示词图谱，`h3_image::reference_pr
 
 本机 H3 使用独立的既有持久任务协议：前端 [comfyVideo.ts](../../apps/desktop/src/lib/comfyVideo.ts) 的 `comfyVideo`／`comfyEnvironment`，Rust [comfy_video.rs](../../apps/desktop/src-tauri/src/commands/comfy_video.rs) 的固定模式 graph 与恢复、[comfy_setup.rs](../../apps/desktop/src-tauri/src/commands/comfy_setup.rs) 的按模式环境准备。`frames`／`reference`／`text` 由显式选择确定，缺省兼容旧首尾帧；[composerLocalVideo.ts](../../apps/desktop/src/lib/composerLocalVideo.ts) 让主屏和画板先保存同一 H3 卡片再执行。模式选择复用 `comfyVideoOptionsForMode`，环境响应的 `mode`／`modelsRequired` 用于当前模式就绪判断，`canAddModels` 仅表示托管环境可以补模型。此接口限定桌面与本机 loopback，不接受任意工作流；见 [三模式契约](../COMFYUI-LOCAL-VIDEO.md)。
 
+普通 H3 视频生成使用现有 `prepare` 启动已选择的环境。取回已提交任务使用 `recover`，绑定原端口、模式与已记录的安装路径，并复用原请求 UUID 和入库记录。进程识别及崩溃恢复统一由 `comfy_setup.rs` 管理。[环境恢复](../COMFYUI-LOCAL-VIDEO.md#h3-视频环境自行恢复桌面源码)
+
 - **用途／关键词**：GenJob、jobId、submit_id、幂等、恢复、终态、入库。
 - **入口**：[task_queue.rs](../../apps/desktop/src-tauri/src/core/task_queue.rs) 的 `GenJob`／`Task::upsert_gen_job`；[generation_worker.rs](../../apps/desktop/src-tauri/src/core/generation_worker.rs) 的 `spawn_recovery`／`finalize_generation_assets`。前端沿 `startGeneration`、`api.cancelCodexCreate`、`api.listGenJobs` 接入；**Cloud 视频取回原任务用 `api.recoverCloudVideo(jobId)`** → `recover_cloud_video`，不重新创建生成。
 - **调用**：[commands/codex.rs](../../apps/desktop/src-tauri/src/commands/codex.rs) 正常生成和恢复共用收尾；[lib.rs](../../apps/desktop/src-tauri/src/lib.rs) 启动恢复并注册 `recover_cloud_video`。[GenerationPanel.tsx](../../apps/desktop/src/components/GenerationPanel.tsx) 的 `retryTurn` 对 Cloud 视频失败末轮调用 `api.recoverCloudVideo(activeJob.id)`，失败交给 [notify.ts](../../apps/desktop/src/lib/notify.ts) 的 `notifyError`；历史失败轮有独立限制，不能对任意轮次复制该操作。
@@ -94,6 +99,13 @@ H3 图片文生图／编辑共用直接提示词图谱，`h3_image::reference_pr
 - 项目管理页与素材库项目选择器共用 `api.projectCovers()`。它按项目成员查询当前可见素材数及最多三张封面，排除库内隐藏、已回收和已清理失效原件，仍属于项目的断联素材按项目范围读取。[项目查询](../../apps/desktop/src-tauri/src/core/projects.rs)
 - **入口／调用**：[folder_connections.rs](../../apps/desktop/src-tauri/src/core/folder_connections.rs) 的 `disconnect_directory(paths, id)` 将连接移除与断联事实写入同一事务；[external_files.rs](../../apps/desktop/src-tauri/src/core/external_files.rs) 的 `link_external_to_library` 记录明确独立收集并清除断联，重新连接也恢复原身份。
 - **复用边界**：[material_catalog.rs](../../apps/desktop/src-tauri/src/core/material_catalog.rs) 的 crate 内部 `catalog_visibility`／`library_membership_sql` 统一供应分页、标签、旧列表／搜索／计数／色板及常用素材查询；不要另按 `library_hidden` 推断目录成员。0051 的独立收集／断联表只影响全局成员展示，不删除原件、缓存、创作资料或真实项目成员；其他连接／分身、独立收集与受管路径保留。旧版已经断开的来源不能可靠推断，升级不批量猜测隐藏。详见 [文件契约](../FOLDER-MODE.md)。
+
+## 以文搜图
+
+- [语义搜索命令](../../apps/desktop/src-tauri/src/commands/semantic_search.rs) 供 [semanticSearch.ts](../../apps/desktop/src/lib/semanticSearch.ts) 和 [LibrarySemanticSearch](../../apps/desktop/src/components/LibrarySemanticSearch.tsx) 使用。模型按需安装，索引由用户启用、暂停或恢复。已提交的结果页和选择 ID 使用同一会话，每页最多 60 项。并发、取消和会话过期由本机处理。
+- [索引](../../apps/desktop/src-tauri/src/core/semantic_search/index.rs) 通过 [0060](../../apps/desktop/src-tauri/sql/0060_semantic_image_embeddings.sql) 接收入库和内容版本变更，后台读取原件并校验 SHA-256。连接目录的内容变更通知和显式刷新可绕过大小与修改时间快路。索引仅写入当前素材库的 SQLite，推理和文件读取在主库锁之外进行。
+- [查询](../../apps/desktop/src-tauri/src/core/semantic_search/query.rs) 复用 `CatalogFilter::sql`、目录可见性和生成来源，范围确定后逐张精确评分。读取分页或选区前复核排名内素材的范围和内容，外接原件离线按现有目录可见性保留已索引结果。分类权重、文件夹条目选择及关键词搜索沿原入口。
+- Windows x64 较早冻结源码完成隔离 WebView2、真实 IPC 和 FP32 模型验收，3 张 PNG 的中文查询均命中首位，建索引 12.37 秒，首查 18.65 秒，后两次 120 和 107 毫秒。Ryzen 7 9700X 的 debug SQLite 探针读取 1 万条合成向量，热排序中位数 533 毫秒，启用生成来源筛选时为 545 毫秒，60 项分页和选择 ID 请求中位数为 5–9 毫秒。探针计时范围为本机 SQLite 读取和排序。模型产物、预处理和样本记录见[模型说明](../../apps/desktop/src-tauri/src/core/semantic_search/model/README.md)。Apple Silicon 实机和更大资料库的验收待补。
 
 ## 回收原件或清理缺失引用
 
@@ -160,6 +172,7 @@ Agent 卡片与对话框的新请求统一复用 `localChatStore` → `local_cha
 - **入口**：[collection-utils.js](../../apps/extension/collection-utils.js) 经 `globalThis.BowerbirdCollection` 暴露 `uploadBytes`／`checkVideoSupport`；[background.js](../../apps/extension/background.js) 的消息监听接收 `save_image`／`save_video`。桌面入口为 [collect/ws_server.rs](../../apps/desktop/src-tauri/src/collect/ws_server.rs) 的 `start`，解析元数据帧和二进制帧。
 - **调用**：`background.js` 的 `fetchVideo` 调用 `BowerbirdCollection.uploadBytes`；桌面 [lib.rs](../../apps/desktop/src-tauri/src/lib.rs) 启动 `collect::ws_server::start`，视频保存走 [video_blob.rs](../../apps/desktop/src-tauri/src/collect/video_blob.rs) 的 `save`；内置探索 [source_browser_capture.rs](../../apps/desktop/src-tauri/src/commands/source_browser_capture.rs) 也复用该保存层。
 - 桌面主窗口通过 `pair_extension` 登记扩展安装公钥。后台 `pairing.js` 为每个连接签发绑定浏览器来源的限时凭据；页面只取得单次上传授权。兼容 URL 下载复用 `core/public_network.rs` 的公网地址判定，每跳独立固定解析结果。
+- 图片采集共用 `core/ingest.rs` 的近似／字节精确去重：仅复用当前可读且未隐藏、未清理、未断开的原件，丢弃新副本前再核对登记路径与可见性。有项目时保留 `LibraryPaths::for_project` 的目标目录；扩展 bytes／URL 和探索全局采集复用 `Database::link_external_to_library` 登记 `independent_library_assets`，使项目内原件的全局用途参与项目删除保护。
 - **边界／状态**：**模块内部专用（扩展采集协议）**；视频保存层在 Rust crate 内已有跨入口调用。扩展 JS 是 classic script/global 导出，不是 React 模块；浏览器下载保持站点会话，上传只发字节及来源，不导出 Cookie。视频必须能力协商。内置探索和扩展的下载范围不同，不能拿一侧流媒体支持替另一侧作保证；见 [扩展 README](../../apps/extension/README.md)、[探索契约](../EMBEDDED-BROWSER.md)。
 
 ## 为官网或桌面配置 Cloud 反向代理入口

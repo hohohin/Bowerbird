@@ -194,7 +194,17 @@ export type DescribeTask =
   | { kind: "single"; assetId: string; instruction: string };
 
 type CanvasDeletionTarget = { assetIds: string[]; removeFromCanvas: () => void };
-type CanvasMenuSelection = { projectId: string; nodeIds: string[]; assetIds?: string[]; prepareProjectRemoval?: (assetIds: string[]) => Promise<void>; deletionTargets?: { item: CanvasDeletionTarget; group?: CanvasDeletionTarget } };
+type CanvasMenuSelection = {
+  projectId: string;
+  nodeIds: string[];
+  assetIds?: string[];
+  assets?: Asset[];
+  imageOnly?: boolean;
+  canAdjustLayer?: boolean;
+  removeSelectionFromCanvas?: () => void;
+  prepareProjectRemoval?: (assetIds: string[]) => Promise<void>;
+  deletionTargets?: { item: CanvasDeletionTarget; group?: CanvasDeletionTarget & { count: number } };
+};
 
 interface State {
   libraryThumbnailWidth: number;

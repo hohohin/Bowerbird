@@ -65,7 +65,7 @@ export function LibraryHome({ onCreateProject, active = true, shortcutsEnabled =
       {panes.map(({ pane, weight }, index) => <Fragment key={pane.id}>
         {index > 0 && <PaneDivider index={index} ratio={panes[index - 1].weight / (panes[index - 1].weight + weight)} onResize={ratio => resizePair(panes[index - 1].pane, pane, ratio)} onSplit={() => splitPane(panes[index - 1].pane)}/>}
         <div className="library-split-pane" style={{ flexGrow: weight }} aria-label={`素材库第 ${index + 1} 栏`}>
-          <LibraryPaneContext.Provider value={pane}><HomePane pane={pane} split={panes.length > 1} onSplit={() => splitPane(pane)} onClose={() => closePane(pane)} onCreateProject={onCreateProject} shortcutsEnabled={active && shortcutsEnabled}/></LibraryPaneContext.Provider>
+          <LibraryPaneContext.Provider value={pane}><HomePane pane={pane} split={panes.length > 1} onSplit={() => splitPane(pane)} onClose={() => closePane(pane)} onCreateProject={onCreateProject} shortcutsEnabled={active && shortcutsEnabled} semanticSearchEnabled={active}/></LibraryPaneContext.Provider>
         </div>
       </Fragment>)}
     </div>
@@ -97,9 +97,9 @@ function PaneDivider({ index, ratio, onResize, onSplit }: { index: number; ratio
     }}/><button type="button" className="library-pane-insert library-filter-trigger" aria-label={`在第 ${index}、${index + 1} 栏之间分栏`} title="在此分栏" onClick={onSplit}><Columns2 size={15} aria-hidden="true"/></button></div>;
 }
 
-function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEnabled }: {
+function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEnabled, semanticSearchEnabled }: {
   pane: LibraryPaneState; split: boolean; onSplit: () => void; onClose: () => void;
-  onCreateProject?: (assetIds?: string[]) => Promise<unknown>; shortcutsEnabled: boolean;
+  onCreateProject?: (assetIds?: string[]) => Promise<unknown>; shortcutsEnabled: boolean; semanticSearchEnabled: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => registerLibraryPane(pane), [pane]);
@@ -123,7 +123,7 @@ function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEna
       {split ? <button type="button" className="library-pane-close library-filter-trigger" aria-label="关闭此栏" title="关闭此栏" onClick={onClose}><X size={15} aria-hidden="true"/></button>
         : <button type="button" className="library-filter-trigger" aria-label="向右分栏" title="分栏" onClick={onSplit}><Columns2 size={15} aria-hidden="true"/></button>}
     </div>
-    <LibraryCatalogTransition key={media} kind={mode === "all" || mode === "tags" ? mode : "collections"} media={media} positionId={pane.id} showEmptyTags={split} dropPreview={split} navigation={navigation}
+    <LibraryCatalogTransition key={media} kind={mode === "all" || mode === "tags" ? mode : "collections"} media={media} positionId={pane.id} showEmptyTags={split} dropPreview={split} navigation={navigation} semanticSearchEnabled={semanticSearchEnabled}
       onClose={() => pane.mode.getState().setOpen(false)} onCreateProject={onCreateProject}/>
   </div>;
 }

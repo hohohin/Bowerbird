@@ -18,6 +18,8 @@
 .asset-detail :is(.asset-detail-back,.asset-detail-collect,.asset-detail-icon-button) { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); }
 .asset-detail :is(.asset-detail-back,.asset-detail-collect,.asset-detail-icon-button):hover { border-color: transparent; background: var(--bb-surface-hover); }
 .asset-detail .asset-detail-collect.is-active { color: var(--bb-ink); background: var(--bb-surface-hover); }
+.asset-detail-primary { background: var(--bb-blue); color: var(--bb-surface); transition: opacity 160ms ease; }
+.asset-detail-primary:enabled:hover { background: color-mix(in srgb, var(--bb-blue), var(--bb-ink) 10%); }
 .asset-detail :is(button,input,:is(select, .tactical-select-trigger),textarea) { border-radius: 0; }
 .asset-detail :is(input,:is(select, .tactical-select-trigger),textarea) { box-shadow: none; border-color: transparent; }
 .asset-detail :is(input,:is(select, .tactical-select-trigger),textarea):focus-visible { outline: 1px dashed var(--bb-muted); outline-offset: 2px; }

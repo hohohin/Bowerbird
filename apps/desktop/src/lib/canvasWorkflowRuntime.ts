@@ -43,7 +43,7 @@ import { readDismissedNotices, dismissNotices } from "./dismissedNotices";
 import { ConfirmedDshTurnFailure, WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import { describeBrandImage } from "./describeBrandImage";
-import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoElapsed, comfyVideoMode, DEFAULT_COMFY_VIDEO, type ComfyVideoStatus } from "./comfyVideo";
+import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoElapsed, comfyVideoMode, DEFAULT_COMFY_VIDEO, type ComfyVideoInput, type ComfyVideoStatus } from "./comfyVideo";
 import { H3_IMAGE } from "./genProviders";
 import { imageOptimizationText, restoreImageOptimization, cleanH3OptimizedPrompt, h3OptimizationInstruction } from "./h3PromptOptimization";
 import { compileAgentPrompt, compileGenerationPrompt, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowNodeRun, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, WORKFLOW_SKILLS,
@@ -1165,7 +1165,9 @@ export class CanvasWorkflowController {
       ...(scheduleId ? { scheduleId } : {}),
       ...(loop ? { loop } : {}),
       accountId,
-      steps: Object.fromEntries(order.map(id => [id, { status: "pending" as const }])) }, nodes);
+      steps: Object.fromEntries(order.map(id => [id, { status: "pending" as const,
+        ...(id === startId && single && !background && startNode.kind === "comfy-video" && startNode.comfyAutoOptimize === true
+          ? { comfyAutoGeneration: {} } : {}) }])) }, nodes);
     } finally { this.reservations.delete(runId); this.emit(); }
     if (start && !start.current()) { await this.stopBeforeDispatch(runId); return; }
     const h3Start = single && source?.kind === "comfy-video" ? start : undefined;
@@ -1191,10 +1193,20 @@ export class CanvasWorkflowController {
     if (!runId) return;
     if (this.stopping.has(runId)) return;
     this.stopping.add(runId);
-    try {
     const localIds = this.document.nodes.filter(node => node.kind === "comfy-video" && ["pending", "running", "waiting"].includes(this.run(runId)?.steps[node.id]?.status)).map(node => node.id);
+    let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    let timeoutError: Error | undefined;
+    const deadline = localIds.length ? new Promise<never>((_, reject) => {
+      stopTimer = setTimeout(() => {
+        timeoutError = new Error("等待本机停止响应超时。可重试停止或继续查询原任务。");
+        reject(timeoutError);
+      }, 20000);
+    }) : undefined;
+    const waitForStop = <T>(operation: Promise<T>) => deadline ? Promise.race([operation, deadline]) : operation;
+    try {
     for (const id of localIds) {
-      this.progress(runId, id, this.run(runId).steps[id].comfyOptimization ? "正在停止提示词优化…" : "正在中断本机生成…");
+      const step = this.run(runId).steps[id];
+      this.progress(runId, id, step.comfyOptimization && !step.comfyOptimization.result ? "正在停止提示词优化…" : "正在中断本机生成…");
       this.run(runId).steps[id].comfyStopping = true;
     }
     this.stopped.add(runId);
@@ -1202,16 +1214,23 @@ export class CanvasWorkflowController {
     for (const abort of this.profileAbort.get(runId) ?? []) abort.abort();
     const run = this.run(runId);
     if (!run) return;
+    const videoStops = new Map(localIds.flatMap(id => {
+      const step = run.steps[id];
+      if (!step.jobId) return [];
+      // Native cancellation owns the original request, including a start still crossing IPC.
+      return [[id, comfyVideo("cancel", this.projectId, step.jobId)
+        .then(result => ({ result, error: undefined }), error => ({ result: undefined, error }))] as const];
+    }));
     const active = Object.values(run.steps).filter(step => step.status === "running" || step.status === "waiting");
     // Keep the definition locked until cancellation requests have completed.
-    await Promise.all(active.map(async step => {
+    await waitForStop(Promise.all(active.map(async step => {
       if (step.voiceRequest?.jobId) await voiceApi.cancel(step.voiceRequest.jobId);
       if (step.jobId && step.generationSubmission !== "submitted" && !this.document.nodes.some(node => node.kind === "comfy-video" && run.steps[node.id] === step)) await api.cancelCodexCreate(step.jobId, step.turnKey);
       for (const generation of Object.values(step.localDsGenerations ?? {})) {
         if (!generation.response) await api.cancelCodexCreate(generation.jobId, generation.turnKey);
       }
       if (step.localDsRequestId && step.localAgentTransport === "codex-cli") await api.agentDsWorkflowCancel(step.localDsRequestId);
-      if (step.agentRunId) await api.cloudAgentCancel(step.agentRunId);
+      if (step.agentRunId && !step.comfyOptimization?.result) await api.cloudAgentCancel(step.agentRunId);
       if (step.chatInput) {
         if (step.chatConversationId && step.chatTurnId) {
           await useLocalChatStore.getState().stop(step.chatConversationId, step.chatTurnId);
@@ -1225,27 +1244,47 @@ export class CanvasWorkflowController {
         const node = this.document.nodes.find(node => run.steps[node.id] === step);
         if (node?.action === "describe" && !step.describeJobIds) await useStore.getState().cancelDescribe(step.assetId);
       }
-    }));
-    await this.executionDrains.get(runId);
+    })));
+    if (run.order.some(id => {
+      const optimization = run.steps[id]?.comfyOptimization;
+      return !localIds.includes(id) || optimization && !optimization.result;
+    })) {
+      await waitForStop(Promise.resolve(this.executionDrains.get(runId)));
+    }
     const cancellationErrors: string[] = [];
     for (const id of localIds) {
       const current = this.run(runId), step = current.steps[id];
       try {
-        // Drain any in-flight submission before cancelling its durable request.
-        const result = step.jobId ? await comfyVideo("cancel", this.projectId, step.jobId) : { status: "cancelled", message: "已取消，未提交生成" };
+        if (timeoutError) throw timeoutError;
+        const pending = videoStops.get(id);
+        const settled = pending && await waitForStop(pending);
+        if (settled && !settled.result) throw settled.error;
+        const result = settled?.result ?? { status: "cancelled", message: "已取消，未提交生成" };
         if (result.status !== "cancelled" && result.status !== "done") throw new Error(result.message);
         await this.saveRun({ ...current, steps: { ...current.steps, [id]: { ...step, comfyCancelled: result.status === "cancelled", comfyStopping: false, comfyProgress: undefined, error: undefined, detail: result.message } } });
       } catch (error) {
-        await this.saveRun({ ...this.run(runId), status: "waiting", steps: { ...this.run(runId).steps, [id]: { ...step, status: "waiting", comfyStopping: false, comfyProgress: undefined, error: `尚未确认停止：${String(error)}` } } });
+        await this.saveRun({ ...this.run(runId), status: "waiting", steps: { ...this.run(runId).steps, [id]: { ...step, status: "waiting", comfyStopping: false, comfyProgress: undefined, detail: "尚未确认本机生成已停止", error: `尚未确认停止：${String(error)}` } } });
         cancellationErrors.push(String(error));
       }
     }
     if (cancellationErrors.length) {
-      this.stopped.delete(runId);
       throw new Error(cancellationErrors.join("\n"));
     }
     await this.saveRun({ ...this.run(runId), status: "stopped", triggerQueue: [] });
-    } finally { this.stopping.delete(runId); }
+    } catch (error) {
+      const run = this.run(runId);
+      const unfinished = run && localIds.filter(id => run.steps[id]?.comfyStopping);
+      if (run && unfinished?.length) {
+        const steps = { ...run.steps };
+        for (const id of unfinished) steps[id] = { ...steps[id], status: "waiting", comfyStopping: false, comfyProgress: undefined, detail: "尚未确认本机生成已停止", error: `尚未确认停止：${String(error)}` };
+        await this.saveRun({ ...run, status: "waiting", steps });
+      }
+      throw error;
+    } finally {
+      clearTimeout(stopTimer);
+      this.stopping.delete(runId);
+      this.emit();
+    }
   }
   async restartLoop(runId: string) {
     await this.writing;
@@ -1821,7 +1860,8 @@ export class CanvasWorkflowController {
 
   async restoreComfyPrompt(nodeId: string, runId: string, source: "original" | "result") {
     const node = this.document.nodes.find(node => node.id === nodeId);
-    const snapshot = workflowRuns(this.document).find(run => run.id === runId)?.steps[nodeId]?.comfyOptimization;
+    const step = workflowRuns(this.document).find(run => run.id === runId)?.steps[nodeId];
+    const snapshot = !step?.comfyAutoGeneration && step?.comfyOptimization;
     if (!node || !snapshot) return;
     if (this.isLocked(nodeId) || this.startingCards.has(nodeId)) throw new Error("卡片正在使用，请等待当前任务结束");
     const text = source === "original" ? snapshot.input.prompt : snapshot.result;
@@ -1842,7 +1882,7 @@ export class CanvasWorkflowController {
   }
 
   async retryComfyPrompt(nodeId: string) {
-    const previous = [...workflowRuns(this.document)].reverse().find(run => run.steps[nodeId]?.comfyOptimization);
+    const previous = [...workflowRuns(this.document)].reverse().find(run => run.steps[nodeId]?.comfyOptimization && !run.steps[nodeId]?.comfyAutoGeneration);
     const step = previous?.steps[nodeId], snapshot = step?.comfyOptimization;
     if (!previous || !snapshot) return;
     const node = this.document.nodes.find(node => node.id === nodeId);
@@ -1896,7 +1936,7 @@ export class CanvasWorkflowController {
     return runId;
   }
 
-  private async runComfyPromptOptimization(runId: string, node: WorkflowNode, halted: () => boolean, start?: CardStart) {
+  private async resolveComfyPromptOptimization(runId: string, node: WorkflowNode, halted: () => boolean, start?: CardStart) {
     const id = node.id, originalStep = this.run(runId).steps[id];
     const assertAccount = () => {
       const account = useStore.getState();
@@ -1963,18 +2003,40 @@ export class CanvasWorkflowController {
     if ("referenceCount" in snapshot.input && snapshot.result.trim() === snapshot.input.prompt.trim()) {
       throw new Error(snapshot.keptOriginal ? "优化结果未保留完整的素材引用，已保留原提示词。可点击重试优化。" : "本次优化返回了相同的提示词，已保留原文。可点击重试优化。");
     }
-    const run = this.run(runId);
-    await this.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "done", error: undefined, detail: snapshot.keptOriginal ? "优化结果的卡片引用不完整，已保留原提示词" : "提示词已替换" } } },
-      this.document.nodes.map(item => item.id === id ? { ...item, prompt: "referenceCount" in snapshot.input ? snapshot.result! : cleanH3OptimizedPrompt(snapshot.result!) } : item));
+    return { ...snapshot, result: snapshot.result };
   }
 
-  private async runComfyVideo(runId: string, node: WorkflowNode, halted: () => boolean, input?: import("./comfyVideo").ComfyVideoInput, start?: CardStart) {
+  private async runComfyPromptOptimization(runId: string, node: WorkflowNode, halted: () => boolean, start?: CardStart) {
+    const snapshot = await this.resolveComfyPromptOptimization(runId, node, halted, start);
+    if (!snapshot || halted()) return;
+    const id = node.id;
+    const run = this.run(runId);
+    await this.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "done", error: undefined, detail: snapshot.keptOriginal ? "优化结果的卡片引用不完整，已保留原提示词" : "提示词已替换" } } },
+      this.document.nodes.map(item => item.id === id ? { ...item, prompt: "referenceCount" in snapshot.input ? snapshot.result : cleanH3OptimizedPrompt(snapshot.result) } : item));
+  }
+
+  private async runComfyAutoGeneration(runId: string, node: WorkflowNode, halted: () => boolean, video: ComfyVideoInput, start?: CardStart) {
+    if (!this.run(runId).steps[node.id].comfyOptimization) {
+      const mode = comfyVideoMode(video);
+      const input = { prompt: video.prompt, mode, seconds: video.seconds, ratio: video.ratio,
+        firstFrameCount: video.firstFrame ? 1 : 0, lastFrameCount: video.lastFrame ? 1 : 0 };
+      await this.step(runId, node.id, { comfyAutoGeneration: { input: video },
+        comfyOptimization: { input, instruction: h3OptimizationInstruction(input), createdAt: Date.now() } });
+    }
+    if (halted()) return;
+    const optimized = await this.resolveComfyPromptOptimization(runId, node, halted, start);
+    if (!optimized || halted()) return;
+    await this.runComfyVideo(runId, node, halted, { ...video, prompt: optimized.result });
+  }
+
+  private async runComfyVideo(runId: string, node: WorkflowNode, halted: () => boolean, input?: ComfyVideoInput, start?: CardStart) {
     const id = node.id, step = this.run(runId).steps[id], accountId = this.run(runId).accountId;
+    const optimizedForThisRun = !!(step.comfyAutoGeneration?.input && step.comfyOptimization?.result);
     let jobId = step.jobId;
     let result: ComfyVideoStatus;
     let terminalFailure = false;
-    const prepare = async (endpoint: string, mode: import("./comfyVideo").ComfyVideoMode) => {
-      let environment = await comfyEnvironment("prepare", endpoint, undefined, undefined, mode);
+    const prepare = async (endpoint: string, mode: import("./comfyVideo").ComfyVideoMode, recovery?: { installation?: string | null }) => {
+      let environment = await comfyEnvironment(recovery ? "recover" : "prepare", endpoint, undefined, recovery?.installation ?? undefined, mode);
       while (!halted()) {
         if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后重新运行");
         if (environment.phase === "ready") return environment.endpoint;
@@ -1988,16 +2050,22 @@ export class CanvasWorkflowController {
     };
     try {
       if (!jobId) {
-        if (step.status !== "pending") throw new Error("上次提交状态未知，请核对本机 ComfyUI 队列");
+        if (step.status !== "pending" && !optimizedForThisRun) {
+          throw new Error("上次提交状态未知，请核对本机 ComfyUI 队列");
+        }
         if (!input) throw new Error("缺少本地视频输入");
         this.progress(runId, id, "正在准备本机环境…");
         const endpoint = await prepare(input.endpoint, comfyVideoMode(input));
         if (!endpoint || halted()) return;
         input = { ...input, endpoint };
         jobId = crypto.randomUUID();
-        await this.step(runId, id, { status: "running", jobId, detail: "正在提交本机视频工作流" });
+        await this.step(runId, id, { status: "running", jobId, error: undefined, detail: "正在提交本机视频工作流" });
         if (halted()) return;
         if (start && !start.current()) { await this.stopBeforeDispatch(runId); return; }
+        if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) {
+          await this.step(runId, id, { status: "pending", jobId: undefined, error: "账号已切换，请登录原账号后继续生成。" });
+          return;
+        }
         start?.release();
         result = await comfyVideo("start", this.projectId, jobId, input);
       } else {
@@ -2012,8 +2080,8 @@ export class CanvasWorkflowController {
         if (result.status === "offline") {
           if (restarted || !result.originalService) throw new Error("本机视频服务仍无法连接，原任务记录已保留。");
           restarted = true;
-          const [original, mode] = result.originalService;
-          const endpoint = await prepare(original, mode);
+          const [original, mode, installation] = result.originalService;
+          const endpoint = await prepare(original, mode, { installation });
           if (!endpoint || halted()) return;
           if (endpoint !== original) throw new Error("原任务使用的本机视频服务暂不可用。");
           result = await comfyVideo("status", this.projectId, jobId);
@@ -2043,6 +2111,10 @@ export class CanvasWorkflowController {
       }
     } catch (error) {
       if (halted()) return;
+      if (!jobId && optimizedForThisRun) {
+        await this.step(runId, id, { status: "waiting", detail: "提示词已优化，等待本机生成", error: `${String(error)}。继续时会沿用本次优化结果。` });
+        return;
+      }
       if (terminalFailure || !jobId) throw error;
       // Preserve the durable identity on all transport errors. Continue never submits anew.
       await this.step(runId, id, { status: "waiting", comfyProgress: undefined, error: `${String(error)}。可继续查询原任务，或点击停止取消本机生成。` });
@@ -2050,6 +2122,10 @@ export class CanvasWorkflowController {
   }
 
   async recoverComfyVideo(runId: string, nodeId?: string) {
+    if (this.run(runId)?.status !== "stopped" || this.stopping.has(runId)) return;
+    // The card is stopped before the old poll returns. Preserve an immediate
+    // click on Take back and resume only after that poll has released the run.
+    await this.executionDrains.get(runId);
     const run = this.run(runId);
     if (!run || run.status !== "stopped" || this.executing.has(runId) || this.stopping.has(runId)) return;
     const node = this.document.nodes.find(node => node.id === (nodeId ?? run.startId));
@@ -2105,6 +2181,9 @@ export class CanvasWorkflowController {
       if (node.kind === "voice" && step.voiceRequest) { await this.runVoice(runId, node, halted); return; }
       this.progress(runId, id, node.kind === "generation" ? `生成${node.generation?.media === "video" ? "视频" : "图片"}，等待会话结果` : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
       if (node.kind === "comfy-video" && step.jobId) { await this.runComfyVideo(runId, node, halted); return; }
+      if (node.kind === "comfy-video" && step.comfyAutoGeneration?.input) {
+        await this.runComfyAutoGeneration(runId, node, halted, step.comfyAutoGeneration.input, start); return;
+      }
       if (step.comfyOptimization) { await this.runComfyPromptOptimization(runId, node, halted, start); return; }
       if (node.kind === "generation" && node.generation?.media === "video" && step.jobId) {
         await this.recoverVideoResult(runId, node, halted); return;
@@ -2469,7 +2548,9 @@ export class CanvasWorkflowController {
         if (mode === "reference" && first.length !== 1) throw new Error("单图模式需要连接一张参考图");
         if (!prompt || prompt.length > 16000) throw new Error("请填写 1–16000 字提示词");
         if (!Number.isFinite(options.seconds) || options.seconds < 1 || options.seconds > 15) throw new Error("视频时长需为 1–15 秒");
-        await this.runComfyVideo(runId, node, halted, { ...options, firstFrame: mode === "text" ? "" : first[0], lastFrame: mode === "frames" ? last[0] : undefined, prompt }, start);
+        const input = { ...options, firstFrame: mode === "text" ? "" : first[0], lastFrame: mode === "frames" ? last[0] : undefined, prompt };
+        if (step.comfyAutoGeneration) await this.runComfyAutoGeneration(runId, node, halted, input, start);
+        else await this.runComfyVideo(runId, node, halted, input, start);
       } else if (node.kind === "generation") {
         const generation = video ? { ...node.generation, media: "video" as const, videoOptions: resolveVideoOptions(node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS, orderedAssets) } : undefined;
         const provider = workflowGenerationProvider(node);
@@ -2483,6 +2564,20 @@ export class CanvasWorkflowController {
           let jobId = step.jobId, turnKey = step.turnKey;
           if (!jobId) {
             if (step.status !== "pending") throw new Error("无法确认上次提交状态，请检查任务中心");
+            const origins = new Map<string, string>();
+            for (const [port, bindings] of Object.entries(connectedNode.inputs)) for (const [index, binding] of bindings.entries()) {
+              const sourceId = binding.assetNodeId ?? binding.canvasNodeId;
+              if (sourceId && values[port]?.[index]?.assetIds?.length) {
+                canvas ??= await api.projectCanvasGet(this.projectId);
+                if (halted()) return;
+                const source = canvas?.nodes.find(candidate => candidate.id === sourceId && candidate.kind === "asset" && candidate.hiddenAt == null);
+                if (source?.assetId && values[port][index].assetIds?.includes(source.assetId) && !origins.has(source.assetId)) {
+                  origins.set(source.assetId, source.id);
+                }
+              }
+            }
+            // Explicit null keeps a reference in the request and history without projecting a canvas node.
+            const referenceNodeIds = orderedAssets.map(asset => origins.get(asset.id) ?? null);
             jobId = crypto.randomUUID(); turnKey = crypto.randomUUID();
             const sessionNodeId = `gen-prompt:${jobId}:${turnKey}:0`;
             // Persist both recovery identity and ownership before calling the provider.
@@ -2491,7 +2586,7 @@ export class CanvasWorkflowController {
               this.document.nodes.map(candidate => candidate.id === id ? { ...candidate, activeSessionNodeId: sessionNodeId,
                 sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate));
             const result = await useStore.getState().startGeneration(prompt, orderedAssets, ratio, provider, prompt,
-              undefined, undefined, undefined, visualProfileId, { projectId: this.projectId, threadId: this.run(runId).threadId }, true, undefined, { jobId, turnKey });
+              undefined, undefined, undefined, visualProfileId, { projectId: this.projectId, threadId: this.run(runId).threadId, referenceNodeIds }, true, undefined, { jobId, turnKey });
             if (!result.accepted) throw new Error(result.error || "生成任务未提交");
           } else if (step.generationSubmission !== "submitted") {
             if (!turnKey || !await api.agentDsWorkflowGenerationJob(jobId, turnKey)) {

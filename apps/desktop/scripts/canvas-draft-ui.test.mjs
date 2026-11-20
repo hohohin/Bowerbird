@@ -105,7 +105,7 @@ try {
   await page.locator(`[data-canvas-node-id="${node.id}"]`).waitFor();
   await page.screenshot({ path: ".tmp/canvas-draft-saved.png" });
   await page.locator(`[data-canvas-node-id="${node.id}"]`).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "图片标注", exact: true }).click();
+  await page.getByRole("menuitem", { name: "编辑", exact: true }).click();
   const regular = page.getByRole("dialog", { name: "图片标注", exact: true });
   await regular.locator("img").waitFor();
   assert.equal(await regular.getByRole("button", { name: "保存到素材库", exact: true }).count(), 1);

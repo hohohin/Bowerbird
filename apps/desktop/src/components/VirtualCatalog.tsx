@@ -36,7 +36,8 @@ function visiblePage(page: Page, hasPending: boolean): Page & { sourceIndices?: 
 // Keep only visited pages' ratios after asset eviction/view switches. A page's
 // total height alone cannot continue uneven columns or adapt to a new width.
 const layoutHistory = new Map<string, Map<string, readonly number[]>>();
-export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, itemKey = asset => asset.id, renderItem, emptySection }: {
+const assetKey = (asset: Asset) => asset.id;
+export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, pageScope, itemKey = assetKey, renderItem, emptySection }: {
   filter: CatalogFilter; sections: CatalogSectionInfo[]; headings: boolean; width: number; revision: number;
   scroll: RefObject<HTMLDivElement>; selected: Set<string>; jump: { id: string; sequence: number } | null; initialTop?: number;
   onActive: (id: string | null) => void; onAssetsChange?: (assets: Asset[]) => void;
@@ -44,6 +45,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   onSelect: (asset: Asset, additive: boolean, range: boolean, location: CatalogLocation) => void;
   onActivate?: (asset: Asset) => void; onOpen: (asset: Asset) => void; onContextMenu: (asset: Asset, x: number, y: number, location: CatalogLocation) => void;
   readPage?: (sectionId: string, offset: number, limit: number) => Promise<Asset[]>;
+  pageScope?: string;
   itemKey?: (asset: Asset) => string;
   renderItem?: (asset: Asset, style: CSSProperties, ratio: number, location: CatalogLocation) => ReactNode;
   emptySection?: (sectionId: string) => ReactNode;
@@ -52,7 +54,8 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   const pendingDeletion = usePendingOriginalDeletion();
   const [viewport, setViewport] = useState(() => ({ top: initialTop ?? 0, height: scroll.current?.clientHeight || 800, width: scroll.current?.clientWidth || 800 }));
   const [tick, setTick] = useState(0);
-  const pagePrefix = `pages:${JSON.stringify(filter)}:`;
+  const geometryKey = JSON.stringify(pageScope ? [filter, pageScope] : filter);
+  const pagePrefix = `pages:${geometryKey}:`;
   const [pages] = useState(() => new Map(catalogCache.entries<Omit<Page, "revision">>(pagePrefix)
     .slice(-CATALOG_CACHE_PAGES).map(([key, entry]) => [key.slice(pagePrefix.length), { ...entry.value, revision: catalogCache.fresh(entry) ? entry.revision : -1 }])));
   const cache = useRef(pages);
@@ -65,7 +68,6 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   const version = useRef(revision); version.current = revision;
   const anchor = useRef<{ key: string; delta: number; asset?: { id: string; delta: number } } | { section: string; delta: number } | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
-  const geometryKey = JSON.stringify(filter);
   const oldGeometry = useRef("");
   const showEmpty = !!emptySection;
   if (oldGeometry.current !== geometryKey) {
@@ -191,8 +193,8 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   useEffect(() => {
     if (!onAssetsChange) return;
     const pages = [...cache.current.values()].map(page => visiblePage(page, pendingDeletion.size > 0));
-    onAssetsChange([...new Map(pages.flatMap(page => [...page.assets, ...Object.values(page.groups).flat()]).map(asset => [asset.id, asset])).values()]);
-  }, [tick, pendingDeletion, onAssetsChange]);
+    onAssetsChange([...new Map(pages.flatMap(page => [...page.assets, ...Object.values(page.groups).flat()]).map(asset => [itemKey(asset), asset])).values()]);
+  }, [tick, pendingDeletion, onAssetsChange, itemKey]);
   useEffect(() => () => onAssetsChange?.([]), [onAssetsChange]);
   useLayoutEffect(() => {
     const view = scroll.current;

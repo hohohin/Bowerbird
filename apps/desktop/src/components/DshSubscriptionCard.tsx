@@ -139,7 +139,7 @@ function ChatDshSetupDialog({ access, onClose, onAuthorize }: {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-  return <ModalShell title="DSH 设置" onClose={onClose} preventClose={busy} footer={<>
+  return <ModalShell title="DSH 设置" className="dsh-setup-dialog" onClose={onClose} preventClose={busy} footer={<>
     <button type="button" className="app-modal-button" disabled={busy} onClick={onClose}>取消</button>
     <button type="button" className="app-modal-button is-primary" disabled={busy || !access.localAllowed || (manual && !url.trim())} onClick={() => void setup(manual)}>{busy ? "正在连接…" : manual ? "连接" : "一键连接本机 DSH"}</button>
   </>}>

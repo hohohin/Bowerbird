@@ -54,6 +54,18 @@ const wave = id => page.locator(`div[data-audio-preview][data-asset-id="${id}"]`
 const playerState = () => page.evaluate(() => { const audio = document.querySelector('audio[data-audio-preview]'); return audio && { src: audio.getAttribute('src'), currentSrc: audio.currentSrc, time: audio.currentTime, paused: audio.paused, seeking: audio.seeking, duration: audio.duration }; });
 async function progressBeyond(time) { await page.waitForFunction(time => { const audio = document.querySelector('audio[data-audio-preview]'); return audio && !audio.paused && !audio.seeking && audio.currentTime >= time; }, time, { timeout: 12000 }); }
 async function stopped() { await page.waitForFunction(() => { const audio = document.querySelector('audio[data-audio-preview]'); return !audio || audio.paused && !audio.getAttribute('src'); }); }
+async function openAudioCatalog() {
+  await page.goto(url);
+  await page.locator('.library-home').waitFor();
+  await page.getByRole('tab', { name: '全部素材', exact: true }).click();
+  await page.getByRole('group', { name: '素材类型' }).hover();
+  const audio = page.getByRole('button', { name: '音频', exact: true });
+  await audio.waitFor();
+  assert.equal(await audio.count(), 1, 'formal library must expose audio alongside image and video');
+  await audio.click();
+  await wave('wav').waitFor();
+  await page.waitForFunction(() => document.querySelector('div[data-audio-preview][data-asset-id="wav"]')?.dataset.waveReady === 'true');
+}
 async function playback(id) {
   const root = wave(id), waveform = root.locator('.audio-waveform-wave'), play = root.locator('.audio-waveform-play');
   await root.scrollIntoViewIfNeeded(); await page.waitForFunction(id => document.querySelector(`div[data-audio-preview][data-asset-id="${id}"]`)?.dataset.waveReady === 'true', id);
@@ -103,6 +115,9 @@ async function mutations() {
   await page.getByRole('button', { name: '删除原文件', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'detached' });
   mutation = await page.evaluate(() => window.mutations.at(-1)); assert.equal(mutation.command, 'trash_asset_original'); assert.equal(mutation.paused, true); assert.equal(mutation.src, null);
+  const firstMutations = await page.evaluate(() => window.mutations);
+  // Restart the fixture because successful deletion hides the original card in this window.
+  await openAudioCatalog();
   await play.click(); await progressBeyond(.2);
   await page.evaluate(() => window.openMutationDialog('delete-reference'));
   await page.getByRole('button', { name: '删除原文件', exact: true }).click();
@@ -110,7 +125,7 @@ async function mutations() {
   mutation = await page.evaluate(() => window.mutations.at(-1)); assert.equal(mutation.command, 'trash_asset_original');
   assert.equal(mutation.paused, true, 'explicitly recycling an external original also stops its player'); assert.equal(mutation.src, null);
   await stopped();
-  return page.evaluate(() => window.mutations);
+  return [...firstMutations, ...await page.evaluate(() => window.mutations)];
 }
 async function selection() {
   const card = page.locator('.audio-file-card[data-asset-id="wav"]');
@@ -150,15 +165,7 @@ try {
     assert.doesNotMatch(labels, /反推|添加到对话框/);
   }
   if (!process.argv.includes('--guards-only')) {
-    await page.goto(url);
-    await page.locator('.library-home').waitFor();
-    await page.getByRole('tab', { name: '全部素材', exact: true }).click();
-    await page.getByRole('group', { name: '素材类型' }).hover();
-    await page.getByRole('button', { name: '音频', exact: true }).waitFor();
-    assert.equal(await page.getByRole('button', { name: '音频', exact: true }).count(), 1, 'formal library must expose audio alongside image and video');
-    await page.getByRole('button', { name: '音频', exact: true }).click();
-    await wave('wav').waitFor();
-    await page.waitForFunction(() => document.querySelector('div[data-audio-preview][data-asset-id="wav"]')?.dataset.waveReady === 'true');
+    await openAudioCatalog();
     if (process.argv.includes('--selection-only')) result.ui = { selection: await selection() };
     else if (process.argv.includes('--mutations-only')) result.ui = { mutations: await mutations() };
     else {
@@ -189,6 +196,7 @@ try {
     await page.getByRole('button', { name: '音频', exact: true }).click(); await wave('wav').waitFor();
     await wave('mp3').locator('.audio-waveform-play').click(); await stopped();
     result.ui.mutations = await mutations();
+    await openAudioCatalog();
     await page.evaluate(() => window.mode.getState().setCatalogView('tags'));
     await page.locator('[data-tag-section="tag-music"]').waitFor();
     assert.equal(await page.locator('[data-tag-section="tag-music"] div[data-audio-preview][data-asset-id="mp3"]').count(), 1, 'manual audio tags retain grouped browsing');
@@ -218,11 +226,13 @@ try {
     await page.evaluate(() => window.store.getState().openDetail('wav'));
     await page.locator('.asset-detail div[data-audio-preview]').waitFor();
     assert.equal(await page.locator('.asset-detail').getByRole('button', { name: /反推/ }).count(), 0);
-    await page.getByRole('button', { name: '+ 加类别', exact: true }).click();
-    await page.getByPlaceholder('新类别名', { exact: true }).fill('音效');
-    await page.getByPlaceholder('新类别名', { exact: true }).press('Enter');
-    await page.waitForFunction(() => window.calls.some(call => call.command === 'set_asset_tags' && call.args.source === 'manual'));
-    assert.deepEqual(await page.evaluate(() => window.calls.find(call => call.command === 'set_asset_tags').args), { assetId: 'wav', names: ['音效'], source: 'manual' });
+    await page.getByRole('button', { name: '添加标签', exact: true }).click();
+    await page.getByRole('textbox', { name: '搜索或新建标签', exact: true }).fill('音效');
+    await page.getByRole('button', { name: '新建并添加“音效”', exact: true }).click();
+    await page.getByRole('button', { name: '移除标签 音效', exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.calls.find(call => call.command === 'local_classification_example').args),
+      { assetIds: ['wav'], tagId: 'tag-音效', positive: true });
+    await page.keyboard.press('Escape');
     await page.screenshot({ path: resolve(output, 'detail-dark.png') });
     const calls = await page.evaluate(() => window.calls);
     assert.ok(calls.some(call => call.command === 'audio_waveform' && call.args.expectedVersion === 'a'.repeat(64)), 'connected entries verify their source fingerprint');

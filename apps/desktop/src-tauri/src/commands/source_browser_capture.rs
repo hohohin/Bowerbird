@@ -39,6 +39,8 @@ fn import_capture(
     let asset = ingest::ingest_from_bytes_with_classification(&paths, db, bytes, page_url, None, None, "extension", !skip_classification)?;
     if let Some(id) = project_id {
         db.add_assets_to_project(id, std::slice::from_ref(&asset.id))?;
+    } else {
+        db.link_external_to_library(&asset.id)?;
     }
     Ok(asset)
 }
@@ -197,6 +199,34 @@ pub async fn finish_source_browser_analysis(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn global_explorer_capture_reuses_a_project_file_and_persists_a_missing_recapture() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut paths = LibraryPaths::init(temporary.path().join("cache")).unwrap();
+        paths.files = Some(Arc::new(crate::core::file_workspace::FileWorkspace::open(
+            temporary.path().join("files.json"),temporary.path().join("BowerbirdLibrary"),
+        ).unwrap()));
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.create_project("p","Project","","p","blank").unwrap();
+        let photo = crate::media::phash::testutil::make_photo_file(temporary.path(),"photo.png",320,7);
+        let bytes = std::fs::read(photo).unwrap();
+        let capture = |project| import_capture(&paths,&db,&bytes,"https://example.com/photo",project,false).unwrap();
+        let first = capture(Some("p"));
+        let global = capture(None);
+        assert_eq!(global.id,first.id);
+        let independent: bool = db.conn.lock().unwrap().query_row(
+            "SELECT EXISTS(SELECT 1 FROM independent_library_assets WHERE asset_id=?1)",[&global.id],|row| row.get(0),
+        ).unwrap();
+        assert!(independent);
+        std::fs::remove_file(first.store_path.as_ref().unwrap()).unwrap();
+        let recaptured = capture(None);
+        assert_ne!(recaptured.id,first.id);
+        assert!(std::path::Path::new(recaptured.store_path.as_ref().unwrap()).starts_with(
+            paths.files.as_ref().unwrap().ensure_root().unwrap().join("收集箱")));
+        assert_eq!(std::fs::read(recaptured.store_path.as_ref().unwrap()).unwrap(),bytes);
+    }
+
     #[test]
     fn source_browser_video_capture_saves_real_video_to_frozen_project() {
         let temporary = tempfile::tempdir().unwrap();

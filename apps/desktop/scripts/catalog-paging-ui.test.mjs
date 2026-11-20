@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-import { checkContextRangeSelection } from './helpers/catalog-context-selection.mjs';
+import { checkContextLookup, checkContextRangeSelection } from './helpers/catalog-context-selection.mjs';
 const server=await createServer({cacheDir:'.tmp/catalog-paging/vite',server:{host:'127.0.0.1',port:17893,strictPort:true,hmr:false,watch:null}});
 await server.listen();
 const browser=await chromium.launch({channel:'chrome',headless:true});
@@ -49,6 +49,9 @@ try {
   await page.getByText('300000 项',{exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>window.requests.some(r=>r.command==='get_assets_by_ids')),false,'range selection must only fetch IDs');
   await page.getByRole('button',{name:'取消选择',exact:true}).click();
+  await page.reload(); await ready();
+  await checkContextLookup(page, index => page.locator(`[data-asset-id="asset-${index}"]`), page.getByRole('button', { name: '取消选择', exact: true }),
+    { idsCommand: 'catalog_ids', lookupCommand: 'get_assets_by_ids', firstId: 'asset-0', secondId: 'asset-1', coldId: 'asset-12000' });
   await page.setViewportSize({width:440,height:720});
   await page.evaluate(()=>window.store.setState({libraryThumbnailWidth:280}));
   await page.waitForTimeout(80);

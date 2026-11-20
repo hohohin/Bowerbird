@@ -77,15 +77,25 @@ try {
   await reset();
   await marquee();
   assert.deepEqual(await chips(), [], "selection alone must not insert references");
+  const priorAssetLookups = await page.evaluate(() => window.calls.filter(call => call.command === "get_assets_by_ids").length);
   await node("a").click({ button: "right", position: { x: 95, y: 75 } });
   assert.deepEqual(await selectedNodes(), mixedSelection, "right-clicking inside a mixed selection preserves it");
   assert.deepEqual(await page.evaluate(() => [...window.store.getState().contextMenu.canvasSelection.nodeIds].sort()), mixedSelection, "the image menu keeps the whole selected group as its target");
+  assert.deepEqual(await page.evaluate(() => window.store.getState().contextMenu.canvasSelection.assets.map(asset => asset.id).sort()), ["a", "existing"]);
+  for (const name of ["批量反推", "合为组图"]) {
+    assert.equal(await page.getByRole("menuitem", { name, exact: true }).count(), 1, "image actions are present on initial paint");
+  }
+  assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === "get_assets_by_ids").length), priorAssetLookups,
+    "opening an already hydrated canvas selection does not read assets again");
   await addFromMenu("添加所选 2 张图片到对话框");
   assert.deepEqual(await chips(), ["existing", "a"], "deduplicate images and skip execution cards");
 
   await reset();
   await marquee();
   await page.locator(".canvas-stage").click({ button: "right", position: { x: 60, y: 50 } });
+  const blankMenu = page.getByRole("menu", { name: "画板节点菜单", exact: true });
+  assert.equal(await blankMenu.getByRole("menuitem", { name: "整理", exact: true }).count(), 0);
+  await blankMenu.getByRole("menuitem", { name: "所选 4 项", exact: true }).click();
   await addFromMenu("添加所选 2 张图片到对话框");
   assert.deepEqual(await chips(), ["existing", "a"], "blank-space menu keeps the marquee selection");
 
@@ -116,7 +126,7 @@ try {
     await marquee();
     await node(id).click({ button: "right", position: { x: 95, y: 50 } });
     assert.deepEqual(await selectedNodes(), mixedSelection, `${id}: an outside menu preserves the mixed selection`);
-    await page.getByRole("menuitem", { name: id === "outside" ? "删除当前项" : "删除", exact: true }).click();
+    if (id === "agent") await page.getByRole("menuitem", { name: "删除", exact: true }).click();
     await page.getByRole("menuitem", { name: id === "outside" ? "移出画布" : "从画布移出", exact: true }).click();
     await node(id).waitFor({ state: "detached" });
     assert.deepEqual(await selectedNodes(), mixedSelection, `${id}: removing the menu target preserves unrelated selected nodes`);
@@ -188,8 +198,8 @@ try {
     // Clear the multi-selection before checking the single-node context action.
     await page.locator(".canvas-stage").click({ position: { x: 60, y: 50 } });
     await node(id).click({ button: "right", position: { x: 95, y: 50 } });
-    await page.getByRole("menuitem", { name: id === "old" ? "删除当前项" : id === "folder" ? "删除当前组" : "删除", exact: true }).click();
-    await page.getByRole("menuitem", { name: ["old", "folder"].includes(id) ? "移出画布" : "从画布移出", exact: true }).click();
+    if (id !== "old") await page.getByRole("menuitem", { name: id === "folder" ? "整组操作 · 1 项" : "删除", exact: true }).click();
+    await page.getByRole("menuitem", { name: id === "old" ? "移出画布" : id === "folder" ? "将整组移出画布" : "从画布移出", exact: true }).click();
     await node(id).waitFor({ state: "detached" });
     await page.keyboard.press(`${primaryModifier}+z`);
     await node(id).waitFor();
@@ -197,10 +207,28 @@ try {
   await reset();
   await marquee();
   await page.locator(".canvas-stage").click({ button: "right", position: { x: 60, y: 50 } });
-  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
+  const selectionTrigger = blankMenu.getByRole("menuitem", { name: "所选 4 项", exact: true });
+  await selectionTrigger.focus();
+  await page.keyboard.press("ArrowRight");
+  const selectionMenu = page.getByRole("menu", { name: "所选 4 项", exact: true });
+  const deleteTrigger = selectionMenu.getByRole("menuitem", { name: "删除", exact: true });
+  await deleteTrigger.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.getByRole("menu", { name: "删除", exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  assert.equal(await deleteTrigger.evaluate(element => document.activeElement === element), true);
+  await page.keyboard.press("ArrowRight");
   await page.getByRole("menuitem", { name: "从画布移出所选 4 项", exact: true }).click();
   for (const id of ["old", "a", "duplicate-a", "prompt"]) await node(id).waitFor({ state: "detached" });
   assert.equal(await node("outside").count(), 1, "unselected material stays on the canvas");
+
+  await reset();
+  await marquee();
+  await node("a").click({ button: "right", position: { x: 95, y: 75 } });
+  await page.getByRole("menuitem", { name: "从画布移出所选 4 项", exact: true }).click();
+  for (const id of mixedSelection) await node(id).waitFor({ state: "detached" });
+  assert.equal(await node("outside").count(), 1);
+  assert.equal(await page.evaluate(() => window.calls.some(call => call.command === "trash_asset_original")), false);
 
   await reset();
   await marquee();

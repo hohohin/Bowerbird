@@ -30,6 +30,16 @@ async function bounds() {
 try {
   await mkdir('.tmp/context-menu', { recursive: true });
   await page.goto('http://127.0.0.1:1796/scripts/fixtures/asset-multi-menu/preview.html', { waitUntil: 'domcontentloaded' });
+  await open();
+  assert.equal(await root().getByRole('menuitem', { name: '编辑', exact: true }).locator('svg[viewBox="0 0 1024 1024"]').count(), 1);
+  await close();
+  await open('canvas-mixed');
+  for (const name of ['调整层级', '整理', '添加到对话框']) {
+    assert.equal(await page.getByRole('menuitem', { name, exact: true }).isEnabled(), true);
+  }
+  assert.equal(await page.getByRole('menuitem', { name: /整组操作/ }).count(), 0);
+  await page.getByRole('menuitem', { name: '从画布移出所选 2 项', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.removedCanvasNodes), ['n1', 'n2']);
   await page.locator('#trigger').click();
   await page.evaluate(() => window.fixtureStore.setState({ promptedAssets: [{ id: 'a1', sections: [{ title: '构图', body: '中心构图' }] }], boardOpen: true }));
   await root().getByRole('menuitem', { name: '维度', exact: true }).click();
@@ -67,11 +77,11 @@ try {
   for (const kind of ['multi', 'canvas']) {
     await open(kind);
     const menu = page.getByRole('menu', { name: '已选 2 项素材的操作', exact: true });
-    for (const name of ['重命名', '打开图片详情', '反推提示词', '图片标注', '用选中的内容新建文件夹', '移入已有文件夹']) assert.equal(await menu.getByRole('menuitem', { name, exact: true }).count(), 0);
+    for (const name of ['重命名', '打开图片详情', '反推提示词', '编辑', '用选中的内容新建文件夹', '移入已有文件夹']) assert.equal(await menu.getByRole('menuitem', { name, exact: true }).count(), 0);
     await menu.getByRole('menuitem', { name: '批量反推', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Bowerbird Cloud', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => window.describe.splice(0).map(v => v.id)), ['a1', 'a2']);
-    const deleteMenu = kind === 'canvas' ? '删除当前项' : '删除';
+    const deleteMenu = kind === 'canvas' ? '当前项的项目与原文件' : '删除';
     await open(kind); await menu.getByRole('menuitem', { name: deleteMenu, exact: true }).click();
     await page.getByRole('menu', {name:deleteMenu, exact:true}).getByRole('menuitem', { name: '删除原文件…', exact: true }).click();
     await page.getByRole('dialog').waitFor();
@@ -96,18 +106,75 @@ try {
     { projectId: 'p1', nodeIds: ['n1'], direction: 1 },
     { projectId: 'p1', nodeIds: ['n1'], direction: -1 },
   ]);
-  await root().getByRole('menuitem', { name: '删除当前项', exact: true }).click();
-  await page.getByRole('menu', {name:'删除当前项', exact:true}).getByRole('menuitem', { name: '删除原文件…', exact: true }).click();
+  const dragLayer = root().getByRole('menuitem', { name: '调整层级', exact: true });
+  const dragBox = await dragLayer.boundingBox();
+  await page.mouse.move(dragBox.x + 20, dragBox.y + dragBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(dragBox.x + 20, dragBox.y - 25);
+  await page.waitForFunction(() => window.layerSteps.length >= 3);
+  await page.mouse.up();
+  assert.equal(await page.evaluate(() => window.layerSteps[2].direction), 1);
+  const beforeExplicit = await page.evaluate(() => window.layerSteps.length);
+  await root().getByRole('menuitem', { name: '层级操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '下移一层', exact: true }).click();
+  assert.deepEqual(await page.evaluate(start => window.layerSteps.slice(start), beforeExplicit), [
+    { projectId: 'p1', nodeIds: ['n1'], direction: -1 },
+  ]);
+  await page.evaluate(() => {
+    const store = window.fixtureStore.getState();
+    store.openContextMenu(100, 100, 'a1', { canvasSelection: { projectId: 'p1', nodeIds: ['n1'],
+      deletionTargets: { item: { assetIds: ['a1'], removeFromCanvas: () => {} } } } });
+  });
+  await root().waitFor();
+  await root().getByRole('menuitem', { name: '项目与原文件', exact: true }).click();
+  await page.getByRole('menu', {name:'项目与原文件', exact:true}).getByRole('menuitem', { name: '删除原文件…', exact: true }).click();
   await page.getByRole('dialog').waitFor();
   assert.deepEqual(await page.locator('[data-delete-asset-id]').evaluateAll(els => els.map(el => el.dataset.deleteAssetId)), ['a1'], 'single canvas target ignores library multiselect');
   await page.getByRole('button', { name: '取消', exact: true }).click();
+  await page.evaluate(() => { window.holdGroupCheck = true; window.holdCanvasCheck = true; });
+  await open('generated');
+  await root().getByRole('menuitem', { name: '删除', exact: true }).click();
+  const canvasLibraryCheck = deletion().getByRole('menuitem', { name: '从库中删除 · 在画布保留', exact: true });
+  const groupCheck = deletion().getByRole('menuitem', { name: /^删除整组原文件/ });
+  assert.equal(await canvasLibraryCheck.getAttribute('title'), '正在检查画布状态…');
+  assert.equal(await canvasLibraryCheck.isEnabled(), false);
+  assert.equal(await groupCheck.isEnabled(), false);
+  const beforeHeight = [await root().boundingBox(), await deletion().boundingBox()].map(box => box.height);
+  await page.waitForFunction(() => window.releaseCanvasCheck && window.releaseGroupCheck);
+  await page.evaluate(() => { window.releaseCanvasCheck(); window.releaseGroupCheck(); });
+  await groupCheck.filter({ hasText: '2 张' }).waitFor();
+  assert.equal(await groupCheck.isEnabled(), true);
+  assert.equal(await canvasLibraryCheck.isEnabled(), true);
+  assert.deepEqual([await root().boundingBox(), await deletion().boundingBox()].map(box => box.height),
+    beforeHeight, 'library and group checks preserve the open menu dimensions');
+  await close();
   for (const kind of ['video', 'mixed', 'external']) {
     await open(kind);
-    if (kind !== 'external') for (const name of ['反推提示词', '批量反推', '图片标注', '分层编辑', '复制图片']) assert.equal(await page.getByRole('menuitem', { name, exact: true }).count(), 0);
+    if (kind !== 'external') for (const name of ['反推提示词', '批量反推', '编辑', '分层编辑', '复制图片']) assert.equal(await page.getByRole('menuitem', { name, exact: true }).count(), 0);
     if (kind === 'video') await page.getByRole('menuitem', { name: '打开视频详情' }).waitFor();
     if (kind === 'external') { await page.getByRole('menuitem', { name: '删除', exact: true }).click(); assert.equal(await page.getByRole('menuitem', { name: '移出园丁鸟' }).count(), 0); }
     await close();
   }
+  await page.evaluate(() => {
+    const store = window.fixtureStore.getState();
+    const target = store.assets.find(asset => asset.id === 'external');
+    store.openContextMenu(100, 100, target.id, { asset: target, fileSelection: {
+      assets: [target], localPaths: { external: 'C:/test/真实文件名.png' }, select: () => {}, openReferences: () => {},
+    } });
+  });
+  await root().waitFor();
+  assert.equal(await root().getByRole('menuitem', { name: '移动到项目', exact: true }).count(), 0);
+  const localRename = root().getByRole('menuitem', { name: '重命名', exact: true });
+  assert.equal(await localRename.getAttribute('title'), '重命名本机文件');
+  await localRename.click();
+  const renameDialog = page.getByRole('dialog', { name: '重命名素材' });
+  const renameInput = renameDialog.getByLabel('素材名称');
+  assert.equal(await renameInput.inputValue(), '真实文件名');
+  await renameInput.fill('新名字');
+  await renameDialog.getByRole('button', { name: '保存名称' }).click();
+  await renameDialog.waitFor({ state: 'hidden' });
+  assert.deepEqual(await page.evaluate(() => window.calls.find(call => call.command === 'local_file_rename')?.args),
+    { assetId: 'external', path: 'C:/test/真实文件名.png', name: '新名字' });
   // An old asynchronous operation must not close a newly opened menu.
   await open(); await page.evaluate(() => { window.holdReveal = true; });
   await root().getByRole('menuitem', { name: '打开所在文件夹' }).click();

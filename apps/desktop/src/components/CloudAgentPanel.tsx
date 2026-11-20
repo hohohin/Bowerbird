@@ -501,8 +501,8 @@ export function CloudAgentSession({
             <div className="hatch-divider" aria-hidden="true"><span /></div>
           </>
         )}
-        <div className="h-1 shrink-0 bg-black/30">
-          <div className="h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
+        <div className="cloud-agent-progress" role="progressbar" aria-label="Agent 任务进度" aria-valuenow={progress}>
+          <div className="cloud-agent-progress-fill" style={{ width: `${progress}%` }} />
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">

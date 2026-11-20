@@ -13,6 +13,8 @@
 
 工作流模板预览与首次运行前的 Agent 详情共用 `workflowPromptPreview` 将提示词内的引用标记显示为对应名称。[工作流提示词](../../apps/desktop/src/lib/canvasWorkflow.ts)
 
+画板视频卡的提示词框复用 `fitContent`。H3 使用 [CanvasTextarea](../../apps/desktop/src/components/CanvasTextarea.tsx)，即梦和 Cloud 使用 [WorkflowPromptEditor](../../apps/desktop/src/components/WorkflowPromptEditor.tsx)。开启后以四行起步，随正文增减，在原高度上限内使用共用悬浮滚动条。
+
 手动组图复用 [GenerationGroupMenuItem.tsx](../../apps/desktop/src/components/GenerationGroupMenuItem.tsx) 的 `MergeGenerationGroupMenuItem`（图片多选）和 `GenerationGroupMenuItem`（解散）。调用为 `AssetContextMenu` 与 `CanvasWorkspace`，显示继续共用 `GenerationGroupControls`／`CanvasConversationImages`。普通图片创作框的「并入上个生成」是显式选择，不复用模型会话作为展示别名；实现见 [显式合组](../CANVAS-WORKFLOW.md#2026-11-11显式抽卡与手动合组源码待发布)。
 
 视频模型／分辨率／时长复用 `VideoControls` 与 `videoGeneration.ts` 的 `videoResolutions`／`videoDurationRange`，建卡和切模式直接使用已确认配置；不要重新引入 `dreaminaVideoModels` 或 CLI 帮助读取作为 UI 前置条件。该控制组件供创作框及工作流共用，保留本机登录／权益及 Cloud 门控。[背景与巡检](../SEEDANCE-2.5-INTEGRATION.md#2026-11-10建卡免核验与后台每日规格巡检)。
@@ -25,7 +27,7 @@
 
 Cloud 文本 Skill 只传标识与参数：`h3PromptOptimization.h3OptimizationInstruction` 生成 H3 选择信封，`textAgent.startTextAgent` 的 Cloud 分支生成 text-editor 信封；原文通过 `startCloudTextRewrite` 的 source 提交。VPS 统一复用 `apps/agent-worker/src/skills/cloud-text-skills.ts` 加载只读方法并冻结到既有 processor 的 checkpoint；禁止界面另行 raw-import Skill。普通用户要求及本机 Codex 方法不受影响。[服务端维护契约](../UNIFIED-AGENT-HARNESS-PLAN.md#2026-11-08cloud-dsh-skill-的服务端归属)。
 
-H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/creation/H3OptimizeButton.tsx)，位于原卡片或创作框的文本框内右下角，积分图标／说明随按钮展示。原卡片沿 `CanvasWorkflowController.optimizeComfyPrompt` 保存步骤；底部 `CreativeComposer` → `CreationBoard.onOptimizeLocalVideo` → [composerLocalVideo.ts](../../apps/desktop/src/lib/composerLocalVideo.ts) 复用 [textAgent.ts](../../apps/desktop/src/lib/textAgent.ts) 的 `startCloudTextRewrite`。纯文本不创建画板卡片或线程，原生历史保留请求身份，完成后直接回填原文字并保留图片及画板引用。新建 H3 卡片只发生在手动生成。两条 H3 返回路径共用 `h3PromptOptimization.cleanH3OptimizedPrompt` 去除行首描述字段名，保留正文及对白中的同名内容。Worker 配套与验收见 [优化修复](../COMFYUI-LOCAL-VIDEO.md#2026-11-07优化入口与纯文本运行修复桌面源码待发布worker-待批准部署)。
+H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/creation/H3OptimizeButton.tsx)，画板视频卡放在提示词框下方，创作框保留原入口，积分说明随按钮展示。独立优化沿 `CanvasWorkflowController.optimizeComfyPrompt` 保存步骤，勾选自动优化的卡片在手动运行时由同一工作流先取回优化结果，再提交生成。底部 `CreativeComposer` → `CreationBoard.onOptimizeLocalVideo` → [composerLocalVideo.ts](../../apps/desktop/src/lib/composerLocalVideo.ts) 复用 [textAgent.ts](../../apps/desktop/src/lib/textAgent.ts) 的 `startCloudTextRewrite`。相关路径共用 `h3PromptOptimization.cleanH3OptimizedPrompt` 清理行首字段名，保留正文和对白。[H3 卡片与优化契约](../COMFYUI-LOCAL-VIDEO.md#工作流视频卡切换-h3)
 
 - **用途／关键词：** 深浅色、tokens、工程蓝、button、input、Tailwind。
 - **入口：** [styles.css](../../apps/desktop/src/styles.css) 的 `--bb-*`、`.app-button-primary`／`.app-button-secondary`、`.app-modal-button`；[IndustrialTheme.css](../../apps/desktop/src/components/IndustrialTheme.css) 覆盖当前色板与状态；[tailwind.config.js](../../apps/desktop/tailwind.config.js) 把 `canvas`／`panel`／`ink`／`muted` 映射到变量。主题切换走 [theme.ts](../../apps/desktop/src/lib/theme.ts) 的 `applyTheme`／`loadCachedTheme`。
@@ -52,14 +54,24 @@ H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/c
 
 素材库与画布同步维护素材右键操作。`AssetTransferMenuItems` 统一提供项目移动、文件夹移动及导出子菜单；普通素材按素材 ID 操作，文件夹宿主传入条目移动回调。画布节点与空白处选区使用相同组件，菜单关闭后的目标选择弹窗由宿主保留。
 
-视频导出使用领域包装 `VideoExportMenu`，复用 `ContextMenu` 的动作语义、焦点和边缘定位，通过 `PortalTargetContext` 挂入播放器以兼容 Lightbox／全屏；普通单选 `TacticalSelect` 不承担动作执行。画板音轨卡及展开素材组直接复用 `AudioWaveform`，不作为图片预览。
+`AssetContextMenu` 统一提供图片「编辑」；[CanvasSelectionMenuItems.tsx](../../apps/desktop/src/components/CanvasSelectionMenuItems.tsx) 为素材及画布节点菜单共用调整层级、整理和添加图片到对话框的选项，画布提供节点范围和可引用图片数量。空白处的选区子菜单通过 `ContextSubmenu` 保留嵌套导出和删除；键盘逐层返回。
+
+声明式菜单以项目菜单试点。[contextMenuModel.ts](../../apps/desktop/src/lib/contextMenuModel.ts) 定义数据，[projectMenu.ts](../../apps/desktop/src/lib/projectMenu.ts) 计算项目选项，[ContextMenuItems.tsx](../../apps/desktop/src/components/ContextMenuItems.tsx) 使用公共菜单壳渲染；命令与弹窗生命周期由宿主负责。公共菜单与 Plate 段落菜单共用 [contextMenuOwnership.ts](../../apps/desktop/src/lib/contextMenuOwnership.ts) 交接焦点，原生文本菜单通过同一广播让应用菜单退出。
+
+画布空白和卡片菜单使用 [canvasContextMenu.ts](../../apps/desktop/src/lib/canvasContextMenu.ts) 生成选项，[CanvasContextMenu.tsx](../../apps/desktop/src/components/CanvasContextMenu.tsx) 渲染并通过插槽复用素材操作、组图、层级及分区色块。画布在右键时冻结命中的对象与选区快照，一次收集素材和可引用图片。
+
+素材菜单的单选双列、多选和残缺选区由 [assetContextMenu.ts](../../apps/desktop/src/lib/assetContextMenu.ts) 生成，继续复用声明式渲染器和素材操作插槽。[useAssetMenuHost.ts](../../apps/desktop/src/components/useAssetMenuHost.ts) 处理全局与嵌入式宿主的选择和导航，[assetMenuCommands.ts](../../apps/desktop/src/lib/assetMenuCommands.ts) 执行文件、素材归属及生成相关命令。需要变更素材菜单时由这三个入口核对规则与动作，勿另建宿主专用菜单。
+
+[openCatalogMenu.ts](../../apps/desktop/src/lib/openCatalogMenu.ts) 复用虚拟视图已加载的素材或目录条目。只有缺项才读取索引，后一次菜单请求、离开工作区或 Esc 可取消迟到结果。连接目录按条目 ID 解析，分类素材按 Asset ID 解析。[CanvasLayerMenuItem.tsx](../../apps/desktop/src/components/CanvasLayerMenuItem.tsx) 的显式单步操作与原按住滑动及键盘操作共享画布层级命令。
+
+视频导出使用 `VideoExportMenu`，复用 `ContextMenu` 的动作语义和焦点。通过 `anchor` 跟随按钮，底部空间不足时向上展开。浮层挂在预览对话框内、动画容器外，全屏时挂在播放器内。画板音轨卡及展开素材组直接复用 `AudioWaveform`。
 
 - **素材业务菜单：** `CategorizedLibrary`、`ConnectedCollections` 与嵌入工作区共用 `AssetContextMenu`；文件夹通过 `fileSelection.entries` 提供条目数量和改名／移动／移出分身回调，不能按 Asset ID 代替目录条目 ID。普通素材操作不另写一套菜单；目录树自身仍使用 `ContextMenu` 的文件夹操作。
 
 2026-11-06：公共 `ContextMenu` 的首焦点与方向键导航同时覆盖普通菜单项、单选菜单项和多选菜单项（`menuitem`／`menuitemradio`／`menuitemcheckbox`）；文本编辑器的 `TextSegmentMenu` 使用此入口并保存块身份；正文／标题类型切换已由完整 Plate EditorKit 接管。
 
 - **用途／关键词：** context menu、右键、操作、删除子菜单、焦点恢复。
-- **入口：** [ContextMenu.tsx](../../apps/desktop/src/components/ContextMenu.tsx) 的 `ContextMenu`、`ContextSubmenu`、`DeleteSubmenu`。宿主提供坐标、关闭回调、`button[role="menuitem"]` 与禁用状态。筛选代价高的子菜单可把 children 写为函数，展开时才计算条目，画板「连接已有卡片」使用此方式。
+- **入口：** [ContextMenu.tsx](../../apps/desktop/src/components/ContextMenu.tsx) 的 `ContextMenu`、`ContextSubmenu`、`DeleteSubmenu`。宿主提供指针坐标或触发按钮 `anchor`，以及关闭回调、`button[role="menuitem"]` 与禁用状态。锚定模式要求浮层使用视口坐标，焦点移动只滚动菜单内部。筛选代价高的子菜单可把 children 写为函数，展开时才计算条目，画板「连接已有卡片」使用此方式。
 - **实用证据：** [AssetContextMenu.tsx](../../apps/desktop/src/components/AssetContextMenu.tsx) 使用子菜单和删除分组；[ProjectContextMenu.tsx](../../apps/desktop/src/components/ProjectContextMenu.tsx) 使用同一菜单壳。
 - **范围／状态：可跨模块复用。** 共用边缘定位、菜单家族互斥、键盘／外部点击关闭和滚动包装；`ContextSubmenu` 必须位于该菜单 Context 内。`AssetContextMenu`／`ProjectContextMenu` 自身绑定素材、项目和 store 行为，是领域入口，不作其他业务的通用菜单模板。
 
@@ -178,6 +190,7 @@ H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/c
 ## 切换素材库一级视图
 
 - **控件与批量操作：** [LibraryCatalogControls.tsx](../../apps/desktop/src/components/LibraryCatalogControls.tsx) 共用素材类型、来源、颜色准备及窄栏收纳，文件夹只通过 children 增加刷新同步；颜色准备由宿主传递查询范围与刷新回调。`CatalogSelectionBar` 共用取消／全选／文件夹分配及画板或新项目动作，宿主保留素材 ID 或目录条目 ID 的解析。两者由 `CategorizedLibrary`、`ConnectedCollections` 同时调用。
+- **以文搜图：** 首页与展开的画板素材栏为全部／项目平铺图片视图启用 [LibrarySemanticSearch.tsx](../../apps/desktop/src/components/LibrarySemanticSearch.tsx)，沿用浮动控件收纳。每栏维护提交、取消、结果会话与退出焦点，目录范围和名称／来源／颜色筛选仍由 `CatalogFilter` 表达。[VirtualCatalog.tsx](../../apps/desktop/src/components/VirtualCatalog.tsx) 通过 `readPage`／`pageScope` 显示会话排序并隔离缓存，范围选择／全选同样读取会话 ID；复用素材卡、预览、拖动和上下文菜单。退出结果恢复原浏览位置，素材库变化校验当前会话，模型或索引重置立即退出对应结果。文件夹、标签及文本编辑器维持原入口。[桌面交互回归](../../apps/desktop/scripts/library-semantic-search-ui.test.mjs)。
 
 - **用途／关键词：** 目录切换、整栏转场、catalog、素材栏、减少动态效果。
 - **一级导航：** [LibrarySourceTabs.tsx](../../apps/desktop/src/components/LibrarySourceTabs.tsx) 共用 `LibraryViewSwitch`，按「文件夹／项目素材／标签分类／全部素材」显示；显示顺序与 Tab 轮换共用 [localFileMode.ts](../../apps/desktop/src/lib/localFileMode.ts) 的 `LIBRARY_VIEW_ORDER`，内部 view 值不改。项目始终可选，项目页签展开当前项目子级标签，点击子级标签打开项目选择；标签页签展开相接的横向全部／项目范围下拉，3 秒空闲或点击外部收起，指针／键盘操作续时，方向下键进入下拉、Escape 返回父页签。方向键切换并在目录重挂载后恢复焦点；`LibrarySourceTabs.css` 保持导航和下拉绝对定位、悬浮覆盖，不得改成占位行或为控件增加内容避让，具体约束见 [UI 规范 7.1](../UI-DESIGN-SPEC.md#71-素材库)。首页、画板和文本编辑器共用，无需另建导航组件。

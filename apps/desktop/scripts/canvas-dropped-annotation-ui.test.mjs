@@ -10,15 +10,17 @@ page.setDefaultTimeout(10000);
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 const panel = page.getByRole("complementary", { name: "画板素材库" });
-const annotate = page.getByRole("menuitem", { name: "图片标注", exact: true });
+const edit = page.getByRole("menuitem", { name: "编辑", exact: true });
 try {
-  await page.goto("http://127.0.0.1:1589/scripts/fixtures/canvas-reference/preview.html?source-library");
-  await panel.locator('[data-asset-id="a"]').waitFor();
+  await page.goto("http://127.0.0.1:1589/scripts/fixtures/canvas-reference/preview.html?source-library&canvas-library");
+  await page.locator('[data-canvas-node-id="old"]').waitFor();
+  const expand = page.getByRole("button", { name: "展开画板素材库", exact: true });
+  if (await expand.isVisible()) await expand.click();
   await page.evaluate(() => {
     const original = window.__TAURI_INTERNALS__.invoke;
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
       const result = await original(command, args);
-      if (["list_assets", "get_assets_by_ids"].includes(command)) {
+      if (["material_catalog_assets", "get_assets_by_ids"].includes(command)) {
         return result.map(asset => ({ ...asset, ext: asset.id === "b" ? "avif" : "png" }));
       }
       return result;
@@ -27,10 +29,9 @@ try {
     window.store.setState({ assets: [] });
     window.emitAssetsChanged();
   });
-  await panel.getByRole("tab", { name: "中央素材", exact: true }).click();
-  await page.waitForFunction(() => window.calls.some(call => call.command === "list_assets"));
+  await panel.getByRole("tab", { name: "全部素材", exact: true }).click();
   await panel.locator('[data-asset-id="a"]').click({ button: "right" });
-  assert.equal(await annotate.isEnabled(), true, "the source library permits annotating the PNG");
+  assert.equal(await edit.isEnabled(), true, "the source library permits editing the PNG");
   await page.keyboard.press("Escape");
 
   for (const id of ["a", "b"]) {
@@ -45,15 +46,20 @@ try {
     }, id);
     await page.waitForFunction(id => window.snapshot().nodes.some(node => node.assetId === id), id);
     const nodeId = await page.evaluate(id => window.snapshot().nodes.find(node => node.assetId === id).id, id);
-    await page.locator(`[data-canvas-node-id="${nodeId}"]`).click({ button: "right" });
-    assert.equal(await annotate.isEnabled(), id === "a", "dropping preserves the library's format eligibility");
+    await page.locator(`[data-canvas-node-id="${nodeId}"]`).dispatchEvent("contextmenu", { button: 2, clientX: 600, clientY: 240 });
     if (id === "a") {
+      assert.equal(await edit.isEnabled(), true);
+      assert.equal(await edit.locator('svg[viewBox="0 0 1024 1024"]').count(), 1);
       assert.equal(await page.evaluate(() => window.store.getState().contextMenu.asset.id), "a");
-      await annotate.click();
+      await edit.click();
       const dialog = page.getByRole("dialog", { name: "图片标注", exact: true });
       await dialog.getByAltText("合成参考 a", { exact: true }).waitFor();
       await dialog.getByRole("button", { name: "关闭（Esc）", exact: true }).click();
-    } else await page.keyboard.press("Escape");
+    } else {
+      await page.getByRole("menu").waitFor();
+      assert.equal(await edit.count(), 0, "the canvas does not offer editing for unsupported AVIF");
+      await page.keyboard.press("Escape");
+    }
   }
   assert.equal(await page.evaluate(() => window.store.getState().assets.length), 0);
   assert.deepEqual(errors, []);

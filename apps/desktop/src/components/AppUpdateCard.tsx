@@ -52,9 +52,9 @@ export function AppUpdateCard({ version, migrating, downloadLabel = "下载更�
           {label}
         </button>
       </div>
-      <div className="mt-2 text-xs text-muted" role="status" aria-live="polite">
+      <div className="mt-2 min-h-4 text-xs text-muted" role="status" aria-live="polite">
         {phase === "current" && "当前已是最新版本。"}
-        {update && phase !== "checking" && <p>新版本 {update.version}</p>}
+        {update && <p>新版本 {update.version}</p>}
         {phase === "downloading" && <>
           <p className="mt-1">已下载 {(downloaded / 1024 / 1024).toFixed(1)} MB{percent !== null ? ` · ${percent}%` : ""}</p>
           <progress className="mt-2 h-1.5 w-full" aria-label="更新下载进度" max={100} value={percent ?? undefined} />

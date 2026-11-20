@@ -16,7 +16,7 @@ const w = window as any;
 const picture = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="180"><rect width="240" height="180" fill="#8797b5"/></svg>');
 const asset = (id: string) => ({ id, name: `${id}.png`, width: 240, height: 180, thumb_path: picture,
   store_path: `C:/test/${id}.png`, source: "imported", ext: "png", origin_path: `C:/original/${id}.png` });
-const assets = [asset("a1"), asset("a2"), { ...asset("video"), store_path: "C:/test/video.mp4", ext: "mp4" }, { ...asset("external"), source: "external" }];
+const assets = [asset("a1"), asset("a2"), { ...asset("video"), store_path: "C:/test/video.mp4", ext: "mp4" }, { ...asset("audio"), store_path: "C:/test/audio.mp3", ext: "mp3" }, { ...asset("external"), source: "external" }];
 w.calls = []; w.describe = []; w.completed = 0;
 const callbacks = new Map(); let callbackId = 0;
 w.__TAURI_INTERNALS__ = {
@@ -29,8 +29,14 @@ w.__TAURI_INTERNALS__ = {
     if (command === "preview_asset_originals") return assets.filter(a => args.assetIds.includes(a.id)).map(a => ({ asset_id: a.id, name: a.name, path: a.store_path, fingerprint: "fixture-original" }));
     if (command === "trash_asset_original") { if (w.failDelete === args.original.asset_id) throw new Error('模拟失败'); return null; }
     if (command === "list_collections") return [{ id: "c1", name: "参考", kind: "collection" }];
-    if (command === "list_generation_group") return assets.slice(0, 2);
-    if (command === "project_canvas_get") return { nodes: [{ kind: "asset", assetId: "a1" }] };
+    if (command === "list_generation_group") {
+      if (w.holdGroupCheck) await new Promise(resolve => { w.releaseGroupCheck = resolve; });
+      return assets.slice(0, 2);
+    }
+    if (command === "project_canvas_get") {
+      if (w.holdCanvasCheck) await new Promise(resolve => { w.releaseCanvasCheck = resolve; });
+      return { nodes: [{ kind: "asset", assetId: "a1" }] };
+    }
     if (command === "delete_asset_with_mode") { if (w.failDelete === args.id) throw new Error('模拟失败'); return { deleted_assets: 1, removed_members: 0, moved_files: 0, failed_moves: [] }; }
     if (command === "reveal_asset_folder" && w.holdReveal) await new Promise(resolve => { w.releaseReveal = resolve; });
     return null;
@@ -45,11 +51,16 @@ useStore.setState({ assets: assets as any, activeProjectId: null, mode: "browse"
 w.fixtureStore = useStore;
 w.openMenu = (kind = "single", x = 100, y = 100) => {
   const ids = kind === "mixed" ? ["a1", "video"] : ["a1", "a2"];
-  const target = assets.find(a => a.id === kind) ?? assets[0];
-  useStore.setState({ mode: "browse", selectedIds: new Set(["unrelated"]), activeProjectId: kind === "canvas" ? "p1" : null });
+  const target = kind === "generated" ? { ...assets[0], generation_session_id: "session" } : assets.find(a => a.id === kind) ?? assets[0];
+  const canvas = kind === "canvas" || kind === "canvas-mixed";
+  const nodeIds = ["n1", "n2"];
+  useStore.setState({ mode: "browse", selectedIds: new Set(["unrelated"]), activeProjectId: canvas ? "p1" : null });
   useStore.getState().openContextMenu(x, y, target.id, {
     asset: target as any,
-    ...(kind === "canvas" ? { canvasSelection: { projectId: "p1", nodeIds: ["n1", "n2"], assetIds: ["a1", "a2"],
+    ...(kind === "generated" ? { libraryProjectId: "p1" } : {}),
+    ...(canvas ? { addCanvasImagesToBoard: kind === "canvas-mixed" ? { count: 1, run: () => {} } : undefined,
+      canvasSelection: { projectId: "p1", nodeIds, assetIds: kind === "canvas-mixed" ? ["a1", "audio"] : ["a1", "a2"],
+      removeSelectionFromCanvas: () => { w.removedCanvasNodes = nodeIds; },
       deletionTargets: { item: {assetIds:[target.id], removeFromCanvas: () => {}} } } }
       : kind === "multi" || kind === "mixed" ? { fileSelection: { assets: assets.filter(a => ids.includes(a.id)) as any,
         select: () => {}, openReferences: () => {}, onComplete: () => w.completed++ } } : {}),

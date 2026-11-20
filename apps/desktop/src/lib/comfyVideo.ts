@@ -19,6 +19,7 @@ export interface ComfyVideoOptions {
   resolution: 0.6 | 0.8 | 0.98 | 1;
 }
 export const DEFAULT_COMFY_VIDEO: ComfyVideoOptions = { endpoint: "http://127.0.0.1:8000", seconds: 8, ratio: "9:16", resolution: 0.8 };
+export const H3_VIDEO_RESOLUTIONS = [{ value: 0.6, label: "低" }, { value: 0.8, label: "中" }, { value: 0.98, label: "高" }] as const;
 export function comfyVideoMode(options?: ComfyVideoOptions): ComfyVideoMode { return options?.mode ?? "frames"; }
 export function comfyVideoOptionsForMode(options: ComfyVideoOptions, mode: ComfyVideoMode): ComfyVideoOptions {
   if (comfyVideoMode(options) === mode) return options;
@@ -35,7 +36,6 @@ export function localVideoInputError(prompt: string, frames: Asset[], options: C
   if (!prompt.trim() || prompt.length > 16000) return "请填写 1–16000 字创作描述。";
   if (!Number.isInteger(options.seconds) || options.seconds < 1 || options.seconds > 15) return "本地视频时长须为 1–15 秒的整数。";
   if (![0.6, 0.8, 0.98, 1].includes(options.resolution) || !["auto", "9:16", "16:9", "4:3", "3:4", "1:1"].includes(options.ratio)) return "请选择本地视频支持的比例和分辨率。";
-  if (mode === "frames" && options.resolution === 0.98) return "首尾帧模式请选择 0.6、0.8 或 1.0 分辨率。";
   if (mode === "text" && options.ratio === "auto") return "文生视频需要指定画面比例。";
   return null;
 }
@@ -48,7 +48,7 @@ export function comfyVideoSize(options: ComfyVideoOptions, firstFrame?: { width?
 }
 export interface ComfyVideoInput extends ComfyVideoOptions { firstFrame: string; lastFrame?: string; prompt: string }
 export interface ComfyVideoProgress { label: string; value?: number | null; max?: number | null }
-export interface ComfyVideoStatus { status: "queued" | "running" | "offline" | "unknown" | "failed" | "done" | "cancelled"; originalService?: [string, ComfyVideoMode]; message: string; asset?: Asset; progress?: ComfyVideoProgress | null; elapsedMs?: number | null }
+export interface ComfyVideoStatus { status: "queued" | "running" | "offline" | "unknown" | "failed" | "done" | "cancelled"; originalService?: [string, ComfyVideoMode, (string | null)?]; message: string; asset?: Asset; progress?: ComfyVideoProgress | null; elapsedMs?: number | null }
 export function comfyVideo(action: "start" | "status" | "cancel", projectId: string, requestId: string, input?: ComfyVideoInput) {
   return invoke<ComfyVideoStatus>("comfy_video", { action, projectId, requestId, input: input ?? null });
 }
@@ -57,7 +57,7 @@ export function checkComfyVideo(endpoint: string, mode: ComfyVideoMode = "frames
 export type ComfyEnvironmentMode = ComfyVideoMode | "image" | "edit";
 export interface ComfyEnvironment {
   mode?: ComfyEnvironmentMode; modelsRequired?: number; canAddModels?: boolean;
-  phase: "missing" | "ready" | "installing" | "starting" | "stopped" | "unavailable" | "failed" | "cancelled";
+  phase: "missing" | "ready" | "installing" | "starting" | "stopped" | "unavailable" | "recoverable" | "failed" | "cancelled";
   message: string; endpoint: string; directory: string; canInstall: boolean; installed: boolean;
   downloadBytes: number; requiredBytes: number; completedBytes: number; totalBytes: number;
   existing?: { path: string; name: string; endpoint: string; canStart: boolean; modelsFound: number }[];
@@ -67,14 +67,14 @@ export interface ComfyEnvironment {
 // Readiness means Run can proceed without user setup, even when the service is stopped.
 export function comfyEnvironmentReady(environment?: ComfyEnvironment) {
   if (!environment) return false;
-  if (environment.phase === "ready") return true;
+  if (environment.phase === "ready" || environment.phase === "recoverable") return true;
   if (!["stopped", "missing", "starting"].includes(environment.phase)) return false;
   const instance = environment.existing?.[0];
   return instance ? instance.canStart && instance.modelsFound === (environment.modelsRequired ?? 5) : environment.installed && environment.canInstall;
 }
 // Multiple visible cards share a read-only detection request; installation is singleton in native code.
 const detections = new Map<string, Promise<ComfyEnvironment>>();
-export function comfyEnvironment(action: "detect" | "status" | "prepare" | "install" | "cancel" | "select_existing" | "start_existing" | "driver", endpoint: string, directory?: string, existingDirectory?: string, mode: ComfyEnvironmentMode = "frames") {
+export function comfyEnvironment(action: "detect" | "status" | "prepare" | "recover" | "install" | "cancel" | "select_existing" | "start_existing" | "driver", endpoint: string, directory?: string, existingDirectory?: string, mode: ComfyEnvironmentMode = "frames") {
   const key = JSON.stringify([endpoint, directory, existingDirectory, mode]);
   if (action === "detect" && detections.has(key)) return detections.get(key)!;
   const request = invoke<ComfyEnvironment>("comfy_video_environment", { action, endpoint, directory: directory ?? null, existingDirectory: existingDirectory ?? null, mode });

@@ -1052,7 +1052,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                 <button
                   onClick={handleDescribe}
                   disabled={describing || queued || promptEmpty || !understandReady}
-                  className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-black disabled:opacity-50"
+                  className="asset-detail-primary rounded px-2.5 py-1 text-xs font-medium disabled:opacity-50"
                   title={
                     !understandReady
                       ? understandReason
@@ -1309,7 +1309,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                 {sourceDiscovery && (
                   <button
                     onClick={() => onExploreSource(asset.source_url!)}
-                    className="flex w-full items-center gap-2 rounded bg-accent px-2.5 py-2 text-left text-xs font-medium text-black hover:opacity-90"
+                    className="asset-detail-primary flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs font-medium"
                     title={asset.source_url}
                   >
                     <Compass size={13} className="shrink-0" />

@@ -2,7 +2,7 @@
 use crate::{
     core::{external_files, material_catalog::catalog_visibility, paths::LibraryPaths},
     db::Database,
-    error::AppResult,
+    error::{AppError, AppResult},
 };
 use std::{
     collections::HashMap,
@@ -226,6 +226,24 @@ fn clean_candidate(db: &Database, candidate: &Candidate, volume: u32) -> AppResu
         || original.fingerprint != candidate.fingerprint
     {
         return Ok(0);
+    }
+    // Cleanup covers every identity at the registered path. A live verified alias
+    // for any affected identity cancels this automatic observation.
+    let canonical = crate::core::folder_connections::registered_path_spelling(Path::new(&candidate.path));
+    let names = external_files::connection_path_spellings(Path::new(&candidate.path), &canonical);
+    let affected: Vec<String> = {
+        let conn = db.conn.lock().unwrap();
+        let mut statement = conn.prepare("SELECT id FROM assets WHERE id=?4 OR store_path IN (?1,?2,?3)")?;
+        let rows = statement.query_map(rusqlite::params![names[0], names[1], names[2], candidate.id], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        rows
+    };
+    for id in affected {
+        match db.resolve_asset_original(&id) {
+            Ok(_) => return Ok(0),
+            Err(error @ (AppError::Io(_) | AppError::Db(_))) => return Err(error),
+            Err(_) => (),
+        }
     }
     db.cleanup_missing_original(original)
 }
@@ -453,6 +471,45 @@ mod tests {
         fs::rename(&f.moved,&f.original).unwrap();
         assert_eq!(sweep.check_batch(&f.db,&f.paths,now + Duration::from_secs(31)).unwrap().restored, 1);
         assert_eq!(f.visible(), 1);
+    }
+
+    #[test]
+    fn automatic_missing_cleanup_preserves_a_verified_alias_and_restarts_observation_if_it_changes() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let f = Fixture::new();
+        f.db.conn.lock().unwrap().execute(
+            "INSERT INTO assets(id,name,ext,store_path,source,created_at) VALUES('0-shared','same original','png',?1,'external',1)",
+            [f.original.to_string_lossy()]).unwrap();
+        f.db.conn.lock().unwrap().execute(
+            "INSERT INTO external_assets(asset_id,fingerprint,library_member) VALUES('0-shared','',1)", []).unwrap();
+        assert_eq!(f.visible(), 2);
+        fs::rename(&f.original, &f.moved).unwrap();
+        let mut sweep = MissingOriginalSweep::default();
+        let start = Instant::now();
+        assert!(sweep.check_batch(&f.db, &f.paths, start).unwrap().pending);
+        f.db.conn.lock().unwrap().execute(
+            "INSERT INTO external_asset_paths(asset_id,path) VALUES(?1,?2)",
+            rusqlite::params![f.id, f.moved.to_string_lossy()]).unwrap();
+        let verified = sweep.check_batch(&f.db, &f.paths, start + CONFIRM_AFTER).unwrap();
+        assert_eq!(verified.removed, 0);
+        assert!(!verified.pending);
+        assert_eq!(f.visible(), 2, "a same-path identity must not clear the identity with a live alias");
+        assert_eq!(f.db.resolve_asset_original(&f.id).unwrap(), f.moved);
+        assert_eq!(f.db.get_asset(&f.id).unwrap().unwrap().store_path.as_deref(), f.original.to_str());
+
+        let locked = fs::OpenOptions::new().read(true).share_mode(0).open(&f.moved).unwrap();
+        sweep.check_batch(&f.db, &f.paths, start + Duration::from_secs(31)).unwrap();
+        assert_eq!(sweep.check_batch(&f.db, &f.paths, start + Duration::from_secs(61)).unwrap().removed, 0);
+        assert_eq!(f.visible(), 2, "temporary access denial must not become a missing original");
+        drop(locked);
+        assert!(!sweep.check_batch(&f.db, &f.paths, start + Duration::from_secs(62)).unwrap().pending);
+        fs::write(&f.moved, b"replacement at the old location").unwrap();
+        assert!(sweep.check_batch(&f.db, &f.paths, start + Duration::from_secs(63)).unwrap().pending);
+        assert_eq!(sweep.check_batch(&f.db, &f.paths, start + Duration::from_secs(92)).unwrap().removed, 0);
+        assert_eq!(f.visible(), 2);
+        assert_eq!(sweep.check_batch(&f.db, &f.paths, start + Duration::from_secs(93)).unwrap().removed, 2);
+        assert_eq!(f.visible(), 0);
+        assert_eq!(fs::read(&f.moved).unwrap(), b"replacement at the old location");
     }
 
     #[test]

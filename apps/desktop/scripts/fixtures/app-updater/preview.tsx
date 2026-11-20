@@ -25,6 +25,7 @@ w.__TAURI_INTERNALS__ = {
     w.calls.push(command);
     if (w.failures?.[command]) throw w.failures[command];
     if (command === "plugin:updater|check") {
+      if (w.holdCheck) await new Promise<void>(resolve => { w.releaseCheck = resolve; });
       if (w.mode === "offline") throw "网络不可用";
       if (w.mode === "current") return null;
       return { rid: 1, currentVersion: "26.9.17", version: "26.9.18", body: "设置内自动更新", rawJson: {} };

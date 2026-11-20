@@ -58,13 +58,17 @@ fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<
     use std::io::Read;
     let candidates = {
         let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, store_path FROM assets WHERE size=?1 AND store_path IS NOT NULL AND id NOT IN (SELECT asset_id FROM external_assets)")?;
+        let visible = super::material_catalog::catalog_visibility(false);
+        let mut stmt = conn.prepare(&format!("SELECT a.id, a.store_path FROM assets a
+            WHERE a.size=?1 AND a.store_path IS NOT NULL AND a.library_hidden=0 AND {visible}
+            AND NOT EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id)"))?;
         let rows = stmt.query_map([size as i64], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
         rows.collect::<Result<Vec<_>, _>>()?
     };
     for (id, stored) in candidates {
         let Ok(mut existing) = fs::File::open(&stored) else { continue };
-        if existing.metadata()?.len() != size { continue; }
+        let Ok(metadata) = existing.metadata() else { continue; };
+        if !metadata.is_file() || metadata.len() != size { continue; }
         let mut incoming = fs::File::open(source)?;
         let mut left = [0u8; 65536];
         let mut right = [0u8; 65536];
@@ -79,7 +83,9 @@ fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<
             }
             remaining -= count as u64;
         }
-        if identical { return db.get_asset(&id); }
+        if identical {
+            if let Some(asset) = db.reusable_capture_asset(&id, &stored)? { return Ok(Some(asset)); }
+        }
     }
     Ok(None)
 }
@@ -168,6 +174,13 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
     } else if approximate || *revision != initial_revision {
         exact_duplicate(db, input, meta.size)?
     } else { None };
+    let duplicate = match duplicate {
+        Some(asset) => match asset.store_path.as_deref() {
+            Some(path) => db.reusable_capture_asset(&asset.id, path)?,
+            None => None,
+        },
+        None => None,
+    };
     if let Some(mut existing) = duplicate {
         drop(revision);
         let _ = fs::remove_file(&store_path);
@@ -763,6 +776,104 @@ mod tests {
         assert_eq!(screenshot.source, original.source);
         assert_eq!(screenshot.source_url, original.source_url);
         assert_eq!(db.get_asset(&original.id).unwrap().unwrap().source_url, original.source_url);
+    }
+
+    #[test]
+    fn recapture_persists_bytes_when_previous_original_is_missing_removed_or_hidden() {
+        for approximate in [true, false] {
+            for previous_state in ["missing", "cleaned", "trashed", "hidden", "disconnected", "directory", "null"] {
+                let (tmp, mut paths, db) = setup();
+                let files = super::super::file_workspace::FileWorkspace::open(
+                    tmp.dir.join("files.json"), tmp.dir.join("BowerbirdLibrary"),
+                ).unwrap();
+                paths.files = Some(std::sync::Arc::new(files));
+                let input = make_photo_file(&tmp.dir, "photo.png", 320, 7);
+                let bytes = fs::read(&input).unwrap();
+                let capture = || {
+                    if approximate {
+                        ingest_from_bytes(&paths, &db, &bytes, "https://example.com/photo", Some("photo.png"),
+                            Some("image/png"), "extension").unwrap()
+                    } else {
+                        // URL downloads and other byte-exact imports use this same durable entry point.
+                        ingest_new_file(&paths, &db, &input).unwrap()
+                    }
+                };
+                let previous = capture();
+                let original = previous.store_path.as_ref().unwrap();
+                match previous_state {
+                    "missing" => fs::remove_file(original).unwrap(),
+                    "cleaned" => { db.conn.lock().unwrap().execute(
+                        "INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)",
+                        rusqlite::params![previous.id, original],
+                    ).unwrap(); }
+                    "trashed" => { db.conn.lock().unwrap().execute(
+                        "INSERT INTO trashed_asset_originals(asset_id,path,fingerprint) VALUES(?1,?2,?3)",
+                        rusqlite::params![previous.id, original, super::super::external_files::fingerprint(Path::new(original)).unwrap()],
+                    ).unwrap(); }
+                    "hidden" => { db.conn.lock().unwrap().execute(
+                        "UPDATE assets SET library_hidden=1 WHERE id=?1", [&previous.id],
+                    ).unwrap(); }
+                    "disconnected" => { db.conn.lock().unwrap().execute(
+                        "INSERT INTO disconnected_library_assets(asset_id) VALUES(?1)", [&previous.id],
+                    ).unwrap(); }
+                    "directory" => { fs::remove_file(original).unwrap(); fs::create_dir(original).unwrap(); }
+                    "null" => { db.conn.lock().unwrap().execute(
+                        "UPDATE assets SET store_path=NULL WHERE id=?1", [&previous.id],
+                    ).unwrap(); }
+                    _ => unreachable!(),
+                }
+                let retained = serde_json::to_value(db.get_asset(&previous.id).unwrap()).unwrap();
+                assert!(db.reusable_capture_asset(&previous.id, original).unwrap().is_none());
+                let captured = capture();
+                assert_ne!(captured.id, previous.id, "{approximate}/{previous_state}");
+                assert_eq!(fs::read(captured.store_path.as_ref().unwrap()).unwrap(), bytes);
+                assert!(Path::new(captured.store_path.as_ref().unwrap()).starts_with(
+                    paths.files.as_ref().unwrap().ensure_root().unwrap().join("收集箱")));
+                assert_eq!(capture().id, captured.id);
+                assert_eq!(serde_json::to_value(db.get_asset(&previous.id).unwrap()).unwrap(), retained);
+                let conn = db.conn.lock().unwrap();
+                for (state, table) in [("cleaned", "removed_missing_asset_originals"), ("trashed", "trashed_asset_originals")] {
+                    let count: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE asset_id=?1"),
+                        [&previous.id], |row| row.get(0)).unwrap();
+                    assert_eq!(count, i64::from(previous_state == state));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn capture_rechecks_selected_original_path_before_reuse() {
+        let (tmp, paths, db) = setup();
+        let original = make_photo_file(&tmp.dir, "original.png", 320, 7);
+        let first = ingest_new_file(&paths, &db, &original).unwrap();
+        let previous_path = first.store_path.as_deref().unwrap();
+        assert!(db.reusable_capture_asset(&first.id, previous_path).unwrap().is_some());
+        let current_path = tmp.dir.join("current.png");
+        fs::copy(previous_path, &current_path).unwrap();
+        db.conn.lock().unwrap().execute("UPDATE assets SET store_path=?2 WHERE id=?1",
+            rusqlite::params![first.id, current_path.to_string_lossy()]).unwrap();
+        assert!(db.reusable_capture_asset(&first.id, previous_path).unwrap().is_none());
+        let captured = ingest_new_file(&paths, &db, &original).unwrap();
+        assert_eq!(captured.id, first.id);
+        assert_eq!(Path::new(captured.store_path.as_deref().unwrap()), current_path);
+    }
+
+    #[test]
+    fn approximate_capture_skips_a_missing_larger_match_and_keeps_the_readable_one() {
+        let (tmp, paths, db) = setup();
+        let full = make_photo_file(&tmp.dir, "large.png", 640, 42);
+        let first = ingest_new_file(&paths, &db, &full).unwrap();
+        let smaller = tmp.dir.join("smaller.png");
+        image::open(&full).unwrap().resize_exact(160,160,image::imageops::FilterType::Lanczos3).save(&smaller).unwrap();
+        let second = ingest_new_file(&paths, &db, &smaller).unwrap();
+        assert_ne!(first.id, second.id);
+        let hash = second.phash.as_deref().unwrap();
+        assert_eq!(db.find_asset_by_phash(hash).unwrap().unwrap().id, first.id);
+        fs::remove_file(first.store_path.as_ref().unwrap()).unwrap();
+        assert_eq!(db.find_asset_by_phash(hash).unwrap().unwrap().id, second.id);
+        let captured = ingest_from_bytes(&paths,&db,&fs::read(smaller).unwrap(),
+            "https://example.com/photo",None,Some("image/png"),"extension").unwrap();
+        assert_eq!(captured.id, second.id);
     }
 
     #[test]

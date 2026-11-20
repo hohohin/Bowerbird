@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 import { ContextMenu } from "./ContextMenu";
+import { ContextMenuItems } from "./ContextMenuItems";
 import { FolderSync, Pencil, Trash2 } from "lucide-react";
+import { buildProjectMenu, type ProjectMenuAction } from "../lib/projectMenu";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { useProjectDeletion } from "./useProjectDeletion";
 import { ProjectRenameDialog } from "./ProjectRenameDialog";
 import { notifyError, notifySuccess } from "../lib/notify";
 
+const PROJECT_MENU_ICONS = {
+  rename: <Pencil size={13} className="shrink-0" aria-hidden="true" />,
+  refresh: <FolderSync size={13} className="shrink-0" aria-hidden="true" />,
+  delete: <Trash2 size={13} aria-hidden="true" />,
+};
 
 /**
  * 侧栏项目右键菜单：更新项目文件 / 删除项目。
@@ -49,52 +56,19 @@ export function ProjectContextMenu() {
     projectId={renaming.id} currentName={renaming.name} onClose={() => setRenaming(null)}
   />}</>;
 
-  // 守卫后捕获，闭包里直接用（TS 不会把守卫的收窄带进嵌套函数）。
   const projectId = menu.projectId;
   const project = projects.find((p) => p.id === projectId);
-  const isBuiltin = project?.kind === "builtin";
-  // 空白项目没有关联文件夹，因此不提供「更新项目文件」。
-  const isBlank = project?.kind === "blank";
+  const actions: Record<ProjectMenuAction, () => void> = {
+    rename: () => {
+      if (!project) return;
+      setRenaming({ id: project.id, name: project.name });
+      close();
+    },
+    refresh: () => void refresh(projectId),
+    delete: () => void prepareDelete(projectId),
+  };
 
   return <ContextMenu key={`${projectId}:${menu.x}:${menu.y}`} x={menu.x} y={menu.y} label="项目操作" onClose={close}>
-      <button
-        type="button"
-        role="menuitem"
-        disabled={busy || deleting || !project}
-        onClick={() => {
-          if (!project) return;
-          setRenaming({ id: project.id, name: project.name });
-          close();
-        }}
-        className="app-context-item px-2 py-1.5"
-      >
-        <Pencil size={13} className="shrink-0" />
-        重命名
-      </button>
-      {!isBuiltin && !isBlank && <button
-        type="button"
-        role="menuitem"
-        onClick={() => void refresh(projectId)}
-        disabled={busy || deleting}
-        title="更新文件夹中的图片素材"
-        className="app-context-item px-2 py-1.5"
-      >
-        <FolderSync size={13} className="shrink-0" />
-        {busy ? "更新中…" : "更新项目文件"}
-      </button>}
-
-      <div className="app-context-divider" />
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          void prepareDelete(projectId);
-        }}
-        disabled={busy || deleting}
-        title="删除项目，默认保留素材"
-        className="app-context-item is-danger px-2 py-1.5"
-      >
-        <Trash2 size={13} aria-hidden="true" />删除项目 · 素材保留
-      </button>
-    </ContextMenu>;
+    <ContextMenuItems items={buildProjectMenu(project?.kind, busy, deleting)} icons={PROJECT_MENU_ICONS} onSelect={id => actions[id]()} />
+  </ContextMenu>;
 }
