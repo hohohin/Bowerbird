@@ -1257,7 +1257,7 @@ fn local_chat_cards_place_by_moved_agent_and_leave_room_for_outputs() {
         let producer = doc["nodes"].as_array_mut().unwrap().iter_mut()
             .find(|node| node["id"] == action.cards[0].id).unwrap();
         producer["sessionNodeIds"] = json!(["gen-prompt:job:turn:0"]);
-        let result_origin = (producer["x"].as_f64().unwrap() + 320.0 + 64.0, producer["y"].as_f64().unwrap());
+        let result_origin = (producer["x"].as_f64().unwrap(), producer["y"].as_f64().unwrap());
         replace_document(&db, &doc);
         let graph = db.begin_project_generation_turn(&crate::core::project_canvas::ProjectGenerationTurnInput {
             project_id: "p".into(), thread_id: started.conversation.summary.thread_id.clone(),
