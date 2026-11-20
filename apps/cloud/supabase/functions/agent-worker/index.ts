@@ -598,7 +598,7 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
       .order("requested_at", { ascending: false }).limit(1)
       .maybeSingle()
     : Promise.resolve({ data: null, error: null });
-  const [inputUrl, checkpointUrl, feedbackUrl, artifactRows, clarificationResult, approvedPlanQuery] = await Promise.all([
+  const [inputUrl, checkpointUrl, feedbackUrl, artifactRows, clarificationResult, approvedPlanQuery, account] = await Promise.all([
     signOrNull(admin, inputKey),
     checkpointKey ? signOrNull(admin, checkpointKey) : Promise.resolve(null),
     feedbackKey ? signOrNull(admin, feedbackKey) : Promise.resolve(null),
@@ -611,6 +611,9 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
       .eq("run_id", claimed.id).eq("status", "answered")
       .order("answered_at", { ascending: false }).limit(1).maybeSingle(),
     approvedPlanResult,
+    claimed.agent_runtime === "dsh" && claimed.skill_id === "bowerbird-unified-agent"
+      ? admin.from("billing_accounts").select("auth_user_id").eq("id", claimed.user_id).maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
   if (artifactRows.error) throw new ApiError("internal_error", "Run 产物读取失败", true);
   if (clarificationResult.error) throw new ApiError("internal_error", "澄清回答读取失败", true);
@@ -655,9 +658,13 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
   if (approvedPlanRow && !approvedPlanUrl) {
     throw new ApiError("internal_error", "已批准计划签名失败", true);
   }
+  const continuationKey = account.data?.auth_user_id
+    ? await sha256Hex(new TextEncoder().encode(`bowerbird:dsh-v2:${account.data.auth_user_id}:o-${claimed.id}`))
+    : undefined;
   return jsonResponse({
     run: {
       id: claimed.id,
+      ...(continuationKey ? { continuationKey } : {}),
       conversationId: claimed.conversation_id,
       skillId: claimed.skill_id,
       skillVersion: claimed.skill_version,

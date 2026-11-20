@@ -1,6 +1,7 @@
 export type ErrorCode =
   | "unauthorized"
   | "insufficient_credits"
+  | "quote_changed"
   | "payload_too_large"
   | "rate_limited"
   | "upstream_failed"
@@ -15,6 +16,7 @@ export type ErrorCode =
 const STATUS: Record<ErrorCode, number> = {
   unauthorized: 401,
   insufficient_credits: 402,
+  quote_changed: 409,
   payload_too_large: 413,
   rate_limited: 429,
   upstream_failed: 502,

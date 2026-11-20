@@ -3,7 +3,7 @@ import * as assert from "node:assert/strict";
 import { chatUpstreamFetch, completeChatJob, consumeChatQueues, processChatJob } from "./runtime.ts";
 import { DeepSeekBackend, DeepSeekBackendError } from "../providers/deepseek/backend.ts";
 import { createHash } from "node:crypto";
-import { chatFailure, validateChatInput } from "../../../cloud/supabase/functions/_shared/chat.ts";
+import { chatFailure, DSH_CHAT_ENGINE, DSH_CHAT_ENGINE_V2, validateChatInput } from "../../../cloud/supabase/functions/_shared/chat.ts";
 
 test("a DSH slot waiting for desktop lets the standard slot finish other jobs", async () => {
   const stop = new AbortController(), waiting = Promise.withResolvers<void>(), served = Promise.withResolvers<void>();
@@ -17,6 +17,20 @@ test("a DSH slot waiting for desktop lets the standard slot finish other jobs", 
     if (++plain === 2) { stop.abort(); served.resolve(); }
   }, "dsh-vps-v2", stop.signal);
   assert.equal(plain, 2); assert.equal(dsh, 1);
+});
+
+test("only a paid-capable native Worker declares paid billing support", async () => {
+  for (const [engine, paid, expected] of [[DSH_CHAT_ENGINE_V2, true, true], [DSH_CHAT_ENGINE_V2, false, false], [DSH_CHAT_ENGINE, true, false]] as const) {
+    const stop = new AbortController();
+    const claims: Record<string, unknown>[] = [];
+    await consumeChatQueues(async body => {
+      claims.push(body);
+      return { job: { id: body.engine ?? "ordinary" } };
+    }, async () => {
+      if (claims.length === 2) stop.abort();
+    }, engine, stop.signal, paid);
+    assert.deepEqual(claims, [{ action: "claim" }, { action: "claim", engine, ...(expected ? { paid_token_billing: true } : {}) }]);
+  }
 });
 
 test("shared Agent chat preserves large input and result through the worker", async () => {
@@ -89,6 +103,33 @@ test("valid DSH input followed by startup failure is not reported as missing inp
   assert.equal(writes[0].status, "failed");
   assert.equal(writes[0].error_code, "chat_dsh_start_failed");
   assert.ok(/启动或恢复会话失败/.test(chatFailure("failed", writes[0].error_code).message));
+});
+
+test("invalid paid claims never reach the free model or record a submission", async () => {
+  const user = [{ role: "user", content: "hello" }];
+  const upstream = { apiKey: "fixture", model: "deepseek-flash", baseUrl: "https://api.deepseek.com" };
+  const billing = { model: upstream.model, max_output_tokens: 16_384 };
+  const job = { id: "job", lease_id: "lease", input_url: "fixture:", engine: "dsh-vps-v2" as const, session_key: "test", previous_job_id: null, model_metering: true as const };
+  const options = { upstream, sessionRoot: "fixture", runtimeRoot: "fixture", profileTemplateDir: "fixture", paidTokenBilling: true };
+  const cases = [
+    { job: { ...job, engine: undefined }, billing, options },
+    { job, billing: null, options },
+    { job, billing, options: { ...options, paidTokenBilling: false } },
+    { job: { ...job, model_metering: undefined }, billing, options },
+    { job, billing: { ...billing, model: "deepseek-v4-pro" }, options },
+    { job, billing: { ...billing, max_output_tokens: 393_217 }, options },
+    { job, billing, options: { ...options, upstream: { ...upstream, baseUrl: "https://other.example" } } },
+  ];
+  for (const candidate of cases) {
+    const input = JSON.stringify({ engine: candidate.job.engine, ...(candidate.job.engine ? { conversation_id: "room" } : {}), messages: user });
+    const writes: Record<string, unknown>[] = [];
+    await processChatJob({ ...candidate.job, paid_billing: candidate.billing, input_hash: createHash("sha256").update(input).digest("hex") },
+      async body => { writes.push(body); return { active: true }; }, { chat: async () => { assert.fail("no upstream submission"); } },
+      "fixture", async () => downloaded(input), candidate.options);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].action, "finish");
+    assert.equal(writes[0].status, "failed");
+  }
 });
 
 test("classifies the original upstream response through Worker finish and public chat error", async () => {

@@ -23,14 +23,25 @@ async function connectWithPlus(sourceId, targetName) {
 }
 
 async function checkWire(sourceId, targetId) {
-  const path = page.locator(`[data-workflow-target="${targetId}"]`);
-  await path.waitFor();
+  const path = page.locator(`path[data-workflow-target="${targetId}"]`);
+  // A horizontal SVG path has zero bounding-box height but still draws a valid wire.
+  await path.waitFor({ state: 'attached' });
   const source = page.locator(`[data-workflow-card="${sourceId}"],[data-canvas-node-id="${sourceId}"]`);
   await source.waitFor();
-  const x = await path.evaluate(el => el.getPointAtLength(0).matrixTransform(el.getScreenCTM()).x);
+  const { d, length, start, end } = await path.evaluate(el => {
+    const matrix = el.getScreenCTM();
+    const length = el.getTotalLength();
+    if (!matrix) throw new Error('Workflow wire has no screen transform');
+    const start = el.getPointAtLength(0).matrixTransform(matrix);
+    const end = el.getPointAtLength(length).matrixTransform(matrix);
+    return { d: el.getAttribute('d'), length, start: { x: start.x, y: start.y }, end: { x: end.x, y: end.y } };
+  });
+  assert.match(d, /^M\s/);
+  assert.ok(Number.isFinite(length) && length > 0 && [start.x, start.y, end.x, end.y].every(Number.isFinite),
+    `${targetId} has a non-empty wire with finite screen endpoints`);
   const box = await source.boundingBox();
-  assert.ok(Math.abs(x - box.x - box.width) <= 2,
-    `${targetId} starts at ${x.toFixed(1)} instead of ${sourceId}'s right edge ${(box.x + box.width).toFixed(1)}`);
+  assert.ok(Math.abs(start.x - box.x - box.width) <= 2,
+    `${targetId} starts at ${start.x.toFixed(1)} instead of ${sourceId}'s right edge ${(box.x + box.width).toFixed(1)}`);
 }
 
 try {
@@ -52,7 +63,7 @@ try {
   });
   // Use the visible add/connect menu on a fresh card, alongside two saved precise bindings.
   await connectWithPlus('draw', '下游加号');
-  await page.locator('[data-workflow-target="plus"]').waitFor();
+  await page.locator('path[data-workflow-target="plus"]').waitFor({ state: 'attached' });
   const connected = await page.evaluate(() => ({
     ids: JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.map(n => n.id),
     newContent: window.snapshot().nodes.filter(n => n.kind === 'note' && n.id !== 'far').length,
@@ -79,6 +90,11 @@ try {
         await publishGeneration(args, paths);
         const session = `gen-prompt:${jobId}:${turnKey}:0`;
         await api.projectCanvasNodeUpdate(session, { x: producing ? 510 + 45 * round : 1500, y: 100 + 55 * round, width: 240, height: 190 });
+        const [asset] = await api.getAssetsByIds([await api.localAgentFindAssetId(paths[0])]);
+        await api.projectCanvasNodeUpdate(`gen-output:${jobId}:${turnKey}:0`, { payloadJson: JSON.stringify({
+          schema_version: 1, snapshot: { name: asset.name, width: asset.width, height: asset.height },
+          execution: { job_id: jobId, turn_key: turnKey },
+        }) });
         return { accepted: true };
       },
     });
@@ -95,16 +111,29 @@ try {
     };
   });
 
+  const drawCard = page.locator('[data-workflow-card="draw"]');
   let latest;
   for (const [asset, single] of [['a', false], ['b', true]]) {
     const { session, inputs } = await page.evaluate(single => window.runChain(single), single);
     assert.notEqual(session, latest, 'each production run has a fresh identity');
     latest = session;
-    await page.locator(`[data-workflow-session-link="${session}"]`).waitFor();
+    const result = page.locator(`[data-canvas-node-id="${session}"]`);
+    await result.locator(`[data-conversation-image="${asset}"]`).waitFor();
+    await drawCard.waitFor({ state: 'detached' });
     for (const sink of sinks) {
       await checkWire(session, sink);
       assert.deepEqual(inputs[sink], [asset], `${sink} receives the result of this run`);
     }
+    const sessionWire = page.locator(`path[data-workflow-session-link="${session}"]`);
+    assert.equal(await sessionWire.count(), 0, 'collapsed producer does not draw an internal wire to its own result');
+    await result.hover();
+    const recall = result.getByRole('button', { name: '编辑生成卡', exact: true });
+    await recall.focus();
+    await recall.press('Enter');
+    await sessionWire.waitFor({ state: 'attached' });
+    assert.match(await sessionWire.getAttribute('d'), /^M\s/);
+    await drawCard.getByRole('button', { name: '收起生成卡', exact: true }).click();
+    await drawCard.waitFor({ state: 'detached' });
   }
   await page.reload();
   for (const sink of sinks) await checkWire(latest, sink);
@@ -168,7 +197,7 @@ try {
     { inputs: [], kind: 'text2video' },
     { inputs: ['/fixture/clip.mp4'], kind: 'multimodal2video' },
   ], 'the downstream request includes the original video file');
-  await page.locator(`[data-workflow-generated-link="${video.clipResultId}"]`).waitFor();
+  await page.locator(`path[data-workflow-generated-link="${video.clipResultId}"]`).waitFor({ state: 'attached' });
   await checkWire(video.clipResultId, 'edit-clip');
   await checkWire('clip', 'completion');
   await editCard.locator('[data-workflow-reference-asset="clip-asset"]').waitFor();

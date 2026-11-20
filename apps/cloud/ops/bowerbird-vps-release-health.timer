@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Bowerbird VPS release health probe every five minutes
+
+[Timer]
+OnCalendar=*-*-* *:0/5:00
+Persistent=true
+AccuracySec=10s
+Unit=bowerbird-vps-release-health.service
+
+[Install]
+WantedBy=timers.target

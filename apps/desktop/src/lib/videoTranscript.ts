@@ -50,6 +50,39 @@ export function getVideoTranscript(assetId: string) {
   return invoke<VideoTranscript | null>("video_transcript_get", { assetId });
 }
 
+export function useVideoTranscript(assetId: string | null, sourceKey: string) {
+  const [state, setState] = useState<{ key: string; transcript?: VideoTranscript | null; error: unknown }>();
+  const [revision, setRevision] = useState(0);
+  const current = state?.key === sourceKey ? state : undefined;
+
+  useEffect(() => {
+    if (!assetId) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function read(id: string) {
+      try {
+        const transcript = await getVideoTranscript(id);
+        if (disposed) return;
+        setState({ key: sourceKey, transcript, error: null });
+        if (transcript?.status === "running") timer = setTimeout(() => void read(id), 1800);
+      } catch (error) {
+        if (!disposed) setState(previous => ({
+          key: sourceKey, transcript: previous?.key === sourceKey ? previous.transcript : undefined, error,
+        }));
+      }
+    }
+    void read(assetId);
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [assetId, sourceKey, revision]);
+
+  return {
+    transcript: current?.transcript,
+    error: current?.error,
+    update: (transcript: VideoTranscript) => setState({ key: sourceKey, transcript, error: null }),
+    refresh: () => setRevision(value => value + 1),
+  };
+}
+
 export function quoteVideoTranscript(assetId: string) {
   return invoke<VideoTranscriptQuote>("video_transcript_quote", { assetId });
 }

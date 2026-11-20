@@ -4,6 +4,8 @@ import { ArrowDown, ArrowUp, Check, Coins, Copy, History, ImagePlus, LoaderCircl
 import { api } from "../lib/api";
 import { CHAT_PROVIDER_LABELS, LOCAL_CHAT_MAX_REFERENCES, chatAssistantLabel, chatCodexOptionError, chatUsesCloud, localChatRunning, localChatStatusLabel, type ChatCardAction, type ChatCardDefaults, type ChatConversation, type ChatMessage, type ChatSummary } from "../lib/localChat";
 import { localChatDraft, pinLocalChat, useProjectChatSummaries, useLocalChatStore, type LocalChatDraft } from "../lib/localChatStore";
+import { ChatPaymentCancelled } from "../lib/localChatPaid";
+import { ChatPaidReceipt } from "./ChatPaidReceipt";
 import { notifyError } from "../lib/notify";
 import { terminalDshTurnFailure } from "../lib/workflowAgentChat";
 import { cloudChatEndedMessage, userErrorMessage } from "../lib/userError";
@@ -41,6 +43,23 @@ export function MessageText({ text }: { text: string }) {
       return <p key={`${index}:${line}`}>{inlineText(paragraph)}</p>;
     });
   })}</div>;
+}
+
+export function useCopyChatReply() {
+  const [copied, setCopied] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(timer.current), []);
+  async function copyMessage(message: ChatMessage) {
+    try {
+      await navigator.clipboard.writeText(message.text);
+      clearTimeout(timer.current);
+      setCopied(message.id);
+      timer.current = setTimeout(() => setCopied(null), 1600);
+    } catch (error) {
+      notifyError(error, "复制回复失败，请重试。");
+    }
+  }
+  return { copied, copyMessage };
 }
 
 export function LocalChatCard({ conversation }: { conversation: ChatSummary }) {
@@ -130,7 +149,7 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
   const [recoverPending, setRecoverPending] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [follow, setFollow] = useState(true);
-  const [copied, setCopied] = useState<string | null>(null);
+  const { copied, copyMessage } = useCopyChatReply();
   const panelRef = useRef<HTMLElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -138,7 +157,6 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
   const currentId = useRef(conversationId);
   currentId.current = conversationId;
   const followRef = useRef(true);
-  const copiedTimer = useRef<ReturnType<typeof setTimeout>>();
   const ownedChat = chat?.projectId === projectId ? chat : null;
   const provider = ownedChat?.provider ?? "codex-local";
   const latestTurnId = ownedChat?.messages[ownedChat.messages.length - 1]?.turnId;
@@ -157,7 +175,7 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     panelRef.current?.focus({ preventScroll: true });
-    return () => { if (previous?.isConnected) previous.focus({ preventScroll: true }); clearTimeout(copiedTimer.current); };
+    return () => { if (previous?.isConnected) previous.focus({ preventScroll: true }); };
   }, []);
   useEffect(() => {
     setLocalError(null); setHistoryOpen(false); setPreview(null); setStopPending(false); setRecoverPending(false);
@@ -219,13 +237,6 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
       {removable && <button type="button" className="local-chat-reference-remove" onClick={() => useLocalChatStore.getState().setDraft(conversationId, { ...draft, referenceAssetIds: draft.referenceAssetIds.filter(value => value !== id) })} aria-label={`移除${label}`}><X size={11} /></button>}
     </div>;
   })}</div> : null;
-  const copyMessage = async (message: ChatMessage) => {
-    try {
-      await navigator.clipboard.writeText(message.text);
-      clearTimeout(copiedTimer.current); setCopied(message.id);
-      copiedTimer.current = setTimeout(() => setCopied(null), 1600);
-    } catch (error) { notifyError(error, "复制回复失败，请重试。"); }
-  };
   const recover = async () => {
     if (!ownedChat || recoverPending || sending || running) return;
     const targetId = conversationId;
@@ -240,12 +251,12 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
     const targetId = conversationId;
     setLocalError(null); followRef.current = true; setFollow(true);
     try {
-      await useLocalChatStore.getState().send({ projectId, conversationId: targetId, provider, ...(codexOptions !== undefined ? { codexOptions: { ...codexOptions } } : {}), text: snapshot.text.trim(), referenceAssetIds: snapshot.referenceAssetIds, cardDefaults: getCardDefaults?.() });
+      await useLocalChatStore.getState().send({ projectId, conversationId: targetId, provider, ...(codexOptions !== undefined ? { codexOptions: { ...codexOptions } } : {}), text: snapshot.text.trim(), referenceAssetIds: snapshot.referenceAssetIds, cardDefaults: getCardDefaults?.() }, true);
       const current = localChatDraft(targetId);
       // Preserve typing or newly selected references added while the request was being accepted.
       if (current.text === snapshot.text && JSON.stringify(current.referenceAssetIds) === JSON.stringify(snapshot.referenceAssetIds)) useLocalChatStore.getState().setDraft(targetId, emptyDraft);
       if (currentId.current === targetId) inputRef.current?.focus();
-    } catch (error) { if (currentId.current === targetId) setLocalError(userErrorMessage(error, "消息暂未发送，请查看对话状态后重试。")); }
+    } catch (error) { if (currentId.current === targetId && !(error instanceof ChatPaymentCancelled)) setLocalError(userErrorMessage(error, "消息暂未发送，请查看对话状态后重试。")); }
   };
   const stop = async () => {
     if (stopPending || ownedChat?.status === "stopping") return;
@@ -291,7 +302,8 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
             {references(message.referenceAssetIds)}
             {message.text ? <MessageText text={message.text} /> : <p className="local-chat-pending">{message.status === "running" ? <><LoaderCircle size={13} className="local-chat-spin" />正在准备回复…</> : "本轮尚未收到回复。"}</p>}
             {message.role === "assistant" && <div className="local-chat-message-actions">{message.text && <button type="button" onClick={() => void copyMessage(message)} aria-label="复制回复">{copied === message.id ? <Check size={12} /> : <Copy size={12} />}{copied === message.id ? "已复制" : "复制"}</button>}
-              {message.status !== "done" && message.status !== "running" && <small>{message.dshTerminalError ? userErrorMessage(message.dshTerminalError, "本机 DSH 本轮失败。") : { stopped: "已停止 · 已收到的内容已保留", interrupted: "回复已中断 · 可以继续对话", failed: "本轮未完成" }[message.status]}</small>}</div>}
+              {message.status !== "done" && message.status !== "running" && <small>{message.dshTerminalError ? userErrorMessage(message.dshTerminalError, "本机 DSH 本轮失败。") : { stopped: "已停止 · 已收到的内容已保留", interrupted: "回复已中断 · 可以继续对话", failed: "本轮未完成" }[message.status]}</small>}
+              {message.paidCloudChat && <ChatPaidReceipt conversationId={conversationId} turnId={message.turnId} />}</div>}
           </article>}
           {ownedChat.messages[index + 1]?.turnId !== message.turnId && ownedChat.actions?.filter(action => action.turnId === message.turnId).map(action =>
             <CardAction key={action.id} action={action} onLocate={onLocateCards} onUndo={onUndoCards} />)}

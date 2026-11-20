@@ -36,6 +36,7 @@
 - 展示当前工作流输入时，[workflowBindingAssetIds](../../apps/desktop/src/lib/canvasSessionOutputs.ts) 读取素材、内容格或上游本轮产物；[workflowSourceMediaLabel](../../apps/desktop/src/lib/workflowCanvasCapabilities.ts) 根据素材元数据或已知生成类型标注来源。卡片、输入引用和断开菜单使用同一套显示名称，输入绑定仍由原端口和编号定位。
 
 - 生成结果直连下游时，[canvasSessionOutputs.ts](../../apps/desktop/src/lib/canvasSessionOutputs.ts) 的 `workflowGenerationResultAnchor` 供画板绘线和整理共用，返回本轮产物所在的可见卡片或单元格。`workflowGenerationPreviewIds` 用于素材预览；调度、重跑和提示词引用继续通过生成卡的输出身份取值。[生成结果接入下游](../CANVAS-WORKFLOW.md#2026-11-13生成结果接入下游桌面源码待发布)。
+- 普通生图卡提交后，由 `workflowImageGenerationActivity` 结合精确会话和生成任务判断运行状态。`workflowImageCardProjection` 为画布呈现、连线和整理提供媒体锚点及节点来源，循环、触发器和定向内容写入保留生成卡。首次生成的实际落点由 [project_canvas.rs](../../apps/desktop/src-tauri/src/core/project_canvas.rs) 和 [placement.rs](../../apps/desktop/src-tauri/src/core/project_canvas/placement.rs) 共同确定，TS 的 `placeWorkflowOutput` 继续供内容表及其他工作流交付使用。
 
 - 项目删除后的收尾复用 `canvasWorkflowRuntime.ts` 导出的 `discardProjectWorkflow(projectId)`：store 在原生删除成功后调用，只停止该项目本地调度、计时器和后续保存，不等待 provider 终态、不宣称远端已取消。删除入口复用 `useProjectDeletion` → `ProjectDeleteDialog` → `deleteProjectCanvas`，不另建任务状态确认。详见 [项目删除](../PROJECT-CANVAS-PLAN.md#2026-11-10确认删除项目后不再由任务状态否决源码待发布)。
 

@@ -4,7 +4,9 @@ import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 // Real store, canvas and inspector; synthetic IPC, no model calls or user library.
-const server = await createServer({ cacheDir: '.tmp/generation-progress/vite', server: { host: '127.0.0.1', port: 17935, strictPort: true, hmr: false, watch: null } });
+const entry = 'scripts/fixtures/canvas-reference/preview.html';
+const server = await createServer({ cacheDir: '.tmp/generation-progress/vite', optimizeDeps: { entries: [entry] },
+  server: { host: '127.0.0.1', port: 17935, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -13,7 +15,7 @@ const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await mkdir('.tmp/generation-progress', { recursive: true });
 try {
-  await page.goto('http://127.0.0.1:17935/scripts/fixtures/canvas-reference/preview.html');
+  await page.goto(server.resolvedUrls.local[0] + entry, { timeout: 45000 });
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(() => {
     const saved = window.snapshot(), base = saved.nodes[0];
@@ -136,5 +138,6 @@ try {
   throw error;
 } finally {
   await browser.close();
+  server.httpServer?.closeAllConnections();
   await server.close();
 }

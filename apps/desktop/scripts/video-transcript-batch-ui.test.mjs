@@ -13,11 +13,11 @@ await page.route('**/*', route => new URL(route.request().url()).hostname === '1
 const base = server.resolvedUrls.local[0];
 const dialog = () => page.getByRole('dialog', { name: '批量转录视频', exact: true });
 
-async function installMock() {
-  await page.evaluate(() => {
+async function installMock(available = false) {
+  await page.evaluate(available => {
     window.store.setState({ cloudAuth: { logged_in: true, user_id: 'test-owner', cloud_available: true } });
     window.transcriptCalls = [];
-    window.transcriptCapabilities = { available: false, credits: null, maxDurationMs: 7200000 };
+    window.transcriptCapabilities = { available, credits: available ? 5 : null, maxDurationMs: 7200000 };
     const prior = window.__TAURI_INTERNALS__.invoke;
     const record = (status, extra) => ({ status, text: '', utterances: [], ...extra });
     window.__TAURI_INTERNALS__.invoke = async (command, args = {}) => {
@@ -26,7 +26,10 @@ async function installMock() {
         const prefix = args.filter.projectId || 'global';
         return { assets: [`${prefix}-saved`, `${prefix}-unavailable`, `${prefix}-noaudio`, `${prefix}-pending`, `${prefix}-long`, `${prefix}-silent`, `${prefix}-held`, `${prefix}-remaining`].map(id => ({ id })), after: null };
       }
-      if (command === 'video_transcript_capabilities') return window.transcriptCapabilities;
+      if (command === 'video_transcript_capabilities') {
+        window.transcriptCalls.push({ command, args });
+        return window.transcriptCapabilities;
+      }
       if (command === 'video_transcript_get') return args.assetId.endsWith('saved') ? record('completed') : null;
       if (command === 'video_transcript_quote') {
         window.transcriptCalls.push({ command, args });
@@ -47,7 +50,7 @@ async function installMock() {
       return prior(command, args);
     };
     window.mode.getState().setMedia('videos');
-  });
+  }, available);
 }
 
 async function openBatch() {
@@ -66,6 +69,19 @@ try {
   const navigation = page.getByRole('tablist', { name: '素材视图切换条', exact: true });
   await navigation.getByRole('tab', { name: '全部素材', exact: true }).click();
   await installMock();
+  await page.waitForFunction(() => window.transcriptCalls.some(call => call.command === 'video_transcript_capabilities'));
+  const entry = page.getByRole('button', { name: '批量转录视频', exact: true });
+  assert.equal(await entry.count(), 0);
+  assert.deepEqual(await page.evaluate(() => window.transcriptCalls.map(call => call.command)), ['video_transcript_capabilities']);
+  await page.evaluate(() => {
+    window.transcriptCapabilities = { available: true, credits: 5, maxDurationMs: 7200000 };
+    window.mode.getState().setMedia('images');
+  });
+  await page.evaluate(() => window.mode.getState().setMedia('videos'));
+  const more = page.getByRole('button', { name: '更多素材库控件', exact: true });
+  if (await more.isVisible()) await more.click();
+  await entry.waitFor();
+  await page.evaluate(() => { window.transcriptCapabilities = { available: false, credits: null, maxDurationMs: 7200000 }; });
   await openBatch();
   await dialog().getByText('视频转录服务暂不可用。', { exact: true }).waitFor();
   assert.equal(await dialog().getByRole('button', { name: '开始转录', exact: true }).isEnabled(), false);
@@ -98,13 +114,13 @@ try {
 
   await page.goto(`${base}scripts/fixtures/connected-collections/preview.html`);
   await page.waitForFunction(() => window.store && window.__TAURI_INTERNALS__?.invoke);
-  await installMock();
+  await installMock(true);
   await page.locator('[data-collection-id="second"]').click();
   await openBatch();
   await dialog().getByText('本次可处理 1 个视频，跳过 0 个。', { exact: true }).waitFor();
   assert.equal(await dialog().getByRole('checkbox', { name: '包含子文件夹' }).isChecked(), false);
   assert.ok(await page.evaluate(() => window.requests.some(call => call.command === 'connection_entry_ids' && call.args.folderId === 'second' && call.args.media === 'videos')));
-  console.log('PASS: batch scope, full-track quote, disabled when unpriced, and no further submissions on unknown state or a changed price');
+  console.log('PASS: batch actions hidden when unpriced, no original scan, scope and full-track quote, no further submissions on unknown state or a changed price');
 } finally {
   await browser.close();
   await server.close();

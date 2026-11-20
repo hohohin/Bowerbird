@@ -59,19 +59,20 @@
 .canvas-tactical .workflow-card>header .workflow-generation-history svg { width:13px;height:13px; }
 .canvas-tactical .workflow-card:is(:hover,:focus-within) .canvas-tactical-module-code { animation:canvas-tactical-contact 160ms steps(1,end); }
 .canvas-tactical .workflow-card:is(:hover,.is-selected)>header { background:transparent;animation:none; }
-.canvas-tactical .workflow-card>header>button[aria-label="删除卡片"] {
-  position:absolute;top:0;right:0;width:35px;height:34px;padding:0 2px 2px 0;
+.canvas-tactical .workflow-card button.canvas-tactical-card-close {
+  position:absolute;top:0;right:0;width:var(--hud-close-width,35px);height:34px;padding:0 2px 2px 0;
+  border:0;border-radius:0;
   display:grid;place-items:center;background:var(--holo-hover);color:var(--holo-ink);
   clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,8px 100%,0 calc(100% - 8px));
 }
-.canvas-tactical .workflow-card>header>button[aria-label="删除卡片"] svg { width:13px;height:13px;stroke-width:1.4; }
-.canvas-tactical .workflow-card>header>button[aria-label="删除卡片"]::before {
+.canvas-tactical .workflow-card .canvas-tactical-card-close svg { width:13px;height:13px;stroke-width:1.4; }
+.canvas-tactical .workflow-card .canvas-tactical-card-close::before {
   content:"";position:absolute;left:3px;top:3px;width:3px;height:3px;opacity:0;
   background:var(--holo-pixel);box-shadow:var(--holo-glow);pointer-events:none;
 }
-.canvas-tactical .workflow-card:is(:hover,.is-selected,:focus-within)>header>button[aria-label="删除卡片"]::before { opacity:.85; }
-.canvas-tactical .workflow-card:hover>header>button[aria-label="删除卡片"]::before { animation:canvas-tactical-contact 160ms steps(1,end); }
-.canvas-tactical .workflow-card>header>button[aria-label="删除卡片"]:is(:hover,:focus-visible):not(:disabled) { background:var(--cs-selected);color:var(--cs-selected-ink);animation:canvas-tactical-contact 160ms steps(1,end); }
+.canvas-tactical .workflow-card:is(:hover,.is-selected,:focus-within) .canvas-tactical-card-close::before { opacity:.85; }
+.canvas-tactical .workflow-card:hover .canvas-tactical-card-close::before { animation:canvas-tactical-contact 160ms steps(1,end); }
+.canvas-tactical .workflow-card button.canvas-tactical-card-close:is(:hover,:focus-visible):not(:disabled) { background:var(--cs-selected);color:var(--cs-selected-ink);animation:canvas-tactical-contact 160ms steps(1,end); }
 .canvas-tactical .workflow-generation-parameters { background:transparent;padding-bottom:2px; }
 .canvas-tactical .workflow-card :is(:is(select, .tactical-select-trigger),textarea,.ProseMirror,.model-select-trigger,button[title="选择画面比例"],.workflow-profile-name,.workflow-trigger-count input,.workflow-loop-start>button) {
   border-radius:0;border-color:transparent;background:transparent;color:var(--cs-ink);box-shadow:none;
@@ -137,7 +138,7 @@
   .canvas-tactical :is(.workflow-card,.canvas-note.is-content-card):hover::before,
   .canvas-tactical .workflow-card:is(:hover,:focus-within) .canvas-tactical-module-code,
   .canvas-tactical .workflow-card>header>button:hover,
-  .canvas-tactical .workflow-card:hover>header>button[aria-label="删除卡片"]::before,
-  .canvas-tactical .workflow-card>header>button[aria-label="删除卡片"]:is(:hover,:focus-visible):not(:disabled),
+  .canvas-tactical .workflow-card:hover .canvas-tactical-card-close::before,
+  .canvas-tactical .workflow-card button.canvas-tactical-card-close:is(:hover,:focus-visible):not(:disabled),
   .canvas-tactical .canvas-note.is-content-card .canvas-text-spacing button:is(:hover,:focus-visible):not(:disabled) { animation:none; }
 }

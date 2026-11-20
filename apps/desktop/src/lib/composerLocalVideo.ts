@@ -35,7 +35,8 @@ export async function startComposerLocalVideo(...args: Parameters<typeof createC
 export async function optimizeComposerLocalVideo(request: ComposerLocalVideoRequest, projectId?: string): Promise<string> {
   const mode = comfyVideoMode(request.options);
   const instruction = h3OptimizationInstruction({ prompt: request.prompt, mode, seconds: request.options.seconds, ratio: request.options.ratio,
-    firstFrameCount: mode !== "text" && request.firstFrame ? 1 : 0, lastFrameCount: mode === "frames" && request.lastFrame ? 1 : 0 });
+    firstFrameCount: mode !== "text" && request.firstFrame ? 1 : 0, lastFrameCount: mode === "frames" && request.lastFrame ? 1 : 0,
+    audioReference: request.audioAssetId ? true : undefined });
   const job = await startCloudTextRewrite({ instruction, source: request.prompt, projectId });
   for (;;) {
     const result = await job.read();

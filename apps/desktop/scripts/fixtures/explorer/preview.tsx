@@ -72,7 +72,7 @@ function Fixture() {
       <div className="min-h-0 flex-1"><MasonryGrid onOpenPreview={asset => setPreview(asset.thumb_path || null)} /></div>
     </ExploreWorkspace></div>
     {preview && <Lightbox images={[preview]} index={0} onClose={() => setPreview(null)} onIndexChange={() => {}} />}
-    {dialog && <div role="dialog" style={{ position: "fixed", top: 120, left: 400, zIndex: 100, background: "white" }}>对话框</div>}
+    {dialog && <div role="dialog" aria-modal="true" style={{ position: "fixed", top: 120, left: 400, zIndex: 100, background: "white" }}>对话框</div>}
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

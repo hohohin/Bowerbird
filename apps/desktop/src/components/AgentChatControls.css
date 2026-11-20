@@ -1,0 +1,46 @@
+.workflow-agent-chat-controls > .workflow-agent-provider-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+.workflow-agent-provider-row > .model-select {
+  flex: 0 0 auto;
+  max-width: 40%;
+}
+.workflow-agent-provider-row .model-select .model-select-trigger {
+  height: 28px;
+  padding-block: 0;
+  padding-inline-end: 5px;
+  gap: 4px;
+}
+.workflow-agent-provider-row .model-select-trigger > svg { display: none; }
+.workflow-agent-chat-controls .workflow-agent-provider-row > .chat-codex-options {
+  flex: 1 1 0;
+  gap: 3px;
+  flex-wrap: nowrap;
+}
+.workflow-agent-chat-controls .workflow-agent-provider-row > .chat-codex-options > .tactical-select-trigger {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  height: 28px;
+  padding: 0 4px;
+  justify-content: flex-start;
+  gap: 4px;
+}
+.workflow-agent-chat-controls .workflow-agent-provider-row > .chat-codex-options > .tactical-select-trigger:nth-child(2) {
+  flex: 0 1 auto;
+  max-width: 85px;
+}
+.workflow-agent-provider-row .tactical-select-icon { display: inline-flex; flex: none; }
+.workflow-agent-provider-row .tactical-select-chevron { display: none; }
+.workflow-card .workflow-agent-provider-row > .workflow-new-chat-action,
+.workflow-card .workflow-agent-provider-row .chat-codex-retry {
+  flex: none;
+  width: 24px;
+  height: 28px;
+  padding: 0;
+}

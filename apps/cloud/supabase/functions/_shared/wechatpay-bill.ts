@@ -1,6 +1,12 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { ApiError } from "./errors.ts";
-import { WechatPayClient, wechatAuthorization, type WechatPayConfig } from "./wechatpay.ts";
+import { WechatApiError, WechatPayClient, wechatAuthorization, type WechatPayConfig } from "./wechatpay.ts";
+
+const manifestErrorCodes = new Set([
+  "NO_STATEMENT_EXIST", "STATEMENT_CREATING", "PARAM_ERROR", "INVALID_REQUEST", "SIGN_ERROR", "SYSTEM_ERROR", "FREQUENCY_LIMITED",
+]);
+const noStatementCode = "NO_STATEMENT_EXIST";
+const noStatementSource = "upstream_no_statement_local_empty";
 
 // Official ALL bill fields/decimal yuan and download checksum contract:
 // https://pay.wechatpay.cn/doc/v3/merchant/4013071246
@@ -122,13 +128,89 @@ export async function downloadWechatBill(config: WechatPayConfig, manifest: Reco
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
-export async function reconcileWechatBill(admin: SupabaseClient, config: WechatPayConfig, billDate: string) {
+function withinNoStatementWindow(billDate: string, now: Date): boolean {
+  // Do not use a no-file response before the normal T+1 Beijing generation window or outside the supported three months.
+  const firstAvailable = Date.parse(`${billDate}T10:00:00+08:00`) + 86_400_000;
+  const beijingNow = new Date(now.getTime() + 8 * 3600_000);
+  const year = beijingNow.getUTCFullYear(), month = beijingNow.getUTCMonth();
+  const lastDay = new Date(Date.UTC(year, month - 2, 0)).getUTCDate();
+  const earliest = new Date(Date.UTC(year, month - 3, Math.min(beijingNow.getUTCDate(), lastDay))).toISOString().slice(0, 10);
+  return now.getTime() >= firstAvailable && billDate >= earliest;
+}
+
+async function assertNoStatementLedgerEmpty(admin: SupabaseClient, config: WechatPayConfig, start: string, end: string) {
+  const payments = () => admin.from("wechatpay_payments").select("order_id", { count: "exact", head: true })
+    .eq("mchid", config.mchid).eq("appid", config.appid);
+  const refunds = () => admin.from("wechatpay_refunds").select("id,wechatpay_payments!inner(mchid,appid)", { count: "exact", head: true })
+    .eq("wechatpay_payments.mchid", config.mchid).eq("wechatpay_payments.appid", config.appid);
+  // Check unresolved rows before missing timestamps, and check the date range last. An original record
+  // moving from pending to an official timestamp must be seen by at least one of these reads.
+  for (const check of [
+    () => [payments().is("success_time", null).in("payment_state", ["CREATED", "NOTPAY", "USERPAYING", "PAYERROR"])
+      .lt("created_at", end).gte("time_expire", start),
+    refunds().is("create_time", null).in("state", ["reserved", "processing", "abnormal"]).lt("created_at", end)],
+    () => [payments().eq("payment_state", "SUCCESS").is("success_time", null), refunds().not("refund_id", "is", null).is("create_time", null)],
+    () => [payments().gte("success_time", start).lt("success_time", end), refunds().gte("create_time", start).lt("create_time", end)],
+  ]) {
+    const counts = await Promise.all(check());
+    if (counts.some(({ error, count }) => error || count === null || !Number.isSafeInteger(count) || count < 0)) {
+      throw new ApiError("internal_error", "本地支付或退款记录无法核验", true);
+    }
+    if (counts.some(({ count }) => count !== 0)) {
+      throw new ApiError("upstream_failed", "微信账单文件不存在，本地有待核对支付或退款记录", true);
+    }
+  }
+}
+
+async function recordNoStatementAudit(admin: SupabaseClient, config: WechatPayConfig, billDate: string) {
+  const key = { bill_date: billDate, mchid: config.mchid, appid: config.appid };
+  const report = { payment_count: 0, refund_count: 0, differences: [], source: noStatementSource, upstream_code: noStatementCode };
+  // No upstream file means there is no upstream digest. Use a non-hex marker and keep any stronger, signed audit.
+  const { error } = await admin.from("wechatpay_bill_audits").upsert({ ...key, hash_value: noStatementCode, status: "matched", report,
+    checked_at: new Date().toISOString() }, { onConflict: "bill_date,mchid,appid", ignoreDuplicates: true });
+  if (error) throw new ApiError("internal_error", "空账核对记录保存失败", true);
+  const { data: saved, error: readError } = await admin.from("wechatpay_bill_audits").select("hash_value,status,report").match(key).maybeSingle();
+  const summary = saved?.report;
+  const hasSignedFile = typeof saved?.hash_value === "string" && /^[a-f0-9]{40}$/i.test(saved.hash_value);
+  const isNoStatement = saved?.hash_value === noStatementCode && summary?.source === noStatementSource && summary?.upstream_code === noStatementCode;
+  if (readError || !saved || (!hasSignedFile && !isNoStatement) || !["matched", "differences"].includes(saved.status)
+    || !Number.isSafeInteger(summary?.payment_count) || summary.payment_count < 0
+    || !Number.isSafeInteger(summary?.refund_count) || summary.refund_count < 0 || !Array.isArray(summary?.differences)
+    || (saved.status === "matched") !== (summary.differences.length === 0)
+    || (isNoStatement && (saved.status !== "matched" || summary.payment_count !== 0 || summary.refund_count !== 0))) {
+    throw new ApiError("internal_error", "空账核对记录无法验证", true);
+  }
+  if (saved.status === "matched" && (summary.payment_count !== 0 || summary.refund_count !== 0)) {
+    throw new ApiError("upstream_failed", "原账单与本次空账证据不一致，需要核对", true);
+  }
+  return { bill_date: billDate, status: saved.status, payment_count: summary.payment_count, refund_count: summary.refund_count,
+    difference_count: summary.differences.length, source: isNoStatement ? noStatementSource : "signed_wechat_statement" };
+}
+
+export async function reconcileWechatBill(admin: SupabaseClient, config: WechatPayConfig, billDate: string, now = new Date()) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(billDate) || !Number.isFinite(Date.parse(`${billDate}T00:00:00+08:00`))
-    || chinaDay(`${billDate}T00:00:00+08:00`) !== billDate || billDate >= chinaDay(new Date().toISOString())!) throw new ApiError("invalid_request", "账单日期必须是有效的历史日期");
-  const manifest = await new WechatPayClient(config).request("GET", `/v3/bill/tradebill?bill_date=${billDate}&bill_type=ALL`);
+    || chinaDay(`${billDate}T00:00:00+08:00`) !== billDate || billDate >= chinaDay(now.toISOString())!) throw new ApiError("invalid_request", "账单日期必须是有效的历史日期");
+  const manifest = await new WechatPayClient(config).request("GET", `/v3/bill/tradebill?bill_date=${billDate}&bill_type=ALL`).catch((error: unknown) => {
+    if (error instanceof WechatApiError && error.upstreamStatus === 400 && error.upstreamCode === noStatementCode
+      && withinNoStatementWindow(billDate, now)) return null;
+    // Fixed classifications only. The Edge platform associates this log with its invocation.
+    console.error(JSON.stringify({
+      event: "wechatpay_bill_failed",
+      stage: "request_manifest",
+      code: error instanceof ApiError ? error.code : "internal_error",
+      ...(error instanceof WechatApiError ? {
+        upstream_code: manifestErrorCodes.has(error.upstreamCode) ? error.upstreamCode : "unclassified",
+      } : {}),
+    }));
+    throw error;
+  });
+  const start = new Date(`${billDate}T00:00:00+08:00`).toISOString(), end = new Date(Date.parse(start) + 86_400_000).toISOString();
+  if (!manifest) {
+    await assertNoStatementLedgerEmpty(admin, config, start, end);
+    return await recordNoStatementAudit(admin, config, billDate);
+  }
   const rows = parseWechatTradeBill(await downloadWechatBill(config, manifest));
   const relevant = rows.filter(row => row.mchid === config.mchid && row.appid === config.appid);
-  const start = new Date(`${billDate}T00:00:00+08:00`).toISOString(), end = new Date(Date.parse(start) + 86_400_000).toISOString();
   const paymentSelect = "order_id,mchid,appid,out_trade_no,transaction_id,payment_state,success_time,orders!inner(amount_minor,currency,status)";
   const refundSelect = "order_id,out_refund_no,refund_id,amount_minor,state,create_time,wechatpay_payments!inner(mchid,appid)";
   const payments = new Map<string, LocalPayment>(), refunds = new Map<string, LocalRefund>();

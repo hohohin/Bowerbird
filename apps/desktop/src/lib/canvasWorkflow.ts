@@ -98,7 +98,7 @@ export interface WorkflowStep {
   comfyStopping?: boolean;
   /** An opted-in manual Run, with the local inputs frozen before dispatching Cloud optimization. */
   comfyAutoGeneration?: { input?: import("./comfyVideo").ComfyVideoInput; imageInput?: H3ImageGenerationInput; videoText?: string };
-  comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput | import("./h3PromptOptimization").H3ImagePromptInput; instruction: string; inputBindings?: string; createdAt?: number; submissionStarted?: boolean; keptOriginal?: boolean; result?: string };
+  comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput | import("./h3PromptOptimization").H3ImagePromptInput; instruction: string; inputBindings?: string; createdAt?: number; submissionStarted?: boolean; keptOriginal?: boolean; result?: string; dshContinuation?: true };
   agentInput?: { prompt: string; source: string; assetIds: string[]; visualProfile?: import("./types").VisualProfileDetail | null };
   chatInput?: import("./localChat").LocalChatSendInput;
   chatConversationId?: string;

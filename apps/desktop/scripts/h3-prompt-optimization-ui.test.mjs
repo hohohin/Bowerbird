@@ -20,10 +20,15 @@ try {
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     const { DEFAULT_COMFY_VIDEO, comfyVideoOptionsForMode } = await import('/src/lib/comfyVideo.ts');
     const check = (ok, message) => { if (!ok) throw Error(message); };
-    const { cleanH3OptimizedPrompt } = await import('/src/lib/h3PromptOptimization.ts');
+    const { cleanH3OptimizedPrompt, restoreH3VideoAudioReference } = await import('/src/lib/h3PromptOptimization.ts');
     check(cleanH3OptimizedPrompt('integrated_multimodal_description: 正文') === '正文', 'field label removed');
     check(cleanH3OptimizedPrompt('参考 <Picture 1>\n  integrated_multimodal_description：正文\n下一行') === '参考 <Picture 1>\n正文\n下一行', 'reference and line breaks preserved');
     check(cleanH3OptimizedPrompt('她说：<d>[Chinese] integrated_multimodal_description: </d>') === '她说：<d>[Chinese] integrated_multimodal_description: </d>', 'spoken literal preserved');
+    const audioOutput = '<Audio 1> 提供 (S1) 的音色。\n(S1) 用 <Audio 1> 的音色说：你好。';
+    check(restoreH3VideoAudioReference('你好。', audioOutput) === audioOutput, 'the single connected recording may be introduced and cited by its valid tag');
+    check(restoreH3VideoAudioReference('使用 <Audio 1>', audioOutput) === audioOutput, 'the same tag may appear in multiple sections');
+    check(restoreH3VideoAudioReference('使用 <Audio 1>', '你好。') === '使用 <Audio 1>', 'existing audio references survive a rewrite');
+    check(restoreH3VideoAudioReference('你好。', '使用 <Audio 2>') === '你好。', 'unknown audio refs are never accepted');
     const original = '她先看向画面左下，再抬眼看向右上。镜头先固定，最后快速拉远到半身，伴随子弹时间感。';
     const optimized = '单一连续镜头。开场固定低机位锁骨以上特写，她先看向画面左下。随后优雅地抬眼看向画面右上，镜头在最后快速后拉至半身，人物动作极慢，保持视线方向。';
     const entitlement = { user_id: 'tester', is_test_account: true, tier: 'pro', offline_state: 'fresh', balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true, can_use_agent_runs: true, max_parallel_agent_runs: 3, allowed_agent_skills: ['bowerbird-unified-agent'], agent_budget_options: ['unified-standard'] }, generation_services: [] };
@@ -387,6 +392,23 @@ try {
       api.getAssetsByIds = getAssets;
       window.store.setState({ startGeneration });
     }
+    const audioReference = await controller({ ...node, comfyVideo: comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, 'reference'),
+      inputs: { 'first-frame': [{ assetId: 'a' }], 'reference-audio': [{ assetId: 'recording-private-id' }] } });
+    api.cloudAgentGet = async runId => ({ ...await get(runId), snapshot: { events: [{ type: 'text.result', display_payload: { schemaVersion: 1, text: audioOutput } }] } });
+    api.getAssetsByIds = async ids => (await getAssets(ids)).map(entry => entry.id === 'recording-private-id'
+      ? { ...entry, store_path: '/synthetic-private.wav', duration: 3.5 } : entry);
+    try {
+      await audioReference.optimizeComfyPrompt('h3');
+      check(audioReference.document.nodes[0].prompt === audioOutput, 'manual H3 optimization keeps the generated audio cue');
+      const request = starts.at(-1);
+      const parameters = JSON.parse(request.intentPrompt.split('\n')[1]).parameters;
+      check(parameters.audioReference === true && parameters.mode === 'reference' && request.references.length === 0
+        && !JSON.stringify(request).includes('recording-private-id'), 'Cloud receives the fact of a recording, without a recording locator');
+      await audioReference.start('h3', true);
+      check(calls.at(-1).input.prompt === audioOutput && calls.at(-1).input.audioAssetId === 'recording-private-id',
+        'local H3 retains the actual input recording and all intentional tag uses');
+      check(JSON.parse(starts.at(-1).intentPrompt.split('\n')[1]).parameters.audioReference === true, 'automatic optimization receives the same recording hint');
+    } finally { api.cloudAgentGet = get; api.getAssetsByIds = getAssets; }
     setAutoOptimize(false);
     const ui = canvasWorkflowController('p'); await ui.load(); await ui.edit([{ ...node, x: 800 }]);
   });
@@ -414,12 +436,14 @@ try {
     }
   });
   const draft = card.getByLabel('卡片指令', { exact: true });
+  const videoStatus = card.locator('footer .workflow-h3-status[role="status"]');
   await draft.fill('new');
   await draft.pressSequentially(' latest draft');
   const optimize = card.getByRole('button', { name: '优化提示词', exact: true });
   await optimize.evaluate(button => { button.click(); button.click(); });
   const feedback = await card.locator('.h3-optimize-action').evaluate(button =>
     new Promise(resolve => requestAnimationFrame(() => resolve(button.getAttribute('aria-busy')))));
+  await videoStatus.getByText('正在优化提示词', { exact: true }).waitFor();
   await page.evaluate(() => window.releaseDraftWrite());
   await page.waitForFunction(() => window.dispatchTrace.some(row => row.key === 'cloudAgentStart'));
   const prefix = await page.evaluate(() => window.dispatchTrace.slice(0,window.dispatchTrace.findIndex(row => row.key === 'cloudAgentStart') + 1));
@@ -433,6 +457,8 @@ try {
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
   assert.deepEqual(await page.evaluate(() => ({ local: window.h3Calls.length, cloud: window.optimizeStarts.length })), { local: before.local, cloud: before.cloud + 1 });
   assert.match(await card.getByLabel('卡片指令', { exact: true }).inputValue(), /单一连续镜头/);
+  await videoStatus.getByText('提示词已优化', { exact: true }).waitFor();
+  assert.equal(await card.getByText('提示词已优化', { exact: true }).count(), 1);
   assert.equal(await card.locator('details.comfy-optimization-result').count(), 0);
   const field = await card.locator('.comfy-video-prompt').boundingBox();
   const action = await card.getByRole('button', { name: '优化提示词', exact: true }).boundingBox();
@@ -449,7 +475,7 @@ try {
   assert.match(await card.getByLabel('卡片指令', { exact: true }).inputValue(), /单一连续镜头/);
   await card.getByLabel('卡片指令', { exact: true }).fill('用户修改后的提示词');
   await page.evaluate(() => { window.dispatchTrace.length = 0; });
-  const runButton = card.getByRole('button', { name: '运行', exact: true });
+  const runButton = card.getByRole('button', { name: /^(运行|重试)$/ });
   await runButton.evaluate(button => { button.click(); button.click(); });
   await page.waitForFunction(n => window.h3Calls.length > n, before.local);
   const directReads = await page.evaluate(() => window.dispatchTrace.slice(0,window.dispatchTrace.findIndex(row => row.key === 'localDispatch')).filter(row=>row.key==='projectCanvasGet').length);
@@ -461,8 +487,11 @@ try {
   assert.equal(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), '用户修改后的提示词');
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), before.cloud + 1);
   assert.equal(await card.getByText('查看优化结果', { exact: true }).count(), 0);
+  assert.equal(await card.getByRole('button', { name: /查看技能执行.*审批/ }).count(), 0);
   const retryButton = card.getByRole('button', { name: '重试', exact: true });
   await retryButton.waitFor();
+  await videoStatus.getByText('视频已生成', { exact: true }).waitFor();
+  assert.equal(await card.getByText('视频已生成', { exact: true }).count(), 1);
   await draft.fill('用户修改后的提示词，再向右看');
   await runButton.waitFor();
   assert.equal(await draft.evaluate(field => field === document.activeElement), true, 'H3 action updates before the textarea loses focus');
@@ -483,7 +512,10 @@ try {
   const videoHistory = page.getByRole('dialog', { name: '提示词优化历史', exact: true });
   await videoHistory.getByRole('button', { name: '恢复第 3 次优化结果', exact: true }).waitFor();
   assert.match(await videoHistory.innerText(), /用户修改后的提示词/);
-  await page.keyboard.press('Escape');
+  await videoHistory.getByRole('button', { name: '恢复第 3 次用户原文', exact: true }).click();
+  await videoHistory.waitFor({ state: 'hidden' });
+  await draft.and(page.locator(':focus')).waitFor();
+  assert.equal(await draft.inputValue(), '用户修改后的提示词');
   await autoCheckbox.uncheck();
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -512,6 +544,10 @@ try {
   assert.equal(imageResult.request.parameters.referenceCount, 0);
   assert.deepEqual(imageResult.outputs.image.assetIds, ['previous']);
   const imageCard = page.locator('[data-workflow-card="image-h3"]');
+  const imageDraft = imageCard.getByLabel('卡片指令', { exact: true });
+  const imageStatus = imageCard.locator('footer .workflow-h3-status[role="status"]');
+  await imageStatus.getByText('提示词已优化', { exact: true }).waitFor();
+  assert.equal(await imageCard.getByRole('button', { name: /查看技能执行.*审批/ }).count(), 0);
   await imageCard.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
   const history = page.getByRole('dialog', { name: '提示词优化历史', exact: true });
   await history.waitFor();
@@ -528,10 +564,14 @@ try {
   assert.equal(await history.getByRole('heading', { name: '用户原文', exact: true }).count(), 2);
   await history.getByRole('button', { name: '恢复第 1 次用户原文', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'image-h3').prompt === '一只玻璃杯');
+  await history.waitFor({ state: 'hidden' });
+  await imageDraft.and(page.locator(':focus')).waitFor();
+  await imageCard.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
   await history.getByRole('button', { name: '恢复第 2 次优化结果', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'image-h3').prompt === '透明玻璃杯，杯沿反射窗边的柔光。');
+  await history.waitFor({ state: 'hidden' });
+  await imageDraft.and(page.locator(':focus')).waitFor();
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), prior + 1, 'restoring history never submits another optimization');
-  await page.keyboard.press('Escape');
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     api.cloudAgentGet = async runId => ({ runId, status: 'succeeded', snapshot: { run: {}, events: [
@@ -548,7 +588,7 @@ try {
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     api.cloudAgentGet = async runId => ({ runId, status: 'succeeded', snapshot: { run: {}, events: [
-      { type: 'text.result', display_payload: { schemaVersion: 1, text: '透明玻璃杯，柔光在杯沿形成窄而清晰的高光。' } }] } });
+      { type: 'text.result', display_payload: { schemaVersion: 1, text: '透明玻璃杯，柔光在杯沿形成窄而清晰的高光。', dshContinuation: true } }] } });
     window.imageDispatches = [];
     window.store.setState({ startGeneration: async (...args) => {
       window.imageDispatches.push({ prompt: args[0], provider: args[3], rawPrompt: args[4] });
@@ -568,6 +608,7 @@ try {
     prompt: '透明玻璃杯，柔光在杯沿形成窄而清晰的高光。',
   }]);
   assert.equal(await imageCard.getByLabel('卡片指令', { exact: true }).innerText(), '透明玻璃杯，柔光在杯沿形成窄而清晰的高光。');
+  await imageStatus.getByText('已提交生成', { exact: true }).waitFor();
   await imageCard.getByRole('button', { name: '重试', exact: true }).waitFor();
   await imageCard.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
   await history.getByRole('button', { name: '恢复第 4 次优化结果', exact: true }).waitFor();
@@ -575,10 +616,11 @@ try {
   await history.getByRole('button', { name: '恢复第 4 次用户原文', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'image-h3').prompt
     === '透明玻璃杯，杯沿反射窗边的柔光。');
+  await history.waitFor({ state: 'hidden' });
+  await imageDraft.and(page.locator(':focus')).waitFor();
   await imageCard.getByRole('button', { name: /^(运行|运行此卡片)$/ }).waitFor();
-  await page.keyboard.press('Escape');
 
-  const beforeConcurrentVideo = await page.evaluate(async () => {
+  await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     const { DEFAULT_COMFY_VIDEO, comfyVideoOptionsForMode } = await import('/src/lib/comfyVideo.ts');
@@ -587,6 +629,14 @@ try {
       ...newWorkflowNode('comfy-video', 430, 60, 'codex'), id: 'h3',
       comfyVideo: comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, 'text'), prompt: '玻璃杯特写。'
     }]);
+  });
+  assert.equal(await autoCheckbox.isChecked(), true, 'a new video card inherits the image card’s global choice');
+  await autoCheckbox.uncheck();
+  assert.equal(await imageCheckbox.isChecked(), false, 'changing the video checkbox also updates the image checkbox');
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('canvas-settings')).h3_auto_optimize_prompt === false);
+  const beforeConcurrentVideo = await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const controller = canvasWorkflowController('p');
     const image = controller.document.nodes.find(node => node.id === 'image-h3');
     const [, id, turnKey] = image.sessionNodeIds.at(-1).split(':');
     // The workflow finished handing off this image, but the native generation is still running.
@@ -595,10 +645,7 @@ try {
       lastRefs: [], refAssets: [], lastRatio: null, createdAt: Date.now() } } });
     return window.h3Calls.length;
   });
-  assert.equal(await autoCheckbox.isChecked(), true, 'a new video card inherits the image card’s global choice');
-  await autoCheckbox.uncheck();
-  assert.equal(await imageCheckbox.isChecked(), false, 'changing the video checkbox also updates the image checkbox');
-  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('canvas-settings')).h3_auto_optimize_prompt === false);
+  await imageStatus.getByText('正在生成图片', { exact: true }).waitFor();
   const concurrent = page.getByRole('dialog', { name: '是否需要继续运行当前卡片？' });
   await runButton.click();
   await concurrent.waitFor();
@@ -628,13 +675,57 @@ try {
   await retryButton.click();
   await page.waitForFunction(() => window.concurrentVideoRunning);
   try {
-    await imageCard.getByRole('button', { name: '运行此卡片', exact: true }).click();
+    await videoStatus.getByText('正在生成视频', { exact: true }).waitFor();
+    await imageCard.getByRole('button', { name: /^(运行|运行此卡片|重试)$/ }).click();
     await concurrent.getByRole('button', { name: '取消', exact: true }).click();
     await concurrent.waitFor({ state: 'hidden' });
     assert.equal(await page.evaluate(() => window.imageDispatches.length), 1);
   } finally { await page.evaluate(() => window.releaseConcurrentVideo()); }
   await page.waitForFunction(n => window.h3Calls.length === n + 2 &&
     JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', beforeConcurrentVideo);
+  const continuationRun = await page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.runs
+    .find(run => run.steps['image-h3']?.comfyOptimization?.dshContinuation).id);
+  await page.evaluate(async () => {
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    const now = Date.now();
+    const chat = { id: 'h3-opt-example', projectId: 'p', threadId: 'h3-chat-thread', nodeId: 'h3-hidden-note',
+      title: 'H3 提示词优化', provider: 'dsh-cloud', status: 'idle', turnCount: 1, preview: '柔光高光', revision: 1,
+      createdAt: now, updatedAt: now, error: null, messages: [
+        { id: 'seed-user', turnId: 'seed', role: 'user', text: '原始提示词', referenceAssetIds: [], status: 'done', createdAt: now, updatedAt: now },
+        { id: 'seed-assistant', turnId: 'seed', role: 'assistant', text: '优化后的柔光高光', referenceAssetIds: [], status: 'done', createdAt: now, updatedAt: now },
+      ] };
+    const quote = { service: 'chat_deepseek', available: true, unit_cost: 0, currency: 'Bcoin', pricing_version: 1, dsh_vps_v2_available: true };
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === 'cloud_agent_open_h3_chat') { window.h3ContinueArgs = args; return chat; }
+      if (command === 'local_chat_get' && args.conversationId === chat.id) return chat;
+      if (command === 'local_chat_quote') return quote;
+      if (command === 'local_chat_send') {
+        window.h3FollowUp = args.input;
+        return { ...chat, revision: 2, turnCount: 2 };
+      }
+      return invoke(command, args);
+    };
+    const { chatQuote } = await import('/src/lib/chatCapabilities.ts');
+    window.store.setState(state => ({ cloudAuth: { ...state.cloudAuth, cloud_available: true },
+      cloudEntitlement: { ...state.cloudEntitlement, policy: { ...state.cloudEntitlement.policy, can_use_cloud: true } } }));
+    chatQuote.replace('tester', quote);
+  });
+  await imageCard.getByRole('button', { name: '续聊优化提示词' }).click();
+  const chatPanel = page.getByRole('complementary', { name: '对话详情' });
+  await chatPanel.getByText('优化后的柔光高光').waitFor();
+  assert.equal(await chatPanel.getAttribute('data-local-chat-id'), 'h3-opt-example');
+  const continued = await page.evaluate(() => window.h3ContinueArgs);
+  assert.equal(continued.projectId, 'p');
+  assert.equal(continued.nodeId, 'image-h3');
+  assert.equal(continued.workflowRunId, continuationRun);
+  await chatPanel.getByLabel('继续对话').fill('把柔光换成侧逆光。');
+  await chatPanel.getByRole('button', { name: '发送对话消息' }).click();
+  await page.waitForFunction(() => window.h3FollowUp !== undefined);
+  const followUp = await page.evaluate(() => window.h3FollowUp);
+  assert.equal(followUp.conversationId, 'h3-opt-example');
+  assert.equal(followUp.provider, 'dsh-cloud');
+  assert.equal(followUp.text, '把柔光换成侧逆光。');
+  assert.equal(followUp.dshSkill, undefined);
   assert.deepEqual(errors, []);
   console.log('H3 explicit and opted-in optimization: manual editing, chained generation, stop, account, failure and original-job recovery passed');
 } catch (error) { console.error(error); throw error; }

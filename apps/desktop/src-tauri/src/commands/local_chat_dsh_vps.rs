@@ -6,6 +6,62 @@ use sha2::{Digest, Sha256};
 use std::future::Future;
 
 pub(super) const ENGINE: &str = "dsh-vps-v2";
+const QUOTE_CHANGED: &str = "云端对话报价已变化，请先核对原请求及当前报价。";
+
+#[derive(Debug, Deserialize)]
+pub struct PaidAuthorization {
+    account_id: String,
+    model: String,
+    pricing_version: u64,
+    max_credits: u64,
+    max_output_tokens: u64,
+}
+
+fn valid_model(model: &str) -> bool {
+    matches!(model, "deepseek-flash" | "deepseek-v4-pro")
+}
+
+fn valid_paid_quote(quote: &Value, model: &str) -> bool {
+    quote["available"] == true && quote["model"] == model
+        && ["pricing_version", "max_credits", "max_output_tokens"].into_iter()
+            .all(|key| quote[key].as_u64().is_some_and(|number| (1..=9_007_199_254_740_991).contains(&number)))
+        && ["cache_hit", "cache_miss", "output"].into_iter()
+            .all(|key| quote["rates_nano"][key].as_u64().is_some_and(|number| (1..=9_007_199_254_740_991).contains(&number)))
+}
+
+pub(super) async fn paid_quote(cloud: &CloudClient, auth: &AuthClient, account: &str, model: &str) -> AppResult<Value> {
+    if !valid_model(model) { return Err(error("所选云端模型暂不支持 Bcoin 计费。")); }
+    cloud_chat::ensure_account(auth, account)?;
+    let mut quote = cloud_chat::request_for_user(cloud, auth, json!({"action":"quote_paid","model":model}), account).await?;
+    cloud_chat::ensure_account(auth, account)?;
+    if !quote.is_object() || !quote["available"].is_boolean()
+        || (quote["available"] == true && !valid_paid_quote(&quote, model)) {
+        return Err(error("云端对话报价暂不可用，请重新获取。"));
+    }
+    quote["account_id"] = json!(account);
+    Ok(quote)
+}
+
+impl PaidAuthorization {
+    pub(super) async fn recheck(&self, cloud: &CloudClient, auth: &AuthClient, account: &str, model: &str) -> AppResult<Value> {
+        if self.account_id != account || self.model != model { return Err(error(QUOTE_CHANGED)); }
+        let quote = paid_quote(cloud, auth, account, model).await?;
+        if quote["available"] != true || quote["pricing_version"].as_u64() != Some(self.pricing_version)
+            || quote["max_credits"].as_u64() != Some(self.max_credits)
+            || quote["max_output_tokens"].as_u64() != Some(self.max_output_tokens) {
+            return Err(error(QUOTE_CHANGED));
+        }
+        Ok(quote)
+    }
+
+    pub(super) fn apply(&self, body: &mut Value) {
+        body["action"] = json!("create_paid");
+        body["pricing_version"] = json!(self.pricing_version);
+        body["max_credits"] = json!(self.max_credits);
+        body["max_output_tokens"] = json!(self.max_output_tokens);
+        body["dsh_options"]["model"] = json!(self.model);
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct Pending {
@@ -13,6 +69,8 @@ pub(super) struct Pending {
     pub(super) key: String,
     job: Option<String>,
     pub(super) account: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) paid: bool,
     #[serde(default)]
     cancel_requested: bool,
     receipt: Option<Receipt>,
@@ -32,6 +90,7 @@ impl Pending {
             key: format!("chat-dsh-{turn}"),
             job: None,
             account,
+            paid: false,
             cancel_requested: false,
             receipt: None,
         }
@@ -56,6 +115,15 @@ impl Pending {
             None => json!({"action":action,"idempotency_key":self.key}),
         }
     }
+
+    pub(super) async fn paid_receipt(&self, cloud: &CloudClient, auth: &AuthClient) -> AppResult<Value> {
+        let Some(job) = self.job.as_ref().filter(|_| self.paid) else { return Ok(Value::Null); };
+        cloud_chat::ensure_account(auth, &self.account)?;
+        let response = cloud_chat::request_for_user(cloud, auth,
+            json!({"action":"get_paid_receipt","job_id":job}), &self.account).await?;
+        cloud_chat::ensure_account(auth, &self.account)?;
+        response.get("receipt").cloned().ok_or_else(|| error("云端对话费用回执暂不可用，请重试。"))
+    }
 }
 
 pub(super) fn create_body(
@@ -66,7 +134,8 @@ pub(super) fn create_body(
     skill: Option<&ChatDshSkill>,
 ) -> AppResult<Value> {
     let (text, references) = db.vps_chat_turn_message(id,turn)?;
-    let conversation = if db.local_chat_turn_uses_history(turn)? { format!("c-{id}") } else { format!("t-{turn}") };
+    let conversation = if let Some(key) = crate::core::local_chat::h3_chat_conversation_key(id) { key }
+        else if db.local_chat_turn_uses_history(turn)? { format!("c-{id}") } else { format!("t-{turn}") };
     let mut body = json!({"action":"create","engine":ENGINE,"idempotency_key":key,"conversation_id":conversation,
         "messages":[{"role":"user","content":cloud_chat::current_text(&text,references)}],"tools_enabled":skill.is_none()});
     if let Some(options) = db.local_chat_turn_options(turn)? {

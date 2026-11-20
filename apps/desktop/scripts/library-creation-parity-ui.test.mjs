@@ -28,7 +28,7 @@ async function singlePreview(target) {
   assert.equal(await pickCount(), before.picks); assert.equal(await chipCount(), before.chips);
   assert.equal(await page.locator('.media-lightbox').count(), 0, 'creation preview is separate from ordinary media detail');
   const image = await preview.getByRole('region', {name:'放大图片'}).boundingBox();
-  const detail = await preview.getByRole('region', {name:'独立会话面板'}).count();
+  const detail = await preview.getByRole('region', {name:'生成记录'}).count();
   const info = await preview.getByRole('region', {name:'图片详情', exact:true}).boundingBox();
   assert.ok(info.width >= 200 && info.x + info.width <= image.x, 'home also shows image details on the left');
   assert.ok(image.width > 100 && !detail, 'imported home images open the large image and details without an empty conversation');
@@ -170,12 +170,20 @@ try {
   const connected = page.locator('[data-connection-entry="parity-entry-1"] .folder-media-card');
   await connected.waitFor();
   await singlePreview(connected); await doubleReference(connected);
-  const connectedPicks = await pickCount();
+  const connectedPicks = await pickCount(), connectedChips = await chipCount();
+  const connectedCard = page.locator('[data-connection-entry="parity-entry-2"] .folder-media-card');
+  const connectedSelection = page.getByRole('region', { name: '按文件夹浏览素材', exact: true })
+    .getByRole('group', { name: '分类素材所选操作', exact: true });
   for (const modifier of ['Control', 'Meta', 'Shift']) {
-    await page.locator('[data-connection-entry="parity-entry-2"] .folder-media-card').click({modifiers:[modifier]});
-    await page.locator('.connected-selection').waitFor(); await idle();
-    assert.equal(await pickCount(),connectedPicks, `${modifier} connected selection does not attach`); assert.equal(await preview.count(),0);
-    await page.locator('.connected-selection').getByRole('button',{name:/取消/}).click();
+    await connectedCard.click({ modifiers: [modifier] });
+    await connectedSelection.waitFor(); await idle();
+    assert.equal(await connectedCard.getAttribute('aria-pressed'), 'true', `${modifier} selects the connected entry`);
+    assert.equal(await pickCount(), connectedPicks, `${modifier} connected selection does not attach`);
+    assert.equal(await chipCount(), connectedChips);
+    assert.equal(await preview.count(), 0);
+    await connectedSelection.getByRole('button', { name: '取消选择', exact: true }).click();
+    await connectedSelection.waitFor({ state: 'detached' });
+    assert.equal(await connectedCard.getAttribute('aria-pressed'), 'false');
   }
 
   // Navigate during the single-click delay; the old route must not reopen a preview.

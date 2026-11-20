@@ -2223,14 +2223,8 @@ impl Database {
         let prompt_node_id = projection_id("gen-prompt", &value.job_id, &value.turn_key, "0");
         // Workflow runs persist this binding before submitting the provider job.
         // Anchor at creation, including when the owning canvas is not mounted.
-        let workflow_json: Option<String> = tx.query_row(
-            "SELECT document_json FROM canvas_workflows WHERE project_id=?1", [&value.project_id], |row| row.get(0),
-        ).optional()?;
-        let workflow: serde_json::Value = workflow_json.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
-        let workflow_nodes = workflow["nodes"].as_array();
-        let owner = workflow_nodes.and_then(|nodes| nodes.iter().find(|node| node["sessionNodeIds"].as_array()
-            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(prompt_node_id.as_str())))))
-            .or_else(|| placement::source(&workflow, &value.job_id, false));
+        let workflow = placement::workflow(&tx, &value.project_id)?;
+        let owner = placement::generation_source(&workflow, &value.job_id, &prompt_node_id);
         // 失败重试锚点：同线程内可见的 prompt 卡才可作为叠放目标，否则回退常规落位。
         let retry_anchor = match value.retry_anchor_node_id.as_deref() {
             Some(node_id) => get_node_tx(&tx, node_id)?.filter(|node| {
@@ -2253,10 +2247,14 @@ impl Database {
         let (prompt_x, prompt_y) = if let Some(anchor) = retry_anchor.as_ref().or(gallery_anchor) {
             (anchor.x, anchor.y)
         } else if let Some(source) = owner {
-            let source = placement::workflow_rect(source);
-            let x = source.x + source.width + 64.0;
-            placement::near(placement::Rect { x, y: source.y, width: 260.0, height: 148.0 },
-                &placement::obstacles(&tx, &value.project_id, &workflow, &[&prompt_node_id])?, x)
+            let rect = placement::workflow_rect(source);
+            let mut excluded = vec![prompt_node_id.as_str()];
+            let x = if placement::image_workflow_can_replace(source, &workflow, &existing_canvas) {
+                excluded.extend(source["id"].as_str());
+                rect.x
+            } else { rect.x + rect.width + 64.0 };
+            placement::near(placement::Rect { x, y: rect.y, width: 260.0, height: 148.0 },
+                &placement::obstacles(&tx, &value.project_id, &workflow, &excluded)?, x)
         } else { (max_right + 72.0, 88.0) };
         let new_prompt = get_node_tx(&tx, &prompt_node_id)?.is_none();
         let mut reference_assets = Vec::new();
@@ -2610,16 +2608,44 @@ impl Database {
             .optional()?
             .ok_or_else(|| AppError::NotFound(format!("project prompt node {prompt_node_id}")))?;
         let workflow = placement::workflow(&tx, project_id)?;
-        let mut occupied = placement::obstacles(&tx, project_id, &workflow, &[&prompt_node_id])?;
+        let owner = placement::generation_source(&workflow, job_id, &prompt_node_id);
+        let source = placement::source(&workflow, job_id, false).map(placement::workflow_rect);
+        let mut excluded = vec![prompt_node_id.as_str()];
+        let snapshot = owner.filter(|node| node["kind"] == "generation" && node["generation"]["media"] != "video")
+            .filter(|node| node["activeSessionNodeId"].as_str().is_none_or(|id| id == prompt_node_id))
+            .filter(|_| !assets.is_empty())
+            .map(|_| project_canvas_snapshot_tx(&tx, project_id)).transpose()?;
+        let first_gallery = owner.zip(snapshot.as_ref()).and_then(|(node, snapshot)| {
+            if !placement::image_workflow_can_replace(node, &workflow, snapshot) { return None; }
+            let output_ids: std::collections::HashSet<_> = assets.iter()
+                .map(|asset| projection_id("gen-output", job_id, turn_key, &asset.id)).collect();
+            let already_delivered = snapshot.nodes.iter().any(|entry| output_ids.contains(&entry.id));
+            let (anchor, has_product) = placement::image_workflow_history(node, snapshot);
+            (!already_delivered && !has_product).then_some((node, anchor.map_or(prompt_node_id.as_str(), |anchor| anchor.id.as_str())))
+        });
+        if let Some((node, anchor)) = first_gallery {
+            excluded.extend(node["id"].as_str());
+            excluded.push(anchor);
+        }
+        let mut occupied = placement::obstacles(&tx, project_id, &workflow, &excluded)?;
         let sizes: Vec<_> = assets.iter().map(|asset| (190.0, asset_node_height(&asset_snapshot(asset)))).collect();
         let slots = placement::grid(&sizes);
-        let source = placement::source(&workflow, job_id, false).map(placement::workflow_rect);
+        let start = if let Some((node, anchor)) = first_gallery {
+            let source = placement::workflow_rect(node);
+            let height = sizes[0].1 * 260.0 / sizes[0].0;
+            let at = placement::near(placement::Rect { x: source.x, y: source.y, width: 260.0, height }, &occupied, source.x);
+            tx.execute("UPDATE canvas_nodes SET x=?2,y=?3 WHERE id=?1", params![anchor, at.0, at.1])?;
+            at
+        } else {
+            source.map_or((prompt.0 + 260.0 + 64.0, prompt.1), |s| (s.x + s.width + 64.0, s.y))
+        };
         let mut node_ids = Vec::with_capacity(assets.len());
         for (index, asset) in assets.iter().enumerate() {
             let node_id = projection_id("gen-output", job_id, turn_key, &asset.id);
-            let x = source.map_or(prompt.0 + 260.0 + 64.0, |s| s.x + s.width + 64.0);
-            let point = placement::near(placement::Rect { x: x + slots[index].0, y: source.map_or(prompt.1, |s| s.y) + slots[index].1,
-                width: sizes[index].0, height: sizes[index].1 }, &occupied, x);
+            let point = if first_gallery.is_some() && index == 0 { start } else {
+                placement::near(placement::Rect { x: start.0 + slots[index].0, y: start.1 + slots[index].1,
+                    width: sizes[index].0, height: sizes[index].1 }, &occupied, start.0)
+            };
             occupied.push(placement::Rect {x:point.0,y:point.1,width:sizes[index].0,height:sizes[index].1});
             let snapshot = asset_snapshot(asset);
             let payload = serde_json::to_string(&AssetNodePayloadV1 {
@@ -3861,6 +3887,52 @@ mod tests {
         assert_eq!((next_card.x,next_card.y), (first.x,first.y)); // Folded history reuses the visible gallery.
         let old = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
         assert_eq!((old.x,old.y),(first.x,first.y));
+    }
+
+    #[test]
+    fn first_workflow_image_replaces_source_at_delivery_and_replays_without_moving_it() {
+        let db = db();
+        materialize(&db, "p1");
+        db.create_creative_thread(&NewCreativeThread {
+            id: "t1".into(), project_id: "p1".into(), title: "workflow".into(), origin: CreativeThreadOrigin::Direct,
+        }).unwrap();
+        let save = |document: &serde_json::Value| {
+            db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p1',1,?1) ON CONFLICT(project_id) DO UPDATE SET document_json=excluded.document_json", [document.to_string()]).unwrap();
+        };
+        let mut doc = serde_json::json!({"schema_version":1,"nodes":[{"id":"image-card","kind":"generation","x":100,"y":200,
+            "sessionNodeIds":["gen-prompt:job:first:0"],"activeSessionNodeId":"gen-prompt:job:first:0"}],
+            "run":{"steps":{"image-card":{"jobId":"job"}}}});
+        save(&doc);
+        let input = ProjectGenerationTurnInput {
+            project_id:"p1".into(), thread_id:"t1".into(), generation_conversation_id:"conversation".into(), job_id:"job".into(), turn_key:"first".into(),
+            prompt:"first".into(), applied_prompt:"first".into(), provider:"test".into(), provider_session_id:None, ratio:None, visual_profile:None,
+            references:vec![], reference_node_ids:vec![], parent_node_id:None, parent_asset_path:None, relation:None, retry_anchor_node_id:None,
+        };
+        let prompt = db.begin_project_generation_turn(&input).unwrap().prompt_node_id;
+        let position = |id: &str| { let node = db.get_canvas_node(id).unwrap().unwrap(); (node.x, node.y) };
+        assert_eq!(position(&prompt), (100.0, 200.0));
+        // The source can be moved while the provider owns the submitted task.
+        doc["nodes"][0]["x"] = 240.into();
+        doc["nodes"][0]["y"] = 330.into();
+        save(&doc);
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,ext,store_path,width,height,created_at) VALUES('first-image','first','png','/first.png',190,150,1)", []).unwrap();
+        let assets = [db.get_asset("first-image").unwrap().unwrap()];
+        let output = db.complete_project_generation_turn("p1", "t1", "job", "first", None, &assets).unwrap().remove(0);
+        assert_eq!(position(&prompt), (240.0, 330.0));
+        assert_eq!(position(&output), (240.0, 330.0));
+        db.conn.lock().unwrap().execute("UPDATE canvas_nodes SET x=520,y=480 WHERE id IN (?1,?2)", params![prompt, output]).unwrap();
+        db.complete_project_generation_turn("p1", "t1", "job", "first", None, &assets).unwrap();
+        assert_eq!(position(&prompt), (520.0, 480.0));
+        assert_eq!(position(&output), (520.0, 480.0));
+
+        doc["nodes"][0]["sessionNodeIds"] = serde_json::json!([prompt,"gen-prompt:job2:second:0"]);
+        doc["nodes"][0]["activeSessionNodeId"] = "gen-prompt:job2:second:0".into();
+        doc["run"]["steps"]["image-card"]["jobId"] = "job2".into();
+        save(&doc);
+        let next = db.begin_project_generation_turn(&ProjectGenerationTurnInput {
+            job_id:"job2".into(), turn_key:"second".into(), generation_conversation_id:"conversation2".into(), ..input
+        }).unwrap();
+        assert_eq!(position(&next.prompt_node_id), (520.0, 480.0));
     }
 
     #[test]

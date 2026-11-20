@@ -18,13 +18,14 @@ export interface ComfyVideoOptions {
   ratio: "9:16" | "16:9" | "4:3" | "3:4" | "1:1" | "auto";
   resolution: 0.6 | 0.8 | 0.98 | 1;
 }
-export const DEFAULT_COMFY_VIDEO: ComfyVideoOptions = { endpoint: "http://127.0.0.1:8000", seconds: 8, ratio: "9:16", resolution: 0.8 };
+export const DEFAULT_COMFY_VIDEO: ComfyVideoOptions = { endpoint: "http://127.0.0.1:8000", seconds: 8, ratio: "auto", resolution: 0.8 };
 export const H3_IMAGE_ENDPOINT = "http://127.0.0.1:18190";
 export const H3_VIDEO_RESOLUTIONS = [{ value: 0.6, label: "低" }, { value: 0.8, label: "中" }, { value: 0.98, label: "高" }] as const;
 export function comfyVideoMode(options?: ComfyVideoOptions): ComfyVideoMode { return options?.mode ?? "frames"; }
 export function comfyVideoOptionsForMode(options: ComfyVideoOptions, mode: ComfyVideoMode): ComfyVideoOptions {
   if (comfyVideoMode(options) === mode) return options;
-  return { ...options, mode, seconds: mode === "frames" ? 8 : 5, resolution: mode === "frames" ? 0.8 : 0.98, ratio: "9:16" };
+  return { ...options, mode, seconds: mode === "frames" ? 8 : 5, resolution: mode === "frames" ? 0.8 : 0.98,
+    ratio: mode === "text" ? "9:16" : DEFAULT_COMFY_VIDEO.ratio };
 }
 export interface ComposerLocalVideoRequest { prompt: string; firstFrame: string; lastFrame?: string; audioAssetId?: string; options: ComfyVideoOptions }
 /** Match the editor's ordered image references; never submit extra images or videos. */

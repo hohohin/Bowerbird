@@ -56,7 +56,7 @@ try {
   await load();
   await openDraft();
   assert.equal(await dialog.getByRole("button", { name: "保存到画板", exact: true }).isEnabled(), false);
-  assert.equal(await dialog.getByRole("button", { name: /不入库/ }).count(), 0);
+  assert.equal(await dialog.getByRole("button", { name: "插入创作板", exact: true }).count(), 0);
   const white = await dialog.getByAltText("白底草稿").evaluate(img => {
     const canvas = document.createElement("canvas"); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
     const context = canvas.getContext("2d"); context.drawImage(img, 0, 0);
@@ -69,7 +69,12 @@ try {
   await dialog.waitFor({ state: "hidden" });
   assert.equal((await saves()).length, 0);
 
+  const currentZoom = await page.locator(".canvas-plane").evaluate(element => new DOMMatrix(getComputedStyle(element).transform).a);
   await page.getByRole("button", { name: "放大", exact: true }).click();
+  await page.waitForFunction(zoom => {
+    const plane = document.querySelector(".canvas-plane");
+    return plane && new DOMMatrix(getComputedStyle(plane).transform).a > zoom;
+  }, currentZoom);
   const point = await openDraft();
   await draw(); await draw("箭头");
   await mkdir(".tmp", { recursive: true });
@@ -109,7 +114,8 @@ try {
   const regular = page.getByRole("dialog", { name: "图片标注", exact: true });
   await regular.locator("img").waitFor();
   assert.equal(await regular.getByRole("button", { name: "保存到素材库", exact: true }).count(), 1);
-  assert.equal(await regular.getByRole("button", { name: /不入库/ }).count(), 1);
+  const insert = regular.getByRole("button", { name: "插入创作板", exact: true });
+  assert.match(await insert.getAttribute("title"), /不进入素材库/);
   await regular.getByRole("button", { name: "右转 90°", exact: true }).click();
   await regular.getByRole("button", { name: "保存到素材库", exact: true }).click();
   await regular.waitFor({ state: "hidden" });

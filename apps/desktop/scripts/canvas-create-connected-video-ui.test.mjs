@@ -143,11 +143,12 @@ try {
     assert.equal(saved.inputs.image[0].autoConnect, times.firstWire, 'the first visible connection keeps its identity');
     assert.equal(await wire.getAttribute('data-auto-connection'), saved.inputs.image[0].autoConnect);
     await card.locator('.workflow-video-controls').waitFor();
-    const expectedAssets = sourceId === 'first' ? ['b', 'c'] : ['existing'];
-    await page.waitForFunction(expected => {
-      const refs = [...document.querySelectorAll('[data-workflow-reference-asset]')];
+    const expectedAssets = sourceId === 'first' ? ['c'] : ['existing'];
+    await page.waitForFunction(({ cardId, expected }) => {
+      const target = document.querySelector(`[data-workflow-card="${CSS.escape(cardId)}"]`);
+      const refs = [...target?.querySelectorAll('[data-workflow-reference-asset]') ?? []];
       return refs.length === expected.length && refs.every((ref, i) => ref.dataset.workflowReferenceAsset === expected[i]);
-    }, expectedAssets);
+    }, { cardId: saved.id, expected: expectedAssets });
     return saved;
   }
 
@@ -162,7 +163,8 @@ try {
   assert.equal(await card.count(), 0);
   await createVideo('old', 'missing');
   const sessionVideo = await createVideo('first');
-  assert.equal(sessionVideo.inputs.image[0].canvasNodeId, 'next', 'the grouped card connects its latest successful turn');
+  assert.equal(sessionVideo.inputs.image[0].assetId, 'c', 'the grouped card connects the image currently displayed');
+  assert.equal(sessionVideo.inputs.image[0].assetNodeId, 'output-c', 'the wire keeps the exact selected output identity');
   assert.equal(sessionVideo.prompt, '保留镜头运动', 'typing before the check completes must survive the first save');
   await page.reload();
   await page.locator(`[data-workflow-card="${sessionVideo.id}"] .workflow-video-controls`).waitFor();

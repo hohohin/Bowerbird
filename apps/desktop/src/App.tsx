@@ -42,6 +42,7 @@ import { OnboardingTour } from "./components/OnboardingTour";
 import { ToastViewport } from "./components/ToastViewport";
 import { FileTaskStatusPanel } from "./components/FileTaskStatus";
 import { StartupUpdateDialog } from "./components/StartupUpdateDialog";
+import { ChatPaidConfirmation } from "./components/ChatPaidConfirmation";
 import { FileDropImport } from "./components/FileDropImport";
 import { prepareGenerationSound } from "./lib/generationNotifications";
 import { useStore } from "./store";
@@ -882,6 +883,7 @@ function App() {
       <ToastViewport />
       <FileTaskStatusPanel />
       <StartupUpdateDialog ready={!initializing} />
+      <ChatPaidConfirmation />
       <FileDropImport />
       {/* 环境引导：codex/扩展/即梦由设置面板对应分区直接唤起，不再有「环境状态」总览 */}
       <CodexOnboarding />

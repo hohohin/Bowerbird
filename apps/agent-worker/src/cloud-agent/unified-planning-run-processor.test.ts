@@ -2,7 +2,7 @@ import { deepEqual, equal, ok, rejects } from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { test } from "node:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { AgentControlClient } from "../control-plane/agent-control-client.ts";
 import type { HarnessAdapter, HarnessSession } from "../harness/contracts.ts";
@@ -17,6 +17,7 @@ import {
 import type { HarnessPlan } from "../harness/run-control-tools.ts";
 import type { RenderHtmlResultV1 } from "../contracts/render-html.ts";
 import { loadUnifiedAgentSkill } from "../skills/bowerbird-unified-agent/loader.ts";
+import { stageNativeSession } from "../cloud-chat/native-session.ts";
 
 function claimed(
   approvedPlanHash: string | null = null,
@@ -76,9 +77,10 @@ test("VPS text skill is frozen before model execution and restored after a crash
     } as unknown as AgentControlClient;
     const processor = new UnifiedPlanningRunProcessor({
       workspaceRoot: folder, vision: { apiKey: "unused", baseUrl: "https://unused.invalid", model: "unused", mock: true },
-      createAdapter() { return { id: "dsh", async open() { return {
+      createAdapter(_child, _provider, _activity, options) { return { id: "dsh", async open() { return {
         runId: runClaim.run.id, sessionId: "skill-test", async turn(prompt) {
           turns++;
+          equal(options?.reasoningEffort, "high");
           ok(JSON.stringify(prompt).includes("FROZEN_SERVER_METHOD_V1"));
           ok(!JSON.stringify(prompt).includes("NEW_SERVER_METHOD_V2"));
           ok(new TextDecoder().decode(raw).includes("FROZEN_SERVER_METHOD_V1"));
@@ -101,6 +103,61 @@ test("VPS text skill is frozen before model execution and restored after a crash
   }
 });
 
+test("H3 publishes the native session with the paid result before publishing its capability", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "h3-native-origin-"));
+  const runClaim = claimed();
+  const native = "c".repeat(64);
+  runClaim.run.id = randomUUID();
+  runClaim.run.continuationKey = native;
+  runClaim.artifactUrls = [];
+  const finalText = "猫沿窗台向右走。";
+  const goal = `bowerbird:cloud-text-skill:v1\n${JSON.stringify({ id: "h3-image-prompt",
+    parameters: { referenceCount: 1, ratio: "auto" } })}`;
+  let raw: Uint8Array | undefined, turns = 0, failSave = true;
+  const events: Array<{ type: string; displayPayload: Record<string, unknown> }> = [];
+  const control = {
+    async loadRawCheckpoint() { return raw; },
+    async downloadVerifiedJson() { return { schemaVersion: 1, goal, textRewrite: { source: "猫在窗台" } }; },
+    async saveRawCheckpoint(args: { bytes: Uint8Array; sha256: string }) {
+      if (failSave && new TextDecoder().decode(args.bytes).includes(finalText)) { failSave = false; throw new Error("save interrupted"); }
+      raw = args.bytes; runClaim.run.checkpointHash = args.sha256; runClaim.run.snapshotSchemaVersion = 1;
+    },
+    async appendEvents(_run: string, _lease: string, batch: typeof events) { events.push(...batch); },
+    async finish() {},
+  } as unknown as AgentControlClient;
+  const processor = new UnifiedPlanningRunProcessor({
+    workspaceRoot: folder, h3SessionRoot: folder,
+    vision: { apiKey: "unused", baseUrl: "https://unused.invalid", model: "unused", mock: true },
+    createAdapter(_child, _provider, _activity, options) {
+      return { id: "dsh", async open() { return {
+        runId: runClaim.run.id, sessionId: native,
+        async turn(prompt) {
+          turns++;
+          equal(options?.nativeSession?.sessionId, native);
+          equal(options?.reasoningEffort, "high");
+          deepEqual(prompt, [{ type: "text", text: "猫在窗台" }], "native history only records the user's original text");
+          writeFileSync(join(options!.nativeSession!.dir, "provider-session.jsonl"), "native-first-turn", "utf8");
+          return { stopReason: "end_turn", committedContent: [{ type: "text", text: JSON.stringify({ schemaVersion: 1, text: finalText }) }] };
+        },
+        async close() {}, async cancel() {},
+      }; } };
+    },
+  });
+  const context = { claimed: runClaim, control, signal: { aborted: false, cancelRequested: false, leaseLost: false, stopRequested: false } } as AgentRunContext;
+  try {
+    await rejects(() => processor.process(context), /save interrupted/);
+    equal(events.some(event => event.type === "text.result"), false);
+    await processor.process(context);
+    equal(turns, 1, "resuming settlement reuses the first native result");
+    deepEqual(events.find(event => event.type === "text.result")?.displayPayload, { schemaVersion: 1, text: finalText, dshContinuation: true });
+    const followup = stageNativeSession(folder, randomUUID(), { session_key: native, previous_job_id: runClaim.run.id });
+    equal(followup.sessionId, native);
+    equal(readFileSync(join(followup.dir, "provider-session.jsonl"), "utf8"), "native-first-turn");
+    equal(existsSync(join(followup.dir, ".h3-rewrite-result")), false);
+    followup.dispose();
+  } finally { rmSync(folder, { recursive: true, force: true }); }
+});
+
 for (const repeats of [1, 24000]) test(`text rewrite (${repeats}) recovers complete saved text without another model turn`, async () => {
   const source = "朱砂痣，左上竖排\n".repeat(repeats), edited = source.replaceAll("朱砂痣", "春山可望");
   const runClaim = claimed(); runClaim.artifactUrls = [];
@@ -119,8 +176,9 @@ for (const repeats of [1, 24000]) test(`text rewrite (${repeats}) recovers compl
   const processor = new UnifiedPlanningRunProcessor({
     workspaceRoot: join(process.env.TEMP ?? ".", "bowerbird-text-tests"),
     vision: { apiKey:"unused",baseUrl:"https://unused.invalid",model:"unused",mock:true },
-    createAdapter(environment) { return { id: "dsh", async open() { return {
+    createAdapter(environment, _provider, _activity, options) { return { id: "dsh", async open() { return {
       runId:runClaim.run.id,sessionId:"text-session",async turn(prompt) {
+        equal(options?.reasoningEffort, undefined);
         turns++; ok(JSON.stringify(prompt).includes("untrustedSource"));
         ok(prompt.some(part => part.type === "text" && part.text.includes(JSON.stringify(source))));
         const response = await fetch(environment.BOWERBIRD_TOOL_BRIDGE_ENDPOINT, { method:"POST",

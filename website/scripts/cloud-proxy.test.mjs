@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer, request as httpRequest } from "node:http";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { createHash } from "node:crypto";
 import { createCloudProxy } from "../cloud-proxy.mjs";
 import { startServer } from "../server.mjs";
@@ -436,6 +436,113 @@ test("concurrent admissions are bounded and released when requests finish", asyn
   assert.equal(limited.status, 429); assert.equal(limited.headers["retry-after"], "60");
   for (const release of releases) release();
   assert.ok((await Promise.all(pending)).every(result => result.status === 200));
+});
+
+test("Cloud concurrency environment requires a valid pair of bounded limits", () => {
+  for (const [totalInFlight, storageInFlight] of [
+    ["16", undefined], [undefined, "4"], ["16 ", "4"], ["17", "4"], ["1", "1"],
+    ["16", "0"], ["16", "16"], ["16", "1.5"], ["16", ""],
+  ]) {
+    assert.throws(() => createCloudProxy({ totalInFlight, storageInFlight }),
+      /^Error: Set both BOWERBIRD_CLOUD_MAX_IN_FLIGHT/);
+  }
+  assert.doesNotThrow(() => createCloudProxy({ totalInFlight: "2", storageInFlight: "1" }));
+  assert.doesNotThrow(() => createCloudProxy({ totalInFlight: "16", storageInFlight: "4" }));
+});
+
+test("signed Storage shares the total cap while reserving slots for control and lookup", { timeout: 5000 }, async t => {
+  const arrivals = new EventEmitter(), release = [];
+  const lookup = "/rest/v1/understand_jobs?select=status,result_text,error_code,safe_message&idempotency_key=eq.original&limit=1";
+  const { send } = await fixture(t, { totalInFlight: "3", storageInFlight: "1",
+    fetchImpl: url => new Promise(resolve => {
+      release.push(() => resolve(url.pathname.includes("/storage/") && !url.pathname.includes("/upload/")
+        ? new Response("video", { headers: { "Content-Type": "video/mp4" } }) : Response.json({})));
+      arrivals.emit("admitted");
+    }),
+  });
+  const media = send(DOWNLOAD);
+  await once(arrivals, "admitted");
+  assert.equal((await send(UPLOAD, "PUT", "video", { "Content-Type": "video/mp4" })).status, 429);
+  assert.equal((await send(DOWNLOAD.split("?")[0])).status, 401);
+  const controls = [send(CONTROL, "POST", "{}", AUTH), send(lookup, "GET", undefined, AUTH)];
+  while (release.length < 3) await once(arrivals, "admitted");
+  const limited = await send(CONTROL, "POST", "{}", AUTH);
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers["retry-after"], "60");
+  for (const finish of release.splice(0)) finish();
+  assert.ok((await Promise.all([media, ...controls])).every(result => result.status === 200));
+  const upload = send(UPLOAD, "PUT", "video", { "Content-Type": "video/mp4" });
+  await once(arrivals, "admitted");
+  release.shift()();
+  assert.equal((await upload).status, 200);
+});
+
+test("storage timeout and disconnect each release both admission counters", { timeout: 5000 }, async t => {
+  for (const timedOut of [true, false]) {
+    const activity = new EventEmitter();
+    let admitBoth;
+    const together = new Promise(resolve => { admitBoth = resolve; });
+    let calls = 0;
+    const { port, send } = await fixture(t, { totalInFlight: "2", storageInFlight: "1", timeoutMs: 80,
+      fetchImpl: async (url, { signal }) => {
+        if (++calls === 1) {
+          activity.emit("start");
+          return new Promise((_, reject) => signal.addEventListener("abort", () => {
+            reject(signal.reason);
+            activity.emit("abort");
+          }, { once: true }));
+        }
+        if (calls === 3) admitBoth();
+        await together;
+        return url.pathname.includes("/storage/") ? new Response("video", { headers: { "Content-Type": "video/mp4" } }) : Response.json({});
+      },
+    });
+    if (timedOut) {
+      assert.equal((await send(DOWNLOAD)).status, 504);
+    } else {
+      const request = httpRequest({ host: "127.0.0.1", port, path: `/api/cloud${DOWNLOAD}` });
+      request.on("error", () => {});
+      request.end();
+      await once(activity, "start");
+      const aborted = once(activity, "abort");
+      request.destroy();
+      await aborted;
+    }
+    const results = await Promise.all([send(DOWNLOAD), send(CONTROL, "POST", "{}", AUTH)]);
+    assert.deepEqual(results.map(result => result.status), [200, 200]);
+    assert.equal(calls, 3);
+  }
+});
+
+test("configured total preserves the verified-user text cap across routes and tokens", { timeout: 5000 }, async t => {
+  const arrivals = new EventEmitter(), release = [];
+  const other = { Authorization: "Bearer other-user" };
+  const { send } = await fixture(t, { totalInFlight: "16", storageInFlight: "4",
+    authFetchImpl: async (_, { headers }) => Response.json({ id: headers.Authorization === other.Authorization ? "other" : "first" }),
+    fetchImpl: (_, { headers }) => headers.Authorization === other.Authorization ? Response.json({})
+      : new Promise(resolve => { release.push(() => resolve(Response.json({}))); arrivals.emit("admitted"); }),
+  });
+  const chat = "/functions/v1/chat-proxy", agent = "/functions/v1/agent-run";
+  const pending = Array.from({ length: 8 }, (_, index) => send(index % 2 ? chat : agent, "POST", "{}", AUTH));
+  while (release.length < 8) await once(arrivals, "admitted");
+  const limited = await send(agent, "POST", "{}", { Authorization: "Bearer rotated-token" });
+  assert.equal(limited.status, 429);
+  assert.equal((await send(chat, "POST", "{}", other)).status, 200);
+  for (const finish of release.splice(0)) finish();
+  assert.ok((await Promise.all(pending)).every(result => result.status === 200));
+  const next = send(chat, "POST", "{}", AUTH);
+  await once(arrivals, "admitted");
+  release.shift()();
+  assert.equal((await next).status, 200);
+});
+
+test("configured concurrency still rejects request 301 from one source IP", { timeout: 5000 }, async t => {
+  const { send, calls } = await fixture(t, { totalInFlight: "16", storageInFlight: "4", trustProxy: false });
+  for (let index = 0; index < 300; index++) assert.equal((await send(CONTROL, "POST", "{}", AUTH)).status, 200);
+  const limited = await send(CONTROL, "POST", "{}", { ...AUTH, "X-Real-IP": "203.0.113.42" });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers["retry-after"], "60");
+  assert.equal(calls.length, 300);
 });
 
 test("website mounts generation separately from the existing account gateway", async t => {

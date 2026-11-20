@@ -19,6 +19,11 @@ const assets: Asset[] = [
   { id: "review-one", name: "城市肖像 · 画面一", store_path: "/src-tauri/resources/samples/preset-13.png", width: 941, height: 1672, ext: "png", generation_session_id: "review-session" },
   { id: "review-two", name: "花影 · 画面二", store_path: "/src-tauri/resources/samples/preset-14.png", width: 1086, height: 1448, ext: "png", generation_session_id: "review-session" },
 ];
+const continuedAsset: Asset = { ...assets[0], id: "review-continued", name: "续轮产物", store_path: `${assets[0].store_path}?continued=1` };
+const singleTurnPreview = new URLSearchParams(location.search).has("single");
+const group = new URLSearchParams(location.search).has("group");
+const referencePreview = new URLSearchParams(location.search).has("reference");
+if (group) assets.forEach(asset => { asset.generation_session_id = `${asset.id}-session`; });
 if (new URLSearchParams(location.search).has("contrast")) {
   assets[1].source_url = "https://example.com/image";
   useStore.setState({ cloudAuth: { cloud_available: true, logged_in: true } as ReturnType<typeof useStore.getState>["cloudAuth"] });
@@ -32,6 +37,10 @@ const job: GenJob = {
     { id: 2, turnKey: "review-second", prompt: "改成低机位的时装大片，加入巨大的红白花朵，保持黑色衣装。", promptRaw: "改成低机位的时装大片，加入巨大的红白花朵，保持黑色衣装。", refs: [], refAssets: [], images: [assets[1].store_path!] },
   ],
 };
+if (singleTurnPreview) {
+  job.turns = [{ ...job.turns[1], refAssets: [assets[0]], ratio: "3:4", provider: "codex" }];
+}
+if (referencePreview) job.turns[0].refAssets = [assets[0]];
 const host = window as any;
 const deferred = new URLSearchParams(location.search).has("deferred");
 host.__reviewHold = new Set(deferred ? ["generation_history", "list_analyses_by_asset", "list_asset_tags", "list_asset_collections"] : []);
@@ -41,16 +50,23 @@ host.__TAURI_INTERNALS__ = {
   convertFileSrc: (path: string) => path,
   transformCallback: (callback: unknown) => { const id = callbacks.size + 1; callbacks.set(id, callback); return id; },
   metadata: { currentWindow: { label: "review" }, currentWebview: { label: "review" } },
-  invoke: async (command: string) => {
+  invoke: async (command: string, args?: { storePath?: string; assetIds?: string[]; assetId?: string }) => {
     if (host.__reviewHold.has(command)) await new Promise<void>((resolve, reject) => host.__reviewPending.push({ command, resolve, reject }));
     if (command === "plugin:event|listen") return 1;
     if (command === "plugin:event|unlisten") return;
-    if (command === "get_assets_by_ids") return assets;
-    if (command === "generation_history") return {
-      session_id: deferred ? job.sessionId : null, references: [], dimension_assets: [],
-      turns: deferred ? job.turns.map(turn => ({ ...turn, prompt_raw: turn.promptRaw, references: [], ref_assets: [] })) : [],
-    };
-    if (command === "list_asset_tags") return [{ name: "时装", source: "manual", origin: "manual" }];
+    if (command === "local_agent_find_asset_id") return [...assets, continuedAsset].find(asset => asset.store_path === args?.storePath)?.id ?? null;
+    if (command === "get_assets_by_ids") return [...assets, continuedAsset].filter(asset => args?.assetIds?.includes(asset.id));
+    if (command === "generation_history") {
+      const index = assets.findIndex(asset => asset.id === args?.assetId);
+      const turns = group && index >= 0 ? [job.turns[index]] : deferred ? job.turns : [];
+      return {
+        session_id: group ? assets[index]?.generation_session_id : deferred ? job.sessionId : null,
+        references: [], dimension_assets: [],
+        turns: turns.map(turn => ({ ...turn, prompt_raw: turn.promptRaw, references: [], ref_assets: [] })),
+      };
+    }
+    if (command === "list_asset_tags") return (referencePreview ? Array.from({ length: 24 }, (_, i) => `时装参考 ${i + 1}`) : ["时装"])
+      .map(name => ({ name, source: "manual", origin: "manual" }));
     if (command === "list_analyses_by_asset" || command === "list_asset_collections") return [];
     if (command === "codex_health") return { ok: false };
     throw new Error(`示意页不执行原生操作：${command}`);
@@ -108,7 +124,7 @@ function Review() {
             <img src={asset.store_path!} alt={asset.name} draggable={false}/>
             <span className="image-review-number">0{index + 1}</span>
           </button>
-          <p className="image-review-card-copy">{job.turns[index].prompt}</p>
+          <p className="image-review-card-copy">{job.turns[index]?.prompt}</p>
         </article>)}
       </div>
       <span className="image-review-gesture">单击查看 · 双击引用</span>
@@ -122,7 +138,10 @@ function Review() {
         <button className="image-review-send" type="button" disabled title="示意页不提交生成任务" aria-label="发送（示意页不可用）"><ArrowUp size={16}/></button>
       </section>
     </section>
-    {shown && <CreationImagePreview key={`${shown.id}:${version}:${showHistory}`} asset={showHistory ? shown : { ...shown, generation_session_id: null }} projectId="review-project" job={showHistory && !deferred ? job : undefined} onClose={() => setShown(null)}/>}
+    {shown && <CreationImagePreview key={`${group ? "group" : shown.id}:${version}:${showHistory}`} asset={showHistory ? shown : { ...shown, generation_session_id: null }} projectId="review-project" job={showHistory && !deferred && !group ? job : undefined}
+      navigation={group ? { index: assets.indexOf(shown), count: assets.length, assetIds: assets.map(asset => asset.id), onIndexChange: index => setShown(assets[index]) } : undefined}
+      workflowOrigin={showHistory && singleTurnPreview ? { nodeId: "workflow-source", title: "花影生图", canExpand: true } : undefined}
+      onExpandWorkflowCard={id => { host.__expandedWorkflow = id; }} onClose={() => setShown(null)}/>}
   </main>;
 }
 

@@ -68,13 +68,14 @@ try {
     ]);
   });
   const card = page.locator('[data-workflow-card="h3"]');
+  assert.match(await card.getByLabel('H3 比例', { exact: true }).innerText(), /自动/);
   const frame = card.locator('.comfy-frame-slot[aria-label="首帧输入"]');
   assert.ok(await frame.evaluate(element => element.offsetHeight <= 56), 'compact first-frame slot');
   await frame.getByRole('img', { name: '首帧', exact: true }).hover();
   await card.locator('.comfy-frame-preview').waitFor();
   await card.locator('header').hover();
   await card.locator('.comfy-frame-preview').waitFor({ state: 'hidden' });
-  const runButton = card.getByRole('button', { name: '运行', exact: true });
+  const runButton = card.getByRole('button', { name: /^(运行|重试)$/ });
   assert.equal(await runButton.getAttribute('title'), '本机算力·不扣额度');
   const autoOptimize = card.getByRole('checkbox', { name: '自动优化提示词' });
   assert.equal(await autoOptimize.isChecked(), false);
@@ -158,6 +159,7 @@ try {
   await page.waitForFunction(() => window.h3Calls.some(call => call.action === 'start'));
   let input = await page.evaluate(() => window.h3Calls.find(call => call.action === 'start').input);
   assert.equal(input.mode, 'reference'); assert.equal(input.firstFrame, 'a'); assert.equal(input.lastFrame, undefined);
+  assert.equal(input.ratio, 'auto');
   assert.equal(input.resolution, .98); assert.equal(input.seconds, 5); assert.match(input.prompt, /<Picture 1>/);
   assert.equal(input.audioAssetId, 'voice'); assert.match(input.prompt, /<Audio 1>/);
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
@@ -213,6 +215,7 @@ try {
   await page.waitForFunction(() => window.h3Calls.some(call => call.action === 'start'));
   input = await page.evaluate(() => window.h3Calls.find(call => call.action === 'start').input);
   assert.equal(input.mode, 'text'); assert.equal(input.firstFrame, ''); assert.equal(input.lastFrame, undefined);
+  assert.equal(input.ratio, '9:16');
   assert.equal(input.audioAssetId, 'voice'); assert.doesNotMatch(input.prompt, /<Audio 1>/);
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
   await card.getByRole('button', { name: '断开参考录音' }).click();

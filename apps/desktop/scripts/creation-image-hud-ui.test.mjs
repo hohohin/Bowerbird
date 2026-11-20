@@ -37,7 +37,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.creation-image-preview-image img')?.naturalWidth > 0 && window.__reviewPending?.length === 4);
   await wait();
   const pendingInspector = modal.locator('.creation-image-preview-inspector');
-  const conversation = modal.locator('section[aria-label="独立会话面板"]');
+  const conversation = modal.locator('section[aria-label="生成记录"]');
   assert.equal(await pendingInspector.isVisible(), false, 'inspector does not flash empty content while data is pending');
   assert.equal(await conversation.isVisible(), false, 'conversation waits for its data');
   const beforeData = await mainImage.boundingBox();
@@ -121,10 +121,10 @@ try {
   assert.equal(await modal.getAttribute('data-panels-locked'), null, 'removing an inline editor releases the shared motion lock');
   // Both toggles remain available while the reading panels are hidden.
   await modal.getByRole('button', { name: '收起图片详情', exact: true }).click();
-  await modal.getByRole('button', { name: '收起会话', exact: true }).click();
+  await modal.getByRole('button', { name: '收起生成记录', exact: true }).click();
   await pendingInspector.waitFor({ state: 'hidden' }); await conversation.waitFor({ state: 'hidden' });
   assert.deepEqual(await mainImage.boundingBox(), beforeCollapse, 'hiding both panels preserves the free image stage');
-  await modal.getByRole('button', { name: '显示会话', exact: true }).click();
+  await modal.getByRole('button', { name: '显示生成记录', exact: true }).click();
   await conversation.waitFor({ state: 'visible' });
   await modal.getByRole('button', { name: '显示图片详情', exact: true }).click();
   await inspector.waitFor({ state: 'visible' }); await wait();
@@ -185,11 +185,11 @@ try {
   await page.waitForFunction(() => document.querySelector('.creation-image-preview-image img:not(.creation-image-preview-thumbnail)')?.naturalWidth > 0);
   assert.equal(await scale(), thumbnailScale, 'replacing the thumbnail with the original preserves zoom');
 
-  await page.goto('http://127.0.0.1:17948/scripts/fixtures/creation-image-review/preview.html');
+  await page.goto('http://127.0.0.1:17948/scripts/fixtures/creation-image-review/preview.html?reference');
   await mainImage.waitFor();
   await page.waitForFunction(() => [...document.querySelectorAll('.creation-image-preview img')].every(img => img.complete && img.naturalWidth > 0));
   await wait();
-  await modal.getByRole('button', { name: '点击放大', exact: true }).first().click();
+  await modal.getByRole('button', { name: '放大参考图 1', exact: true }).first().click();
   const nested = page.locator('.media-lightbox');
   const nestedImage = nested.locator('img');
   await nestedImage.waitFor();
@@ -299,8 +299,9 @@ try {
   await page.getByRole('button', { name: '查看普通图片', exact: true }).click(); await wait();
   assert.equal(await mainImage.isVisible(), true);
   assert.equal(await inspector.isVisible(), true);
-  assert.equal(await modal.getByRole('region', { name: '独立会话面板' }).count(), 0);
-  assert.equal(await modal.getByRole('button', { name: /收起会话|显示会话/ }).count(), 0);
+  assert.equal(await modal.getByRole('region', { name: '生成记录', exact: true }).count(), 0,
+    await modal.locator('.creation-image-preview-conversation:not(.creation-image-preview-inspector)').allTextContents());
+  assert.equal(await modal.getByRole('button', { name: /收起生成记录|显示生成记录/ }).count(), 0);
   await page.screenshot({ path: `${output}/imported-light.png` });
   // Exercise the same image anchor at wide and tall aspect ratios without changing fixture data.
   for (const ratio of [2.4, .3]) {

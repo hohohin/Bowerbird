@@ -429,7 +429,7 @@ fn local_chat_cards_h3_drafts_use_native_defaults_and_bounded_options() {
     assert_eq!(h3["provider"], "comfy-video");
     assert_eq!(
         h3["comfyVideo"],
-        json!({"mode":"frames","endpoint":"http://127.0.0.1:8000","seconds":8,"ratio":"9:16","resolution":0.8})
+        json!({"mode":"frames","endpoint":"http://127.0.0.1:8000","seconds":8,"ratio":"auto","resolution":0.8})
     );
     assert_eq!(
         h3["inputs"],

@@ -102,7 +102,7 @@ try {
   await text.waitFor();
   const textId = await text.getAttribute("data-canvas-node-id");
   const cell = page.getByRole("textbox", { name: "第 1 行第 1 列", exact: true });
-  assert.equal(await text.locator(".canvas-text-handle").innerText(), "");
+  assert.equal(await text.locator(".canvas-text-handle").innerText(), "内容卡片");
   assert.equal(await text.locator(".canvas-text-handle svg").count(), 2);
   assert.ok(Math.abs((await text.boundingBox()).height - 110) < 0.1);
   assert.equal(await cell.evaluate(e => getComputedStyle(e).fontSize),

@@ -53,8 +53,10 @@ export type NodeDshAcpPortOptions = {
   imageCardProvider?: boolean;
   videoCardOptions?: boolean;
   chatOptions?: import("../../../cloud/supabase/functions/_shared/chat.ts").DshChatOptionsSelection;
+  planningReasoningEffort?: "high";
   profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution" | "chat";
   nativeSession?: { dir: string; sessionId: string };
+  nativeTextOnly?: boolean;
 };
 
 export type NodeDshAcpPortDependencies = {
@@ -213,7 +215,9 @@ export class NodeDshAcpPort implements DshAcpPort {
       imageCardProvider: options.imageCardProvider,
       videoCardOptions: options.videoCardOptions,
       chatOptions: options.chatOptions,
+      planningReasoningEffort: options.planningReasoningEffort,
       nativeSession: options.nativeSession,
+      nativeTextOnly: options.nativeTextOnly,
     });
     try {
       const acp = await dependencies.loadAcp(options.profileTemplateDir);

@@ -354,6 +354,36 @@ fn input(request: &str) -> ChatSendInput {
         }),
     }
 }
+
+#[test]
+fn h3_optimization_projects_one_private_cloud_chat_and_keeps_the_original_key() {
+    let db = fixture();
+    let original = "01400000-0000-4000-8000-000000000007";
+    let doc = serde_json::json!({
+        "nodes": [{"id":"h3"}],
+        "runs": [{"id":"workflow", "accountId":"owner", "steps":{"h3":{
+            "agentRunId": original,
+            "comfyOptimization":{"dshContinuation":true,"input":{"prompt":"原提示词"},"result":"已优化"}
+        }}}]
+    });
+    db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('project-a',1,?1)", [doc.to_string()]).unwrap();
+    assert!(db.h3_optimization_chat_source("project-a","h3","workflow","another").is_err());
+    assert!(db.h3_optimization_chat_source("project-a","another","workflow","owner").is_err());
+    let source = db.h3_optimization_chat_source("project-a","h3","workflow","owner").unwrap();
+    let chat = db.open_h3_optimization_chat("project-a", &source).unwrap();
+    assert_eq!(super::h3_chat_conversation_key(&chat.summary.id), Some(format!("o-{original}")));
+    assert_eq!(chat.summary.provider, "dsh-cloud");
+    assert_eq!(chat.messages.iter().map(|message| message.text.as_str()).collect::<Vec<_>>(), ["原提示词","已优化"]);
+    assert_eq!(db.open_h3_optimization_chat("project-a", &source).unwrap().messages.len(), 2);
+    assert!(db.open_h3_optimization_chat("project-b", &source).is_err());
+    let mut follow_up = input("follow-up");
+    follow_up.conversation_id = Some(chat.summary.id);
+    let after = db.begin_local_chat(&follow_up).unwrap().conversation;
+    assert_eq!(after.summary.turn_count, 2);
+    let conn = db.conn.lock().unwrap();
+    let hidden: Option<i64> = conn.query_row("SELECT hidden_at FROM canvas_nodes WHERE id=?1", [after.summary.node_id], |row| row.get(0)).unwrap();
+    assert!(hidden.is_some());
+}
 fn count(db: &Database, table: &str) -> i64 {
     db.conn
         .lock()

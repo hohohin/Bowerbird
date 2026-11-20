@@ -2,6 +2,15 @@ import { api } from "./api";
 import type { Asset, GenJob, GenerationHistory } from "./types";
 import { useStore } from "../store";
 
+export async function loadImagePreviewHistory(asset: Asset, projectId: string | null, localVideo?: boolean): Promise<GenJob | null> {
+  let history = await api.generationHistory(asset.id, projectId, localVideo);
+  // Library assets may be previewed outside their original project.
+  if (projectId && !history.turns.length && asset.generation_session_id) history = await api.generationHistory(asset.id, null);
+  return history.turns.length ? imageHistoryJob(history, {
+    id: `image-preview:${asset.id}`, projectId, createdAt: asset.created_at ?? 0,
+  }) : null;
+}
+
 /** Display history and restored tasks share the same turn mapping; negative UI IDs avoid live turn collisions. */
 export function imageHistoryJob(history: GenerationHistory, identity: Pick<GenJob, "id" | "projectId"> & Partial<GenJob>): GenJob {
   return {
@@ -25,7 +34,11 @@ export function imageHistoryJob(history: GenerationHistory, identity: Pick<GenJo
 
 /** Resolve only on explicit send. Never borrow the currently open project's identity or navigate to another editor. */
 export async function resolveImagePreviewJob(asset: Asset, displayed: GenJob, sourceJobId: string | null): Promise<GenJob> {
-  if (sourceJobId) return useStore.getState().genJobs[sourceJobId] ?? { ...displayed, id: sourceJobId };
+  if (sourceJobId) {
+    const live = useStore.getState().genJobs[sourceJobId];
+    if (live?.sessionId && live.sessionId !== displayed.sessionId) throw new Error("原会话已变化，请重新打开图片后继续");
+    return live ?? { ...displayed, id: sourceJobId };
+  }
   await useStore.getState().loadGenJobs();
   const analyses = await api.listAnalysesByAsset(asset.id);
   const metadata = analyses.filter(row => row.kind === "generation_meta").flatMap(row => {

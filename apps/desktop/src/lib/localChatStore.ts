@@ -1,9 +1,11 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { listen } from "@tauri-apps/api/event";
+import { useStore } from "../store";
 import { selectedChatOptions } from "./chatCapabilities";
 import { parseChatProvider } from "./chatProvider";
-import { localChat, LOCAL_CHAT_UPDATED_EVENT, localChatInputError, localChatRunning, type ChatCodexOptions, type ChatConversation, type ChatSummary, type LocalChatSendInput } from "./localChat";
+import { DSH_MODELS, localChat, LOCAL_CHAT_UPDATED_EVENT, localChatInputError, localChatRunning, type ChatCodexOptions, type ChatConversation, type ChatPaidAuthorization, type ChatSummary, type LocalChatSendInput } from "./localChat";
+import { ChatPaymentCancelled, confirmChatPayment } from "./localChatPaid";
 
 export interface LocalChatDraft { text: string; referenceAssetIds: string[]; codexOptions?: ChatCodexOptions }
 const DRAFT_STORAGE = "bowerbird.localChat.drafts.v1";
@@ -33,7 +35,7 @@ interface LocalChatState {
   applyConversation: (conversation: ChatConversation) => void;
   loadProject: (projectId: string) => Promise<void>;
   loadConversation: (conversationId: string) => Promise<ChatConversation | null>;
-  send: (input: Omit<LocalChatSendInput, "requestId"> & { requestId?: string }) => Promise<ChatConversation>;
+  send: (input: Omit<LocalChatSendInput, "requestId"> & { requestId?: string }, confirmPaid?: boolean) => Promise<ChatConversation>;
   stop: (conversationId: string, turnId?: string) => Promise<void>;
   recover: (conversationId: string) => Promise<void>;
   setDraft: (conversationId: string, draft: LocalChatDraft) => void;
@@ -181,7 +183,7 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
     loadingConversations.set(conversationId, request);
     return request;
   },
-  send: async input => {
+  send: async (input, confirmPaid = false) => {
     // An unaccepted workflow step may replay its saved input after a desktop upgrade.
     const provider = parseChatProvider(input.provider);
     if (provider && provider !== input.provider) input = { ...input, provider };
@@ -203,13 +205,38 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
       const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.agentNodeId ?? null, input.provider ?? "codex-local", input.text, input.referenceAssetIds, input.cardDefaults ?? null, input.codexOptions ?? null, input.dshSkill ?? null, input.manualCardRun ?? false]);
       const pending = pendingSubmissions.get(key);
       const requestId = input.requestId || (pending?.fingerprint === fingerprint ? pending.requestId : crypto.randomUUID());
+      let authorization: ChatPaidAuthorization | undefined;
+      const conversation = input.conversationId ? get().summaries[input.conversationId] : undefined;
+      if (confirmPaid && (input.provider ?? conversation?.provider) === "dsh-cloud") {
+        if (pending?.requestId === requestId || input.requestId) {
+          const previous = await localChat.getByRequest(requestId);
+          if (previous) {
+            get().applyConversation(previous);
+            pendingSubmissions.delete(key);
+            return previous;
+          }
+        }
+        const { projectRouteRevision, cloudAuth } = useStore.getState();
+        if ((await localChat.quote()).paid_available === true) {
+          const model = (input.codexOptions ?? conversation?.codexOptions)?.model ?? DSH_MODELS[0].model;
+          const quote = await localChat.quotePaid(model);
+          if (!quote.available) throw new Error("所选模型的云端对话报价暂不可用，请重新获取。");
+          if (!await confirmChatPayment(quote)) throw new ChatPaymentCancelled();
+          const current = useStore.getState();
+          if (current.projectRouteRevision !== projectRouteRevision || current.cloudAuth?.user_id !== cloudAuth?.user_id) {
+            throw new Error("项目或账号已切换，请核对后重新发送。");
+          }
+          const { account_id, pricing_version, max_credits, max_output_tokens } = quote;
+          authorization = { account_id, model: quote.model, pricing_version, max_credits, max_output_tokens };
+        }
+      }
       pendingSubmissions.set(key, { fingerprint, requestId });
-      const chat = await localChat.send({ ...input, requestId });
+      const chat = await localChat.send({ ...input, requestId }, authorization);
       get().applyConversation(chat);
       pendingSubmissions.delete(key);
       return { ...(get().conversations[chat.id] ?? chat), submittedTurnId: chat.submittedTurnId };
     } catch (error) {
-      set(state => ({ errors: { ...state.errors, [key]: error } }));
+      if (!(error instanceof ChatPaymentCancelled)) set(state => ({ errors: { ...state.errors, [key]: error } }));
       throw error;
     } finally { set(state => ({ sending: { ...state.sending, [key]: false } })); }
   },

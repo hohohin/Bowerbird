@@ -51,6 +51,7 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, url: null, transfers: [] };
     if (command === "cloud_start_wechat_login") { if (w.failWechat) throw "模拟扫码登录失败"; return "https://open.weixin.qq.com/connect/qrconnect?state=fixture"; }
     if (command === "plugin:shell|open" && w.failWechatBrowser) throw "模拟浏览器打开失败";
 

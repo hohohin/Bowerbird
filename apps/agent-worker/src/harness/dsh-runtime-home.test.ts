@@ -23,11 +23,14 @@ test("DSH runtime home keeps dependencies immutable and cleans only its fresh ch
   }
   writeFileSync(join(template, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"), "bin", "utf8");
   writeFileSync(join(template, "node_modules", "immutable-proof.txt"), "immutable", "utf8");
+  const planningFile = "cordis.bridge.patch.yml";
+  const templateProfile = readFileSync(join(import.meta.dirname, "../../../../spikes/unified-agent-harness-u1/profiles/bowerbird-u1", planningFile), "utf8");
+  writeFileSync(join(template, planningFile), templateProfile, "utf8");
 
   try {
     const home = createDshRuntimeHome({ templateDir: template, runtimeRoot: runtime });
     const profile = join(home.home, "profiles", home.profileName);
-    assert.equal(readFileSync(join(profile, "cordis.bridge.patch.yml"), "utf8"), "cordis.bridge.patch.yml");
+    assert.equal(readFileSync(join(profile, planningFile), "utf8"), templateProfile);
     assert.equal(readFileSync(join(profile, "cordis.controlled-model.patch.yml"), "utf8"), "cordis.controlled-model.patch.yml");
     assert.equal(readFileSync(join(profile, "cordis.html-execution.patch.yml"), "utf8"), "cordis.html-execution.patch.yml");
     assert.equal(readFileSync(join(profile, "cordis.content-execution.patch.yml"), "utf8"), "cordis.content-execution.patch.yml");
@@ -39,6 +42,14 @@ test("DSH runtime home keeps dependencies immutable and cleans only its fresh ch
     home.dispose();
     assert.equal(existsSync(home.home), false);
     assert.equal(existsSync(template), true);
+    const optimizer = createDshRuntimeHome({ templateDir: template, runtimeRoot: runtime, planningReasoningEffort: "high" });
+    try {
+      const profile = readFileSync(join(optimizer.home, optimizer.bridgePatch), "utf8");
+      assert.match(profile, /^ +thinking: enabled$/m);
+      assert.match(profile, /^ +reasoningEffort: high$/m);
+      assert.match(profile, /id: deepseek-flash/);
+      assert.equal(readFileSync(join(template, planningFile), "utf8"), templateProfile);
+    } finally { optimizer.dispose(); }
     for (const imageCardProvider of [false, true]) for (const videoCardOptions of [undefined, false, true]) {
       const chat = createDshRuntimeHome({ templateDir: template, runtimeRoot: runtime, chat: true, imageCardProvider, videoCardOptions, chatOptions: { model: "deepseek-v4-pro", reasoningEffort: "max" } });
       try {

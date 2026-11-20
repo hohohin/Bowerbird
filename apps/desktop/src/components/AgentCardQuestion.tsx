@@ -1,7 +1,8 @@
 import { ArrowUp, X } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { localChat, type AgentQuestionAnswer, type AgentQuestionBatch } from "../lib/localChat";
 import { userErrorMessage } from "../lib/userError";
+import "./AgentCardQuestion.css";
 
 export function AgentCardQuestion({ conversationId, onResume }: {
   conversationId: string;
@@ -37,6 +38,7 @@ function QuestionBubble({ batch, conversationId, onResume }: {
   const submittedSnapshot = useRef<AgentQuestionBatch>();
   const composing = useRef(false);
   const reopen = useRef<HTMLButtonElement>(null);
+  const bubble = useRef<HTMLDivElement>(null);
   const single = batch.questions.length === 1 && !batch.questions[0].multiSelect;
   const waiting = phase === "submitted" || batch.queued;
   useEffect(() => {
@@ -45,6 +47,46 @@ function QuestionBubble({ batch, conversationId, onResume }: {
       setPhase("ready");
     }
   }, [batch, phase]);
+  useLayoutEffect(() => {
+    const element = bubble.current;
+    const card = element?.closest<HTMLElement>(".workflow-card");
+    const stage = card?.closest<HTMLElement>(".canvas-stage");
+    const offset = element?.offsetParent;
+    if (!open || !element || !card || !stage || !(offset instanceof HTMLElement)) return;
+    const reading = card.querySelector(".workflow-agent-reading");
+    const plane = card.closest(".canvas-plane");
+    const composer = stage.parentElement?.querySelector(".canvas-composer-host");
+    const place = () => {
+      const frame = stage.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      const origin = offset.getBoundingClientRect();
+      const scale = cardRect.width / card.offsetWidth;
+      if (!scale || !frame.width || !frame.height) return;
+      const margin = 12, overlap = 12 * scale;
+      const availableWidth = Math.max(1, frame.width - margin * 2);
+      const width = Math.min(228 * scale, availableWidth);
+      const right = cardRect.right - overlap;
+      const left = cardRect.left + overlap - width;
+      const flip = right + width > frame.right - margin && (left >= frame.left + margin
+        || cardRect.left - frame.left > frame.right - cardRect.right);
+      const x = Math.max(frame.left + margin, Math.min(flip ? left : right, frame.right - margin - width));
+      const dock = composer?.getBoundingClientRect();
+      const bottom = dock && dock.height > 0 ? Math.min(frame.bottom, dock.top) : frame.bottom;
+      const height = Math.min(320 * scale, Math.max(1, bottom - frame.top - margin * 2));
+      const anchorY = reading ? reading.getBoundingClientRect().top + 44 * scale : cardRect.top + 136 * scale;
+      const y = Math.max(frame.top + margin, Math.min(anchorY, bottom - margin - Math.min(element.offsetHeight * scale, height)));
+      element.dataset.side = flip ? "left" : "right";
+      Object.assign(element.style, { left: `${(x - origin.left) / scale}px`, top: `${(y - origin.top) / scale}px`,
+        width: `${width / scale}px`, maxHeight: `${height / scale}px` });
+    };
+    place();
+    const resize = new ResizeObserver(place);
+    for (const target of [stage, card, element, reading, composer]) if (target) resize.observe(target);
+    const position = new MutationObserver(place);
+    position.observe(card, { attributes: true, attributeFilter: ["style"] });
+    if (plane) position.observe(plane, { attributes: true, attributeFilter: ["style"] });
+    return () => { resize.disconnect(); position.disconnect(); };
+  }, [open]);
   const complete = (batchAnswers: AgentQuestionAnswer[]) => batchAnswers.every(answer => answer.selected.length || answer.custom?.trim());
   const close = () => { setOpen(false); reopen.current?.focus(); };
   function change(index: number, value: Partial<AgentQuestionAnswer>) {
@@ -71,24 +113,28 @@ function QuestionBubble({ batch, conversationId, onResume }: {
     }
   }
   return <>
-    <button ref={reopen} type="button" className="workflow-agent-question-status"
-      aria-expanded={open} onClick={event => { event.stopPropagation(); setOpen(true); }}>
+    <button ref={reopen} type="button" className="workflow-agent-question-status" data-awaiting-answer={!waiting}
+      aria-expanded={open} aria-controls={open ? `${labelId}-bubble` : undefined}
+      onClick={event => { event.stopPropagation(); setOpen(true); }}>
       {waiting ? "继续处理中" : "待你回答"}
     </button>
-    {open && <section className="workflow-agent-question-bubble" role="group" aria-labelledby={labelId}
+    {open && <div ref={bubble} className="workflow-agent-question-float"
       onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}
+      onContextMenu={event => event.stopPropagation()}
       onWheel={event => event.stopPropagation()} onKeyDown={event => {
         event.stopPropagation();
         if (event.key === "Escape" && !event.nativeEvent.isComposing) { event.preventDefault(); close(); }
       }}>
-      <div className="workflow-agent-question-heading"><strong id={labelId}>Agent 提问</strong>
-        <button type="button" className="app-icon-button" aria-label="关闭问题气泡" title="关闭问题气泡" onClick={close}><X size={14} /></button>
+    <section id={`${labelId}-bubble`} className="workflow-agent-question-bubble" role="group" aria-labelledby={labelId}>
+      <div className="workflow-agent-question-heading"><span id={labelId}>Agent有一个问题</span>
+        <button type="button" className="canvas-tactical-card-close" aria-label="关闭问题气泡" title="关闭问题气泡" onClick={close}><X size={13} /></button>
       </div>
       {batch.questions.map((question, index) => <fieldset key={question.id} disabled={phase !== "ready" || waiting}>
         <legend>{question.question}</legend>
         {question.options.map(option => {
           const selected = answers[index].selected.includes(option.label);
           return <button type="button" key={option.label} className="workflow-agent-question-option"
+            title={option.description ? `${option.label}\n${option.description}` : option.label}
             aria-pressed={single ? undefined : selected} onClick={() => {
               const next = change(index, question.multiSelect
                 ? { selected: selected ? answers[index].selected.filter(label => label !== option.label) : [...answers[index].selected, option.label] }
@@ -96,9 +142,9 @@ function QuestionBubble({ batch, conversationId, onResume }: {
               if (single) void send(next);
             }}><span>{option.label}</span>{option.description && <small>{option.description}</small>}</button>;
         })}
-        <div className="workflow-agent-question-answer">
+        <div className="workflow-agent-question-answer workflow-agent-input">
           <textarea rows={1} value={answers[index].custom} aria-label={`${question.question} 文字答案`}
-            placeholder={question.options.length ? "其他答案…" : "输入答案…"}
+            placeholder="编辑你的回答"
             onChange={event => change(index, { custom: event.target.value, ...(!question.multiSelect ? { selected: [] } : {}) })}
             onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
             onKeyDown={event => {
@@ -112,6 +158,6 @@ function QuestionBubble({ batch, conversationId, onResume }: {
       </fieldset>)}
       {(phase !== "ready" || waiting) && <p role="status">{phase === "sending" ? "正在提交答案…" : "答案已提交，等待 Agent 继续…"}</p>}
       {failure && <p role="alert">{failure}</p>}
-    </section>}
+    </section></div>}
   </>;
 }

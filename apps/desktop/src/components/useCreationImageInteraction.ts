@@ -59,7 +59,7 @@ class ImageGesture {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private sequence = 0;
   private press: { x: number; y: number; moved: boolean } | null = null;
-  constructor(public options: Options, private show: (asset: Asset | null) => void) {
+  constructor(public options: Options, private show: (preview: { asset: Asset; canvasNodeId?: string } | null) => void) {
     this.cancel = this.cancel.bind(this);
     this.close = this.close.bind(this);
     this.click = this.click.bind(this);
@@ -111,10 +111,10 @@ class ImageGesture {
       if (isVideoPath(path)) {
         if (!this.handlesVideo(image.media) || this.options.onCanvasVideoPreview?.(path, image.media, asset)) return;
         const playable = await externalFiles.media(path);
-        if (this.current(request, image)) this.show({ ...asset, store_path: playable });
+        if (this.current(request, image)) this.show({ asset: { ...asset, store_path: playable }, canvasNodeId: image.canvasNodeId });
         return;
       }
-      this.show(asset);
+      this.show({ asset, canvasNodeId: image.canvasNodeId });
     } catch (error) {
       if (this.current(request, image)) notifyError(error, "无法预览素材，请重试");
     }
@@ -169,13 +169,14 @@ class ImageGesture {
 
 /** One gesture policy for canvas images and every library catalog; hosts only resolve ownership. */
 export function useCreationImageInteraction(options: Options) {
-  const [asset, setAsset] = useState<Asset | null>(null);
+  const [preview, setPreview] = useState<{ asset: Asset; canvasNodeId?: string } | null>(null);
+  const asset = preview?.asset;
   const jobs = useStore(state => state.genJobs);
   const boardOpen = useStore(state => state.boardOpen);
   const genEditing = useStore(state => state.genEditing);
   const route = useStore(state => state.projectRouteRevision);
   const controller = useRef<ImageGesture>();
-  controller.current ??= new ImageGesture(options, setAsset);
+  controller.current ??= new ImageGesture(options, setPreview);
   const gesture = controller.current;
   gesture.options = options;
   useLayoutEffect(() => {
@@ -183,5 +184,5 @@ export function useCreationImageInteraction(options: Options) {
     return gesture.cancel;
   }, [gesture, options.enabled, options.scope, boardOpen, genEditing, route]);
   const job = asset && Object.values(jobs).find(item => item.turns.some(turn => !!asset.store_path && turn.images.includes(asset.store_path)));
-  return { gesture, preview: asset ? { asset, job: job || undefined } : null };
+  return { gesture, preview: preview ? { ...preview, job: job || undefined } : null };
 }

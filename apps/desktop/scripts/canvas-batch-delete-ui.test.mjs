@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
-const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || "playwright");
-const server = await createServer({ server: { host: "127.0.0.1", port: 1487, strictPort: true, hmr: false, watch: null } });
+const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || "../../html-renderer/node_modules/playwright/index.mjs");
+const server = await createServer({ cacheDir: ".tmp/canvas-batch-delete-vite", server: { host: "127.0.0.1", port: 1487, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1800, height: 1100 } });
@@ -12,12 +12,13 @@ page.on("pageerror", error => errors.push(error.message));
 const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
 const dialog = () => page.getByRole("dialog");
 const deleteCalls = () => page.evaluate(() => window.deleteCalls ?? []);
-async function openDelete(id = "a") {
-  await node(id).click({ button: "right", position: { x: 90, y: 85 } });
-  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
+async function openDelete(target, submenu) {
+  await target.click({ button: "right", position: { x: 24, y: 24 } });
+  await page.getByRole("menuitem", { name: submenu, exact: true }).click();
   await page.getByRole("menuitem", { name: "删除原文件…", exact: true }).click();
-  await dialog().getByRole("list", { name: "待删除素材" }).waitFor();
 }
+const preview = () => dialog().getByRole("list", { name: "待删除素材" });
+const previewIds = () => preview().locator("[data-delete-asset-id]").evaluateAll(items => items.map(item => item.dataset.deleteAssetId));
 async function marquee() {
   const rect = await page.locator(".canvas-stage").boundingBox();
   // Start below the cards, outside the floating canvas toolbar.
@@ -65,9 +66,35 @@ try {
   const originalCanvas = await page.evaluate(() => sessionStorage.getItem("reference-fixture"));
   await reset();
   await marquee();
-  await openDelete();
-  assert.deepEqual(await dialog().locator("[data-delete-asset-id]").evaluateAll(items => items.map(item => item.dataset.deleteAssetId)), ["existing", "a"]);
-  assert.equal(await dialog().getByRole("list", { name: "待删除素材" }).locator("img").count(), 2);
+  await openDelete(node("a"), "当前项的项目与原文件");
+  await preview().waitFor();
+  assert.deepEqual(await previewIds(), ["a"], "recycling the current item does not recycle the canvas selection");
+  await dialog().getByRole("button", { name: "取消", exact: true }).click();
+  assert.deepEqual(await deleteCalls(), []);
+  // Right-clicking outside the selection targets only that image.
+  await openDelete(node("outside"), "项目与原文件");
+  await preview().waitFor();
+  assert.deepEqual(await previewIds(), ["b"]);
+  await page.keyboard.press("Escape");
+
+  // The physical batch action belongs to a real group. Include a repeated
+  // asset inside the group and an independent instance outside the group.
+  await page.evaluate(() => {
+    const s = window.snapshot();
+    const duplicate = s.nodes.find(n => n.id === "duplicate-a");
+    duplicate.x = 820;
+    s.nodes.push({ ...duplicate, id: "group-duplicate-a" });
+    s.groups = [{ id: "folder", projectId: "p", name: "素材组", role: null, x: 60, y: 80,
+      width: 400, height: 240, zIndex: 1, createdAt: 1, updatedAt: 1 }];
+    s.groupItems = ["old", "a", "group-duplicate-a"].map((nodeId, ordinal) => ({ projectId: "p", groupId: "folder", nodeId, ordinal }));
+    sessionStorage.setItem("reference-fixture", JSON.stringify(s));
+  });
+  await reset();
+  const groupImage = node("folder").locator('[data-frequent-asset-id="existing"]');
+  await openDelete(groupImage, "整组操作 · 3 项");
+  await preview().waitFor();
+  assert.deepEqual(await previewIds(), ["existing", "a"]);
+  assert.equal(await preview().locator("img").count(), 2);
   assert.deepEqual(await deleteCalls(), [], "opening preview performs no deletion");
   await mkdir(".tmp/canvas-batch-delete", { recursive: true });
   for (const theme of ["dark", "light"]) {
@@ -80,15 +107,7 @@ try {
   await dialog().getByRole("button", { name: "取消", exact: true }).click();
   assert.deepEqual(await deleteCalls(), []);
   await page.setViewportSize({ width: 1800, height: 1100 });
-  // Right-clicking outside the selection targets only that image.
-  await openDelete("outside");
-  assert.equal(await dialog().locator("[data-delete-asset-id]").count(), 1);
-  assert.equal(await dialog().locator("[data-delete-asset-id]").getAttribute("data-delete-asset-id"), "b");
-  await page.keyboard.press("Escape");
-
-  await reset();
-  await marquee();
-  await openDelete();
+  await openDelete(groupImage, "整组操作 · 3 项");
   await page.evaluate(() => { window.failDeleteId = "a"; window.holdDelete = true; });
   await dialog().getByRole("button", { name: "删除原文件", exact: true }).click();
   await page.waitForFunction(() => window.releaseDelete);
@@ -97,29 +116,28 @@ try {
   await page.getByRole("button", { name: "查看文件任务", exact: true }).click();
   await dialog().getByText("查看未完成项").click();
   await dialog().getByRole("button", { name: "重试失败项" }).waitFor();
-  await node("old").waitFor({ state: "detached" });
-  assert.equal(await node("a").count(), 1);
+  await groupImage.waitFor({ state: "detached" });
+  await node("duplicate-a").waitFor();
   assert.equal(await node("outside").count(), 1);
   await page.evaluate(() => { window.failDeleteId = null; });
   await dialog().getByRole("button", { name: "重试失败项" }).click();
   await page.keyboard.press("Escape");
   await dialog().waitFor({ state: "detached" });
-  await node("a").waitFor({ state: "detached" });
+  await node("folder").waitFor({ state: "detached" });
   await node("duplicate-a").waitFor({ state: "detached" });
   assert.ok(await page.evaluate(() => window.snapshot().nodes.some(node => node.id === "a" && node.hiddenAt)), "creative identity is retained");
   assert.deepEqual((await deleteCalls()).map(call => call.original.asset_id), ["existing", "a", "a"], "retry only attempts failed originals");
   await page.evaluate(() => window.save());
   await page.reload();
   await node("outside").waitFor();
-  assert.equal(await node("a").count(), 0, "reloading preserves the hidden state");
+  assert.equal(await node("duplicate-a").count(), 0, "reloading preserves the hidden state");
+  assert.equal(await node("folder").count(), 0, "reloading keeps the emptied group hidden");
 
   // Preview errors block confirmation; external and managed sources share explicit original recycling.
   await page.evaluate(snapshot => sessionStorage.setItem("reference-fixture", snapshot), originalCanvas);
   await reset();
   await page.evaluate(() => { window.failPreview = true; });
-  await node("outside").click({ button: "right", position: { x: 90, y: 85 } });
-  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await page.getByRole("menuitem", { name: "删除原文件…", exact: true }).click();
+  await openDelete(node("outside"), "项目与原文件");
   await dialog().getByRole("alert").waitFor();
   assert.equal(await dialog().getByRole("button", { name: "删除原文件", exact: true }).isDisabled(), true);
   await page.evaluate(() => { window.failPreview = false; window.externalPreview = true; });
@@ -139,7 +157,7 @@ try {
   await dialog().waitFor({ state: 'detached' });
   assert.deepEqual(await page.evaluate(() => window.calls.filter(c => c.command === 'trash_asset_original').map(c => c.args.original.asset_id)), ['a1','a2']);
   assert.deepEqual(errors, []);
-  console.log("PASS canvas batch delete: marquee, frozen previews, deduplication, library-selection isolation, cancel/outside selection, partial failure/retry, busy guard, reload, preview error, external reference, themes/narrow layout");
+  console.log("PASS canvas batch delete: marquee/current-item isolation, real group previews and deduplication, library scope, cancel/outside selection, partial failure/retry, reload, preview error, external reference, themes/narrow layout");
 } catch (error) {
   await mkdir(".tmp/canvas-batch-delete", { recursive: true });
   await page.screenshot({ path: ".tmp/canvas-batch-delete/failure.png" });

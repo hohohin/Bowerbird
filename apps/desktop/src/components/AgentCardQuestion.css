@@ -1,0 +1,70 @@
+.workflow-agent-question-float {
+  --agent-question-row-height: 32px;
+  position:absolute; z-index:12; top:136px; left:calc(100% - 12px); width:228px; max-height:320px;
+  box-shadow:var(--hud-shadow); cursor:auto; user-select:text;
+}
+.workflow-agent-question-float::before {
+  content:""; position:absolute; top:23px; left:-5px; width:10px; height:10px; transform:rotate(45deg);
+  background:var(--cs-card); border-bottom:1px solid var(--cs-rule); border-left:1px solid var(--cs-rule); pointer-events:none;
+}
+.workflow-agent-question-float[data-side="left"]::before {
+  left:auto; right:-5px; transform:rotate(225deg);
+}
+.workflow-agent-question-bubble {
+  box-sizing:border-box; max-height:inherit; overflow:auto; overscroll-behavior:contain; padding:8px 12px 12px;
+  border:1px solid var(--cs-rule); border-radius:0; background:var(--cs-card); color:var(--cs-ink);
+}
+.workflow-agent-question-heading {
+  position:relative; isolation:isolate; display:flex; align-items:center; height:34px; margin:-8px -12px 8px;
+  padding:0 calc(var(--hud-close-width, 35px) + 8px) 0 12px;
+  background:linear-gradient(var(--cs-rule),var(--cs-rule)) 12px bottom/28px 1px no-repeat;
+}
+.workflow-agent-question-heading::before {
+  content:""; position:absolute; z-index:-1; inset:0 var(--hud-close-width, 35px) 1px 0; pointer-events:none;
+  background:repeating-linear-gradient(0deg, var(--bb-warning) 0 1px, transparent 1px 3px);
+  -webkit-mask-image:linear-gradient(to right, #000, transparent);
+  mask-image:linear-gradient(to right, #000, transparent);
+  opacity:.32;
+}
+.workflow-agent-question-heading > span {
+  display:flex; align-items:center; gap:6px; font-size:12px; font-weight:500; color:var(--cs-ink);
+}
+.workflow-agent-question-heading > span::before {
+  content:""; width:4px; height:4px; flex:none; background:var(--bb-warning);
+}
+.workflow-agent-question-bubble fieldset {
+  display:grid; gap:4px; min-inline-size:0; padding:4px 0 0; border:0; margin:0;
+}
+.workflow-agent-question-bubble fieldset + fieldset { margin-top:12px; }
+.workflow-agent-question-bubble legend { font-size:13px; line-height:1.45; font-weight:600; overflow-wrap:anywhere; }
+.workflow-card .workflow-agent-question-bubble .workflow-agent-question-option {
+  position:relative; box-sizing:border-box; display:grid; grid-template-columns:minmax(0,1fr); align-content:center; gap:1px; text-align:start;
+  height:var(--agent-question-row-height); padding:2px 8px 2px 14px; border:0; border-bottom:1px solid var(--cs-rule);
+  border-radius:0; background:transparent; color:var(--cs-ink); font-size:12px; line-height:14px;
+}
+.workflow-card .workflow-agent-question-option:not(:disabled):is(:hover,:focus-visible) {
+  background:var(--cs-hover); color:var(--cs-selected-ink);
+}
+.workflow-agent-question-option::before {
+  content:""; position:absolute; inset:50% auto auto 4px; width:4px; height:4px; transform:translateY(-50%);
+  box-sizing:border-box; border:1px solid currentColor; opacity:0;
+}
+.workflow-agent-question-option:not(:disabled):is(:hover,:focus-visible)::before,
+.workflow-agent-question-option[aria-pressed="true"]::before { opacity:1; }
+.workflow-agent-question-option[aria-pressed="true"]::before { background:currentColor; }
+.workflow-card .workflow-agent-question-bubble .workflow-agent-question-option[aria-pressed="true"] {
+  color:var(--cs-selected-ink); font-weight:600; border-bottom-color:var(--cs-selected-ink);
+}
+.workflow-agent-question-option > :is(span,small) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workflow-agent-question-option small { font-size:11px; line-height:12px; color:var(--cs-muted); }
+.workflow-agent-question-bubble p { margin:6px 0 0; font-size:11px; color:var(--cs-muted); }
+.workflow-card .workflow-agent-question-bubble .workflow-agent-question-answer {
+  box-sizing:border-box; height:var(--agent-question-row-height); align-items:center; padding:0 2px 0 0;
+  border-radius:0; background:transparent;
+}
+.workflow-card .workflow-agent-question-bubble .workflow-agent-question-answer > textarea {
+  height:100%; min-height:0; max-height:none; padding:6px 7px; resize:none; overflow:auto; line-height:16px;
+}
+.workflow-card .workflow-agent-question-bubble .workflow-agent-question-answer > textarea:focus { outline:none; }
+.workflow-agent-question-answer textarea::placeholder { color:var(--cs-muted); opacity:1; }
+.workflow-card .workflow-agent-question-answer > button { width:26px; height:26px; min-height:0; margin:0; border-radius:0; }

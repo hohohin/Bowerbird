@@ -71,6 +71,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `macOS/DEV-SYNC-2026-10-13.md` | Windows 1001 后续二维表格/Agent 会话生图增量、Mac 本机改动组合与验证 | 接续 10 月 13 日 Mac 接收、核对比例/分类输出兼容与发布边界时 |
 | `macOS/CROSS-PLATFORM-SYNC-2026-10-15.md` | 10 月 15 日分叉合并、工作流/Agent 增量与跨端接收验证 | 其他端接收本次 mac 存档或核对 Intel 包与后续源码边界时 |
 | `macOS/README.md` | Intel / Apple Silicon 开发运行、DMG 固定拖动安装规范、重打包脚本与交付检查 | macOS 开发 / 构建 / 重打包 / 交付 / 排障前必读 |
+| `macOS/RELEASE-READINESS.md` | 两种架构的候选构建、签名公证、旧版升级和原生功能验收回执 | Mac 全量发布准备、收集门禁证据或交接发布团队前读 |
 
 ## 文档维护规则
 

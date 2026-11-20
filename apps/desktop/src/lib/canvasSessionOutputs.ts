@@ -1,9 +1,11 @@
-import type { CanvasNode } from "./types";
+import type { CanvasNode, GenJob } from "./types";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasDocumentTextValue, canvasNoteValue, readCanvasNote, type CanvasNotePayload } from "./canvasNotes";
 import { contentInputAxisIndex } from "./canvasContentInput";
 import { documentMediaReferences, type DocumentMediaReference } from "./documentProjection";
-import { activePromptReferences, isWorkflowGenerationResult, workflowActiveSession, workflowBindingKey, type WorkflowInput, type WorkflowNode } from "./canvasWorkflow";
+import { activePromptReferences, isWorkflowGenerationResult, workflowActiveSession, workflowBindingKey, workflowInputProducers,
+  workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowInput, type WorkflowNode, type WorkflowStep } from "./canvasWorkflow";
+import { isVideoPath } from "./videoGeneration";
 
 function payload(node: CanvasNode) {
   try { return JSON.parse(node.payloadJson); } catch { return {}; }
@@ -41,13 +43,103 @@ export function workflowSessionIds(workflow: readonly WorkflowNode[]) {
     .flatMap(node => [...(node.sessionNodeIds ?? []), ...(node.activeSessionNodeId ? [node.activeSessionNodeId] : [])]));
 }
 
-/** Video cards retain their existing history-only presentation. */
-export function hiddenWorkflowSessionIds(workflow: readonly WorkflowNode[]) {
-  return workflowSessionIds(workflow.filter(node => node.generation?.media === "video"));
+const ordinaryImageCard = (node: WorkflowNode) => node.kind === "generation" && node.generation?.media !== "video";
+const pendingGeneration = (status: unknown) => status === "running" || status === "querying" || status === "queued";
+const workflowImageOutput = (node: CanvasNode) => node.kind === "asset" && node.role === "output" && !!node.assetId
+  && !/^(workflow-video|workflow-comfy):/.test(node.id) && !isVideoPath(payload(node).snapshot?.name);
+const imageSessions = (node: WorkflowNode) => [...(node.sessionNodeIds ?? []), ...(node.outputs.image?.nodeIds ?? []), workflowActiveSession(node)];
+
+/** An async workflow step can finish before its submitted image turn does. */
+export function workflowImageGenerationActivity(node: WorkflowNode, step: WorkflowStep | undefined,
+  nodes: readonly CanvasNode[], jobs: Readonly<Record<string, GenJob>>): {
+  running: boolean; jobId?: string; failed?: boolean; session?: CanvasNode; sessionStatus?: string; error?: string;
+} {
+  if (!ordinaryImageCard(node)) return { running: false };
+  const session = nodes.find(item => item.id === workflowActiveSession(node) && item.kind === "prompt");
+  const data = session && payload(session);
+  const jobId: string | undefined = step?.status === "running" ? step.jobId : data?.job_id ?? step?.jobId;
+  const turnKey = step?.status === "running" ? step.turnKey : data?.turn_key ?? step?.turnKey;
+  const job = jobId ? jobs[jobId] : undefined;
+  const lastTurn = job?.turns[job.turns.length - 1];
+  const live = lastTurn?.turnKey === turnKey ? job : undefined;
+  const error = live ? lastTurn?.error ?? undefined : undefined;
+  const running = step?.status === "running" || (live?.running ?? pendingGeneration(data?.status));
+  const failed = !running && (data?.status === "failed" || (pendingGeneration(data?.status) && !!error));
+  return { running, jobId, failed, session, sessionStatus: typeof data?.status === "string" ? data.status : undefined, error };
+}
+
+/** Exact saved result IDs and turn identities establish provenance, never Asset ID equality. */
+function imageOrigins(workflow: readonly WorkflowNode[], nodes: readonly CanvasNode[], runs: ReturnType<typeof workflowRuns> = []) {
+  const sources = new Map(workflow.filter(ordinaryImageCard).map(node => [node.id, node]));
+  const direct = new Map<string, WorkflowNode | null>(), jobs = new Map<string, WorkflowNode | null>();
+  const turns = new Map<string, WorkflowNode | null>();
+  const key = (projectId: string, jobId: string, turnKey?: string) => JSON.stringify([projectId, jobId, turnKey]);
+  function record(index: Map<string, WorkflowNode | null>, id: string, source: WorkflowNode) {
+    index.set(id, index.has(id) && index.get(id) !== source ? null : source);
+  }
+  for (const source of sources.values()) {
+    for (const id of imageSessions(source)) if (id) record(direct, id, source);
+    for (const id of source.resultNodeIds ?? []) record(direct, id, source);
+  }
+  for (const run of runs) for (const [id, step] of Object.entries(run.steps)) {
+    const source = sources.get(id);
+    if (source && step.jobId) record(jobs, step.jobId, source);
+  }
+  const origins = new Map<string, WorkflowNode>();
+  function owner(node: CanvasNode, data: ReturnType<typeof payload>): WorkflowNode | undefined {
+    const group: unknown = data.workflow_generation_group;
+    if (direct.has(node.id)) {
+      const source = direct.get(node.id);
+      if (!source || typeof group === "string" && group.startsWith("workflow:") && group !== `workflow:${JSON.stringify([node.projectId, source.id])}`) return;
+      return source;
+    }
+    if (typeof group !== "string" || !group.startsWith("workflow:")) return;
+    try {
+      const [project, id] = JSON.parse(group.slice("workflow:".length));
+      return project === node.projectId ? sources.get(id) : undefined;
+    } catch { return; }
+  }
+  for (const node of nodes) {
+    if (node.kind !== "prompt") continue;
+    const data = payload(node);
+    const source = owner(node, data) ?? (!direct.has(node.id) && data.job_id ? jobs.get(data.job_id) : undefined);
+    if (!source || !data.job_id) continue;
+    if (data.turn_key) record(turns, key(node.projectId, data.job_id, data.turn_key), source);
+    if (node.hiddenAt == null) origins.set(node.id, source);
+  }
+  for (const node of nodes) {
+    if (node.hiddenAt != null || !workflowImageOutput(node)) continue;
+    const data = payload(node), execution = data.execution;
+    const resolved = owner(node, data);
+    const source = execution?.job_id && execution?.turn_key
+      ? turns.get(key(node.projectId, execution.job_id, execution.turn_key)) ?? resolved
+      : resolved && (data.workflow_generation_group === `workflow:${JSON.stringify([node.projectId, resolved.id])}`
+        || data.workflow_source === resolved.id || resolved.outputs.image?.assetIds?.includes(node.assetId!)) ? resolved : undefined;
+    if (source && (!resolved || source === resolved) && (!direct.has(node.id) || direct.get(node.id) === source)) {
+      origins.set(node.id, source);
+    }
+  }
+  return origins;
+}
+
+/** Video cards retain history-only presentation. Do not show an extra placeholder for a first image run. */
+export function hiddenWorkflowSessionIds(workflow: readonly WorkflowNode[], nodes: readonly CanvasNode[] = [],
+  jobs: Readonly<Record<string, GenJob>> = {}) {
+  const hidden = workflowSessionIds(workflow.filter(node => node.generation?.media === "video"));
+  if (!nodes.length) return hidden;
+  const origins = imageOrigins(workflow, nodes);
+  const hasOutput = new Set(nodes.filter(workflowImageOutput).map(node => origins.get(node.id)?.id));
+  for (const source of workflow) {
+    const active = workflowActiveSession(source);
+    if (!active || hasOutput.has(source.id)) continue;
+    const activity = workflowImageGenerationActivity(source, undefined, nodes, jobs);
+    if (activity.running || activity.failed) hidden.add(active);
+  }
+  return hidden;
 }
 
 /** A connected content destination owns presentation before delivery and across reruns. */
-export function contentRoutedWorkflowSessionIds(nodes: readonly CanvasNode[], workflow: readonly WorkflowNode[]) {
+function contentRoutedWorkflowSourceIds(nodes: readonly CanvasNode[], workflow: readonly WorkflowNode[]) {
   const sources = new Set<string>();
   for (const writer of workflow) {
     const target = writer.textTarget;
@@ -59,7 +151,63 @@ export function contentRoutedWorkflowSessionIds(nodes: readonly CanvasNode[], wo
     if (target.appendAxis ? contentInputAxisIndex(note, target) < 0 : !target.append && !note.cells.flat().some(cell => cell.id === target.cellId)) continue;
     for (const input of writer.inputs.image ?? []) if (input.nodeId && input.portId === "image") sources.add(input.nodeId);
   }
+  return sources;
+}
+
+export function contentRoutedWorkflowSessionIds(nodes: readonly CanvasNode[], workflow: readonly WorkflowNode[]) {
+  const sources = contentRoutedWorkflowSourceIds(nodes, workflow);
   return workflowSessionIds(workflow.filter(node => sources.has(node.id) && node.generation?.media !== "video"));
+}
+
+/** Compute the current projected media without mutating workflow or generation history. */
+export function workflowImageCardProjection(document: CanvasWorkflow, nodes: readonly CanvasNode[],
+  conversations: ReturnType<typeof canvasConversationCards>, unavailable: ReadonlySet<string> = new Set()) {
+  const runs = workflowRuns(document);
+  const origins = imageOrigins(document.nodes, nodes, runs);
+  const exempt = contentRoutedWorkflowSourceIds(nodes, document.nodes);
+  const descendants = new Set(document.nodes.filter(node => node.kind === "loop" || node.kind === "trigger").map(node => node.id));
+  if (descendants.size) {
+    const followers = new Map<string, Set<string>>();
+    for (const node of document.nodes) for (const input of Object.values(node.inputs).flat()) {
+      for (const id of workflowInputProducers(document.nodes, input)) {
+        const targets = followers.get(id) ?? new Set<string>();
+        targets.add(node.id);
+        followers.set(id, targets);
+      }
+    }
+    for (const id of descendants) for (const child of followers.get(id) ?? []) descendants.add(child);
+  }
+  for (const id of descendants) exempt.add(id);
+  for (const run of runs) if (workflowRunActive(run)) for (const id of run.loop?.bodyIds ?? []) exempt.add(id);
+  for (const trigger of document.nodes.filter(node => node.kind === "trigger")) for (const input of Object.values(trigger.inputs).flat()) {
+    const source = input.nodeId ?? origins.get(input.canvasNodeId ?? input.pendingCompletionSession ?? "")?.id;
+    if (source) exempt.add(source);
+  }
+
+  const visible = new Map(nodes.filter(node => node.hiddenAt == null && !conversations.hiddenIds.has(node.id)
+    && !unavailable.has(node.id)).map(node => [node.id, node]));
+  const candidates = new Map<string, Map<string, CanvasNode>>();
+  for (const node of nodes) {
+    const source = origins.get(node.id);
+    if (!source || exempt.has(source.id) || unavailable.has(node.id) || !workflowImageOutput(node)) continue;
+    const anchor = visible.get(conversations.aliases.get(node.id) ?? node.id);
+    if (!anchor) continue;
+    const gallery = conversations.cards.get(anchor.id);
+    if (gallery && gallery.outputs.some(output => origins.get(output.id) !== source)) continue;
+    const owned = candidates.get(source.id) ?? new Map<string, CanvasNode>();
+    owned.set(anchor.id, anchor);
+    candidates.set(source.id, owned);
+  }
+  const anchors = new Map<string, CanvasNode>();
+  for (const source of document.nodes) {
+    const owned = candidates.get(source.id);
+    if (!owned) continue;
+    const preferred = workflowGenerationResultAnchor(source, nodes, conversations)?.nodeId;
+    const anchor = (preferred && owned.get(preferred))
+      || [...owned.values()].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id))[0];
+    if (anchor) anchors.set(source.id, anchor);
+  }
+  return { anchors, origins };
 }
 
 /** A session socket exposes only this turn's results, never its reference images or later turns. */

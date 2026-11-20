@@ -98,6 +98,7 @@ try {
     const result = await page.evaluate(() => ({ calls: window.localCalls.filter(call => call.action === 'start'), environment: window.environmentCalls }));
     assert.equal(result.calls.length, 1);
     assert.equal(result.calls[0].input.mode || 'frames', mode);
+    assert.equal(result.calls[0].input.ratio, mode === 'text' ? '9:16' : 'auto');
     assert.equal(result.calls[0].input.firstFrame, mode === 'text' ? '' : 'a');
     assert.equal(result.calls[0].input.lastFrame, mode === 'frames' ? 'b' : undefined);
     assert.equal(result.calls[0].input.audioAssetId, audioEnabled ? 'speech' : undefined);

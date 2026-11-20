@@ -1,5 +1,8 @@
 import { AdaptiveToolGateway, type AdaptiveJournal } from "../harness/adaptive-tool-gateway.ts";
-import { textRewritePrompt, parseTextRewriteResult } from "../skills/bowerbird-unified-agent/text-rewrite.ts";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { publishedNativeSession, stageNativeSession } from "../cloud-chat/native-session.ts";
+import { nativeTextRewritePolicy, textRewritePrompt, parseTextRewriteResult } from "../skills/bowerbird-unified-agent/text-rewrite.ts";
 import { resolveCloudTextSkill, validateCloudTextSkillSnapshot, type CloudTextSkillSnapshot } from "../skills/cloud-text-skills.ts";
 import { ToolGatewayError } from "../harness/scoped-tool-gateway.ts";
 import { AdaptiveRunTools } from "../harness/adaptive-run-tools.ts";
@@ -75,6 +78,7 @@ async function downloadUserResponse(context: AgentRunContext, url: string): Prom
 type UnifiedPlanningCheckpoint = HarnessCheckpointSeed & {
   textResult?: string;
   textSkill?: CloudTextSkillSnapshot;
+  h3ContinuationKey?: string;
   adaptiveJournal?: AdaptiveJournal;
   visualObservations?: VisualObservationReference[];
   revision?: number;
@@ -160,6 +164,8 @@ function decodeCheckpoint(
   }
   if (checkpoint.textResult !== undefined && (!checkpoint.input.textRewrite || checkpoint.phase !== "succeeded" ||
       typeof checkpoint.textResult !== "string" || !checkpoint.textResult.trim())) throw new Error("unified_agent_checkpoint_invalid");
+  if (checkpoint.h3ContinuationKey !== undefined && (typeof checkpoint.h3ContinuationKey !== "string" || !checkpoint.textSkill?.id.startsWith("h3-") ||
+      !/^[a-f0-9]{64}$/.test(checkpoint.h3ContinuationKey))) throw new Error("unified_agent_checkpoint_invalid");
   // Explicit migration of the known previous instruction bundle; approved plan
   // contents/hash and completed durable calls are preserved.
   checkpoint.skillHash = expected.skillHash;
@@ -175,6 +181,7 @@ export type UnifiedPlanningRunProcessorOptions = {
   createAdapter: PlanningHarnessAdapterFactory;
   createApprovedStepExecutor?: (context: AgentRunContext, workspace: RunWorkspace) => ApprovedStepExecutor;
   modelProxy?: Omit<MeteredDeepSeekProxyOptions, "runId" | "leaseId" | "phase" | "control">;
+  h3SessionRoot?: string;
   htmlExecution?: {
     renderConfig: HtmlRenderExecutorConfig;
     createRenderExecutor?: (
@@ -517,30 +524,60 @@ export class UnifiedPlanningRunProcessor implements AgentRunProcessor {
   private async executeTextRewrite(context: AgentRunContext, checkpoint: UnifiedPlanningCheckpoint): Promise<void> {
     const { run, lease } = context.claimed;
     if (run.approvedPlanHash) throw new Error("unified_agent_text_input_invalid");
+    const sessionRoot = this.options.h3SessionRoot;
+    // Freeze both the method and the provider-session choice before the first model call.
+    if (!checkpoint.textResult && !checkpoint.textSkill) {
+      checkpoint.textSkill = resolveCloudTextSkill(checkpoint.input.goal);
+      if (sessionRoot && checkpoint.textSkill?.id.startsWith("h3-")) checkpoint.h3ContinuationKey = run.continuationKey;
+    }
+    const nativeKey = checkpoint.h3ContinuationKey;
+    if (nativeKey && !sessionRoot) throw new Error("dsh_native_session_missing");
+    let published = sessionRoot && nativeKey ? publishedNativeSession(sessionRoot, nativeKey, run.id) : undefined;
+    const resultName = ".h3-rewrite-result";
     if (!checkpoint.textResult) {
-      // Resolve once before saving; recovery uses the frozen method, never today's VPS file.
-      checkpoint.textSkill ??= resolveCloudTextSkill(checkpoint.input.goal);
       await this.saveCheckpoint(context, checkpoint, "compose_plan", 10, [{ seq: 10, type: "text.rewrite.started", progress: 10, displayPayload: {} }]);
       let proxy: Awaited<ReturnType<typeof startMeteredDeepSeekProxy>> | undefined;
+      let snapshot: ReturnType<typeof stageNativeSession> | undefined;
       try {
-        if (this.options.modelProxy) proxy = await startMeteredDeepSeekProxy({ ...this.options.modelProxy,
-          runId: run.id, leaseId: lease.leaseId, phase: "compose_plan", control: context.control, signal: context.signal, maxModelTurns: 3, allowedToolNames: [] });
-        const runner = new UnifiedPlanningHarnessRunner({ runId: run.id,
-          dispatch: async () => { throw new ToolGatewayError("tool_not_allowed"); },
-        }, (environment, _provider, activity) => this.options.createAdapter(environment, proxy?.childEnvironment(), activity));
-        const result = await runner.run(checkpoint, [{ type: "text", text: textRewritePrompt(checkpoint.input.goal, checkpoint.input.textRewrite!.source, checkpoint.textSkill) }]);
-        if (context.signal.aborted) throw new Error("unified_agent_run_cancelled");
-        checkpoint = { ...checkpoint, textResult: parseTextRewriteResult(result), phase: "succeeded", checkpointVersion: checkpoint.checkpointVersion + 1 };
-        // Persist the result before publishing it; lease recovery never repeats a completed edit.
+        let textResult: string;
+        if (published) {
+          textResult = readFileSync(join(published, resultName), "utf8");
+        } else {
+          if (sessionRoot && nativeKey) snapshot = stageNativeSession(sessionRoot, run.id, { session_key: nativeKey, previous_job_id: null });
+          if (this.options.modelProxy) proxy = await startMeteredDeepSeekProxy({ ...this.options.modelProxy,
+            runId: run.id, leaseId: lease.leaseId, phase: "compose_plan", control: context.control, signal: context.signal, maxModelTurns: 3, allowedToolNames: [],
+            ...(snapshot && checkpoint.textSkill ? { systemPolicy: nativeTextRewritePolicy(checkpoint.textSkill) } : {}) });
+          const runner = new UnifiedPlanningHarnessRunner({ runId: run.id,
+            dispatch: async () => { throw new ToolGatewayError("tool_not_allowed"); },
+          }, (environment, _provider, activity) => this.options.createAdapter(environment, proxy?.childEnvironment(), activity,
+            { reasoningEffort: checkpoint.textSkill?.reasoningEffort, ...(snapshot ? { nativeSession: snapshot } : {}) }));
+          const source = checkpoint.input.textRewrite!.source;
+          const prompt = snapshot ? source : textRewritePrompt(checkpoint.input.goal, source, checkpoint.textSkill);
+          const result = await runner.run(checkpoint, [{ type: "text", text: prompt }]);
+          textResult = parseTextRewriteResult(result);
+          if (context.signal.aborted) throw new Error("unified_agent_run_cancelled");
+          if (snapshot && sessionRoot && nativeKey) {
+            // Rename both the flushed native session and the result together so a lease recovery can finish the original run.
+            writeFileSync(join(snapshot.dir, resultName), textResult, "utf8");
+            snapshot.publish();
+            published = publishedNativeSession(sessionRoot, nativeKey, run.id);
+          }
+        }
+        if (!textResult.trim()) throw new Error("unified_agent_text_result_invalid");
+        checkpoint = { ...checkpoint, textResult, phase: "succeeded", checkpointVersion: checkpoint.checkpointVersion + 1 };
         await this.saveCheckpoint(context, checkpoint, "succeeded", 100, []);
       } catch (error) {
         if (proxy?.lastErrorCode) throw new Error(proxy.lastErrorCode);
         throw error;
-      } finally { await proxy?.close(); }
+      } finally {
+        await proxy?.close();
+        snapshot?.dispose();
+      }
     }
     if (context.signal.aborted) throw new Error("unified_agent_run_cancelled");
+    if (published) rmSync(join(published, resultName), { force: true });
     await context.control.appendEvents(run.id, lease.leaseId, [{ seq: 90, type: "text.result", progress: 100,
-      displayPayload: { schemaVersion: 1, text: checkpoint.textResult } }]);
+      displayPayload: { schemaVersion: 1, text: checkpoint.textResult, ...(published ? { dshContinuation: true } : {}) } }]);
     await context.control.finish(run.id, lease.leaseId);
   }
 

@@ -367,6 +367,159 @@ try {
   assert.equal((await q("select status from understand_jobs where id=$1", [legacy.j.id]))[0].status,"outcome_unknown");
   assert.deepEqual(await ledger(legacy.j),[]);
   console.log("file speech quote and duration, retained pricing, old worker isolation, query-only leases, byte limit, one settlement, and expiry passed");
+
+  // The metering migration applies to a pre-0094 database.
+  await q(fs.readFileSync(path.join(dir,"0095_chat_model_usage.sql"),"utf8"));
+  const paidChatMigration = fs.readFileSync(path.join(dir,"0096_chat_paid_billing.sql"),"utf8");
+  await q("begin");
+  try {
+    await q(paidChatMigration);
+    await q(`update service_costs set active=true,unit_cost=70,parameters=parameters||'{"max_output_tokens":8192}' where service='chat_paid_flash_v1'`);
+    assert.equal((await q("select quote_chat_paid_turn('deepseek-flash') as value"))[0].value.available,false);
+  } finally { await q("rollback"); }
+  const [chatOwner, anotherOwner] = [randomUUID(), randomUUID()];
+  await q("insert into auth.users(id) values($1),($2)", [chatOwner, anotherOwner]);
+  const createChat = async (key, owner, cap, connection = db) => (await q(
+    "select * from begin_chat_session_turn($1,$2,$3,$4,$5,30,false,$2)",
+    [owner, key, hash, `chat/${owner}/${key}/request.json`, cap], connection,
+  ))[0];
+  const businessDay = (await q("select timezone('Asia/Shanghai',now())::date::text as day"))[0].day;
+  const totals = async table => (await q(
+    `select request_count::int as requests, cost_micros::int as cost from ${table} where business_date=$1`, [businessDay],
+  ))[0];
+  const nonChatBefore = await totals("system_usage_daily");
+  const legacyChat = await createChat("legacy-dsh", chatOwner, 500_000_000);
+  const perTurn = Number((await q("select reserved_cost_micros from credit_holds where id=$1", [legacyChat.hold_id]))[0].reserved_cost_micros);
+  assert.equal(perTurn,24_000_000);
+  const mixed = await totals("system_usage_daily");
+  assert.deepEqual(mixed,{ requests:nonChatBefore.requests+1,cost:nonChatBefore.cost+perTurn });
+
+  const chatMigration = fs.readFileSync(path.join(dir,"0094_chat_daily_limits.sql"),"utf8");
+  await q("begin");
+  try {
+    await q("update credit_holds set reserved_cost_micros=null where id=$1", [legacyChat.hold_id]);
+    await assert.rejects(q(chatMigration), /history cannot be attributed/);
+  } finally {
+    await q("rollback");
+  }
+  assert.deepEqual(await totals("system_usage_daily"), mixed);
+  await q(chatMigration);
+  assert.deepEqual(await totals("system_usage_daily"), nonChatBefore);
+  assert.deepEqual(await totals("system_chat_usage_daily"), {requests:1,cost:perTurn});
+  assert.equal((await q("select chat_request_count from usage_daily where user_id=$1 and business_date=$2", [chatOwner,businessDay]))[0].chat_request_count,1);
+  assert.equal((await q("select has_table_privilege('authenticated','system_chat_usage_daily','select') as allowed"))[0].allowed,false);
+  assert.equal((await createChat("legacy-dsh",chatOwner,1)).id,legacyChat.id);
+  await q("select * from enqueue_chat_completion($1,$2,true)",[legacyChat.id, hash]);
+  const [oldLease] = await q("select * from claim_chat_session_turn('pre-migration-job')");
+  assert.equal(oldLease.id,legacyChat.id);
+  const [settled] = await q("select * from finish_chat_completion($1,$2,'succeeded',$3,null)",[oldLease.id,oldLease.lease_id,
+    {message:{role:"assistant",content:"fixture"},usage:{input_tokens:2,output_tokens:1},model:"fixture"}]);
+  assert.equal(settled.actual_credits,0);
+  assert.deepEqual(await ledger(legacyChat),["confirm"]);
+
+  // From two native PG connections in different session timezones, give the
+  // same owner one remaining turn and race two distinct conversation IDs.
+  await q("update service_costs set parameters=jsonb_set(parameters,'{free_turns_per_day}','2') where service='chat_deepseek'");
+  await q("set timezone='Pacific/Honolulu'", [], rival);
+  const keys = ["race-a","race-b"];
+  const race = await Promise.allSettled(keys.map((key,index) => createChat(key,chatOwner,3*perTurn,sessions[index])));
+  const winners = race.filter(entry => entry.status === "fulfilled");
+  const losers = race.filter(entry => entry.status === "rejected");
+  assert.equal(winners.length,1);
+  assert.equal(losers.length,1);
+  assert.equal(losers[0].reason.code,"P0001");
+  assert.equal(losers[0].reason.detail,"chat_daily_turn_limit");
+  assert.equal((await createChat(winners[0].value.idempotency_key,chatOwner,1,rival)).id,winners[0].value.id);
+  assert.deepEqual(await totals("system_chat_usage_daily"),{requests:2,cost:2*perTurn});
+  assert.equal((await q("select count(*)::int as count from credit_holds where user_id=$1 and service='chat_deepseek'", [chatOwner]))[0].count,2);
+  assert.equal((await q("select sum(request_count)::int as requests from usage_minute where user_id=$1",[chatOwner]))[0].requests,2);
+
+  const reserveText = cap => q("select begin_sync_understand($1,$2,100,$3,30)",[user,randomUUID(),cap]);
+  await assert.rejects(reserveText(nonChatBefore.cost), error => error.detail === "daily_cost_limit");
+  await createChat("other-owner",anotherOwner,3*perTurn,rival);
+  await assert.rejects(createChat("chat-cap-stop",anotherOwner,3*perTurn),error => error.detail === "daily_cost_limit");
+  await reserveText(nonChatBefore.cost+100);
+  assert.deepEqual(await totals("system_usage_daily"),{requests:nonChatBefore.requests+1,cost:nonChatBefore.cost+100});
+  assert.deepEqual(await totals("system_chat_usage_daily"),{requests:3,cost:3*perTurn});
+
+  // Preserve the capped data as a prior Shanghai date and confirm a fresh
+  // business-day row is used, without advancing the host clock.
+  await q("update system_chat_usage_daily set business_date=business_date-1 where business_date=$1",[businessDay]);
+  await q("update usage_daily set business_date=business_date-1 where user_id=$1 and business_date=$2",[chatOwner,businessDay]);
+  await createChat("new-day",chatOwner,perTurn,rival);
+  assert.deepEqual(await totals("system_chat_usage_daily"),{requests:1,cost:perTurn});
+  assert.equal((await q("select chat_request_count from usage_daily where user_id=$1 and business_date=$2",[chatOwner,businessDay]))[0].chat_request_count,1);
+  console.log("chat daily limits: same-day cutover, rollback on unattributed cost, old order settlement, concurrent quota, replay, dual bucket isolation, and Shanghai day reset passed");
+
+  const metered = await createChat("metered", anotherOwner, 500_000_000);
+  await q("select * from enqueue_chat_completion($1,$2,true)", [metered.id, hash]);
+  const [meteredLease] = await q("select * from claim_chat_session_turn('usage-fixture')");
+  assert.equal(meteredLease.id, metered.id);
+  const call = (callId, observation=null, connection=db, lease=meteredLease.lease_id, model="deepseek-v4-pro") => q(
+    "select record_chat_model_call($1,$2,$3,$4,$5) as recorded", [metered.id,lease,callId,model,observation], connection,
+  ).then(([row]) => row.recorded);
+  const [firstCall, secondCall, thirdCall] = ["a","b","c"].map(value => value.repeat(64));
+  const usage = {status:"observed",input_tokens:40,output_tokens:8,cache_hit_tokens:13,cache_miss_tokens:27,
+    provider_model:"DeepSeek-V4-Pro-0813",provider_request_id:"fixture-request"};
+  await assert.rejects(call(firstCall,usage), /not submitted/);
+  await assert.rejects(call(firstCall,null,db,randomUUID()), /invalid chat model lease/);
+  assert.deepEqual((await Promise.all([call(firstCall), call(firstCall,null,rival)])).sort(),[false,true]);
+  await assert.rejects(call(firstCall,null,db,meteredLease.lease_id,"deepseek-flash"), /conflicting chat model identity/);
+  await assert.rejects(call(firstCall,{...usage,input_tokens:"40"}), /invalid chat token/);
+  await assert.rejects(call(firstCall,{...usage,cache_hit_tokens:99}), /invalid chat cache/);
+  await assert.rejects(call(firstCall,{...usage,prompt:"private"}), /invalid chat model observation/);
+  assert.equal(await call(firstCall,usage),true);
+  assert.equal(await call(firstCall,usage,rival),true);
+  await assert.rejects(call(firstCall,{...usage,output_tokens:9}), /conflicting chat model observation/);
+  assert.equal(await call(secondCall),true);
+  assert.equal(await call(secondCall,{status:"http_error",http_status:429}),true);
+  assert.equal(await call(thirdCall),true);
+  // Exercise a receipt on a pre-midnight submission while keeping the day of the upstream authorization.
+  await q("update chat_model_calls set submitted_at=($2::date::timestamp at time zone 'Asia/Shanghai')-interval '1 second' where job_id=$1 and call_id=$3",
+    [metered.id,businessDay,thirdCall]);
+  for (const index of [0,1,2,3,4,5,6,7,8]) assert.equal(await call(index.toString().repeat(64)),true);
+  await assert.rejects(call("9".repeat(64)), /call count exceeded/);
+  const [stoppedChat] = await q("select * from cancel_chat_dsh($1,$2,null)", [anotherOwner,metered.id]);
+  assert.equal(stoppedChat.status,"outcome_unknown");
+  await assert.rejects(call("d".repeat(64)), /inactive chat model lease/);
+  assert.equal(await call(thirdCall,{status:"unknown"}),true);
+  assert.equal(await call(thirdCall,{status:"unknown"},rival),true);
+  assert.equal(await call("0".repeat(64),{...usage,provider_request_id:"late-known-usage"},rival),true);
+  const [observations] = await q(`select
+    count(*)::int as total,
+    count(*) filter (where observation is null)::int as pending,
+    count(*) filter (where observation->>'status'='unknown')::int as unknown,
+    count(*) filter (where business_date = $2::date-1)::int as previous_day,
+    sum((observation->>'input_tokens')::int)::int as input,
+    sum((observation->>'output_tokens')::int)::int as output
+    from chat_model_calls where job_id=$1`, [metered.id,businessDay]);
+  assert.deepEqual(observations,{total:12,pending:8,unknown:1,previous_day:1,input:80,output:16});
+  assert.deepEqual(await ledger(metered),[]);
+  assert.deepEqual(await ledger(legacyChat),["confirm"]);
+  const success = await createChat("metered-success",chatOwner,500_000_000);
+  await q("select * from enqueue_chat_completion($1,$2,true)",[success.id,hash]);
+  const [successLease] = await q("select * from claim_chat_session_turn('usage-fixture')");
+  assert.equal(successLease.id,success.id);
+  const recordSuccess = receipt => q("select record_chat_model_call($1,$2,$3,'deepseek-flash',$4)",
+    [success.id,successLease.lease_id,firstCall,receipt]);
+  await recordSuccess(null);
+  await recordSuccess({status:"observed",input_tokens:10,output_tokens:2,cache_hit_tokens:5});
+  const [finishedUsage] = await q("select * from finish_chat_completion($1,$2,'succeeded',$3,null)",[success.id,successLease.lease_id,
+    {message:{role:"assistant",content:"fixture"},usage:{input_tokens:10,output_tokens:2},model:"deepseek-flash"}]);
+  assert.equal(finishedUsage.actual_credits,0);
+  assert.deepEqual(await ledger(success),["confirm"]);
+  const [meteringRights] = await q(`select
+    has_table_privilege('authenticated','chat_model_calls','select') as user_read,
+    has_table_privilege('service_role','chat_model_calls','insert') as service_write,
+    has_function_privilege('authenticated','record_chat_model_call(uuid,uuid,text,text,jsonb)','execute') as user_rpc,
+    has_function_privilege('service_role','record_chat_model_call(uuid,uuid,text,text,jsonb)','execute') as service_rpc`);
+  assert.deepEqual(meteringRights,{user_read:false,service_write:false,user_rpc:false,service_rpc:true});
+  console.log("chat model usage: 0095 before 0094, worker-only lease, concurrent submit, immutable receipt, unknown/cancel, cross-day attribution, 12-call limit, and unchanged billing passed");
+
+  await q(paidChatMigration);
+  const { verifyChatPaidBilling } = await import("./chat-paid-db.fixture.mjs");
+  await verifyChatPaidBilling(q,db,rival);
+
   if (mode === "--file-speech-flow") {
     const { verifyFileSpeechFlow } = await import("./file-speech-flow.fixture.mjs");
     await verifyFileSpeechFlow(q, root);

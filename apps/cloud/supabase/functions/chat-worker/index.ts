@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import { chatFailure, chatResult, DSH_CHAT_ENGINE, DSH_CHAT_ENGINE_V2, isDshChatEngine, validChatCallId } from "../_shared/chat.ts";
+import { chatFailure, chatResult, DSH_CHAT_ENGINE, DSH_CHAT_ENGINE_V2, isDshChatEngine, isDshChatModel, validChatCallId } from "../_shared/chat.ts";
 import {
   ApiError,
   errorResponse,
@@ -8,6 +8,7 @@ import {
 } from "../_shared/errors.ts";
 
 const BUCKET = "generation-temp";
+const paidWorkerEnabled = () => Deno.env.get("CHAT_DSH_TOKEN_BILLING_WORKER_ENABLED") === "true";
 const required = (name: string) => {
   const value = Deno.env.get(name)?.trim();
   if (!value) throw new ApiError("not_configured", `${name} 未配置`);
@@ -76,7 +77,9 @@ Deno.serve(async (request: Request) => {
       const supportsDsh = isDshChatEngine(raw.engine);
       if (raw.engine !== undefined && !supportsDsh) throw new ApiError("invalid_request", "未知 Worker 通道");
       const persistent = raw.engine === DSH_CHAT_ENGINE_V2;
-      const result = await admin.rpc(persistent ? "claim_chat_session_turn" : supportsDsh ? "claim_chat_turn" : "claim_chat_completion", {
+      const paidCapable = persistent && raw.paid_token_billing === true && paidWorkerEnabled();
+      const claim = paidCapable ? "claim_chat_paid_turn" : persistent ? "claim_chat_session_turn" : supportsDsh ? "claim_chat_turn" : "claim_chat_completion";
+      const result = await admin.rpc(claim, {
         p_worker: worker,
         ...(supportsDsh && !persistent ? { p_dsh_supported: true } : {}),
       });
@@ -90,7 +93,7 @@ Deno.serve(async (request: Request) => {
         180,
       );
       if (signed.error) {
-        await admin.rpc("finish_chat_completion", {
+        await admin.rpc(paidCapable ? "finish_chat_paid_turn" : "finish_chat_completion", {
           p_id: job.id,
           p_lease: job.lease_id,
           p_status: "failed",
@@ -105,10 +108,47 @@ Deno.serve(async (request: Request) => {
           lease_id: job.lease_id,
           input_hash: job.input_hash,
           input_url: signed.data.signedUrl,
-          ...(job.dsh_session_key ? { engine: DSH_CHAT_ENGINE_V2, session_key: job.dsh_session_key,
+          ...(paidCapable && job.paid_billing ? { paid_billing: {
+            model: job.paid_billing.model, max_output_tokens: job.paid_billing.max_output_tokens,
+          } } : {}),
+          ...(job.dsh_session_key ? { engine: DSH_CHAT_ENGINE_V2, session_key: job.dsh_session_key, model_metering: true,
             previous_job_id: job.dsh_previous_job_id } : job.dsh_tools_enabled != null ? { engine: DSH_CHAT_ENGINE } : {}),
         },
       });
+    }
+    if (raw.action === "model_authorize") {
+      if (!paidWorkerEnabled()) throw new ApiError("not_configured", "对话计费 Worker 尚未开放");
+      if (typeof raw.job_id !== "string" || typeof raw.lease_id !== "string" ||
+          typeof raw.call_id !== "string" || !/^[0-9a-f]{64}$/.test(raw.call_id) ||
+          !isDshChatModel(raw.model) || !Number.isInteger(raw.max_output_tokens) ||
+          raw.max_output_tokens < 1 || raw.max_output_tokens > 393216) {
+        throw new ApiError("invalid_request", "对话模型授权信息无效");
+      }
+      const authorized = await admin.rpc("authorize_chat_paid_model", {
+        p_job_id: raw.job_id, p_lease: raw.lease_id, p_call_id: raw.call_id,
+        p_model: raw.model, p_max_output_tokens: raw.max_output_tokens,
+      });
+      if (authorized.error?.details === "chat_paid_budget_exhausted") return jsonResponse({ authorized: false });
+      if (authorized.error) throw new ApiError("invalid_request", "对话模型授权失效或存在冲突", false, 409);
+      return jsonResponse({ authorized: authorized.data === true });
+    }
+    if (raw.action === "model_submit" || raw.action === "model_observe") {
+      const observe = raw.action === "model_observe";
+      if (typeof raw.job_id !== "string" || typeof raw.lease_id !== "string" ||
+          typeof raw.call_id !== "string" || !/^[0-9a-f]{64}$/.test(raw.call_id) ||
+          !isDshChatModel(raw.model) ||
+          observe && (!raw.observation || typeof raw.observation !== "object" || Array.isArray(raw.observation))) {
+        throw new ApiError("invalid_request", "对话模型计量身份无效");
+      }
+      const recorded = await admin.rpc("record_chat_model_call", {
+        p_job_id: raw.job_id,
+        p_lease: raw.lease_id,
+        p_call_id: raw.call_id,
+        p_model: raw.model,
+        p_observation: observe ? raw.observation : null,
+      });
+      if (recorded.error) throw new ApiError("invalid_request", "对话模型调用记录已失效或存在冲突", false, 409);
+      return jsonResponse({ recorded: recorded.data === true });
     }
     if (raw.action === "dsh_poll" || raw.action === "tool_request") {
       const tool = raw.action === "tool_request";
@@ -134,7 +174,7 @@ Deno.serve(async (request: Request) => {
         (typeof raw.result.model !== "string" || !raw.result.model.trim() ||
           raw.result.model.length > 120)
       ) throw new ApiError("invalid_request", "模型计量身份无效");
-      const finished = await admin.rpc("finish_chat_completion", {
+      const finished = await admin.rpc(paidWorkerEnabled() ? "finish_chat_paid_turn" : "finish_chat_completion", {
         p_id: raw.job_id,
         p_lease: raw.lease_id,
         p_status: raw.status,

@@ -10,6 +10,8 @@ const STORAGE = ROUTES.storage.map(route => ({ ...route, match: new RegExp(route
 const PREFIX = "/api/cloud";
 const PRIVATE = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" };
 const JSON_LIMIT = 20 * 1024 * 1024;
+const DEFAULT_IN_FLIGHT = 8;
+const MAX_IN_FLIGHT = 16;
 // A bounded 4 MiB transcript can be escaped again by the understanding JSON envelope.
 const UNDERSTAND_RESULT_LIMIT = 2 * 4 * 1024 * 1024 + 4096;
 const fail = status => Object.assign(new Error("Cloud gateway request failed"), { status });
@@ -50,15 +52,25 @@ export function createCloudProxy({
   publicKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY,
   trustProxy = process.env.BOWERBIRD_TRUST_PROXY === "1",
   fetchImpl = fetch, authFetchImpl = fetchImpl, timeoutMs = 180_000,
+  totalInFlight = process.env.BOWERBIRD_CLOUD_MAX_IN_FLIGHT,
+  storageInFlight = process.env.BOWERBIRD_CLOUD_MAX_STORAGE_IN_FLIGHT,
 } = {}) {
-  const buckets = new Map(); let active = 0; let sweptAt = 0;
+  const configured = totalInFlight !== undefined || storageInFlight !== undefined;
+  const totalLimit = configured ? Number(totalInFlight) : DEFAULT_IN_FLIGHT;
+  const storageLimit = configured ? Number(storageInFlight) : totalLimit;
+  if (configured && (String(totalLimit) !== totalInFlight || String(storageLimit) !== storageInFlight
+    || !Number.isInteger(totalLimit) || totalLimit < 2 || totalLimit > MAX_IN_FLIGHT
+    || !Number.isInteger(storageLimit) || storageLimit < 1 || storageLimit >= totalLimit)) {
+    throw new Error("Set both BOWERBIRD_CLOUD_MAX_IN_FLIGHT (2–16) and BOWERBIRD_CLOUD_MAX_STORAGE_IN_FLIGHT (1 to total minus one)");
+  }
+  const buckets = new Map(); let active = 0; let activeStorage = 0; let sweptAt = 0;
   const textUsers = new Map();
   return async (request, response) => {
     const incomingId = request.headers['x-bowerbird-request-id'];
     const requestId = typeof incomingId === 'string' && /^[A-Za-z0-9-]{20,64}$/.test(incomingId) ? incomingId : randomUUID();
     response.setHeader('X-Bowerbird-Request-Id', requestId);
     const controller = new AbortController();
-    let timer, admitted = false, textUser;
+    let timer, admitted = false, storageAdmitted = false, textUser;
     const disconnected = () => { if (!response.writableEnded) controller.abort(); };
     request.on("aborted", disconnected); response.on("close", disconnected);
     try {
@@ -99,8 +111,9 @@ export function createCloudProxy({
         if (!bucket && buckets.size >= 10_000) throw fail(429);
         bucket = { count: 0, until: now + 60_000 }; buckets.set(ip, bucket);
       }
-      if (++bucket.count > 300 || active >= 8) throw fail(429);
+      if (++bucket.count > 300 || active >= totalLimit || (storage && activeStorage >= storageLimit)) throw fail(429);
       active++; admitted = true;
+      if (storage) { activeStorage++; storageAdmitted = true; }
       const base = new URL(upstream);
       if (base.protocol !== "https:" || base.username || base.password || base.pathname !== "/" || base.search || base.hash || !publicKey) throw fail(503);
       const target = new URL(path, base); target.search = url.search;
@@ -186,6 +199,7 @@ export function createCloudProxy({
       response.end(JSON.stringify({ requestId, phase: 'gateway', error: { code: `cloud_gateway_${status}`, message: status === 401 ? "请先登录或重新获取原任务文件链接" : status === 413 ? "请求内容超过大小限制，请减少参考素材" : "云服务连接暂时中断，请稍后查看原任务状态，勿重复提交" } }));
     } finally {
       clearTimeout(timer); controller.abort(); if (admitted) active--;
+      if (storageAdmitted) activeStorage--;
       if (textUser) {
         const count = textUsers.get(textUser) - 1;
         if (count) textUsers.set(textUser, count); else textUsers.delete(textUser);

@@ -7,13 +7,13 @@ import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { comfyAudioHint, comfyAudioLabel, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, H3_VIDEO_RESOLUTIONS, type ComfyEnvironment, type ComfyVideoOptions, type ComfyVideoMode } from "../lib/comfyVideo";
+import { comfyAudioHint, comfyAudioLabel, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, H3_VIDEO_RESOLUTIONS, type ComfyEnvironment, type ComfyVideoOptions, type ComfyVideoMode, type ComfyVideoProgress } from "../lib/comfyVideo";
 import { isAudioAsset } from "../lib/audioMedia";
 import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError } from "../lib/notify";
 import type { Asset } from "../lib/types";
-import { H3_VIDEO_AUDIO_PORT, type WorkflowNode, type WorkflowStep } from "../lib/canvasWorkflow";
+import { H3_VIDEO_AUDIO_PORT, type WorkflowNode } from "../lib/canvasWorkflow";
 import "./ComfyVideoCard.css";
 import { TacticalSelect } from "./TacticalSelect";
 import { RatioSelect } from "./creation/RatioSelect";
@@ -41,17 +41,13 @@ function EnvironmentAction({ label, disabled, hint, onClick }: {
   </span>;
 }
 
-export function ComfyGenerationProgress({ step }: { step: WorkflowStep }) {
-  const progress = step.comfyStopping ? undefined : step.comfyProgress;
-  const determinate = progress?.value != null && progress.max != null && progress.max > 0;
-  const percent = determinate ? Math.min(100, Math.max(0, progress.value! / progress.max! * 100)) : undefined;
-  return <div className="comfy-generation-progress" role="status">
-    <span>{step.comfyStopping ? "正在中断本机生成…" : userErrorMessage(progress?.label ?? step.detail, "等待本机进度")}</span>
-    <div className="comfy-progress-bar" role="progressbar" aria-label="本地视频当前阶段进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-      <span className="comfy-progress-fill" style={{ width: `${percent ?? 0}%` }} />
-      {percent != null && <span className="comfy-progress-percent">{Math.round(percent)}%</span>}
-    </div>
-  </div>;
+export function ComfyGenerationProgress({ progress }: { progress: ComfyVideoProgress }) {
+  const { value, max } = progress;
+  const percent = value != null && max != null && max > 0 ? Math.min(100, Math.max(0, value / max * 100)) : undefined;
+  return <span className="comfy-progress-bar" role="progressbar" aria-label="本地视频当前阶段进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+    <span className="comfy-progress-fill" style={{ width: `${percent ?? 0}%` }} />
+    {percent != null && <span className="comfy-progress-percent" aria-hidden="true">{Math.round(percent)}%</span>}
+  </span>;
 }
 
 export interface ComfyEnvironmentState { ready: boolean; checking: boolean; message: string }

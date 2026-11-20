@@ -328,7 +328,8 @@ try {
   await page.evaluate(()=>{window.failNodeSave=false;});
   await card.getByRole('button',{name:'继续工作流'}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='done');
-  await card.getByText('视频已生成 · 用时 4 分 34 秒',{exact:true}).waitFor();
+  const status=card.locator('footer .workflow-h3-status[role="status"]');
+  await status.getByText('视频已生成 · 用时 4 分 34 秒',{exact:true}).waitFor();
   assert.deepEqual((await snapshot()).nodes[0].outputs.image.assetIds,['h3-video']);
   let resultId=(await snapshot()).nodes[0].resultNodeIds[0];
   await page.locator(`[data-canvas-node-id="${resultId}"]`).waitFor();
@@ -396,8 +397,10 @@ try {
   // Real step counts, phase reset, failed cancellation and confirmed interruption.
   await page.reload();await card.waitFor();await installMock();
   await page.evaluate(()=>{window.environmentPhase='ready';window.comfyMode='running';window.comfyProgress={label:'生成视频',value:3,max:8};});
-  await card.getByRole('button',{name:'运行',exact:true}).click();
-  const progress=card.getByLabel('本地视频当前阶段进度',{exact:true});
+  const generate=card.getByRole('button',{name:/^(运行|重试)$/});
+  await generate.click();
+  const progress=status.getByLabel('本地视频当前阶段进度',{exact:true});
+  await status.getByText('正在生成视频',{exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('.comfy-progress-bar')?.getAttribute('aria-valuenow')==='37.5');
   assert.equal(await progress.getAttribute('aria-valuemax'),'100');
   assert.equal(await card.locator('.comfy-progress-fill').evaluate(el=>el.style.width),'37.5%');
@@ -406,7 +409,7 @@ try {
   assert.equal(await card.getByText(/3\/8/).count(),0);
   await page.screenshot({path:'.tmp/comfy-video/real-progress.png'});
   await page.evaluate(()=>{window.comfyProgress={label:'保存视频',value:null,max:null};});
-  await card.getByText('保存视频',{exact:true}).waitFor();
+  await status.getByText('保存视频',{exact:true}).waitFor();
   assert.equal(await progress.getAttribute('aria-valuenow'),null,'new phase clears previous sampling percentage');
   assert.equal(await card.locator('.comfy-progress-fill').evaluate(el=>el.style.width),'0%','unknown progress stays empty without looping');
   await page.evaluate(()=>{window.cancelMode='error';});
@@ -417,6 +420,7 @@ try {
   await card.getByRole('button',{name:'停止工作流'}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='stopped');
   assert.equal((await snapshot()).run.steps[(await snapshot()).nodes[0].id].comfyCancelled,true);
+  await status.getByText('已取消',{exact:true}).waitFor();
   assert.equal(await card.getByRole('button',{name:'取回上次视频'}).count(),0,'cancelled task cannot be retrieved');
   assert.equal(await progress.count(),0);
   const finalCalls=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('comfy-calls')));
@@ -424,7 +428,7 @@ try {
   assert.ok(finalCalls.filter(call=>call.action==='cancel').slice(-2).every(call=>call.requestId===finalStart.requestId),'stop targets the exact current request');
   // The original request reaches native cancellation while the start response is still pending.
   await page.evaluate(()=>{window.holdSubmission=true;});
-  await card.getByRole('button',{name:'运行',exact:true}).click();
+  await generate.click();
   await page.waitForFunction(()=>typeof window.finishSubmission==='function');
   await card.getByRole('button',{name:'停止工作流'}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='stopped');

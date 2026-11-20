@@ -3,7 +3,7 @@ import { Copy } from "lucide-react";
 import { useStore } from "../store";
 import { userErrorMessage } from "../lib/userError";
 import { videoTime } from "../lib/videoFrame";
-import { getVideoTranscript, quoteVideoTranscript, startVideoTranscript, useVideoTranscriptPrice, type VideoTranscript, type VideoTranscriptQuote } from "../lib/videoTranscript";
+import { quoteVideoTranscript, startVideoTranscript, useVideoTranscriptPrice, type useVideoTranscript, type VideoTranscript, type VideoTranscriptQuote } from "../lib/videoTranscript";
 
 function TranscriptStart({ assetId, owner, label, prepareOnMount, focusPanel, refreshTranscript, onStart }: {
   assetId: string;
@@ -96,50 +96,32 @@ function TranscriptText({ transcript, onSeek }: {
   </>;
 }
 
-export function VideoTranscriptPanel({ assetId, hidden, active, onSeek }: {
+export function VideoTranscriptPanel({ assetId, hidden, active, canStartNew, state, onSeek }: {
   assetId: string;
   hidden: boolean;
   active: boolean;
+  canStartNew: boolean;
+  state: ReturnType<typeof useVideoTranscript>;
   onSeek: (time: number) => void;
 }) {
-  const [transcript, setTranscript] = useState<VideoTranscript | null>();
-  const [loadError, setLoadError] = useState("");
+  const { transcript, error: loadError, update, refresh } = state;
   const [startError, setStartError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [revision, setRevision] = useState(0);
   const panel = useRef<HTMLDivElement>(null);
   const pending = useRef(false);
   const mounted = useRef(false);
   const userId = useStore(state => state.cloudAuth?.logged_in ? state.cloudAuth.user_id : null);
   const focusPanel = () => panel.current?.focus({ preventScroll: true });
-  const refresh = () => { setLoadError(""); setRevision(value => value + 1); };
 
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
 
-  useEffect(() => {
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function read() {
-      try {
-        const current = await getVideoTranscript(assetId);
-        if (disposed) return;
-        setTranscript(current);
-        setLoadError("");
-        if (current?.status === "running") timer = setTimeout(read, 1800);
-      } catch (reason) {
-        if (!disposed) setLoadError(userErrorMessage(reason, "转录状态暂时无法读取，请刷新。"));
-      }
-    }
-    void read();
-    return () => { disposed = true; clearTimeout(timer); };
-  }, [assetId, revision]);
-
   async function start(quote?: VideoTranscriptQuote, expectedCredits?: number) {
     const auth = useStore.getState().cloudAuth;
     if (pending.current || !userId || !auth?.logged_in || auth.user_id !== userId) return;
+    if (quote && !canStartNew) return;
     pending.current = true;
     focusPanel();
     setSubmitting(true);
@@ -147,7 +129,7 @@ export function VideoTranscriptPanel({ assetId, hidden, active, onSeek }: {
     try {
       const current = await startVideoTranscript(assetId, userId, expectedCredits, quote);
       if (!mounted.current) return;
-      setTranscript(current);
+      update(current);
       if (current.status === "running") refresh();
     } catch (reason) {
       if (mounted.current) {
@@ -162,7 +144,7 @@ export function VideoTranscriptPanel({ assetId, hidden, active, onSeek }: {
 
   return <div ref={panel} className="video-transcript-panel" tabIndex={-1} hidden={hidden}>
     {loadError ? <>
-      <p role="alert">{loadError}</p>
+      <p role="alert">{userErrorMessage(loadError, "转录状态暂时无法读取，请刷新。")}</p>
       <button type="button" onClick={() => { focusPanel(); refresh(); }}>刷新转录状态</button>
     </> : submitting || transcript?.status === "running"
       ? <p role="status">{submitting ? "正在准备转录…" : "正在转录，关闭预览后可回来查看。"}</p>
@@ -174,13 +156,12 @@ export function VideoTranscriptPanel({ assetId, hidden, active, onSeek }: {
         {startError && <p role="alert">{startError}</p>}
         {transcript?.status === "interrupted" && <>
           <p role="status">{userErrorMessage(transcript.error, transcript.cloudPending
-            ? "转录尚未完成，可恢复原任务。" : "转录尚未完成，可核对费用后重试。")}</p>
+            ? "转录尚未完成，可恢复原任务。" : "转录尚未完成。")}</p>
         </>}
         {transcript?.cloudPending ? (userId
           ? <button type="button" className="app-button-primary" onClick={() => void start()}>恢复原任务</button>
           : <p>请登录原 Bowerbird 账号后恢复。</p>)
-          : !userId ? <p>登录 Bowerbird 后即可获取转录。</p>
-          : active && <TranscriptStart key={userId} assetId={assetId} owner={userId}
+          : active && canStartNew && userId && <TranscriptStart key={userId} assetId={assetId} owner={userId}
             prepareOnMount={Boolean(transcript?.quoteRequired || transcript?.priceChanged)}
             focusPanel={focusPanel} refreshTranscript={refresh} label={transcript?.status === "interrupted" ? "重试转录" : "获取转录"}
             onStart={(quote, credits) => void start(quote, credits)}/>}

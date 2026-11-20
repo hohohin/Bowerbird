@@ -52,9 +52,11 @@ export function createDshRuntimeHome(options: {
   runtimeRoot: string;
   chat?: boolean;
   chatOptions?: import("../../../cloud/supabase/functions/_shared/chat.ts").DshChatOptionsSelection;
+  planningReasoningEffort?: "high";
   imageCardProvider?: boolean;
   videoCardOptions?: boolean;
   nativeSession?: {dir: string; sessionId:string};
+  nativeTextOnly?: boolean;
 }): DshRuntimeHome {
   const templateDir = resolve(options.templateDir);
   const runtimeRoot = resolve(options.runtimeRoot);
@@ -84,6 +86,16 @@ export function createDshRuntimeHome(options: {
     mkdirSync(pluginDir, { recursive: true });
     for (const file of DSH_PROFILE_TEMPLATE_FILES) copyFileSync(join(templateDir, file), join(profileDir, file));
     for (const file of DSH_PROFILE_PLUGIN_FILES) copyFileSync(join(templateDir, "plugins", file), join(pluginDir, file));
+    if (options.planningReasoningEffort === "high") {
+      const file = join(profileDir, "cordis.bridge.patch.yml");
+      const baseline = readFileSync(file, "utf8");
+      const patch = baseline.replace(/^( +thinking: )disabled(?=\r?$)/m, "$1enabled")
+        .replace(/^( +reasoningEffort: )off(?=\r?$)/m, "$1high");
+      if (!/^ +thinking: enabled$/m.test(patch) || !/^ +reasoningEffort: high$/m.test(patch)) {
+        throw new Error("dsh_planning_reasoning_profile_invalid");
+      }
+      writeFileSync(file, patch, "utf8");
+    }
     if (options.chat) {
       let chatPatch = readFileSync(join(import.meta.dirname, "../cloud-chat/cordis.chat.patch.yml"), "utf8");
       if (options.chatOptions) {
@@ -115,6 +127,7 @@ export function createDshRuntimeHome(options: {
         const file = join(profileDir, "cordis.chat.patch.yml");
         const patch = readFileSync(file, "utf8");
         writeFileSync(file, patch + "\n- id: acp\n  disabled: true\n- insert:\n    - id: native-chat-acp\n      name: './plugins/native-chat-acp.mjs'\n" +
+          (options.nativeTextOnly ? "- id: bowerbird-chat-cards\n  disabled: true\n" : "") +
           "- id: compaction-basic\n  config:\n    auto: true\n- id: session-persistence-jsonl\n  config:\n    root: " + JSON.stringify(options.nativeSession.dir) + "\n", "utf8");
       }
     }

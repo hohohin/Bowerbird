@@ -72,6 +72,7 @@ export function unifiedPlanningProcessorFromEnv(
       upstream: dshDeepSeek,
       ...(dependencies.allowInsecureLoopback ? { allowInsecureLoopback: true } : {}),
     },
+    h3SessionRoot: env.BOWERBIRD_DSH_SESSION_ROOT?.trim() || undefined,
     ...(renderConfig ? {
       htmlExecution: {
         renderConfig,
@@ -92,7 +93,7 @@ export function unifiedPlanningProcessorFromEnv(
         },
       },
     } : {}),
-    createAdapter(childEnvironment, providerEnvironment, activity) {
+    createAdapter(childEnvironment, providerEnvironment, activity, options) {
       if (!providerEnvironment) throw new Error("dsh_model_proxy_environment_missing");
       return new DshAcpHarnessAdapter({
         cwd: runtimeRoot,
@@ -105,6 +106,12 @@ export function unifiedPlanningProcessorFromEnv(
           timeoutMs: UNIFIED_DSH_PROMPT_TIMEOUT_MS,
           promptTimeoutMs: 0,
           activity,
+          ...(options?.nativeSession ? {
+            profileMode: "chat",
+            nativeSession: options.nativeSession,
+            nativeTextOnly: true,
+            chatOptions: { model: "deepseek-flash", reasoningEffort: options.reasoningEffort ?? "off" },
+          } : { planningReasoningEffort: options?.reasoningEffort }),
         }),
       });
     },

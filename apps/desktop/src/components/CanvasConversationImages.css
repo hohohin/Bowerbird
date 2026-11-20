@@ -48,3 +48,58 @@
 .workflow-material-hotspot.is-image-session.is-hovered .workflow-session-output,
 .workflow-material-hotspot.is-image-session:hover .workflow-session-output,
 .workflow-material-hotspot.is-image-session:focus-within .workflow-session-output { opacity: 1; }
+
+.canvas-generation-actions {
+  position: absolute;
+  inset: 6px 6px auto auto;
+  z-index: 4;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+}
+.canvas-prompt-node:hover > .canvas-generation-actions,
+.canvas-prompt-node:focus-within > .canvas-generation-actions,
+.canvas-node:hover > .canvas-generation-actions,
+.canvas-node:focus-within > .canvas-generation-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.canvas-generation-actions > button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--cs-rule);
+  border-radius: 3px;
+  background: var(--cs-card);
+  color: var(--cs-ink);
+}
+.canvas-generation-actions > button:focus-visible,
+.canvas-generation-revision:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 2px; }
+.canvas-generation-stage {
+  position: absolute;
+  z-index: 3;
+  inset: auto 6px 6px auto;
+  padding: 3px 7px;
+  background: var(--cs-card);
+  color: var(--cs-ink);
+  font-size: 11px;
+  pointer-events: none;
+}
+.canvas-node:has(> .canvas-generation-revision),
+.canvas-prompt-node.is-image-only:has(> .canvas-generation-revision) { overflow: visible; }
+.canvas-generation-revision {
+  position: absolute;
+  z-index: 5;
+  inset: calc(100% + 6px) auto auto 0;
+  width: min(340px, max(240px, 100%));
+  padding: 8px;
+  border: 1px solid var(--cs-rule);
+  border-radius: 3px;
+  background: var(--cs-card);
+  color: var(--cs-ink);
+  box-shadow: var(--cs-shadow);
+  user-select: text;
+  cursor: default;
+}

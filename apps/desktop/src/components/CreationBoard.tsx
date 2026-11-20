@@ -42,6 +42,7 @@ import {
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import type { CreativeComposerMode } from "../lib/creativeDraft";
 import { CHAT_PROVIDER_LABELS, chatCodexOptionError, localChatInputError, type ChatCodexOptions, type ChatComposeRequest, type ChatProvider } from "../lib/localChat";
+import { ChatPaymentCancelled } from "../lib/localChatPaid";
 import { ChatProviderSelect, useChatProviderAccess } from "./creation/ChatProviderSelect";
 import { CodexModelSelect, useChatCodexModels } from "./creation/CodexModelSelect";
 import { RATIOS } from "./creation/ratios";
@@ -286,7 +287,8 @@ export function CreationBoard({
     if (!claim) return;
     const scope = h3Scope;
     const request: ComposerLocalVideoRequest = { prompt: localPrompt, options: { ...generation.localVideo! },
-      firstFrame: localMode === "text" ? "" : localFrames[0]?.id ?? "", lastFrame: localMode === "frames" ? localFrames[1]?.id : undefined };
+      firstFrame: localMode === "text" ? "" : localFrames[0]?.id ?? "", lastFrame: localMode === "frames" ? localFrames[1]?.id : undefined,
+      audioAssetId };
     const current = () => {
       const state = useStore.getState();
       return mounted.current && h3ScopeRef.current === scope && claim.isCurrent()
@@ -705,7 +707,7 @@ export function CreationBoard({
         const current = useStore.getState();
         if (mounted.current && (!prepareProject || current.libraryHomeView === origin.libraryHomeView)
           && claim.isCurrent() && isWorkspaceOperationCurrent(originId, current.activeProjectId, current.projectRoutePending, origin.projectRouteRevision, current.projectRouteRevision)) exitCreationMode();
-      } catch (error) { notifyError(error, "对话未能发送，请检查连接后重试。"); }
+      } catch (error) { if (!(error instanceof ChatPaymentCancelled)) notifyError(error, "对话未能发送，请检查连接后重试。"); }
       finally { claim.release(); setSubmitting(false); }
       return;
     }

@@ -1034,6 +1034,8 @@ mod tests {
         db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)",[]).unwrap();
         let source=root.join("frame.png");image::RgbImage::new(32,32).save(&source).unwrap();
         let frame=ingest::ingest_generated(&paths,&db,&source,None,"test").unwrap();
+        let tail_source=root.join("tail.png");image::RgbImage::new(32,64).save(&tail_source).unwrap();
+        let tail=ingest::ingest_generated(&paths,&db,&tail_source,None,"test").unwrap();
         let video=root.join("fixture.mp4");
         let output=crate::media::tools::command(crate::media::tools::resolve(crate::media::tools::Tool::Ffmpeg).unwrap())
             .args(["-y","-f","lavfi","-i","color=c=blue:s=64x96:r=24","-t","0.25","-pix_fmt","yuv420p"]).arg(&video).output().unwrap();
@@ -1075,7 +1077,7 @@ mod tests {
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base=format!("http://{}",listener.local_addr().unwrap());
         let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap()});
-        let mut i=input();i.endpoint=base;i.first_frame=frame.id.clone();i.last_frame=Some(frame.id.clone());i.ratio="auto".into();
+        let mut i=input();i.endpoint=base;i.first_frame=frame.id.clone();i.last_frame=Some(tail.id);i.ratio="auto".into();
         let request=uuid::Uuid::new_v4().to_string();let path=root.join(format!("{request}.json"));
         let mut record=Record {installation: None, account:"tester".into(),project:"p".into(),input:i,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,cancel_acknowledged:false,elapsed_ms:None};
         save(&path,&record).unwrap();let http=client().unwrap();
@@ -1097,7 +1099,7 @@ mod tests {
         shared.phase.store(3, Ordering::SeqCst);
         let after_restart = poll(&http, &db, &paths, &path, &mut record, &request, &|| Ok(())).await.unwrap();
         assert_eq!(after_restart.asset.unwrap().id, asset.id);
-        assert_eq!(db.count_assets(None).unwrap(),2);assert_eq!(shared.posts.load(Ordering::SeqCst),1);
+        assert_eq!(db.count_assets(None).unwrap(),3);assert_eq!(shared.posts.load(Ordering::SeqCst),1);
         record.asset_id=None;shared.phase.store(2,Ordering::SeqCst);
         let failed=poll(&http,&db,&paths,&path,&mut record,&request,&|| Ok(())).await.unwrap();assert_eq!(failed.status,"failed");assert!(failed.message.contains("mock GPU error"));
         let mut denied=Record {installation: None, account:"tester".into(),project:"p".into(),input:record.input.clone(),prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,cancel_acknowledged:false,elapsed_ms:None};

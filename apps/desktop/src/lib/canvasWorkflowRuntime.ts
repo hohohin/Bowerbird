@@ -293,6 +293,11 @@ export class CanvasWorkflowController {
     return !this.document.nodes.some(node => node.id === id && node.kind === "trigger")
       && (workflowLockedNodes(this.document).has(id) || [...this.reservations.values()].some(item => item.access.includes(id)));
   }
+  isWriteLocked(id: string) {
+    return workflowRuns(this.document).some(run => workflowRunActive(run)
+      && (run.writeNodeIds ?? workflowWriteNodes(this.document.nodes, run.order)).includes(id))
+      || [...this.reservations.values()].some(item => item.writes.includes(id));
+  }
   canEditCompletionSources(id: string) {
     return this.document.nodes.some(node => node.id === id && node.kind === "trigger" && workflowTriggerMode(node) === "completion");
   }
@@ -721,7 +726,10 @@ export class CanvasWorkflowController {
         const sourceId = input.assetNodeId ?? input.canvasNodeId;
         if (sourceId && !canvasNodes.some(node => node.id === sourceId && node.hiddenAt == null)) throw new Error("来源卡片已不存在");
         if (input.nodeId && !nodes.some(node => node.id === input.nodeId)) throw new Error("来源卡片已不存在");
-        if (trigger?.kind !== "trigger" && [sourceId, input.nodeId, ...workflowInputProducers(nodes, input)].some(id => id && this.isLocked(id))) throw new Error("关联工作流正在运行，请先停止");
+        // A new reader leaves existing source definitions intact. Writes still
+        // block data connections, and extracting a frame requires an idle source.
+        if (trigger?.kind !== "trigger" && output.type !== "signal" && [sourceId, input.nodeId, ...workflowInputProducers(nodes, input)]
+          .some(id => id && (input.videoFrame ? this.isLocked(id) : this.isWriteLocked(id)))) throw new Error("来源卡片正在使用");
       }
       const signalOnly = outputs.length > 0 && outputs.every(output => output.type === "signal");
       const connectionId = options.connectionId ?? crypto.randomUUID();
@@ -1948,7 +1956,8 @@ export class CanvasWorkflowController {
     if (!prompt || prompt.length > 16000) throw new Error("请在卡片中填写 1–16000 字提示词后再优化");
     const input = retryInput ?? (image ? { prompt, referenceCount: referenceCount ?? node.inputs.image?.length ?? 0, ratio: node.ratio ?? "auto" } : { prompt, mode, seconds: options.seconds, ratio: options.ratio,
       firstFrameCount: mode !== "text" && node.inputs["first-frame"]?.length ? 1 : 0,
-      lastFrameCount: mode === "frames" && node.inputs["last-frame"]?.length ? 1 : 0 });
+      lastFrameCount: mode === "frames" && node.inputs["last-frame"]?.length ? 1 : 0,
+      audioReference: node.inputs[H3_VIDEO_AUDIO_PORT]?.length === 1 || undefined });
     const runId = crypto.randomUUID(), threadId = crypto.randomUUID(), accountId = useStore.getState().cloudAuth?.user_id ?? null;
     this.reservations.set(runId, { access: [nodeId], writes: [nodeId] });
     const start = this.beginStart(nodeId, "optimize");
@@ -2020,7 +2029,8 @@ export class CanvasWorkflowController {
             const prompt = hasAudio && "mode" in snapshot.input && snapshot.input.mode === "reference"
               ? restoreH3VideoAudioReference(snapshot.input.prompt, cleaned) : cleaned;
             if (!prompt) throw new Error("Cloud DSH 未返回有效的优化提示词，请检查任务结果");
-            snapshot = { ...snapshot, result: prompt, keptOriginal: restored?.keptOriginal ?? (prompt !== cleaned ? true : undefined) };
+            snapshot = { ...snapshot, result: prompt, keptOriginal: restored?.keptOriginal ?? (prompt !== cleaned ? true : undefined),
+              ...(payload.dshContinuation === true ? { dshContinuation: true } : {}) };
             // Save the result before applying it so recovery never repeats the paid request.
             await this.step(runId, id, { comfyOptimization: snapshot });
             break;
@@ -2067,7 +2077,8 @@ export class CanvasWorkflowController {
       const mode = comfyVideoMode(video);
       const draft = node.prompt.trim();
       const input = { prompt: draft || linkedText || video.prompt, mode, seconds: video.seconds, ratio: video.ratio,
-        firstFrameCount: video.firstFrame ? 1 : 0, lastFrameCount: video.lastFrame ? 1 : 0 };
+        firstFrameCount: video.firstFrame ? 1 : 0, lastFrameCount: video.lastFrame ? 1 : 0,
+        audioReference: video.audioAssetId ? true as const : undefined };
       await this.step(runId, node.id, { generationRunInput, comfyAutoGeneration: { input: video, videoText: draft ? linkedText : "" },
         comfyOptimization: { input, instruction: h3OptimizationInstruction(input), createdAt: Date.now(),
           inputBindings: JSON.stringify([node.inputs, node.promptReferences]) } });
@@ -2139,7 +2150,7 @@ export class CanvasWorkflowController {
     }
     if (halted()) return;
     if (!turnKey) throw new Error("原生成任务缺少轮次身份，请检查原任务");
-    await this.step(runId, id, { generationSubmission: "submitted", detail: "生成任务已提交，图片进度请查看会话" });
+    await this.step(runId, id, { generationSubmission: "submitted", detail: "生成任务已提交" });
     if (!await this.deliverSubmittedSessions(runId, node, halted)) return;
     await this.finish(runId, node, { image: { type: "image", nodeIds: [`gen-prompt:${jobId}:${turnKey}:0`] } });
   }

@@ -61,17 +61,18 @@ test('required upstream cards also deliver outputs without starting unrelated pa
   assert.deepEqual(workflowOrder(nodes, 'consumer', true), ['consumer']);
 });
 
-test('Agent references select inputs, preserve positions and follow current source without injecting unused text',()=>{
+test('Agent references follow their slot while all connected text remains available',()=>{
   const a={...node('a','instruction'),outputs:{text:{type:'text',text:'原文A'}}};
   const b={...node('b','instruction'),outputs:{text:{type:'text',text:'原文B'}}};
   const agent={...node('agent','agent'),agentTransport:'cloud',inputs:{text:[{nodeId:'a',portId:'text'},{nodeId:'b',portId:'text'}]}};
   agent.prompt='将 @[selected] 简写，再润色 @[selected]';
   agent.promptReferences=[{id:'selected',type:'text',input:agent.inputs.text[1],label:'文本 2'}];
   const compile=()=>compileAgentPrompt(agent,workflowInputValues([a,b,agent],generationInputNode(agent)));
-  assert.deepEqual(generationInputNode(agent).inputs.text,[{...agent.inputs.text[1],slot:2}]);
-  assert.deepEqual(compile(),{prompt:'将 【引用文本 1】 简写，再润色 【引用文本 1】',source:JSON.stringify({'引用文本 1':'原文B'}),assetIds:[]});
+  assert.deepEqual(generationInputNode(agent).inputs.text,agent.inputs.text.map((input,index)=>({...input,slot:index+1})));
+  assert.deepEqual(compile(),{prompt:'将 【引用文本 1】 简写，再润色 【引用文本 1】',source:JSON.stringify({'引用文本 1':'原文B','引用文本 2':'原文A'}),assetIds:[]});
   b.outputs.text.text='更新B';assert.equal(JSON.parse(compile().source)['引用文本 1'],'更新B');
-  agent.inputs.text=[{nodeId:'b',portId:'text'},{nodeId:'a',portId:'text'}];assert.equal(JSON.parse(compile().source)['引用文本 1'],'原文A');
+  agent.inputs.text=[{nodeId:'b',portId:'text'},{nodeId:'a',portId:'text'}];
+  assert.deepEqual(JSON.parse(compile().source),{'引用文本 1':'原文A','引用文本 2':'更新B'});
   agent.inputs.text=[];assert.throws(compile,/已断开/);
   agent.prompt='自由写一首诗';assert.deepEqual(compile(),{prompt:agent.prompt,source:'{}',assetIds:[]});
 });

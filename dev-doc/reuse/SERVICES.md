@@ -118,7 +118,7 @@ H3 视频三模式共用可选录音素材 ID 与既有媒体连线，`comfy_vid
 
 ## 探测媒体、生成缩略图或调用 FFmpeg
 
-- 素材视频转录从 [videoTranscript.ts](../../apps/desktop/src/lib/videoTranscript.ts) 调用 [video_transcript.rs](../../apps/desktop/src-tauri/src/commands/video_transcript.rs) 的能力、核价、开始和状态接口。MP3 提取复用 [speech.rs](../../apps/desktop/src-tauri/src/commands/video_replication/speech.rs) 的媒体工具，受限传输走 Cloud 公共签名入口。豆包标准版 2.0 的提交和查询在 [file-speech.ts](../../apps/agent-worker/src/cloud-understand/file-speech.ts)，按原 Cloud 任务 UUID 恢复。批量按现有目录范围逐个核对和提交。[视频素材](../VIDEO-MEDIA.md#素材视频管理的识别路线)
+- 素材视频转录从 [videoTranscript.ts](../../apps/desktop/src/lib/videoTranscript.ts) 调用 [video_transcript.rs](../../apps/desktop/src-tauri/src/commands/video_transcript.rs) 的能力、核价、开始和状态接口。预览和批量共用 `useVideoTranscriptPrice` 判断是否显示新任务操作。预览通过 `useVideoTranscript` 独立读取本机文稿及原任务状态。MP3 提取复用 [speech.rs](../../apps/desktop/src-tauri/src/commands/video_replication/speech.rs) 的媒体工具，受限传输走 Cloud 公共签名入口。豆包标准版 2.0 的提交和查询在 [file-speech.ts](../../apps/agent-worker/src/cloud-understand/file-speech.ts)，按原 Cloud 任务 UUID 恢复。批量按现有目录范围逐个核对和提交。[视频素材](../VIDEO-MEDIA.md#素材视频管理的识别路线)
 - 强化复刻（Cloud 已部署，桌面源码待发布）：`commands/video_replication/enhanced.rs`、`enhanced/{finish,markers}.rs` 经原 `video_replication` 的 `enhanced-*` 操作连接 `EnhancedReplication.tsx`；复用 reference 校验、媒体工具／probe／audio、understand 队列／计费、`codex_create_image` 即梦任务与 generation history，新增切片及分步骤回执、WAV 契约／豆包语音适配、词标记和字幕成片编排。`enhanced-frame` 沿项目／源哈希校验提取缓存中点帧，`replicationAnalysisNote` 适配原内容卡片两列 payload；正式输出复用图片入库和项目建卡接口。均为复刻内部接口，未另建 Agent runner；上线、验收和限制见 [复刻专项](../VIDEO-REPLICATION.md#强化复刻首版cloud-已部署桌面源码待发包)。
 
 - **用途／关键词**：probe、缩略图、ffprobe、FFmpeg、视频封面、二进制发现。

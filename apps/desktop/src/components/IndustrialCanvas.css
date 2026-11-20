@@ -123,16 +123,16 @@ html[data-theme] .canvas-tactical .workflow-card>header {
 html[data-theme] .canvas-tactical .workflow-card:is(:hover,.is-selected)>header {
   background:linear-gradient(var(--screen-line),var(--screen-line)) 15px 100%/calc(100% - 30px) 1px no-repeat;
 }
-html[data-theme] .canvas-tactical .workflow-card>header>button[aria-label="删除卡片"] {
-  top:-1px;right:-1px;width:var(--hud-close-width);padding:0;
+html[data-theme] .canvas-tactical .workflow-card>header>button.canvas-tactical-card-close { top:-1px;right:-1px; }
+html[data-theme] .canvas-tactical .workflow-card button.canvas-tactical-card-close {
+  padding:0;
   background:transparent;color:var(--cs-muted);
-  clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,8px 100%,0 calc(100% - 8px));
 }
-html[data-theme] .canvas-tactical .workflow-card>header>button[aria-label="删除卡片"]:is(:hover,:focus-visible):not(:disabled) {
+html[data-theme] .canvas-tactical .workflow-card button.canvas-tactical-card-close:is(:hover,:focus-visible):not(:disabled) {
   background:var(--cs-hover);color:var(--cs-ink);
 }
-html[data-theme] .canvas-tactical .workflow-card>header>button[aria-label="删除卡片"]::before { left:0;top:0;background:var(--screen-edge);box-shadow:none; }
-html[data-theme] .canvas-tactical .workflow-card>header>button[aria-label="删除卡片"] svg { align-self:center;justify-self:center;margin:0; }
+html[data-theme] .canvas-tactical .workflow-card .canvas-tactical-card-close::before { left:0;top:0;background:var(--screen-edge);box-shadow:none; }
+html[data-theme] .canvas-tactical .workflow-card .canvas-tactical-card-close svg { align-self:center;justify-self:center;margin:0; }
 html[data-theme] .canvas-tactical .workflow-card :is(textarea,.ProseMirror,.workflow-profile-name,.workflow-trigger-count input) { background:transparent; }
 html[data-theme] .canvas-tactical .workflow-preview::after { content:none; }
 html[data-theme] .canvas-tactical .workflow-card footer {

@@ -11,18 +11,11 @@ const root = process.cwd(), frozen = path.join(root, '.tmp/canvas-interaction-pe
 const out = '.tmp/canvas-interaction-performance'; await mkdir(out, { recursive: true });
 const slash = value => value.replaceAll('\\', '/');
 const renderedSourceHashes = {};
-// The isolated Tauri host owns a read-only IPC bridge. Test modules and the prebundled
-// Tauri JS client use a distinct mock bridge, exactly as in the Chrome fixture.
-const bridge = { __TAURI_INTERNALS__: '__CANVAS_TEST_IPC__', __TAURI_EVENT_PLUGIN_INTERNALS__: '__CANVAS_TEST_EVENTS__' };
+const runtime = native ? await import('./fixtures/canvas-interaction-performance/webview2.mjs') : null;
+const ipc = runtime?.isolatedCanvasIpc();
 const server = await createServer({ root, cacheDir: '.tmp/canvas-interaction-performance-vite' + (native ? '-native' : ''),
-  optimizeDeps: { entries: ['scripts/fixtures/canvas-interaction-performance/preview.html'], ...(native ? { esbuildOptions: {
-    define: Object.fromEntries(Object.entries(bridge).map(([a,b]) => ['window.' + a, 'window.' + b])),
-  } } : {}) }, plugins: [{
-  name: 'isolated-canvas-ipc', enforce: 'pre', transform(code, id) {
-    if (native && !id.includes('node_modules') && /\.[jt]sx?$/.test(id) && code.includes('__TAURI_'))
-      return code.replace(/__TAURI_INTERNALS__|__TAURI_EVENT_PLUGIN_INTERNALS__/g, key => bridge[key]);
-  },
-}, {
+  optimizeDeps: { entries: ['scripts/fixtures/canvas-interaction-performance/preview.html'], esbuildOptions: ipc?.esbuildOptions },
+  plugins: [...(ipc ? [ipc.plugin] : []), {
   name: 'interaction-instrumentation', enforce: 'pre',
   resolveId(source, importer) {
     if (!baseline || !importer || !source.startsWith('.')) return;
@@ -42,7 +35,7 @@ const server = await createServer({ root, cacheDir: '.tmp/canvas-interaction-per
   },
 }], server: { host: '127.0.0.1', port: 1628, strictPort: true, hmr: false, watch: null } });
 await server.listen();
-const host = native ? await (await import('./fixtures/canvas-interaction-performance/webview2.mjs')).openWebView(server.resolvedUrls.local[0]) : null;
+const host = runtime ? await runtime.openWebView(server.resolvedUrls.local[0]) : null;
 const browser = host?.browser ?? await chromium.launch({ channel: 'chrome', headless: true });
 const page = host?.page ?? await browser.newPage({ viewport: { width: 1800, height: 1200 } });
 if (native) await page.setViewportSize({ width: 1800, height: 1200 });

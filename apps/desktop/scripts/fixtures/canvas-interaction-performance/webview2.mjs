@@ -4,8 +4,20 @@ import { createServer } from 'node:net';
 import path from 'node:path';
 import { chromium } from '../../../../html-renderer/node_modules/playwright/index.mjs';
 
+// Keep synthetic IPC separate from Tauri's immutable native WebView bridge.
+export function isolatedCanvasIpc() {
+  const bridge = { __TAURI_INTERNALS__: '__CANVAS_TEST_IPC__', __TAURI_EVENT_PLUGIN_INTERNALS__: '__CANVAS_TEST_EVENTS__' };
+  return {
+    esbuildOptions: { define: Object.fromEntries(Object.entries(bridge).map(([a, b]) => ['window.' + a, 'window.' + b])) },
+    plugin: { name: 'isolated-canvas-ipc', enforce: 'pre', transform(code, id) {
+      if (!id.includes('node_modules') && /\.[jt]sx?$/.test(id) && code.includes('__TAURI_'))
+        return code.replace(/__TAURI_INTERNALS__|__TAURI_EVENT_PLUGIN_INTERNALS__/g, key => bridge[key]);
+    } },
+  };
+}
+
 // Reuse the debug-only, hidden WebView2 host. It has no desktop setup or database commands.
-export async function openWebView(origin) {
+export async function openWebView(origin, entry = 'scripts/fixtures/canvas-interaction-performance/preview.html') {
   const base = path.resolve('.tmp/audio-preview-native');
   await mkdir(base, { recursive: true });
   const root = await mkdtemp(path.join(base, 'canvas-'));
@@ -14,7 +26,7 @@ export async function openWebView(origin) {
   await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
   const port = socket.address().port;
   await new Promise(resolve => socket.close(resolve));
-  const url = new URL('scripts/fixtures/canvas-interaction-performance/preview.html', origin).href;
+  const url = new URL(entry, origin).href;
   const child = spawn(path.resolve('src-tauri/target/debug/examples/audio_preview_smoke.exe'), [], { windowsHide: true, stdio: ['ignore','ignore','pipe'], env: {
     ...process.env, APPDATA: path.join(root,'appdata'), LOCALAPPDATA: path.join(root,'localappdata'),
     BOWERBIRD_AUDIO_TEST_ROOT: root, BOWERBIRD_AUDIO_TEST_FIXTURES: path.join(root,'fixtures'), BOWERBIRD_AUDIO_TEST_URL: url, BOWERBIRD_AUDIO_TEST_SOURCES: '{}',

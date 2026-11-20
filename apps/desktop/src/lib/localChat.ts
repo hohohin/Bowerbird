@@ -54,7 +54,16 @@ export function chatCodexOptionError(options: ChatCodexOptions, models: ChatCode
     ? "所选模型不支持此推理强度，请重新选择。" : null;
 }
 export interface ChatComposeRequest { prompt: string; references: import("./types").Asset[]; provider: ChatProvider; codexOptions?: ChatCodexOptions; dshSkill?: import("./dshSkill").DshSkill }
-export interface ChatQuote { service: "chat_deepseek"; available: boolean; unit_cost: number | null; currency: "Bcoin"; pricing_version: number | null; dsh_vps_v2_available?: boolean; dsh_vps_skills_available?: boolean }
+export interface ChatQuote { service: "chat_deepseek"; available: boolean; unit_cost: number | null; currency: "Bcoin"; pricing_version: number | null; dsh_vps_v2_available?: boolean; dsh_vps_skills_available?: boolean; paid_available?: boolean }
+export interface ChatPaidAuthorization { account_id: string; model: string; pricing_version: number; max_credits: number; max_output_tokens: number }
+export type ChatPaidQuote = { available: false } | (ChatPaidAuthorization & {
+  available: true; rates_nano: { cache_hit: number; cache_miss: number; output: number };
+});
+export interface ChatPaidReceipt {
+  status: "pending" | "settled" | "refunded";
+  model: string; pricing_version: number; max_credits: number;
+  fee_nano?: string; debited_credits?: number; carry_nano?: string; refund_credits?: number;
+}
 export function chatProviderUnavailable(provider: ChatProvider, state: {
   cloudAvailable: boolean; loggedIn: boolean; cloudAllowed: boolean; localAllowed: boolean; codexReady: boolean; balance: number;
 }, quote: ChatQuote | null, dsh: ChatDshStatus | null = null): string | null {
@@ -66,6 +75,7 @@ export function chatProviderUnavailable(provider: ChatProvider, state: {
   if (!state.loggedIn) return "请先登录 Bowerbird 账号。";
   if (!state.cloudAllowed) return "当前账号暂不可使用 Cloud。";
   if (!quote) return "正在获取 Cloud 对话报价，请稍候。";
+  if (quote.paid_available === true) return null;
   if (!quote.available || quote.unit_cost !== 0 || !quote.dsh_vps_v2_available) return "云端 DSH 会话服务暂未开放。";
   return state.balance < quote.unit_cost ? "Bcoin 不足，请补充后重试。" : null;
 }
@@ -88,6 +98,7 @@ export interface ChatSummary {
 export interface ChatMessage {
   dshTerminalError?: string;
   dshFailureCode?: string;
+  paidCloudChat?: boolean;
   id: string;
   turnId: string;
   role: "user" | "assistant" | "tool";
@@ -147,13 +158,18 @@ export const localChat = {
     invoke<ChatDshAccount>("local_chat_dsh_account", { action, attemptId }),
   models: () => invoke<ChatCodexModel[]>("local_chat_models"),
   quote: () => invoke<ChatQuote>("local_chat_quote"),
+  quotePaid: (model: string) => invoke<ChatPaidQuote>("local_chat_quote_paid", { model }),
+  paidReceipt: (conversationId: string, turnId: string) => invoke<ChatPaidReceipt | null>("local_chat_paid_receipt", { conversationId, turnId }),
   list: (projectId: string) => invoke<ChatSummary[]>("local_chat_list", { projectId }),
   revision: (conversationId: string) => invoke<number | null>("local_chat_revision", { conversationId }),
   get: (conversationId: string) => invoke<ChatConversation | null>("local_chat_get", { conversationId }),
+  openH3Optimization: (projectId: string, nodeId: string, workflowRunId: string) =>
+    invoke<ChatConversation>("cloud_agent_open_h3_chat", { projectId, nodeId, workflowRunId }),
   newOnCard: (projectId: string, nodeId: string, conversationId: string, codexOptions?: ChatCodexOptions, provider?: ChatProvider) =>
     invoke<ChatConversation>("local_chat_new_on_card", { projectId, nodeId, conversationId, codexOptions, provider }),
   getByRequest: (requestId: string) => invoke<ChatConversation | null>("local_chat_get_by_request", { requestId }),
-  send: (input: LocalChatSendInput) => invoke<ChatConversation>("local_chat_send", { input }),
+  send: (input: LocalChatSendInput, paidAuthorization?: ChatPaidAuthorization) =>
+    invoke<ChatConversation>("local_chat_send", { input, ...(paidAuthorization ? { paidAuthorization } : {}) }),
   stop: (conversationId: string, turnId?: string) => invoke<ChatConversation | null>("local_chat_stop", { conversationId, turnId }),
   recover: (conversationId: string) => invoke<ChatConversation>("local_chat_recover", { conversationId }),
   questions: (conversationId: string) => invoke<AgentQuestionBatch[]>("local_chat_questions", { conversationId }),

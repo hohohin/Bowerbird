@@ -5,6 +5,14 @@ const KEY = /^[a-f0-9]{64}$/;
 const JOB = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export interface NativeChatClaim { session_key: string; previous_job_id: string | null }
 
+export function publishedNativeSession(root: string, sessionId: string, jobId: string): string | undefined {
+  if (!isAbsolute(root) || resolve(root) === resolve("/") || !KEY.test(sessionId) || !JOB.test(jobId)) {
+    throw new Error("dsh_session_identity_invalid");
+  }
+  const target = join(root, sessionId, jobId);
+  return existsSync(target) ? target : undefined;
+}
+
 /** The control plane chooses the parent from succeeded jobs for the same account/conversation. */
 export function stageNativeSession(root: string, jobId: string, {session_key: key, previous_job_id: parent}: NativeChatClaim, ephemeral = false) {
   if (!isAbsolute(root) || resolve(root) === resolve("/") || !KEY.test(key) || !JOB.test(jobId) ||

@@ -1,7 +1,8 @@
-import { deepEqual, equal, notEqual, ok } from "node:assert/strict";
+import { deepEqual, equal, notEqual, ok, rejects } from "node:assert/strict";
 import { test } from "node:test";
 import { randomBytes } from "node:crypto";
 import { Buffer } from "node:buffer";
+import type { ChatModelObservation } from "../../../cloud/supabase/functions/_shared/chat.ts";
 import {
   AgentControlError,
   type PreparedToolCall,
@@ -129,6 +130,22 @@ const requestBody = {
   tools: [],
 };
 
+test("Agent proxy injects the frozen rewrite policy only in the outgoing request", async () => {
+  const messages = [{ role: "user", content: "我的原始提示词" }];
+  const control = new FakeControl();
+  const proxy = await startMeteredDeepSeekProxy({
+    runId: "run-proxy", leaseId: "lease-proxy", phase: "compose_plan", control, allowInsecureLoopback: true,
+    upstream: { apiKey: "fixture", baseUrl: "http://127.0.0.1:43123", model: "deepseek-v4-flash" },
+    systemPolicy: "server-only H3 rewrite skill",
+    async fetch(_url, init) {
+      deepEqual(JSON.parse(init.body).messages, [{ role: "system", content: "server-only H3 rewrite skill" }, ...messages]);
+      return { ok: true, status: 200, async text() { return sse(); } };
+    },
+  });
+  try { equal((await proxyRequest(proxy.childEnvironment(), { ...requestBody, messages })).status, 200); }
+  finally { await proxy.close(); }
+});
+
 for (const permanent of [false, true]) test(`diagnostic persistence ${permanent ? "preserves its failure stage" : "retries a transient control error"} without repeating the model`, async () => {
   const control = new FakeControl();
   const upload = control.uploadDiagnostic.bind(control);
@@ -193,6 +210,219 @@ async function proxyRequest(environment: Readonly<Record<string, string>>, body:
     body: JSON.stringify(body),
   });
 }
+
+test("chat records only authorized, distinct exchanges and keeps verified metering for a truncated reply", async () => {
+  const submissions: string[] = [], observations: Array<[string, ChatModelObservation]> = [];
+  let upstream = 0, submitAllowed = true;
+  let reply = "";
+  const model = "deepseek-v4-pro";
+  const proxy = await startMeteredDeepSeekProxy({
+    runId: "chat-job", leaseId: "chat-lease", phase: "chat", allowInsecureLoopback: true,
+    upstream: { apiKey: "fixture", baseUrl: "http://127.0.0.1:43123", model },
+    async beforeModel() {},
+    async onModelSubmit(id) {
+      if (!submitAllowed) throw new Error("control unavailable");
+      submissions.push(id);
+    },
+    async onModelObservation(id, observation) {
+      equal(id, submissions.at(-1));
+      observations.push([id, observation]);
+    },
+    onUsage() {},
+    onModelError() {},
+    async fetch() {
+      upstream++;
+      equal(upstream, submissions.length);
+      return {ok:true,status:200,async text() { return reply; }};
+    },
+  });
+  const send = (content: string) => proxyRequest(proxy.childEnvironment(), {
+    model, stream: true, messages: [{role:"user",content}],
+  });
+  try {
+    reply = `data: ${JSON.stringify({
+      id:"deepseek-first", model:"DeepSeek-V4-Pro-0813", choices:[{finish_reason:"stop"}],
+      usage:{prompt_tokens:21,completion_tokens:7,prompt_cache_hit_tokens:6,prompt_cache_miss_tokens:15},
+    })}\n\ndata: [DONE]\n\n`;
+    equal((await send("first")).status,200);
+    deepEqual(observations[0],[submissions[0],{status:"observed",input_tokens:21,output_tokens:7,cache_hit_tokens:6,cache_miss_tokens:15,
+      provider_request_id:"deepseek-first",provider_model:"DeepSeek-V4-Pro-0813"}]);
+    equal((await send("first")).status,409);
+    equal(upstream,1);
+
+    reply = reply.replace('"stop"','"length"').replace('"deepseek-first"','"deepseek-second"')
+      .replace('"prompt_cache_miss_tokens":15','"prompt_cache_miss_tokens":2');
+    equal((await send("truncated")).status,422);
+    deepEqual(observations[1],[submissions[1],{status:"observed",input_tokens:21,output_tokens:7,
+      provider_request_id:"deepseek-second",provider_model:"DeepSeek-V4-Pro-0813"}]);
+
+    reply = sse(false);
+    equal((await send("missing usage")).status,502);
+    deepEqual(observations[2],[submissions[2],{status:"unknown"}]);
+    equal((await send("missing usage")).status,409);
+
+    const malformedUsageEvents = [
+      [{prompt_tokens:21},{completion_tokens:7}],
+      [{prompt_tokens:21,completion_tokens:7},{prompt_tokens:40}],
+      [{prompt_tokens:21,completion_tokens:7},{prompt_tokens:40,completion_tokens:7}],
+    ];
+    for (const [index, events] of malformedUsageEvents.entries()) {
+      reply = events.map(usage => `data: ${JSON.stringify({ usage })}\n\n`).join("") + "data: [DONE]\n\n";
+      // Keep the historical reply decoder compatible while refusing to treat
+      // conflicting fragments as a complete provider usage observation.
+      equal((await send(`ambiguous usage ${index}`)).status,200);
+      deepEqual(observations[3+index],[submissions[3+index],{status:"unknown"}]);
+    }
+    submitAllowed = false;
+    equal((await send("rejected before upstream")).status,502);
+    equal(upstream,6);
+    equal(new Set(submissions).size,6);
+    equal(observations.length,6);
+  } finally { await proxy.close(); }
+});
+
+test("chat observes an explicit upstream error and an interrupted fetch without inventing tokens or retransmitting", async () => {
+  const abort = new AbortController();
+  const started = Promise.withResolvers<void>();
+  const observations: ChatModelObservation[] = [];
+  let upstream = 0;
+  const proxy = await startMeteredDeepSeekProxy({
+    runId: "chat-interrupted", leaseId: "lease", phase: "chat", allowInsecureLoopback: true, signal: abort.signal,
+    upstream: {apiKey:"fixture",baseUrl:"http://127.0.0.1:43123",model:"deepseek-flash"},
+    async beforeModel() {},
+    async onModelSubmit() {},
+    async onModelObservation(_id, observation) { observations.push(observation); },
+    onUsage() {},
+    onModelError() {},
+    async fetch(_url, init) {
+      if (++upstream === 1) return {ok:false,status:429,async text() { return "private"; }};
+      await new Promise<never>((_, reject) => {
+        init.signal!.addEventListener("abort", () => reject(new Error("cancelled")), { once:true });
+        started.resolve();
+      });
+      throw new Error("unreachable");
+    },
+  });
+  const request = (content: string) => proxyRequest(proxy.childEnvironment(), {
+    model:"deepseek-flash",stream:true,messages:[{role:"user",content}],
+  });
+  try {
+    equal((await request("rejected")).status,429);
+    deepEqual(observations,[{status:"http_error",http_status:429}]);
+    const pending = request("interrupted");
+    await started.promise;
+    abort.abort();
+    equal((await pending).status,502);
+    deepEqual(observations,[{status:"http_error",http_status:429},{status:"unknown"}]);
+    equal(upstream,2);
+  } finally { await proxy.close(); }
+});
+
+test("chat cancellation during durable submission keeps the reservation and sends no upstream request", async () => {
+  const abort = new AbortController();
+  const authorized = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const submitted: string[] = [], observations: ChatModelObservation[] = [];
+  let upstream = 0;
+  const proxy = await startMeteredDeepSeekProxy({
+    runId: "chat-submit-cancelled", leaseId: "lease", phase: "chat", allowInsecureLoopback: true, signal: abort.signal,
+    upstream: { apiKey: "fake", baseUrl: "http://127.0.0.1:43123", model: requestBody.model },
+    async beforeModel() {},
+    async onModelSubmit(callId) { submitted.push(callId); authorized.resolve(); await release.promise; },
+    async onModelObservation(_callId, observation) { observations.push(observation); },
+    onUsage() {},
+    onModelError() {},
+    async fetch() { upstream++; return { ok: true, status: 200, async text() { return sse(); } }; },
+  });
+  try {
+    const pending = proxyRequest(proxy.childEnvironment());
+    await authorized.promise;
+    abort.abort();
+    release.resolve();
+    const response = await pending;
+    equal(response.status, 409);
+    deepEqual(await response.json(), { error: { code: "agent_run_cancelled" } });
+    equal(submitted.length, 1);
+    equal(upstream, 0);
+    deepEqual(observations, []);
+  } finally { await proxy.close(); }
+});
+
+test("paid chat authorizes the exact requested output cap and never falls through a denial", async () => {
+  const model = "deepseek-v4-pro";
+  const caps: Array<number | undefined> = [];
+  const sent: number[] = [];
+  const observations: ChatModelObservation[] = [];
+  let allow = true;
+  const options = {
+    runId: "paid-chat", leaseId: "lease", phase: "chat" as const, paidMaxOutputTokens: 16_384,
+    upstream: { apiKey: "fixture", baseUrl: "https://api.deepseek.com", model },
+    async beforeModel() {},
+    async onModelSubmit(_id: string, cap?: number) {
+      caps.push(cap);
+      if (!allow) throw new Error("authorization denied");
+    },
+    async onModelObservation(_id: string, observation: ChatModelObservation) { observations.push(observation); },
+    onUsage() {},
+    onModelError() {},
+    async fetch(url: string, init: {body: string; redirect?: string}) {
+      const request = JSON.parse(init.body);
+      equal(url, "https://api.deepseek.com/chat/completions");
+      equal(init.redirect, "error");
+      equal(request.max_tokens, caps.at(-1));
+      sent.push(request.max_tokens);
+      return { ok: true, status: 200, async text() { return sse(); } };
+    },
+  };
+  await rejects(() => startMeteredDeepSeekProxy({ ...options, upstream: { ...options.upstream, baseUrl: "https://other.example" } }),
+    /dsh_paid_model_proxy_config_invalid/);
+  const proxy = await startMeteredDeepSeekProxy(options);
+  const send = (content: string, overrides: Record<string, unknown> = {}) => proxyRequest(proxy.childEnvironment(), {
+    model, stream: true, messages: [{ role: "user", content }], ...overrides,
+  });
+  try {
+    for (const overrides of [{ max_tokens: 393_216 }, { max_tokens: 8192 }, {}]) {
+      const response = await send(`call-${sent.length}`, overrides);
+      equal(response.status, 200);
+      await response.text();
+    }
+    for (const overrides of [{ max_tokens: 0 }, { max_tokens: 1.5 }, { max_tokens: null }, { n: 2 }, { max_completion_tokens: 99_999 }]) {
+      equal((await send("invalid", overrides)).status, 400);
+    }
+    allow = false;
+    equal((await send("denied")).status, 502);
+    equal((await send("denied")).status, 409);
+    deepEqual(caps, [16_384, 8192, 16_384, 16_384]);
+    deepEqual(sent, [16_384, 8192, 16_384]);
+    equal(observations.length, 3);
+  } finally { await proxy.close(); }
+});
+
+test("paid chat keeps metering but withholds replies outside the written authorization", async () => {
+  let reply = sse(), sent = 0;
+  const model = "deepseek-flash";
+  const observations: ChatModelObservation[] = [];
+  const proxy = await startMeteredDeepSeekProxy({
+    runId: "paid-bad-usage", leaseId: "lease", phase: "chat", paidMaxOutputTokens: 8,
+    upstream: { apiKey: "fixture", baseUrl: "https://api.deepseek.com", model },
+    async beforeModel() {},
+    async onModelSubmit() {},
+    async onModelObservation(_id, observation) { observations.push(observation); },
+    onUsage() { throw new Error("invalid usage must not deliver a result"); },
+    onModelError() {},
+    async fetch() { sent++; return { ok: true, status: 200, async text() { return reply; } }; },
+  });
+  try {
+    for (const [input, output] of [[21, 9], [1_048_573, 7]]) {
+      reply = sse().replace('"prompt_tokens":21', `"prompt_tokens":${input}`).replace('"completion_tokens":7', `"completion_tokens":${output}`);
+      const response = await proxyRequest(proxy.childEnvironment(), { model, stream: true, messages: [{ role: "user", content: String(input) }] });
+      equal(response.status, 502);
+      deepEqual(await response.json(), { error: { code: "deepseek_paid_usage_outside_authorization" } });
+      deepEqual(observations.at(-1), { status: "observed", input_tokens: input, output_tokens: output, provider_request_id: "provider-request-1" });
+    }
+    equal(sent, 2);
+    equal(observations.length, 2);
+  } finally { await proxy.close(); }
+});
 
 async function assertResponseBodyRejected(body: string, safeErrorCode: string): Promise<void> {
   const control = new FakeControl();

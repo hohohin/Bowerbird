@@ -170,15 +170,18 @@ export function VideoTranscriptBatchButton({ scope }: { scope: Scope }) {
   const { projectId, label, folderId } = scope;
   const [open, setOpen] = useState(false);
   const task = useBatch(state => state.task);
+  const owner = useStore(state => state.cloudAuth?.cloud_available && state.cloudAuth.logged_in ? state.cloudAuth.user_id : null);
+  const canStartNew = useVideoTranscriptPrice(owner).credits !== null;
+  if (!open && !task && !canStartNew) return null;
   return <>
     <button type="button" className="library-filter-trigger" title="批量转录视频" aria-label="批量转录视频" onClick={() => setOpen(true)}>
       <Captions size={14} aria-hidden="true"/>
     </button>
-    {open && <VideoTranscriptBatch key={`${projectId ?? ""}:${folderId ?? ""}`} scope={{ projectId, label, folderId }} task={task} onClose={() => setOpen(false)}/>}
+    {open && <VideoTranscriptBatch key={`${projectId ?? ""}:${folderId ?? ""}`} scope={{ projectId, label, folderId }} task={task} canStartNew={canStartNew} onClose={() => setOpen(false)}/>}
   </>;
 }
 
-function VideoTranscriptBatch({ scope, task, onClose }: { scope: Scope; task: Batch | null; onClose: () => void }) {
+function VideoTranscriptBatch({ scope, task, canStartNew, onClose }: { scope: Scope; task: Batch | null; canStartNew: boolean; onClose: () => void }) {
   const { projectId, folderId, label } = scope;
   const [descendants, setDescendants] = useState(false);
   const [plan, setPlan] = useState<BatchPlan | null>(null);
@@ -187,10 +190,10 @@ function VideoTranscriptBatch({ scope, task, onClose }: { scope: Scope; task: Ba
   const auth = useStore(state => state.cloudAuth);
   const owner = auth?.logged_in ? auth.user_id ?? null : null;
   const currentPlan = owner && plan?.owner === owner ? plan : null;
-  const price = useVideoTranscriptPrice(!task && currentPlan?.videos.length ? owner : null);
+  const price = useVideoTranscriptPrice(canStartNew && !task && currentPlan?.videos.length ? owner : null);
 
   useEffect(() => {
-    if (task || !owner) return;
+    if (task || !owner || !canStartNew) return;
     let current = true;
     setPlan(null);
     setProgress(null);
@@ -205,9 +208,9 @@ function VideoTranscriptBatch({ scope, task, onClose }: { scope: Scope; task: Ba
       if (current) setError(userErrorMessage(reason, "无法读取当前范围的视频，请关闭后重试。"));
     });
     return () => { current = false; };
-  }, [projectId, folderId, label, descendants, task, owner]);
+  }, [projectId, folderId, label, descendants, task, owner, canStartNew]);
 
-  const canStart = Boolean(currentPlan?.videos.length && price.credits !== null);
+  const canStart = Boolean(canStartNew && currentPlan?.videos.length && price.credits !== null);
   const start = () => {
     if (!canStart || !currentPlan || price.credits === null) return;
     void runBatch(currentPlan, label, price.credits);
@@ -216,7 +219,7 @@ function VideoTranscriptBatch({ scope, task, onClose }: { scope: Scope; task: Ba
   return <ModalShell title="批量转录视频" onClose={onClose} footer={task
     ? task.running
       ? <button type="button" className="app-button-secondary" disabled={task.stopping} onClick={() => updateBatch({ stopping: true })}>{task.stopping ? "等待当前视频结束" : "停止剩余视频"}</button>
-      : <button type="button" className="app-button-secondary" onClick={() => { price.refresh(); useBatch.setState({ task: null }); }}>选择新的范围</button>
+      : canStartNew && <button type="button" className="app-button-secondary" onClick={() => { price.refresh(); useBatch.setState({ task: null }); }}>选择新的范围</button>
     : <button type="button" className="app-button-primary" disabled={!canStart} onClick={start}>开始转录</button>}>
     {task ? <div className="grid gap-3" role="status">
       <p>{task.label} · {task.done} / {task.total}</p>
@@ -228,7 +231,7 @@ function VideoTranscriptBatch({ scope, task, onClose }: { scope: Scope; task: Ba
       <p>{label}</p>
       {folderId && <label className="flex items-center gap-2"><input type="checkbox" checked={descendants} onChange={event => { setPlan(null); setProgress(null); setDescendants(event.target.checked); }}/> 包含子文件夹</label>}
       {error && <p role="alert">{error}</p>}
-      {!owner ? <p>请先登录 Bowerbird 账号。</p> : !error && (currentPlan
+      {!owner ? <p>请先登录 Bowerbird 账号。</p> : !canStartNew ? <p role="status">视频转录服务暂不可用。</p> : !error && (currentPlan
         ? <>
           <p>本次可处理 {currentPlan.videos.length} 个视频，跳过 {currentPlan.total - currentPlan.videos.length} 个。</p>
           {Array.from(currentPlan.exclusions, ([reason, count]) => <p key={reason}>{reason}（{count} 个视频）</p>)}

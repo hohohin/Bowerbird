@@ -15,6 +15,20 @@ const settings = page.getByRole('dialog', { name: 'DSH 设置', exact: true });
 const menu = page.getByRole('dialog', { name: '对话模型', exact: true });
 const openMenu = () => composer.getByRole('button', { name: /选择对话模型$/ }).click();
 const inspect = () => page.evaluate(async () => (await import('/scripts/fixtures/local-chat/mock.ts')).inspect());
+async function assertCompactDshControls(card) {
+  const row = card.locator('.workflow-agent-provider-row');
+  const provider = row.getByRole('button', { name: /选择对话模型$/ });
+  const model = row.getByRole('combobox', { name: 'DSH 模型', exact: true });
+  const effort = row.getByRole('combobox', { name: 'DSH 推理强度', exact: true });
+  const positions = await Promise.all([provider, model, effort].map(control => control.boundingBox()));
+  assert.ok(positions.every(rect => rect && rect.height > 0 && rect.width > 0));
+  const [providerRect, modelRect, effortRect] = positions;
+  assert.ok(positions.every(rect => Math.abs(rect.y + rect.height / 2 - providerRect.y - providerRect.height / 2) <= 2)
+    && providerRect.x + providerRect.width <= modelRect.x + 1
+    && modelRect.x + modelRect.width <= effortRect.x + 1, 'DSH provider, model and effort share one row');
+  assert.equal(await model.locator('.tactical-select-icon svg').count(), 1);
+  assert.equal(await effort.locator('.tactical-select-icon svg').count(), 1);
+}
 
 try {
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/local-chat/preview.html?settings`);
@@ -68,7 +82,8 @@ try {
   const localId = await panel.getAttribute('data-local-chat-id');
   await panel.getByRole('button', { name: '关闭对话详情' }).click();
   const localCard = page.locator(`.workflow-card:has([data-local-chat-id="${localId}"])`);
-  const bubble = localCard.getByRole('group', {name: 'Agent 提问', exact: true});
+  await assertCompactDshControls(localCard);
+  const bubble = localCard.getByRole('group', {name: 'Agent有一个问题', exact: true});
   const input = bubble.getByRole('textbox', {name: /文字答案/});
   await page.evaluate(async id => {
     const fixture = await import('/scripts/fixtures/local-chat/mock.ts');
@@ -99,9 +114,12 @@ try {
     ['test-question-two', [{ id: 'date', selected: [], custom: '周六' }]],
   ]);
   assert.equal((await inspect()).conversations[localId].status, 'running', 'answer acceptance alone does not finish the turn');
+  const cardComposer = localCard.locator('.workflow-agent-composer');
+  assert.equal(await cardComposer.getByRole('button').count(), 1);
+  await cardComposer.getByRole('button', { name: '停止回复', exact: true }).click();
+  await cardComposer.getByRole('button', { name: '发送续聊消息', exact: true }).waitFor();
   await localCard.getByRole('button', { name: '查看 Agent 详情' }).click();
   await panel.waitFor();
-  await panel.getByRole('button', { name: '停止回复', exact: true }).click();
   await panel.getByRole('button', { name: '取回回复', exact: true }).click();
   await panel.getByText('花影入月', { exact: true }).waitFor();
   assert.equal(await panel.getByRole('button', {name:'DSH 设置', exact:true}).count(), 0);
@@ -195,6 +213,7 @@ try {
   });
   const agent = page.locator('[data-workflow-card="legacy-dsh-agent"] .workflow-agent-chat-controls');
   await agent.waitFor();
+  await assertCompactDshControls(agent);
   assert.equal(await agent.getByRole('combobox', {name:'云端技能'}).count(), 0);
   assert.deepEqual(errors, []);
   console.log('PASS: DSH setup, credential redaction, URL restore, independent local entitlement, zero-price managed access, role labels, original-request recovery');

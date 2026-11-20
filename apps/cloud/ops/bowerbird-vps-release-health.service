@@ -1,0 +1,19 @@
+[Unit]
+Description=Bowerbird VPS release health probe
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/bowerbird/vps-release-health
+EnvironmentFile=-/etc/bowerbird/agent-health.env
+ExecStart=/usr/bin/node check-vps-release-health.mjs
+TimeoutStartSec=180
+StandardOutput=journal
+SyslogIdentifier=bowerbird-vps-release-health
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

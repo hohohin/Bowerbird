@@ -17,6 +17,7 @@ export type PlanningHarnessAdapterFactory = (
   childEnvironment: Readonly<Record<string, string>>,
   providerEnvironment?: Readonly<Record<string, string>>,
   activity?: ToolActivity,
+  options?: { reasoningEffort?: "high"; nativeSession?: { dir: string; sessionId: string } },
 ) => HarnessAdapter;
 
 /**

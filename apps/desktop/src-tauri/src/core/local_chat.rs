@@ -147,6 +147,8 @@ pub struct ChatMessage {
     pub dsh_terminal_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dsh_failure_code: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paid_cloud_chat: bool,
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -189,6 +191,20 @@ const SUMMARY_SQL: &str = "SELECT c.id,c.project_id,c.thread_id,c.node_id,c.titl
           (SELECT json_extract(n.payload_json,'$.initialCodexOptions') FROM canvas_nodes n WHERE n.id=c.node_id))
  FROM local_chat_conversations c";
 
+const H3_CHAT_PREFIX: &str = "h3-opt-";
+
+pub fn h3_chat_conversation_key(id: &str) -> Option<String> {
+    let source = id.strip_prefix(H3_CHAT_PREFIX)?;
+    let canonical = uuid::Uuid::parse_str(source).ok()?.to_string();
+    (canonical == source).then(|| format!("o-{source}"))
+}
+
+pub struct H3OptimizationChatSource {
+    pub agent_run_id: String,
+    prompt: String,
+    result: String,
+}
+
 fn summary(row: &Row<'_>) -> rusqlite::Result<ChatSummary> {
     Ok(ChatSummary {
         id: row.get(0)?,
@@ -217,7 +233,9 @@ fn read(conn: &Connection, id: &str) -> AppResult<Option<ChatConversation>> {
     };
     let mut statement = conn.prepare("SELECT m.id,m.turn_id,m.role,m.text,m.reference_asset_ids,m.status,m.created_at,m.updated_at,
         CASE WHEN m.role='assistant' AND json_valid(t.provider_turn_id) THEN json_extract(t.provider_turn_id,'$.terminalError') END,
-        CASE WHEN m.role='assistant' AND json_valid(t.provider_turn_id) THEN json_extract(t.provider_turn_id,'$.failureCode') END
+        CASE WHEN m.role='assistant' AND json_valid(t.provider_turn_id) THEN json_extract(t.provider_turn_id,'$.failureCode') END,
+        CASE WHEN m.role='assistant' AND json_valid(t.provider_turn_id)
+             THEN (json_extract(t.provider_turn_id,'$.paid') IS 1 AND json_type(t.provider_turn_id,'$.job') IS 'text') ELSE 0 END
         FROM local_chat_messages m JOIN local_chat_turns t ON t.id=m.turn_id WHERE m.conversation_id=?1
         ORDER BY t.created_at,t.rowid,m.created_at,m.id")?;
     let messages = statement
@@ -234,6 +252,7 @@ fn read(conn: &Connection, id: &str) -> AppResult<Option<ChatConversation>> {
                 updated_at: row.get(7)?,
                 dsh_terminal_error: row.get(8)?,
                 dsh_failure_code: row.get(9)?,
+                paid_cloud_chat: row.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -433,6 +452,73 @@ impl Database {
         read(&self.conn.lock().unwrap(), id)
     }
 
+    pub fn h3_optimization_chat_source(&self, project: &str, node: &str, workflow_run: &str, account: &str) -> AppResult<H3OptimizationChatSource> {
+        let conn = self.conn.lock().unwrap();
+        let raw: String = conn.query_row(
+            "SELECT w.document_json FROM canvas_workflows w JOIN projects p ON p.id=w.project_id
+             WHERE w.project_id=?1 AND p.archived_at IS NULL",
+            [project], |row| row.get(0),
+        ).optional()?.ok_or_else(|| error("请重新打开卡片所属的项目"))?;
+        let document: serde_json::Value = serde_json::from_str(&raw)?;
+        if !document["nodes"].as_array().is_some_and(|nodes| nodes.iter().any(|card| card["id"] == node)) {
+            return Err(error("卡片已不存在"));
+        }
+        let unavailable = || error("这次优化没有可续接的对话");
+        let run = document["runs"].as_array().into_iter().flatten().chain(std::iter::once(&document["run"]))
+            .find(|run| run["id"] == workflow_run).ok_or_else(unavailable)?;
+        if run["accountId"] != account {
+            return Err(error("请登录发起该优化的原账号后续聊"));
+        }
+        let step = &run["steps"][node];
+        let snapshot = &step["comfyOptimization"];
+        if snapshot["dshContinuation"] != true {
+            return Err(unavailable());
+        }
+        let agent_run_id = step["agentRunId"].as_str().ok_or_else(unavailable)?;
+        if h3_chat_conversation_key(&format!("{H3_CHAT_PREFIX}{agent_run_id}")).is_none() {
+            return Err(unavailable());
+        }
+        Ok(H3OptimizationChatSource {
+            agent_run_id: agent_run_id.to_string(),
+            prompt: snapshot["input"]["prompt"].as_str().ok_or_else(unavailable)?.to_string(),
+            result: snapshot["result"].as_str().filter(|text| !text.trim().is_empty()).ok_or_else(unavailable)?.to_string(),
+        })
+    }
+
+    /// The private local projection displays the paid first turn; the provider conversation is already on the server.
+    pub fn open_h3_optimization_chat(&self, project: &str, source: &H3OptimizationChatSource) -> AppResult<ChatConversation> {
+        let id = format!("{H3_CHAT_PREFIX}{}", source.agent_run_id);
+        let now = Utc::now().timestamp_millis();
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        if let Some(chat) = read(&tx, &id)? {
+            if chat.summary.project_id != project || chat.summary.provider != "dsh-cloud" {
+                return Err(error("该对话不属于当前项目"));
+            }
+            return Ok(chat);
+        }
+        let thread = format!("chat-thread-{id}");
+        let node = format!("chat-node-{id}");
+        let turn = format!("h3-rewrite-{}", source.agent_run_id);
+        let title = "H3 提示词优化";
+        let payload = serde_json::json!({"schema_version":1,"note_type":"chat","text":title,"conversation_id":id}).to_string();
+        tx.execute("INSERT INTO creative_threads(id,project_id,title,origin,created_at,updated_at)
+            SELECT ?1,p.id,?3,'direct',?4,?4 FROM projects p JOIN project_canvases c ON c.project_id=p.id WHERE p.id=?2 AND p.archived_at IS NULL",
+            params![thread,project,title,now/1000])?;
+        tx.execute("INSERT INTO canvas_nodes(id,project_id,thread_id,kind,payload_json,x,y,width,height,created_at,updated_at,hidden_at)
+            VALUES(?1,?2,?3,'note',?4,0,0,300,180,?5,?5,?5)",params![node,project,thread,payload,now/1000])?;
+        tx.execute("INSERT INTO local_chat_conversations(id,project_id,thread_id,node_id,title,status,created_at,updated_at,provider)
+            VALUES(?1,?2,?3,?4,?5,'idle',?6,?6,'dsh-cloud')",params![id,project,thread,node,title,now])?;
+        tx.execute("INSERT INTO local_chat_turns(id,conversation_id,request_id,request_json,provider_turn_id,status,created_at,updated_at)
+            VALUES(?1,?2,?1,'{}','{\"engine\":\"dsh-vps-v2\"}','done',?3,?3)",params![turn,id,now])?;
+        tx.execute("INSERT INTO local_chat_messages(id,conversation_id,turn_id,role,text,status,created_at,updated_at)
+            VALUES(?1,?3,?4,'user',?5,'done',?7,?7),(?2,?3,?4,'assistant',?6,'done',?7,?7)",
+            params![format!("{turn}-0-user"),format!("{turn}-1-assistant"),id,turn,source.prompt,source.result,now])?;
+        let chat = read(&tx, &id)?.ok_or_else(|| error("无法打开优化对话"))?;
+        tx.commit()?;
+        Ok(chat)
+    }
+
     /// Keep the public workflow node and all its connections. The old conversation's private
     /// note remains available for history, provider recovery, and independent continuations.
     pub fn new_agent_chat(&self, project: &str, node_id: &str, previous_id: &str, target: Option<ChatProvider>, options: Option<ChatCodexOptions>) -> AppResult<ChatConversation> {
@@ -609,7 +695,9 @@ impl Database {
         tx.execute("INSERT INTO local_chat_messages(id,conversation_id,turn_id,role,text,reference_asset_ids,status,created_at,updated_at) VALUES(?1,?2,?3,'user',?4,?5,'done',?6,?6)",params![format!("{turn_id}-0-user"),id,turn_id,input.text.trim(),serde_json::to_string(&input.reference_asset_ids)?,now])?;
         tx.execute("INSERT INTO local_chat_messages(id,conversation_id,turn_id,role,text,status,created_at,updated_at) VALUES(?1,?2,?3,'assistant','','running',?4,?4)",params![format!("{turn_id}-1-assistant"),id,turn_id,now])?;
         tx.execute("UPDATE local_chat_conversations SET status='running',error=NULL,revision=revision+1,updated_at=?2 WHERE id=?1",params![id,now])?;
-        tx.execute("UPDATE canvas_nodes SET hidden_at=NULL WHERE id=(SELECT node_id FROM local_chat_conversations WHERE id=?1)",[&id])?;
+        if h3_chat_conversation_key(&id).is_none() {
+            tx.execute("UPDATE canvas_nodes SET hidden_at=NULL WHERE id=(SELECT node_id FROM local_chat_conversations WHERE id=?1)",[&id])?;
+        }
         tx.execute(
             "UPDATE project_canvases SET updated_at=?2 WHERE project_id=?1",
             params![input.project_id, now / 1000],
@@ -674,6 +762,12 @@ impl Database {
             WHERE id=?1 AND status IN ('running','stopping')",params![turn,checkpoint])?;
         if changed != 1 { return Err(error("原云端 DSH 轮次已结束")); }
         Ok(())
+    }
+    pub fn local_chat_vps_checkpoint(&self, conversation: &str, turn: &str) -> AppResult<Option<String>> {
+        Ok(self.conn.lock().unwrap().query_row(
+            "SELECT t.provider_turn_id FROM local_chat_turns t JOIN local_chat_conversations c ON c.id=t.conversation_id
+             WHERE t.conversation_id=?1 AND t.id=?2 AND c.provider='dsh-cloud' AND t.provider_turn_id IS NOT NULL",
+            params![conversation, turn], |row| row.get(0)) .optional()?)
     }
     pub fn local_chat_recovery(&self, id: &str) -> AppResult<(String, String)> {
         let conn = self.conn.lock().unwrap();

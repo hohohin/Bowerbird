@@ -3,6 +3,7 @@ import type { ComfyVideoMode, ComfyVideoOptions } from "./comfyVideo";
 export interface H3PromptInput {
   prompt: string; mode: ComfyVideoMode; seconds: number; ratio: ComfyVideoOptions["ratio"];
   firstFrameCount: number; lastFrameCount: number;
+  audioReference?: true;
 }
 
 export interface H3ImagePromptInput {
@@ -59,6 +60,9 @@ export function cleanH3OptimizedPrompt(text: string): string {
 }
 
 export function restoreH3VideoAudioReference(original: string, optimized: string): string {
-  const tags = (prompt: string) => (prompt.match(/<Audio\s+\d+>/gi) ?? []).join("\n");
-  return tags(original) === tags(optimized) ? optimized : original;
+  const tags = /<Audio\s+\d+>/gi;
+  const references = optimized.match(tags) ?? [];
+  // A connected Ref2VA recording may be cited in multiple sections.
+  if (references.some(tag => tag !== "<Audio 1>") || !references.length && original.match(tags)) return original;
+  return optimized;
 }

@@ -4,6 +4,8 @@
 
 ## 正式渠道签名与公证（2026-11-11 源码，待 Mac 验收）
 
+双架构待办及每批验收回执见 [macOS 全量发布验收](RELEASE-READINESS.md)。
+
 `macOS/release.sh` 默认用于正式渠道。签名机设置 `APPLE_SIGNING_IDENTITY` 为本团队的 Developer ID Application 身份，并配置 Tauri 支持的 Apple 公证凭据，使构建出的 app 已装订公证票据。`BOWERBIRD_NOTARY_PROFILE` 指定本机 `notarytool` 已保存的钥匙串配置，用于 DMG 的公证与装订。正式流程对实际更新归档和挂载镜像中的 app 核对签名、Hardened Runtime、版本、架构和 Gatekeeper，再处理 DMG。跳过构建复用制品时也执行这些检查。操作参考 [Tauri 签名文档](https://v2.tauri.app/distribute/sign/macos/)。
 
 本地开发仍可使用 `run-signed.sh`。测试分发脚本可设置 `BOWERBIRD_MAC_CHANNEL=local COS_SKIP_UPLOAD=1`，输出位于 `macOS/dist/local`。正式放行还需对两种架构分别保留干净机安装、旧版升级和登录恢复记录。

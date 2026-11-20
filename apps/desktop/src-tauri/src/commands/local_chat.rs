@@ -242,6 +242,24 @@ pub async fn local_chat_quote(
 }
 
 #[tauri::command]
+pub async fn local_chat_quote_paid(
+    cloud: State<'_, CloudClient>, auth: State<'_, AuthClient>, model: String,
+) -> AppResult<Value> {
+    let account = auth.snapshot().user_id.ok_or_else(|| error("请先登录 Bowerbird 账号"))?;
+    dsh_vps::paid_quote(&cloud, &auth, &account, &model).await
+}
+
+#[tauri::command]
+pub async fn local_chat_paid_receipt(
+    db: State<'_, Arc<Database>>, cloud: State<'_, CloudClient>, auth: State<'_, AuthClient>,
+    conversation_id: String, turn_id: String,
+) -> AppResult<Value> {
+    let Some(saved) = db.local_chat_vps_checkpoint(&conversation_id, &turn_id)? else { return Ok(Value::Null); };
+    let Some(pending) = dsh_vps::Pending::parse(&turn_id, &saved)? else { return Ok(Value::Null); };
+    pending.paid_receipt(&cloud, &auth).await
+}
+
+#[tauri::command]
 pub async fn local_chat_recover(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
@@ -353,6 +371,7 @@ pub async fn local_chat_send(
     entitlement: State<'_, EntitlementService>,
     cloud: State<'_, CloudClient>,
     input: ChatSendInput,
+    paid_authorization: Option<dsh_vps::PaidAuthorization>,
 ) -> AppResult<ChatConversation> {
     // Lost IPC acknowledgements can be retried safely, including after account downgrade.
     if let Some(mut previous) = db.replay_local_chat(&input)? {
@@ -361,6 +380,9 @@ pub async fn local_chat_send(
     }
     if input.agent_node_id.is_some() { super::canvas_workflow::require_pro(&auth, &entitlement).await?; }
     let provider = db.local_chat_provider(&input)?;
+    if paid_authorization.is_some() && provider != ChatProvider::DshCloud {
+        return Err(error("本轮 Bcoin 授权仅适用于云端 DSH 对话。"));
+    }
     enum Runtime { Codex(String), DshLocal(dsh::LocalConnection), DshCloud(String, bool, bool) }
     let runtime = match provider {
         ChatProvider::CodexLocal => {
@@ -376,11 +398,25 @@ pub async fn local_chat_send(
         }
         ChatProvider::DshCloud => {
             let account = auth.snapshot().user_id.ok_or_else(|| error("请先登录 Bowerbird 账号"))?;
-            let quote = cloud_chat::request(&cloud, &auth, json!({"action":"quote"})).await?;
+            let quote = if let Some(authorization) = &paid_authorization {
+                let inherited = if input.codex_options.is_none() {
+                    input.conversation_id.as_deref().map(|id| db.get_local_chat(id)).transpose()?.flatten()
+                        .and_then(|chat| chat.summary.codex_options)
+                } else { None };
+                let model = input.codex_options.as_ref().or(inherited.as_ref())
+                    .and_then(|options| options.model.as_deref()).unwrap_or("deepseek-flash");
+                authorization.recheck(&cloud, &auth, &account, model).await?
+            } else {
+                let quote = cloud_chat::request_for_user(&cloud, &auth, json!({"action":"quote"}), &account).await?;
+                if quote["paid_available"] == true {
+                    return Err(error("请在对话中确认本轮 Bcoin 授权后发送。"));
+                }
+                if quote["available"] != true || quote["dsh_vps_v2_available"] != true || quote["unit_cost"] != 0 {
+                    return Err(error("云端 DSH 会话服务暂未开放"));
+                }
+                quote
+            };
             cloud_chat::ensure_account(&auth,&account)?;
-            if quote["available"] != true || quote["dsh_vps_v2_available"] != true {
-                return Err(error("云端 DSH 会话服务暂未开放"));
-            }
             if input.dsh_skill.is_some() && quote["dsh_vps_skills_available"] != true { return Err(error("云端 DSH 技能暂未开放")); }
             Runtime::DshCloud(account, quote["image_card_provider"] == true, quote["video_card_options"] == true)
         }
@@ -433,11 +469,15 @@ pub async fn local_chat_send(
             )
             .await,
             Runtime::DshCloud(account, image_card_provider, video_card_options) => {
-                let pending = dsh_vps::Pending::new(&turn,account);
+                let mut pending = dsh_vps::Pending::new(&turn,account);
                 match dsh_vps::create_body(&db, &id, &turn, &pending.key, input.dsh_skill.as_ref()) {
                     Ok(mut body) => {
                         if image_card_provider && input.dsh_skill.is_none() { body["image_card_provider"] = json!(true); }
                         if video_card_options && input.dsh_skill.is_none() { body["video_card_options"] = json!(true); }
+                        if let Some(authorization) = &paid_authorization {
+                            authorization.apply(&mut body);
+                            pending.paid = true;
+                        }
                         dsh_vps::run(&app,&db,&cloud,&auth,&id,&turn,pending,Some(body),cancel_rx).await
                     }
                     Err(detail) => Err(detail),

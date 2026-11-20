@@ -156,7 +156,9 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
     canvasLibraryStatus: canvasLibraryCheck?.menu === menu ? canvasLibraryCheck.status : "checking",
     generationCount: groupIds?.length ?? 0, generationCheck, hasGenerationGroup: !!menu.generationGroup, canvasImagesPending,
     canvas: canvas && { nodeCount: canvas.nodeIds.length, canRemove: !!removeFromCanvas, itemTarget: !!deletionTargets?.item,
-      groupCount: deletionTargets?.group?.count, canUngroup: !!menu.ungroupCanvasFolder },
+      groupCount: deletionTargets?.group?.count, canUngroup: !!menu.ungroupCanvasFolder,
+      generationActions: canvas.generationActions && { edit: !!canvas.generationActions.edit, revise: !!canvas.generationActions.revise,
+        create: !!canvas.generationActions.create } },
     file: file && { local: !!file.localPaths, entries: entries && { available: entries.available, canRemoveReferences: !!entries.removeReferences } },
     describe: { queued: describingId === assetId || describeQueue.some(item => item.assetId === assetId),
       cloudUsable: understandEngineUsable(describeAccess, "bowerbird-cloud"), cloudAvailable: cloudAuth?.cloud_available ?? false,
@@ -229,6 +231,9 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
       case "remove-references": close(); entries?.removeReferences?.(); break;
       case "remove-from-canvas": removeFromCanvas?.(); close(); break;
       case "ungroup": close(); menu.ungroupCanvasFolder?.(); break;
+      case "edit-generation-card": close(); canvas?.generationActions?.edit?.(); break;
+      case "continue-image-generation": close(); canvas?.generationActions?.revise?.(); break;
+      case "create-image-generation-card": close(); canvas?.generationActions?.create?.(); break;
       case "remove-from-project": removeFromProject(targetIds); break;
       case "delete-originals": confirmDelete(targetIds); break;
       case "delete-generation": if (groupIds) confirmDelete(groupIds); break;

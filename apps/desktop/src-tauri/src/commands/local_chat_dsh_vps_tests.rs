@@ -26,6 +26,85 @@ fn done() -> Value {
 }
 
 #[tokio::test]
+async fn local_chat_vps_paid_quote_rejects_changed_cap_version_and_owner() {
+    let handler = Router::new().route("/functions/v1/chat-proxy", post(|Json(body): Json<Value>| async move {
+        assert_eq!(body, json!({"action":"quote_paid","model":"deepseek-flash"}));
+        Json(json!({"available":true,"model":"deepseek-flash","pricing_version":7,"max_credits":20,
+            "max_output_tokens":1024,"rates_nano":{"cache_hit":1280,"cache_miss":64000,"output":256000}}))
+    }));
+    let (cloud, auth, server) = gateway(handler).await;
+    let mut authorized = PaidAuthorization { account_id: "test-user".into(), model: "deepseek-flash".into(), pricing_version: 7, max_credits: 20, max_output_tokens: 1024 };
+    let current = authorized.recheck(&cloud, &auth, "test-user", "deepseek-flash").await.unwrap();
+    assert_eq!(current["account_id"], "test-user");
+    authorized.pricing_version = 6;
+    assert_eq!(authorized.recheck(&cloud, &auth, "test-user", "deepseek-flash").await.unwrap_err().to_string(), QUOTE_CHANGED);
+    authorized.pricing_version = 7;
+    authorized.max_credits = 19;
+    assert!(authorized.recheck(&cloud, &auth, "test-user", "deepseek-flash").await.is_err());
+    authorized.max_credits = 20;
+    authorized.max_output_tokens = 2048;
+    assert!(authorized.recheck(&cloud, &auth, "test-user", "deepseek-flash").await.is_err());
+    assert!(authorized.recheck(&cloud, &auth, "different-user", "deepseek-flash").await.is_err());
+    assert!(authorized.recheck(&cloud, &auth, "test-user", "deepseek-v4-pro").await.is_err());
+    server.abort();
+}
+
+#[tokio::test]
+async fn local_chat_vps_paid_create_preserves_authorization_and_recovers_only_original_key() {
+    let (db, id, turn) = cloud_turn_for("dsh-cloud");
+    let mut pending = Pending::new(&turn, "test-user".into());
+    let key = pending.key.clone();
+    let authorized = PaidAuthorization { account_id: "test-user".into(), model: "deepseek-flash".into(), pricing_version: 7, max_credits: 20, max_output_tokens: 1024 };
+    let mut create = create_body(&db, &id, &turn, &key, None).unwrap();
+    assert_eq!(create["action"], "create");
+    assert!(create.get("max_credits").is_none());
+    authorized.apply(&mut create);
+    pending.paid = true;
+    let handler = Router::new().route("/functions/v1/chat-proxy", post(move |Json(body): Json<Value>| {
+        let key = key.clone();
+        async move {
+            let job = "11111111-1111-4111-8111-111111111111";
+            let result = match body["action"].as_str().unwrap() {
+                "create_paid" => {
+                    assert_eq!(body["idempotency_key"], key);
+                    assert_eq!(body["pricing_version"], 7);
+                    assert_eq!(body["max_credits"], 20);
+                    assert_eq!(body["max_output_tokens"], 1024);
+                    assert_eq!(body["dsh_options"]["model"], "deepseek-flash");
+                    assert!(body.get("account_id").is_none());
+                    return (axum::http::StatusCode::BAD_GATEWAY, Json(json!({"error":{"message":"模拟接单回执丢失"}})));
+                }
+                "get" => {
+                    assert_eq!(body, json!({"action":"get","idempotency_key":key}));
+                    json!({"job_id":job,"status":"succeeded","message":{"role":"assistant","content":"最终回复"}})
+                }
+                "get_paid_receipt" => {
+                    assert_eq!(body, json!({"action":"get_paid_receipt","job_id":job}));
+                    json!({"receipt":{"status":"settled","fee_nano":"128000000"}})
+                }
+                other => panic!("unexpected {other}"),
+            };
+            (axum::http::StatusCode::OK, Json(result))
+        }
+    }));
+    let (cloud, auth, server) = gateway(handler).await;
+    let (_stop, cancel) = watch::channel(false);
+    let apply = |_: String, _: Value| async { panic!("no tool requested") };
+    assert!(drive(&db, &cloud, &auth, &id, &turn, pending, Some(create), cancel.clone(), apply).await.is_err());
+    db.finish_local_chat(&id, &turn, "interrupted", None).unwrap();
+    let (_, saved) = db.local_chat_recovery(&id).unwrap();
+    db.resume_vps_chat(&id, &turn, &saved).unwrap();
+    let pending = Pending::parse(&turn, &saved).unwrap().unwrap();
+    assert!(pending.paid);
+    assert_eq!(drive(&db, &cloud, &auth, &id, &turn, pending, None, cancel, apply).await.unwrap(), "done");
+    db.finish_local_chat(&id, &turn, "done", None).unwrap();
+    let saved = db.local_chat_vps_checkpoint(&id, &turn).unwrap().unwrap();
+    let pending = Pending::parse(&turn, &saved).unwrap().unwrap();
+    assert_eq!(pending.paid_receipt(&cloud, &auth).await.unwrap()["fee_nano"], "128000000");
+    server.abort();
+}
+
+#[tokio::test]
 async fn local_chat_vps_one_create_and_idempotent_tool_ack_after_disconnect() {
     let (db, id, turn) = cloud_turn_for("dsh-cloud");
     let pending = Pending::new(&turn, "test-user".into());

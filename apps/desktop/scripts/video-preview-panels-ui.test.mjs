@@ -44,7 +44,7 @@ try {
     const invoke = window.__TAURI_INTERNALS__.invoke;
     const scrollIntoView = HTMLElement.prototype.scrollIntoView;
     window.previewTurns = [];
-    window.store.setState({ cloudAuth: { logged_in: true, user_id: 'test-owner' } });
+    window.store.setState({ cloudAuth: { logged_in: true, user_id: 'test-owner', cloud_available: true } });
     window.transcriptCapabilities = { available: true, credits: 7, maxDurationMs: 7200000 };
     const transcripts = {
       generated: { status: 'no_audio', text: '', utterances: [] },
@@ -199,6 +199,19 @@ try {
   await close();
 
   await open('long');
+  await page.waitForFunction(() => window.calls.some(call => call.command === 'video_transcript_get' && call.args.assetId === 'long'));
+  assert.equal(await transcript.count(), 0, 'no transcript panel for a new video while the service is closed');
+  assert.equal(await page.evaluate(() => window.calls.some(call => call.command === 'video_transcript_quote' && call.args.assetId === 'long')), false);
+  await close();
+
+  await open('plain');
+  await transcript.getByText('第二句。', { exact: true }).waitFor();
+  await close();
+
+  await page.evaluate(() => { window.transcriptCapabilities = { available: true, credits: 7, maxDurationMs: 7200000 }; });
+  await open('long');
+  await quote.waitFor();
+  await page.evaluate(() => { window.transcriptCapabilities = { available: false, credits: null, maxDurationMs: 7200000 }; });
   await quote.click();
   await transcript.getByText('视频转录服务暂不可用。', { exact: true }).waitFor();
   assert.equal(await transcript.getByRole('button', { name: '获取转录', exact: true }).count(), 0);
@@ -223,7 +236,7 @@ try {
   await close();
 
   assert.deepEqual(errors, []);
-  console.log('PASS: shared video preview, short and long full-track quotes, lookup-only recovery when unpriced, timestamp seek and conversation switching');
+  console.log('PASS: closed service hides new transcript actions and preserves saved records and recovery; short and long quotes, timestamp seek and conversation switching');
 } finally {
   await browser.close();
   await server.close();

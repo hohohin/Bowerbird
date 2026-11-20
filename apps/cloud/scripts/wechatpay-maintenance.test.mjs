@@ -44,3 +44,31 @@ test("errors and response payloads cannot expose credentials; failed jobs exit a
     transport: async () => Response.json({ bill_date: "2026-11-01", status: "differences", payment_count: 1, refund_count: 0, difference_count: 1 }) }),
     { code: "PAYMENT_BILL_NEEDS_ATTENTION" });
 });
+
+test("keeps validated bill date and HTTP status for failed responses without reading headers or body", async () => {
+  const now = new Date("2026-11-03T16:00:01Z");
+  for (const status of [401, 429, 500]) {
+    await assert.rejects(runWechatMaintenance({ env, now, mode: "bill", transport: async () => ({
+      ok: false, status,
+      get headers() { assert.fail("must not read response headers"); },
+      get body() { assert.fail("must not read response body"); },
+      json() { assert.fail("must not parse response body"); },
+      text() { assert.fail("must not read response text"); },
+    }) }), error => {
+      assert.equal(error.code, "PAYMENT_WORKER_HTTP_ERROR");
+      assert.deepEqual(error.summary, { task: "bill", bill_date: "2026-11-03", http_status: status });
+      return true;
+    });
+  }
+});
+
+test("drops non-HTTP and success status values and keeps the task name on reconcile errors", async () => {
+  for (const status of [0, 200, 600, `500 ${env.WECHAT_PAY_RECONCILE_TOKEN}`]) {
+    await assert.rejects(runWechatMaintenance({ env, transport: async () => ({ ok: false, status }) }), {
+      code: "PAYMENT_WORKER_HTTP_ERROR", summary: { task: "reconcile" },
+    });
+  }
+  await assert.rejects(runWechatMaintenance({ env, transport: async () => new Response(null, { status: 500 }) }), {
+    code: "PAYMENT_WORKER_HTTP_ERROR", summary: { task: "reconcile", http_status: 500 },
+  });
+});

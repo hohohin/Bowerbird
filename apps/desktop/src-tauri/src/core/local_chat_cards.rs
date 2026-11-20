@@ -695,7 +695,7 @@ fn compile(
             } => {
                 let mode = mode.as_deref().unwrap_or("frames");
                 let seconds = seconds.unwrap_or(8);
-                let ratio = ratio.as_deref().unwrap_or("9:16");
+                let ratio = ratio.as_deref().unwrap_or(if mode == "text" { "9:16" } else { "auto" });
                 let resolution = resolution.unwrap_or(0.8);
                 if prompt.trim().is_empty()
                     || prompt.chars().count() > 8000

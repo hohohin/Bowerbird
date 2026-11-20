@@ -50,7 +50,6 @@
 .comfy-environment-actions > :last-child button { background: var(--bb-blue); color: white; border-color: transparent; }
 .comfy-environment-actions button:disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
 
-.comfy-generation-progress { display: grid; gap: 7px; margin: 10px 0; color: var(--bb-muted); font-size: 12px; }
 /* Adapted from dylanharriscameron / ancient-falcon-18 (Uiverse), MIT.
    https://uiverse.io/dylanharriscameron/ancient-falcon-18
    See ComfyVideoProgress.LICENSE.txt. Width follows service progress; no loop animation. */

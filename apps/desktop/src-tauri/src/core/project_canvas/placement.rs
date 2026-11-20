@@ -345,6 +345,98 @@ pub(super) fn source<'a>(workflow: &'a Value, id: &str, agent: bool) -> Option<&
     None
 }
 
+fn array(value: &Value) -> impl Iterator<Item = &Value> {
+    value.as_array().into_iter().flatten()
+}
+
+fn inputs(node: &Value) -> impl Iterator<Item = &Value> {
+    node["inputs"].as_object().into_iter().flat_map(|ports| ports.values()).flat_map(array)
+}
+
+fn owns_session(node: &Value, id: &str) -> bool {
+    node["activeSessionNodeId"].as_str() == Some(id)
+        || array(&node["sessionNodeIds"]).chain(array(&node["outputs"]["image"]["nodeIds"])).any(|candidate| candidate == id)
+}
+
+pub(super) fn generation_source<'a>(workflow: &'a Value, job: &str, prompt: &str) -> Option<&'a Value> {
+    array(&workflow["nodes"]).find(|node| owns_session(node, prompt)).or_else(|| source(workflow, job, false))
+}
+
+/// Match the desktop presentation boundary without moving executable workflow state.
+pub(super) fn image_workflow_can_replace(card: &Value, workflow: &Value, snapshot: &ProjectCanvasSnapshot) -> bool {
+    let Some(id) = card["id"].as_str().filter(|_| card["kind"] == "generation" && card["generation"]["media"] != "video") else {
+        return false;
+    };
+    let mut pending: Vec<_> = array(&workflow["nodes"]).filter(|node| matches!(node["kind"].as_str(), Some("trigger" | "loop")))
+        .filter_map(|node| node["id"].as_str()).collect();
+    let mut visited = HashSet::new();
+    while let Some(producer) = pending.pop() {
+        if producer == id { return false; }
+        if !visited.insert(producer) { continue; }
+        let source = array(&workflow["nodes"]).find(|node| node["id"] == producer);
+        for node in array(&workflow["nodes"]) {
+            if inputs(node).any(|input| input["nodeId"] == producer || source.is_some_and(|source| {
+                let Some(target) = input["canvasNodeId"].as_str() else { return false; };
+                array(&source["resultNodeIds"]).any(|result| result == target)
+                    || (source["textTarget"]["nodeId"] == target
+                        && (matches!(input["cellId"].as_str(), Some("*" | "*text" | "*latest" | "*latest-image"))
+                            || input["cellId"] == source["textTarget"]["cellId"]
+                            || array(&source["textTarget"]["cellIds"]).any(|cell| cell == &input["cellId"])))
+            })) {
+                pending.extend(node["id"].as_str());
+            }
+        }
+    }
+    let runs = workflow["runs"].as_array().map(|runs| runs.iter().collect::<Vec<_>>()).unwrap_or_else(|| vec![&workflow["run"]]);
+    if runs.into_iter().any(|run| matches!(run["status"].as_str(), Some("running" | "waiting"))
+        && array(&run["loop"]["bodyIds"]).any(|body| body == id)) { return false; }
+    !array(&workflow["nodes"]).any(|node| {
+        if node["kind"] == "trigger" && inputs(node).any(|input| input["nodeId"] == id
+            || input["canvasNodeId"].as_str().or_else(|| input["pendingCompletionSession"].as_str()).is_some_and(|session| owns_session(card, session))) {
+            return true;
+        }
+        let target = &node["textTarget"];
+        if target["image"] != true || !array(&node["inputs"]["image"]).any(|input| input["nodeId"] == id && input["portId"] == "image") {
+            return false;
+        }
+        let Some(table) = snapshot.nodes.iter().find(|node| node.kind == CreativeNodeKind::Note
+            && node.hidden_at.is_none() && target["nodeId"] == node.id.as_str()) else { return false; };
+        let note: Value = serde_json::from_str(&table.payload_json).unwrap_or_default();
+        if !matches!(note["note_type"].as_str(), Some("text" | "images")) { return false; }
+        let mut cells = array(&note["cells"]).flat_map(array);
+        if target["appendAxis"].is_string() {
+            cells.any(|cell| array(&target["axisCellIds"]).any(|id| id == &cell["id"]))
+        } else {
+            target["append"] == true || cells.any(|cell| cell["id"] == target["cellId"])
+        }
+    })
+}
+
+/// Find the authoritative gallery anchor and detect earlier visible outputs.
+pub(super) fn image_workflow_history<'a>(source: &Value, snapshot: &'a ProjectCanvasSnapshot) -> (Option<&'a CanvasNode>, bool) {
+    let group = format!("workflow:{}", serde_json::json!([snapshot.canvas.project_id, source["id"]]));
+    let archived: HashSet<_> = snapshot.threads.iter().filter(|thread| thread.archived_at.is_some()).map(|thread| thread.id.as_str()).collect();
+    let grouped: HashSet<_> = snapshot.group_items.iter().map(|item| item.node_id.as_str()).collect();
+    let visible = snapshot.nodes.iter().filter(|node| node.hidden_at.is_none()
+        && node.thread_id.as_deref().is_none_or(|thread| !archived.contains(thread)));
+    let mut turns = HashSet::new();
+    let mut anchor: Option<&CanvasNode> = None;
+    for node in visible.clone().filter(|node| node.kind == CreativeNodeKind::Prompt) {
+        let data: Value = serde_json::from_str(&node.payload_json).unwrap_or_default();
+        if data["workflow_generation_group"] != group.as_str() && !owns_session(source, &node.id) { continue; }
+        if let Some(key) = turn(&data, false) { turns.insert(key); }
+        if data["generation_group_dissolved"] != true && anchor.is_none_or(|old| (node.created_at, &node.id) < (old.created_at, &old.id)) {
+            anchor = Some(node);
+        }
+    }
+    let has_product = visible.filter(|node| node.kind == CreativeNodeKind::Asset && node.role == Some(CreativeNodeRole::Output)
+        && node.asset_id.is_some() && !grouped.contains(node.id.as_str())).any(|node| {
+        let data: Value = serde_json::from_str(&node.payload_json).unwrap_or_default();
+        data["workflow_generation_group"] == group.as_str() || turn(&data, true).is_some_and(|key| turns.contains(&key))
+    });
+    (anchor, has_product)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
