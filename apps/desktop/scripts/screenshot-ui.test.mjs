@@ -268,12 +268,14 @@ try {
   await capture.waitFor(); assert.equal(await capture.textContent(), 'F1');
   await capture.click(); await page.keyboard.press('Control+Shift+S'); await page.waitForFunction(() => window.settings.screenshot_shortcuts.capture === 'Control+Shift+KeyS');
   await page.evaluate(() => { window.conflict = true; }); await capture.click(); await page.keyboard.press('F6');
-  await page.getByRole('alert').filter({ hasText: '请换一个组合键' }).waitFor(); assert.equal(await capture.textContent(), 'Ctrl + Shift + S');
+  await page.waitForFunction(async () => !!(await import('/src/store.ts')).useStore.getState().settingsSaveError);
+  assert.equal(await capture.textContent(), 'Ctrl + Shift + S');
   await page.evaluate(() => { window.conflict = false; });
   await page.getByRole('button', { name: '停用', exact: true }).first().click(); await page.waitForFunction(() => window.settings.screenshot_shortcuts.capture === '');
   await page.getByRole('button', { name: '恢复默认', exact: true }).click(); await page.waitForFunction(() => window.settings.screenshot_shortcuts.capture === 'F1');
   await capture.click(); await page.keyboard.press('Escape'); assert.equal(await capture.textContent(), 'F1');
-  await page.getByRole('button', { name: '立即截图', exact: true }).click();
+  await page.getByRole('button', { name: '截图工具' }).click();
+  await page.getByRole('menuitem', { name: '立即截图', exact: true }).click();
   assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'screenshot_start')));
   await page.screenshot({ path: '.tmp/screenshot/settings.png' });
   assert.deepEqual(errors, []); console.log('Screenshot UI passed: pixel-exact loupe/colour, edge flipping, Retina/fractional/unequal scales, native cursor IPC, repeated pixel nudges, expand/shrink/bounds/minimum size, text focus, cached base/draft rendering, Retina export, 10 annotation tools, filled shapes, line strips, in-place text, Esc capture, undo/redo, cancellation/retry, warm-window reuse/reset, stale-load rejection, pin, shortcut persistence/conflict.');

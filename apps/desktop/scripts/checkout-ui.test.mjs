@@ -76,11 +76,18 @@ try {
 
   await page.getByRole('radio', { name: '自定义充值金额', exact: true }).check();
   await page.getByLabel('自定义充值金额（元）', { exact: true }).fill('1234');
+  await page.evaluate(() => { window.mode = 'lost'; });
   await page.getByRole('button', { name: /^微信充值 ¥/ }).click();
+  await dialog.getByRole('button', { name: '重试原请求' }).waitFor();
+  const originalTopup = await page.evaluate(() => window.calls.filter(c => c.command === 'cloud_create_checkout').at(-1).args.request);
+  await page.evaluate(() => { window.mode = 'success'; });
+  await dialog.getByRole('button', { name: '重试原请求' }).click();
   await dialog.getByRole('img', { name: '微信付款二维码' }).waitFor();
   assert.match(await dialog.innerText(), /¥1234\.00/);
   assert.match(await dialog.innerText(), /24,680 Bcoin/);
   const lastRequest = await page.evaluate(() => window.calls.filter(c => c.command === 'cloud_create_checkout').at(-1).args.request);
+  assert.deepEqual(lastRequest, originalTopup);
+  assert.equal(lastRequest.product, 'bcoin_custom');
   assert.equal(lastRequest.custom_amount_yuan, 1234);
   assert.equal(lastRequest.amount_minor, undefined);
   assert.equal(lastRequest.credits, undefined);
@@ -106,7 +113,8 @@ try {
   assert.equal(await page.getByRole('img', { name: '微信付款二维码' }).count(), 0);
   assert.equal(await page.evaluate(() => window.store.getState().cloudEntitlement.user_id), 'user-c');
 
-  // Real standalone account panel, without unrelated canvas fixture dependencies.
+  // Fresh standalone account panel. The synthetic server resets on navigation.
+  await page.evaluate(() => localStorage.removeItem('bowerbird.checkout.user-a'));
   await page.goto('http://127.0.0.1:1817/scripts/fixtures/checkout/preview.html?standalone');
   await page.evaluate(() => { window.enabled = true; window.store.setState({ accountOnboardingForceOpen: true }); window.remount(); });
   const account = page.getByRole('dialog', { name: '设置', exact: true });

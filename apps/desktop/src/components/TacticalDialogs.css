@@ -371,7 +371,6 @@ html[data-theme] .file-workspace-move-dialog .app-modal-body > div.border {
 .comfy-environment-panel progress[value]::-moz-progress-bar { border-radius: 0; background: rgb(var(--holo-rgb) / .38); }
 
 /* Existing import/media chrome remains scoped outside dialog content. */
-[data-file-drop-overlay] { background: rgb(var(--bb-ink-rgb) / 6%); box-shadow: inset 0 0 0 1px var(--bb-muted); }
 .file-drop-feedback,
 .app-topbar .toolbar-import-notice { border-color: transparent; border-radius: 4px; background: var(--bb-surface-modal); box-shadow: 0 6px 20px rgb(var(--bb-shadow-rgb) / 14%); }
 .project-inspector-header .project-inspector-detail { border-color: transparent; border-radius: 3px; background: var(--bb-surface-2); }

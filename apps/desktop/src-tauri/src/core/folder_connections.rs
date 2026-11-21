@@ -69,6 +69,15 @@ fn directory(path: &Path) -> AppResult<PathBuf> {
 fn media(path: &Path) -> bool {
     external_files::image_path(path) || external_files::video_path(path) || external_files::audio_path(path) || crate::core::text_documents::text_path(path)
 }
+
+struct ScanFile {
+    source: PathBuf,
+    prepared: external_files::ConnectedFileFingerprint,
+    previous: Option<String>,
+    size: i64,
+    mtime: String,
+    verification: Option<i64>,
+}
 fn reference(path: &Path) -> bool {
     path.extension()
         .is_some_and(|v| v.eq_ignore_ascii_case("bowerbird"))
@@ -520,7 +529,8 @@ impl Database {
         let mut stmt = conn.prepare_cached(&format!("WITH requested(id,ordinal) AS (VALUES {requested})
           SELECT a.*,e.id AS entry_id,e.folder_id AS entry_folder_id,e.name AS entry_name,e.path AS entry_path,
           e.is_reference AS entry_reference,e.available AND f.available AND r.available AS entry_available,
-          COALESCE(x.fingerprint,c.sha256,e.mtime||':'||e.size) AS entry_version
+          CASE WHEN a.size>33554432 AND a.connected_scan_key IS NOT NULL AND NOT e.is_reference
+            THEN 'preview:'||a.connected_scan_key ELSE COALESCE(NULLIF(x.fingerprint,''),c.sha256,e.mtime||':'||e.size) END AS entry_version
           FROM requested q JOIN connected_entries e ON e.id=q.id JOIN assets a ON a.id=e.asset_id
           JOIN connected_folders f ON f.id=e.folder_id JOIN connected_roots r ON r.id=f.root_id
           LEFT JOIN external_assets x ON x.asset_id=a.id LEFT JOIN creative_file_fingerprints c ON c.asset_id=a.id
@@ -560,8 +570,13 @@ impl Database {
     }
     fn register_connected_asset(&self, paths: &LibraryPaths, path: &Path, preferred_id: Option<&str>) -> AppResult<Asset> {
         // Recover a uniquely identifiable original moved outside the app. Never merge two live originals.
-        let known:bool=self.conn.lock().unwrap().query_row("SELECT EXISTS(SELECT 1 FROM external_asset_paths WHERE path=?1 UNION ALL SELECT 1 FROM assets WHERE store_path=?1)",[string(path)],|r|r.get(0))?;
         let prepared = Self::prepare_connected_file(path)?;
+        let names = external_files::connection_path_spellings(path, &prepared.path);
+        let known: bool = self.conn.lock().unwrap().query_row(
+            "SELECT EXISTS(SELECT 1 FROM external_asset_paths WHERE path IN (?1,?2,?3)
+                UNION ALL SELECT 1 FROM assets WHERE store_path IN (?1,?2,?3))",
+            names.each_ref(), |row| row.get(0),
+        )?;
         let candidates: Vec<(String, String)> = {
             let conn = self.conn.lock().unwrap();
             let mut stmt=conn.prepare("SELECT a.id,a.store_path FROM assets a JOIN external_assets e ON e.asset_id=a.id WHERE e.fingerprint=?1
@@ -583,6 +598,77 @@ impl Database {
             }
         }
         self.index_prepared_connected_file(paths, path, preferred_id, prepared)
+    }
+
+    fn scan_path_has_removed_original(&self, path: &Path) -> AppResult<bool> {
+        let names = external_files::connection_path_spellings(path, path);
+        Ok(self.conn.lock().unwrap().query_row(
+            "SELECT EXISTS(SELECT 1 FROM assets a WHERE a.store_path IN (?1,?2,?3)
+                AND EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id
+                    UNION ALL SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id))",
+            names.each_ref(), |row| row.get(0),
+        )?)
+    }
+
+    fn scan_relocation_candidate(&self, path: &Path, size: i64) -> AppResult<bool> {
+        let paths = {
+            let conn = self.conn.lock().unwrap();
+            let mut query = conn.prepare_cached("SELECT a.store_path FROM assets a JOIN external_assets e ON e.asset_id=a.id
+                WHERE a.store_path<>?1 AND (a.size=?2 OR a.size IS NULL) AND e.fingerprint<>''
+                AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id)
+                AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id)
+                AND NOT EXISTS(SELECT 1 FROM external_asset_paths WHERE path=?1)")?;
+            let rows = query.query_map(params![string(path),size], |r| r.get::<_,String>(0))?;
+            rows.collect::<Result<Vec<_>,_>>()?
+        };
+        for possible in paths {
+            let possible = Path::new(&possible);
+            if !possible.exists() && !self.original_under_offline_connection(possible)? { return Ok(true); }
+        }
+        Ok(false)
+    }
+
+    fn commit_scan_files(&self, folder: &str, images: &Path, batch: &mut Vec<ScanFile>, errors: &mut Vec<String>, interrupted: bool) -> AppResult<bool> {
+        if interrupted {
+            // The foreground operation may have moved a queued file. Keep the
+            // remaining originals from the current listing and skip stale work.
+            batch.retain(|entry| fs::symlink_metadata(&entry.source).is_ok_and(|metadata| metadata.is_file()
+                && external_files::preview_key(&entry.source, &metadata).is_ok_and(|version| version == entry.prepared.version)));
+        }
+        if batch.is_empty() { return Ok(false); }
+        if !batch[0].source.parent().is_some_and(connection_root_readable) {
+            batch.clear();
+            return Err(invalid("目录位置已变化，请重新定位后刷新"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let mut tx = conn.transaction()?;
+        let mut changed = false;
+        for entry in batch.drain(..) {
+            let file = &entry.source;
+            let result = (|| -> AppResult<()> {
+                let savepoint = tx.savepoint()?;
+                let asset = Self::index_connected_in(&savepoint, images, file, entry.previous.as_deref(), &entry.prepared)?;
+                let file_name = name(file);
+                savepoint.execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference,size,mtime) VALUES(?1,?2,?3,?4,?5,0,?6,?7)
+                    ON CONFLICT(path) DO UPDATE SET asset_id=excluded.asset_id,available=1,size=excluded.size,mtime=excluded.mtime", params![id(),folder,asset,string(file),file_name,entry.size,entry.mtime])?;
+                savepoint.execute("DELETE FROM disconnected_library_assets WHERE asset_id=?1", [&asset])?;
+                if let (Some(previous), Some(generation)) = (&entry.previous, entry.verification) {
+                    savepoint.execute("UPDATE semantic_jobs SET verify_registered=0 WHERE asset_id=?1 AND generation=?2 AND model_key=(SELECT model_key FROM semantic_index_state WHERE id=1)",params![previous,generation])?;
+                }
+                if entry.previous.as_deref() != Some(asset.as_str()) { Self::connect_entry_projects_in(&savepoint, folder, &asset)?; }
+                savepoint.commit()?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => changed = true,
+                Err(error) => {
+                    changed |= tx.execute("UPDATE connected_entries SET available=0 WHERE path=?1 AND available=1", [string(file)])? > 0;
+                    errors.push(format!("{}：{}", name(file), error));
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
     }
     fn resolve_reference(&self, paths: &LibraryPaths, path: &Path, value: &MaterialReference) -> AppResult<Option<Asset>> {
         if let Some(asset) = self.get_asset(&value.asset_id)? {
@@ -627,7 +713,10 @@ impl Database {
                     return Ok(Some(updated));
                 }
             }
-            let expected:Option<String>=self.conn.lock().unwrap().query_row("SELECT COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",[&value.asset_id],|r|r.get(0))?;
+            if asset.store_path.as_deref().is_some_and(|path| Path::new(path).is_file()) {
+                self.complete_connected_fingerprint(&value.asset_id)?;
+            }
+            let expected:Option<String>=self.conn.lock().unwrap().query_row("SELECT COALESCE(NULLIF(e.fingerprint,''),f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",[&value.asset_id],|r|r.get(0))?;
             let expected = expected.or_else(|| {
                 asset
                     .store_path
@@ -840,6 +929,7 @@ impl Database {
         }
         let mut visited = HashSet::new();
         let generated = generated_connection_paths(paths);
+        let managed_images = fs::canonicalize(&paths.images)?;
         let mut errors = Vec::new();
         let mut yielded = false;
         let still_registered = |folder_id: &str, path: &Path| -> AppResult<bool> {
@@ -878,6 +968,7 @@ impl Database {
             let mut seen = HashSet::new();
             let mut seen_folders = HashSet::new();
             let mut complete = true;
+            let mut batch = Vec::with_capacity(64);
             for item in listed {
                 if yield_to_mutation() {
                     yielded = true;
@@ -932,14 +1023,19 @@ impl Database {
                     continue;
                 }
                 seen.insert(string(&file));
+                if reference(&file) {
+                    progress(self.commit_scan_files(&folder_id, &managed_images, &mut batch, &mut errors, !complete)?);
+                }
                 let processed = (|| -> AppResult<bool> {
-                    let old:Option<(String,i64,String,bool,Option<i64>)>=self.conn.lock().unwrap().query_row(
+                    let old:Option<(String,i64,String,bool,Option<i64>,Option<String>)>=self.conn.lock().unwrap().query_row(
                         "SELECT e.asset_id,COALESCE(e.size,-1),COALESCE(e.mtime,''),EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=e.asset_id UNION ALL SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=e.asset_id),
-                           (SELECT j.generation FROM semantic_jobs j JOIN semantic_index_state s ON s.model_key=j.model_key WHERE j.asset_id=e.asset_id AND j.verify_registered=1 AND s.run_state<>'off')
-                         FROM connected_entries e WHERE e.path=?1",[string(&file)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+                           (SELECT j.generation FROM semantic_jobs j JOIN semantic_index_state s ON s.model_key=j.model_key WHERE j.asset_id=e.asset_id AND j.verify_registered=1 AND s.run_state<>'off'),a.connected_scan_key
+                         FROM connected_entries e JOIN assets a ON a.id=e.asset_id WHERE e.path=?1",[string(&file)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+                    let metadata = fs::symlink_metadata(&file)?;
+                    let scan_key = external_files::preview_key(&file, &metadata)?;
                     let reference_target = if reference(&file) {
                         old.as_ref()
-                            .and_then(|(asset, _, _, _, _)| self.get_asset(asset).ok().flatten())
+                            .and_then(|(asset, ..)| self.get_asset(asset).ok().flatten())
                             .and_then(|a| a.store_path)
                     } else {
                         None
@@ -947,30 +1043,46 @@ impl Database {
                     let target_before = reference_target
                         .as_deref()
                         .map(|target| stamp(Path::new(target)).ok());
-                    let file_stamp = || -> AppResult<(i64, String)> {
-                        let (size, mut mtime) = stamp(&file)?;
-                        if let Some(target) = reference_target.as_deref() {
-                            mtime.push_str(&format!("|{:?}", stamp(Path::new(target)).ok()));
-                        }
-                        Ok((size, mtime))
-                    };
-                    let (size, mtime) = file_stamp()?;
+                    let size = metadata.len() as i64;
+                    let mut mtime = format!("{:?}", metadata.modified()?);
+                    if let Some(target_stamp) = &target_before { mtime.push_str(&format!("|{target_stamp:?}")); }
                     let reference_resolved = !reference(&file)
                         || old
                             .as_ref()
-                            .and_then(|(asset, _, _, _, _)| self.get_asset(asset).ok().flatten())
+                            .and_then(|(asset, ..)| self.get_asset(asset).ok().flatten())
                             .and_then(|a| a.store_path)
                             .is_some_and(|p| Path::new(&p).is_file());
                     if reference_resolved
                         && old
                             .as_ref()
-                            .is_some_and(|(_, s, m, marked_missing, verification)| !marked_missing && verification.is_none() && *s == size && *m == mtime)
+                            .is_some_and(|(_, s, m, marked_missing, verification, key)| !marked_missing && verification.is_none() && *s == size && *m == mtime && (reference(&file) || key.as_ref().map_or(!external_files::video_path(&file), |key| *key == scan_key)))
                     {
                         let changed = self.conn.lock().unwrap().execute(
                             "UPDATE connected_entries SET available=1 WHERE path=?1 AND available=0",
                             [string(&file)],
                         )? > 0;
                         return Ok(changed);
+                    }
+                    if !reference(&file) {
+                        let previous = old.as_ref().map(|row| row.0.clone());
+                        let canonical = fs::canonicalize(&file)?;
+                        if canonical != file || !metadata.is_file() { return Err(invalid("原文件路径已变化，请核对原件位置")); }
+                        // Recycle/cleanup remove the directory entry but retain the original
+                        // in assets. Measure it before any write transaction can restore it.
+                        let strict_registry = file.starts_with(&managed_images)
+                            || old.as_ref().is_some_and(|row| row.3)
+                            || (old.is_none() && (self.scan_path_has_removed_original(&canonical)?
+                                || self.scan_relocation_candidate(&file, size)?));
+                        if !strict_registry {
+                            let needs_hash = size <= external_files::DEFERRED_FINGERPRINT_BYTES as i64
+                                || old.as_ref().is_some_and(|row| row.4.is_some());
+                            let prepared = Self::prepare_connected_path(canonical, metadata, needs_hash)?;
+                            batch.push(ScanFile { source: file.clone(), prepared, previous, size, mtime, verification: old.and_then(|row| row.4) });
+                            if batch.len() == batch.capacity() {
+                                return self.commit_scan_files(&folder_id, &managed_images, &mut batch, &mut errors, !complete);
+                            }
+                            return Ok(false);
+                        }
                     }
                     let asset = if reference(&file) {
                         let value = load_reference(&file)?;
@@ -981,9 +1093,9 @@ impl Database {
                         };
                         asset
                     } else {
-                        self.register_connected_asset(paths, &file, old.as_ref().map(|(id, _, _, _, _)| id.as_str()))?
+                        self.register_connected_asset(paths, &file, old.as_ref().map(|row| row.0.as_str()))?
                     };
-                    if !reference(&file) && file_stamp()? != (size, mtime.clone()) {
+                    if !reference(&file) && stamp(&file)? != (size, mtime.clone()) {
                         return Err(invalid("文件正在变化，请稍后刷新"));
                     }
                     if target_before
@@ -1009,7 +1121,7 @@ impl Database {
                         let tx = conn.unchecked_transaction()?;
                         tx.execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference,size,mtime) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(path) DO UPDATE SET asset_id=excluded.asset_id,available=1,size=excluded.size,mtime=excluded.mtime",params![id(),folder_id,asset.id,string(&file),file_name,reference(&file),size,mtime])?;
                         tx.execute("DELETE FROM disconnected_library_assets WHERE asset_id=?1", [&asset.id])?;
-                        if let Some((id, _, _, _, Some(generation))) = &old {
+                        if let Some((id, _, _, _, Some(generation), _)) = &old {
                             tx.execute("UPDATE semantic_jobs SET verify_registered=0 WHERE asset_id=?1 AND generation=?2 AND model_key=(SELECT model_key FROM semantic_index_state WHERE id=1)", params![id,generation])?;
                         }
                         tx.commit()?;
@@ -1018,7 +1130,7 @@ impl Database {
                     // connected projects; explicitly reconnecting a folder restores cached members.
                     if old
                         .as_ref()
-                        .is_none_or(|(previous, _, _, _, _)| previous != &asset.id)
+                        .is_none_or(|(previous, ..)| previous != &asset.id)
                     {
                         self.connect_entry_projects(&folder_id, &asset.id)?;
                     }
@@ -1036,6 +1148,7 @@ impl Database {
                     }
                 }
             }
+            progress(self.commit_scan_files(&folder_id, &managed_images, &mut batch, &mut errors, !complete)?);
             // Reconcile only after all directory entries were read successfully; assets/creative data survive.
             if !complete || !connection_root_readable(&path) {
                 continue;
@@ -1295,6 +1408,20 @@ impl Database {
         tx.commit()?;
         Ok(())
     }
+
+    fn complete_fingerprints_before_directory_move(&self, path: &Path) -> AppResult<()> {
+        let pending = {
+            let conn = self.conn.lock().unwrap();
+            let mut query = conn.prepare("SELECT a.id,a.store_path FROM assets a JOIN external_assets e ON e.asset_id=a.id
+                WHERE a.connected_scan_key IS NOT NULL AND e.fingerprint='' AND a.store_path IS NOT NULL")?;
+            let rows = query.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        for (id, original) in pending {
+            if registered_path_spelling(Path::new(&original)).starts_with(path) { self.complete_connected_fingerprint(&id)?; }
+        }
+        Ok(())
+    }
     pub fn relocate_connected_directory(&self, id: &str, path: &Path) -> AppResult<()> {
         let folder = self.connected_folder(id)?;
         if folder.parent_id.is_some() {
@@ -1319,6 +1446,7 @@ impl Database {
                             .strip_prefix(&folder.path)
                             .map_err(|_| invalid("目录结构已变化"))?,
                     );
+                    if Path::new(&entry.path).is_file() { self.complete_connected_fingerprint(&entry.asset_id)?; }
                     let expected: Option<String> = self
                         .conn
                         .lock()
@@ -1329,7 +1457,7 @@ impl Database {
                             |r| r.get(0),
                         )
                         .optional()?;
-                    let expected = expected
+                    let expected = expected.filter(|hash| !hash.is_empty())
                         .or_else(|| external_files::fingerprint(Path::new(&entry.path)).ok())
                         .ok_or_else(|| invalid("原文件缺少校验信息，无法确认新位置"))?;
                     if external_files::fingerprint(&target)? != expected {
@@ -1347,6 +1475,7 @@ impl Database {
         if destination == Path::new(&folder.path) {
             return Ok(());
         }
+        self.complete_fingerprints_before_directory_move(Path::new(&folder.path))?;
         move_path_with(Path::new(&folder.path), &destination, || {
             self.repoint_tree(&folder, &destination, None)
         })?;
@@ -1362,6 +1491,7 @@ impl Database {
         if destination == Path::new(&source.path) {
             return Ok(());
         }
+        self.complete_fingerprints_before_directory_move(Path::new(&source.path))?;
         move_path_with(Path::new(&source.path), &destination, || {
             self.repoint_tree(&source, &destination, Some(&target))
         })?;
@@ -1392,12 +1522,14 @@ impl Database {
         let asset = self.get_asset(asset_id)?.ok_or_else(|| invalid("素材已不存在"))?;
         let original = Path::new(asset.store_path.as_deref().ok_or_else(|| invalid("原文件不可用"))?);
         let original_stamp = stamp(original)?;
+        let original_key = external_files::preview_key(original, &fs::symlink_metadata(original)?)?;
         let filename = name(original);
         let mut path = folder.join(format!("{filename}.bowerbird"));
         let data = material_reference(&path, &asset)?;
         if stamp(original)? != original_stamp {
             return Err(invalid("原文件正在变化，请稍后重试"));
         }
+        self.register_connected_fingerprint(asset_id, original, &original_key, &data.sha256)?;
         let expected: Option<String> = self.conn.lock().unwrap().query_row(
             "SELECT COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",
             [asset_id], |row| row.get(0))?;
@@ -1468,7 +1600,11 @@ impl Database {
                 return Err(invalid("原件位置已变化，请刷新后重新选择"));
             }
             if let Some(version) = &entry.version {
-                if version.len() != 64 {
+                if let Some(key) = version.strip_prefix("preview:") {
+                    if external_files::preview_key(source, &fs::symlink_metadata(source)?)? != key {
+                        return Err(invalid("原文件内容已变化，请刷新后重新选择"));
+                    }
+                } else if version.len() != 64 {
                     let (size, modified) = stamp(source)?;
                     if *version != format!("{modified}:{size}") {
                         return Err(invalid("原文件内容已变化，请刷新后重新选择"));
@@ -1670,6 +1806,7 @@ impl Database {
         if destination == Path::new(&entry.path) {
             return Ok(());
         }
+        if !entry.is_reference { self.complete_connected_fingerprint(&entry.asset_id)?; }
         move_path_with(Path::new(&entry.path), &destination, || {
             let conn = self.conn.lock().unwrap();
             let tx = conn.unchecked_transaction()?;
@@ -1731,16 +1868,17 @@ impl Database {
             }
             // The registered fingerprint anchors the confirmation. Always read the bytes at execution.
             if !verify_bytes {
-                if let Some(hash) = &expected { return Ok((path, hash.clone())); }
+                if let Some(hash) = expected.as_ref().filter(|hash| !hash.is_empty()) { return Ok((path, hash.clone())); }
             }
-            let before = stamp(&path)?;
+            let before = external_files::preview_key(&path, &fs::metadata(&path)?)?;
             let fingerprint = external_files::fingerprint(&path)?;
-            if stamp(&path)? != before {
+            if external_files::preview_key(&path, &fs::metadata(&path)?)? != before {
                 return Err(invalid("原文件正在变化，请稍后重新确认"));
             }
-            if expected.as_deref().is_some_and(|value| value != fingerprint) {
+            if expected.as_deref().is_some_and(|value| !value.is_empty() && value != fingerprint) {
                 return Err(invalid("原文件内容已变化，请刷新后重新确认"));
             }
+            self.register_connected_fingerprint(id, &path, &before, &fingerprint)?;
             Ok((path, fingerprint))
         })();
         let (path, fingerprint, missing) = match checked {
@@ -2061,7 +2199,7 @@ fn record_asset_move(tx: &rusqlite::Transaction<'_>, id: &str, old: &Path, new: 
         )?;
     }
     let names = external_files::connection_path_spellings(old, &registered_path_spelling(old));
-    tx.execute("UPDATE assets SET store_path=?2,origin_path=CASE WHEN origin_path IN (?3,?4,?5) THEN ?2 ELSE origin_path END,thumb_path=CASE WHEN thumb_path IN (?3,?4,?5) THEN ?2 ELSE thumb_path END WHERE id=?1",
+    tx.execute("UPDATE assets SET store_path=?2,connected_scan_key=NULL,origin_path=CASE WHEN origin_path IN (?3,?4,?5) THEN ?2 ELSE origin_path END,thumb_path=CASE WHEN thumb_path IN (?3,?4,?5) THEN ?2 ELSE thumb_path END WHERE id=?1",
         params![id,string(new),names[0],names[1],names[2]])?;
     Ok(())
 }

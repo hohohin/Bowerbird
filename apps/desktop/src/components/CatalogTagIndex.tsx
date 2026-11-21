@@ -63,7 +63,7 @@ export function CatalogTagIndex({ tags, active, dropTarget, alphabetic, pinned, 
         return <div key={tag.id}>
           {isPinned && index === 0 && <div className="catalog-letter-heading">置顶</div>}
           {!isPinned && alphabetic && (index === 0 || pinned.includes(tags[index - 1].id) || catalogInitial(tags[index - 1].name) !== initial) && <div className="catalog-letter-heading" aria-hidden="true">{initial}</div>}
-          <button className={`catalog-row${dropTarget === tag.id ? " is-drop-target" : ""}`} data-tag-id={tag.id} data-section-id={tag.id} aria-current={active === tag.id ? "location" : undefined}
+          <button className={`catalog-row${dropTarget === tag.id ? " is-drop-target" : ""}`} data-tag-id={tag.id} data-tag-name={tag.name} data-section-id={tag.id} aria-current={active === tag.id ? "location" : undefined}
             title={isPinned ? `${tag.name} · 已置顶` : tag.name} onClick={() => onNavigate(tag.id)}
             onContextMenu={event => {
               event.preventDefault(); event.stopPropagation();

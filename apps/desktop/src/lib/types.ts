@@ -402,6 +402,7 @@ export interface Analysis {
 export interface CodexHealth {
   ok: boolean;
   reason: string;
+  signed_in?: boolean;
 }
 
 export interface DreaminaHealth extends CodexHealth {
@@ -561,6 +562,10 @@ export interface GenerationHistory {
 export type AppTheme = "light" | "dark";
 
 /** 应用设置（后端 settings.json 持久化） */
+export type UnderstandProviderPref = "auto" | "bowerbird-cloud" | "codex";
+export type SettingsSection = "system" | "account" | "credits" | "models" | "personalization" | "about" | "developer";
+export type SettingsRequest = { section: SettingsSection; subscription?: "codex" | "jimeng" | "dsh" };
+
 export interface AppSettings {
   screenshot_shortcuts?: { capture: string; paste: string };
   screenshot_auto_save?: boolean;
@@ -568,6 +573,7 @@ export interface AppSettings {
   theme: AppTheme;
   auto_analyze_on_ingest: boolean;
   auto_analyze_prompt: string;
+  default_understand_provider?: UnderstandProviderPref;
   library_root: string | null;
   cloud_auto_understand: boolean;
   board_shift_pick: boolean;

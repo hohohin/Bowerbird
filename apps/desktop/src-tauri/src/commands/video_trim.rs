@@ -130,12 +130,21 @@ fn trim(db: &Database, paths: &LibraryPaths, source: &str, start: f64, end: f64,
 }
 
 fn replace(db: &Database, original: &Asset, output: &Path, thumbnail: &Path, meta: &media::probe::ProbeMeta) -> AppResult<()> {
+    let fingerprint = crate::core::external_files::fingerprint(output)?;
+    let modified = fs::metadata(output)?.modified()?.duration_since(std::time::UNIX_EPOCH).ok()
+        .map(|time| time.as_secs() as i64);
     let mut conn = db.conn.lock().unwrap();
     let tx = conn.transaction()?;
-    let changed = tx.execute("UPDATE assets SET size=?1,width=?2,height=?3,duration=?4,thumb_path=?5,file_mtime=?6,phash=NULL,colors=NULL WHERE id=?7 AND store_path=?8",
-        params![meta.size as i64, meta.width, meta.height, meta.duration, thumbnail.to_string_lossy(), chrono::Utc::now().timestamp(), original.id, original.store_path])?;
+    let changed = tx.execute("UPDATE assets SET size=?1,width=?2,height=?3,duration=?4,thumb_path=?5,file_mtime=?6,phash=NULL,colors=NULL,connected_scan_key=NULL WHERE id=?7 AND store_path=?8",
+        params![meta.size as i64, meta.width, meta.height, meta.duration, thumbnail.to_string_lossy(), modified, original.id, original.store_path])?;
     if changed != 1 { return Err(AppError::Other("原视频已被删除或移动，未覆盖".into())); }
     tx.execute("DELETE FROM asset_colors WHERE asset_id=?1", [&original.id])?;
+    tx.execute("INSERT INTO creative_file_fingerprints(asset_id,sha256,asset_size,asset_mtime) VALUES(?1,?2,?3,?4)
+        ON CONFLICT(asset_id) DO UPDATE SET sha256=excluded.sha256,asset_size=excluded.asset_size,asset_mtime=excluded.asset_mtime",
+        params![original.id,fingerprint,meta.size as i64,modified])?;
+    tx.execute("UPDATE analyses SET payload=json_set(payload,'$.current',json('false')) WHERE asset_id=?1
+        AND kind IN ('video_transcript','video_analysis') AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.current')=1 END",
+        [&original.id])?;
     // Same volume rename replaces atomically; encoding never writes into the source file.
     fs::rename(output, original.store_path.as_deref().unwrap())?;
     tx.commit()?;

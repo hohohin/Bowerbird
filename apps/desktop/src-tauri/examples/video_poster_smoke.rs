@@ -1,7 +1,11 @@
 //! Isolated real-decoder smoke. Never initializes Tauri or opens a user library.
 #![allow(dead_code, unused_imports, unused_mut)]
+#[path = "../src/media/audio.rs"]
+mod audio;
 #[path = "../src/error.rs"]
 mod error;
+#[path = "../src/media/probe.rs"]
+mod probe;
 #[path = "../src/media/tools.rs"]
 mod tools;
 #[path = "../src/media/thumb.rs"]
@@ -18,6 +22,7 @@ extern "C" {}
 
 fn main() {
     if let Some(code) = thumb::video_thumbnail_worker() { std::process::exit(code); }
+    if let Some(code) = probe::video_probe_worker() { std::process::exit(code); }
     let args: Vec<_> = std::env::args_os().collect();
     assert!((3..=4).contains(&args.len()), "usage: video_poster_smoke VIDEO OUTPUT.jpg [REFERENCE.jpg]");
     let source = std::path::Path::new(&args[1]);
@@ -37,7 +42,11 @@ fn main() {
     // which must still reach the native decoder on machines without FFmpeg.
     let canonical_source = std::fs::canonicalize(source).unwrap();
     let canonical_output = output.with_extension("canonical.jpg");
-    thumb::generate_video(&canonical_source, &canonical_output, 480).expect("extract canonical library path");
+    let metadata = thumb::generate_video_with_meta(&canonical_source, &canonical_output, 480, true)
+        .expect("extract canonical library path").expect("cover worker metadata");
+    let probed = probe::probe(&canonical_source).expect("probe canonical fixture");
+    assert_eq!((metadata.width, metadata.height), (probed.width, probed.height));
+    assert!((metadata.duration - probed.duration).abs() < 0.025, "wrong cover worker duration: {metadata:?}");
     assert_eq!(image, image::open(&canonical_output).unwrap().to_rgb8(), "canonical paths must preserve the cover pixels");
     std::fs::remove_file(canonical_output).unwrap();
     let broken = output.with_extension("broken.mp4");
@@ -46,5 +55,5 @@ fn main() {
     assert!(thumb::generate_video(&broken, &missing, 480).is_err());
     assert!(!missing.exists());
     std::fs::remove_file(broken).unwrap();
-    println!("PASS: real short video, portrait transform, 270x480 red JPEG, canonical library path, corrupt video fails without a partial cover");
+    println!("PASS: real short video, portrait transform, 270x480 red JPEG, canonical library path with metadata {metadata:?}, corrupt video fails without a partial cover");
 }

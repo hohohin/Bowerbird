@@ -192,7 +192,7 @@ html[data-theme="light"] .app-topbar.library-tactical {
 .library-tactical .library-filter-trigger::before { content: none; }
 .library-tactical :is(.app-button-dark, .app-button-accent, .topbar-account-trigger,
   .library-view-switch button, .library-media-switch button, .library-view-segments button,
-  .library-filter-trigger, .catalog-sidebar-heading button, .catalog-row, .catalog-selection button,
+  .library-filter-trigger, .catalog-sidebar-heading button, .catalog-row:where(:not([data-capture-drop-target])), .catalog-selection button,
   .folder-selection-bar button, .app-popover button, .folder-popover button, .library-color-action,
   .thumbnail-size-slider, .file-place-row, .folder-navigation button, .file-places-heading button,
   .file-place-remove, .folder-address):not(:disabled):is(:hover, :focus-visible, [aria-selected="true"],
@@ -203,7 +203,7 @@ html[data-theme="light"] .app-topbar.library-tactical {
 }
 .library-tactical :is(.app-button-dark, .app-button-accent, .topbar-account-trigger,
   .library-view-switch button, .library-media-switch button, .library-view-segments button,
-  .library-filter-trigger, .catalog-sidebar-heading button, .catalog-row, .catalog-selection button,
+  .library-filter-trigger, .catalog-sidebar-heading button, .catalog-row:where(:not([data-capture-drop-target])), .catalog-selection button,
   .folder-selection-bar button, .app-popover button, .folder-popover button, .library-color-action,
   .thumbnail-size-slider, .file-place-row, .folder-navigation button, .file-places-heading button,
   .file-place-remove, .folder-address):not(:disabled):is(:hover, :focus-visible) { animation: library-tactical-control-contact 160ms steps(1,end); }

@@ -540,11 +540,11 @@ pub async fn list_assets(
 /// 画板规范化节点按 asset_id 精确补水；不应用素材栏的分页、筛选或生成组折叠。
 #[tauri::command]
 pub async fn get_assets_by_ids(
-    db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<LibraryPaths>>,
     asset_ids: Vec<String>,
 ) -> Result<Vec<Asset>, AppError> {
-    let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.get_assets_by_ids(&asset_ids))
+    let path = paths.db.clone();
+    tokio::task::spawn_blocking(move || Database::open_read_only(&path)?.get_assets_by_ids(&asset_ids))
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }

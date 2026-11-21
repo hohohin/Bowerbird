@@ -9,6 +9,35 @@ fn trim_ranges_reject_invalid_values() {
 }
 
 #[test]
+fn overwrite_rebinds_the_original_and_retires_only_video_results() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.mp4");
+    let output = temp.path().join("trimmed.mp4");
+    fs::write(&source, b"first").unwrap();
+    fs::write(&output, b"other").unwrap();
+    let db = Database::open_in_memory().unwrap();
+    db.migrate().unwrap();
+    db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,ext,store_path,duration) VALUES('v','video','mp4',?1,2)",
+        [source.to_string_lossy().as_ref()]).unwrap();
+    for kind in ["video_transcript", "video_analysis", "description"] {
+        db.conn.lock().unwrap().execute("INSERT INTO analyses(id,asset_id,kind,payload) VALUES(?1,'v',?1,'{\"current\":true}')", [kind]).unwrap();
+    }
+    let asset = db.get_asset("v").unwrap().unwrap();
+    let thumbnail = temp.path().join("new.jpg");
+    let meta = media::probe::ProbeMeta { ext: "mp4".into(), width: 320, height: 240, size: 5, duration: 1.0 };
+    replace(&db, &asset, &output, &thumbnail, &meta).unwrap();
+    let updated = db.get_asset("v").unwrap().unwrap();
+    assert_eq!(updated.duration, Some(1.0));
+    assert_eq!(updated.thumb_path.as_deref(), thumbnail.to_str());
+    assert_eq!(fs::read(&source).unwrap(), b"other");
+    let conn = db.conn.lock().unwrap();
+    let registered: String = conn.query_row("SELECT sha256 FROM creative_file_fingerprints WHERE asset_id='v'", [], |r| r.get(0)).unwrap();
+    assert_eq!(registered, crate::core::external_files::fingerprint(&source).unwrap());
+    let current: String = conn.query_row("SELECT group_concat(kind) FROM analyses WHERE json_extract(payload,'$.current')=1", [], |r| r.get(0)).unwrap();
+    assert_eq!(current, "description");
+}
+
+#[test]
 #[ignore = "requires local FFmpeg/FFprobe; uses only synthetic media and a temporary library"]
 fn trim_real_video_copy_overwrite_and_failure_preservation() {
     let scratch = Scratch(std::env::temp_dir().join(format!("bowerbird-trim-test-{}", ulid::Ulid::new())));

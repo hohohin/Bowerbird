@@ -97,7 +97,7 @@ try {
     await surface.getByText(failure.expected, { exact: true }).waitFor();
     if (failure.settings) {
       await surface.getByRole('alert').locator('..').getByRole('button', { name: '配置自有订阅' }).click();
-      assert.equal(await page.evaluate(() => window.store.getState().subscriptionSettingsTarget), failure.settings);
+      assert.equal(await page.evaluate(() => window.store.getState().settingsRequest?.subscription), failure.settings);
     }
     const display = `${await surface.innerText()} ${await surface.locator('[title], [aria-label]').evaluateAll(nodes => nodes.map(node => `${node.title ?? ''} ${node.getAttribute('aria-label') ?? ''}`).join(' '))}`;
     assert.doesNotMatch(display, /https?:\/\/|C:\\private|TypeError|provider_token_missing|ExceedConcurrencyLimit|outcome_unknown|usage limit|private-request/);

@@ -209,12 +209,11 @@ pub async fn set_active_project(
     active: State<'_, ActiveProjectContext>,
     project_id: Option<String>,
 ) -> Result<(), AppError> {
-    if let Some(id) = &project_id {
-        if db.get_project(id)?.is_none() {
-            return Err(AppError::NotFound(format!("project {id}")));
-        }
-        db.ensure_project_canvas(id)?;
-        db.touch_project_canvas(id)?;
+    if let Some(id) = project_id.clone() {
+        let db = db.inner().clone();
+        tokio::task::spawn_blocking(move || db.open_project_canvas_scope(&id))
+            .await
+            .map_err(|error| AppError::Other(error.to_string()))??;
     }
     active.set(project_id);
     Ok(())

@@ -25,7 +25,9 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `PROJECT.md#关键约定`（云端修改交付规范） | 云端相关修改须在修改与验证后取得部署确认，确认后立即部署，部署与线上核验完成才算任务完成 | 所有云端相关修改开始前及交付前必读 |
 | `project_logs/README.md` | PROJECT 详细历史的日期日志、2026-10-31 整理前原件、行号与哈希索引及审计处理记录 | 追溯被替代约定、完整故障过程或本次文档整理时；现行结论仍读 PROJECT.md |
 | `dev-doc/UI-DESIGN-SPEC.md` | 当前工业制图视觉与交互规范、深浅色 tokens、卡片／控件／菜单／动效及验收规则 | 设计、修改或审查任何桌面界面前读；产品决策与实装状态仍以 PROJECT.md 为准 |
-| `apps/code-reader-mcp/README.md` | GPT 网页端只读代码 MCP、脱敏快照、Node 权限限制与官方私有 HTTPS 隧道接入 | 代码只读分享、快照更新、MCP 接入或撤销权限前必读 |
+| `apps/code-reader-mcp/README.md` | ChatGPT／Gemini 只读代码 MCP、脱敏快照、依赖覆盖、授权与隧道验证 | 代码只读分享、快照更新、MCP 接入或撤销权限前必读 |
+| `GLOSSARY.md` | 素材、画板、任务、订阅和 Bcoin 等术语 | 修改跨模块术语、用户提示或项目文档时 |
+| `apps/cloud/ALIPAY.md` | 支付宝个人 Pro 订阅的申请与本地配置准备 | 支付宝订阅申请、沙箱配置或权限核验前读 |
 | `dev-doc/Bowerbird开发计划.md` | 当前架构与代码入口（技术栈 / 数据身份 / 生成与理解 provider），已合并旧 provider 草案 | 任何实现工作之前必读；产品决策以 PROJECT.md 为准 |
 | `dev-doc/Bowerbird开发计划.md#复用地图` | 按用途查找 UI、桌面逻辑与服务接口；分类页记录源码、调用、依赖边界及覆盖缺口 | 新增功能或 UI 前先查，再核实当前源码与调用方式 |
 | `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | Bcoin 当前定价、Pro 功能订阅、价格快照、迁移／回退与验证边界；末尾保留历史 v2 草案 | 商业化、定价、积分、功能门控相关工作前必读 |

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowLeft, Compass, Images, LayoutDashboard, Link2, LoaderCircle } from "lucide-react";
 import { SidebarAccount } from "./SidebarAccount";
+import { ScreenshotMenu } from "./ScreenshotMenu";
 import { QuickTransfer } from "./QuickTransferPanel";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { MediaTypeFilter } from "./MediaTypeFilter";
@@ -187,6 +188,7 @@ export function Toolbar({
           <MediaTypeFilter />
 
         </div>}
+        <ScreenshotMenu />
         <SidebarAccount placement="topbar" />
       </div>
       {collectedNotice && (

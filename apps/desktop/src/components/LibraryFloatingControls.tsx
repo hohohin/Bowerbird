@@ -20,6 +20,7 @@ export function LibraryFloatingControls({ children, controlsRef }: { children: R
     if (!navigation) return;
     let wasCompact = false;
     const fit = () => {
+      if (host.closest('[inert], [aria-hidden="true"]')) return;
       const width = row.scrollWidth;
       const projected = heading.matches(":has(.library-source-navigation)");
       const navStyle = getComputedStyle(navigation), headingStyle = getComputedStyle(heading);
@@ -40,6 +41,9 @@ export function LibraryFloatingControls({ children, controlsRef }: { children: R
     observer.observe(heading); observer.observe(row); observer.observe(navigation);
     const position = new MutationObserver(fit);
     position.observe(heading, { attributes: true, attributeFilter: ['style', 'data-hover-anchored'] });
+    for (let ancestor = host.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      if (ancestor !== heading) position.observe(ancestor, { attributes: true, attributeFilter: ['inert', 'aria-hidden'] });
+    }
     fit();
     return () => { observer.disconnect(); position.disconnect(); };
   }, [controls]);

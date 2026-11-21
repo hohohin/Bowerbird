@@ -104,7 +104,11 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const scope = projectScope ? projectId : null;
   const rows = useMemo(() => connectedRows(folders), [folders]);
   const foldersById = useMemo(() => new Map(folders.map(folder => [folder.id, folder])), [folders]);
-  const sections = useMemo(() => rows.map(({ item }) => ({ id: item.id, name: item.name, count: item.count, tagId: null })), [rows]);
+  const canDropInFolder = useCallback((folder: FolderConnection) => folder.available && foldersById.get(folder.root_id)?.available !== false, [foldersById]);
+  const sections = useMemo(() => rows.map(({ item }) => ({
+    id: item.id, name: item.name, count: item.count, tagId: null,
+    collection: { id: item.id, available: canDropInFolder(item) },
+  })), [rows, canDropInFolder]);
   const current = folders.find(folder => folder.id === active);
   const connectionRoot = current && foldersById.get(current.root_id);
   const reading = !!current && !error && !current.error && (current.scanning || recoveringRoots.has(current.root_id));
@@ -329,7 +333,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   }
   async function relocate(folder: FolderConnection) { const path = await api.pickFolder(folder.path); if (path) await folderConnections.relocate(folder.root_id, path); }
   const menuButton = (label: string, action: () => void, disabled = false) => <button type="button" role="menuitem" className="app-context-item" disabled={disabled || busy} onClick={() => { setMenu(null); action(); }}>{label}</button>;
-  return <section ref={root} className="categorized-library library-tactical connected-collections" aria-label="按文件夹浏览素材" data-creation-pick-disabled={multiple || busy} data-file-import-project-id={scope ?? ""} data-file-import-collection-id={active ?? undefined} data-file-import-collection-name={current?.name}
+  return <section ref={root} className="categorized-library library-tactical connected-collections" aria-label="按文件夹浏览素材" data-creation-pick-disabled={multiple || busy} data-file-import-project-id={scope ?? ""}
     style={{ ...glass.style, "--catalog-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
     {glass.definition}<LibraryMotion/>
     <div className="file-view-heading">{navigation}<div className="video-collection-controls"><LibraryCatalogControls filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared}>
@@ -342,13 +346,15 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
         <OverlayScrollArea className="catalog-tree-scroll" viewportClassName="catalog-index" label="文件夹目录滚动条">
           <div role="tree" aria-label="文件夹层级">{visibleRows.map(({ item, depth }) => {
             const children = folders.some(folder => folder.parent_id === item.id);
+            const available = canDropInFolder(item);
             return <div key={item.id} role="treeitem" aria-label={item.name} aria-level={depth + 1} aria-selected={active === item.id} aria-expanded={children ? !collapsed.has(item.id) : undefined}
-              data-collection-id={item.id} data-file-import-collection-id={item.id} data-file-import-collection-name={item.name} tabIndex={active === item.id || !active ? 0 : -1} title={item.path} className={`catalog-row catalog-tree-row${!item.available ? " is-offline" : ""}${drop === item.id ? " is-drop-target" : ""}${menu && "folder" in menu && menu.folder.id === item.id ? " is-menu-open" : ""}`}
+              data-collection-id={item.id} data-file-import-collection-id={item.id} data-file-import-collection-name={item.name} data-file-import-collection-available={available}
+              tabIndex={active === item.id || !active ? 0 : -1} title={item.path} className={`catalog-row catalog-tree-row${!available ? " is-offline" : ""}${drop === item.id ? " is-drop-target" : ""}${menu && "folder" in menu && menu.folder.id === item.id ? " is-menu-open" : ""}`}
               style={{ paddingLeft: 4 + Math.min(depth, 8) * 17 }} onClick={() => navigate(item.id)} onKeyDown={event => treeKey(event, item)} onContextMenu={event => { event.preventDefault(); setMenu({ folder: item, x: event.clientX, y: event.clientY }); }}
-              onDragOver={event => { if (getDragAssets()?.length && item.available) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = isNativeAssetDrag() ? "copy" : "link"; setDrop(item.id); } }} onDragLeave={() => setDrop(null)}
-              onDrop={event => { const ids = getDragAssets(); setDrop(null); if (!ids?.length) return; event.preventDefault(); event.stopPropagation(); void run(() => folderConnections.references([...new Set(ids)], item.id), true); }}>
+              onDragOver={event => { if (getDragAssets()?.length && available) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = isNativeAssetDrag() ? "copy" : "link"; setDrop(item.id); } }} onDragLeave={() => setDrop(null)}
+              onDrop={event => { const ids = getDragAssets(); setDrop(null); if (!ids?.length) return; event.preventDefault(); event.stopPropagation(); if (available) void run(() => folderConnections.references([...new Set(ids)], item.id), true); }}>
               {children && <button className="catalog-tree-toggle" tabIndex={-1} aria-label={`${collapsed.has(item.id) ? "展开" : "收起"}${item.name}`} onClick={event => { event.stopPropagation(); toggle(item.id); }}>{collapsed.has(item.id) ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</button>}
-              <Folder className="catalog-tree-icon" size={14}/><span className="catalog-tree-name">{item.name}</span>{!item.available && <Unlink size={12} aria-label="连接不可用"/>}
+              <span className="catalog-tree-name">{item.name}</span>{!available && <Unlink size={12} aria-label="连接不可用"/>}
               <div className="catalog-tree-row-actions" onKeyDown={event => event.stopPropagation()}><button className="catalog-tree-add" aria-label={`在「${item.name}」中新建文件夹`} title="新建文件夹" disabled={!item.available} onClick={event => { event.stopPropagation(); setEditor({ parentId: item.id }); }}><Plus size={12}/></button>
                 <button aria-label={`「${item.name}」的更多操作`} title="更多操作" onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); setMenu({ folder: item, x: rect.right, y: rect.bottom }); }}><MoreHorizontal size={14}/></button></div>
             </div>;

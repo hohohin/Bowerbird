@@ -38,7 +38,7 @@ function visiblePage(page: Page, hasPending: boolean): Page & { sourceIndices?: 
 const layoutHistory = new Map<string, Map<string, readonly number[]>>();
 const assetKey = (asset: Asset) => asset.id;
 export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, pageScope, itemKey = assetKey, renderItem, emptySection }: {
-  filter: CatalogFilter; sections: CatalogSectionInfo[]; headings: boolean; width: number; revision: number;
+  filter: CatalogFilter; sections: (CatalogSectionInfo & { collection?: { id: string; available: boolean } })[]; headings: boolean; width: number; revision: number;
   scroll: RefObject<HTMLDivElement>; selected: Set<string>; jump: { id: string; sequence: number } | null; initialTop?: number;
   onActive: (id: string | null) => void; onAssetsChange?: (assets: Asset[]) => void;
   onBrowseGroup?: (head: string, shown: string | null) => void;
@@ -254,7 +254,10 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   if (headings) sections.forEach((section, index) => { if (layout.groups[index].top <= logicalTop + 1) current = section.id; });
   useEffect(() => { onActive(current); }, [current, onActive]);
   return <div ref={root} className={`catalog-sections catalog-virtual${filter.kind === "tags" ? " catalog-tag-sections" : ""}`} aria-label="分类素材" style={{ height: Math.min(layout.height + 100, 8_000_000), position: "relative", overflow: "clip", overflowAnchor: "none" }} data-cached-pages={cache.current.size}>
-    {sections.map((section, index) => <section key={section.id} data-catalog-section={section.id} data-tag-section={section.tagId ?? undefined} className={showEmpty && !section.count ? "is-empty" : undefined}
+    {sections.map((section, index) => <section key={section.id} data-catalog-section={section.id}
+      data-tag-section={section.tagId ?? undefined} data-tag-name={section.tagId ? section.name : undefined}
+      data-file-import-collection-id={section.collection?.id} data-file-import-collection-name={section.collection ? section.name : undefined}
+      data-file-import-collection-available={section.collection?.available} className={showEmpty && !section.count ? "is-empty" : undefined}
       aria-label={headings ? `${section.name}${section.tagId && filter.media === "images" ? "图片" : "素材"}` : undefined} style={{ position: "absolute", top: layout.groups[index].top * scale, height: layout.groups[index].height * scale, width: "100%" }}>
       {headings && (current === section.id || visible.some(block => block.section === index) || (showEmpty && !section.count && layout.groups[index].top + layout.groups[index].height >= logicalTop - 500 && layout.groups[index].top <= logicalTop + viewport.height + 500)) && <h3 style={{ position: "absolute", width: "100%", top: Math.min(Math.max(layout.groups[index].top, logicalTop), layout.groups[index].top + layout.groups[index].height - 40) - logicalTop + viewport.top - layout.groups[index].top * scale }} className={`catalog-section-heading${current === section.id && viewport.top > 0 ? " is-pinned" : ""}`}><span title={section.name} data-library-count={`${String(section.count).padStart(2, "0")} 项`} className={`catalog-section-title${current === section.id && viewport.top > 0 ? " library-floating-surface" : ""}`}>{section.name}</span>{!section.count && emptySection && <span className="connected-empty-section">{emptySection(section.id)}</span>}</h3>}
       {visible.filter(block => block.section === index).map(block => {

@@ -293,7 +293,8 @@ fn current_view(
         return Ok(None);
     }
     if let Some(path) = db.get_asset(asset_id)?.and_then(|asset| asset.store_path) {
-        if FileStamp::read(Path::new(&path)).is_ok_and(|stamp| stamp != record.stamp) {
+        if FileStamp::read(Path::new(&path)).is_ok_and(|stamp| stamp != record.stamp)
+            || (Path::new(&path).is_file() && !db.connected_source_matches(asset_id, Path::new(&path))?) {
             return Ok(None);
         }
     }

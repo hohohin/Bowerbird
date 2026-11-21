@@ -52,6 +52,144 @@ fn connected_index_reads_headers_without_creating_media_caches() {
     assert_eq!(fs::read_dir(&f.paths.images).unwrap().count(), 0);
 }
 
+fn padded_video(path: &Path, fixture: &str, size: u32) {
+    use std::io::{Seek, Write};
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/media").join(fixture);
+    fs::copy(source, path).unwrap();
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    let start = file.seek(std::io::SeekFrom::End(0)).unwrap();
+    file.write_all(&(size - start as u32).to_be_bytes()).unwrap();
+    file.write_all(b"free").unwrap();
+    drop(file);
+    fs::OpenOptions::new().write(true).open(path).unwrap().set_len(size.into()).unwrap();
+}
+
+#[test]
+fn large_connection_lists_duration_and_completes_preview_before_fingerprint() {
+    let f = Fixture::new();
+    let folder = f.path.parent().unwrap().join("videos");
+    fs::create_dir(&folder).unwrap();
+    let source = folder.join("large.mp4");
+    let length = DEFERRED_FINGERPRINT_BYTES as u32 + 1024;
+    padded_video(&source, "fragmented.mp4", length);
+    let root = f.db.connect_directory(&folder, None).unwrap();
+    let read = || {
+        let ids = f.db.connection_entry_ids(Some(&root), None, None, 0, 100).unwrap();
+        f.db.resolve_connection_entries(&ids).unwrap().pop().unwrap()
+    };
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    let first = read();
+    assert!((first.asset.duration.unwrap_or_default() - 0.4).abs() < 0.025);
+    assert_eq!(f.db.pending_connected_fingerprints("").unwrap(), [first.asset_id.clone()]);
+    let folder = f.paths.root.join("external-previews");
+    fs::create_dir_all(&folder).unwrap();
+    let preview = folder.join(format!("{}.jpg", preview_key(&source, &fs::metadata(&source).unwrap()).unwrap()));
+    image::RgbImage::new(16, 12).save(&preview).unwrap();
+    let result = f.db.complete_connected_preview_versioned(&f.paths, &source, preview.to_str().unwrap()).unwrap().unwrap();
+    assert_eq!(first.version.as_deref(), Some(result.1.as_str()));
+    assert_eq!(f.db.pending_connected_fingerprints("").unwrap(), [first.asset_id.clone()]);
+    let checked = f.db.preview_original_selection(&[first.asset_id.clone()]).unwrap();
+    assert_eq!(checked.len(), 1);
+    assert!(f.db.pending_connected_fingerprints("").unwrap().is_empty());
+    assert_eq!(f.db.current_preview_changes(vec![result]).unwrap().len(), 1);
+
+    let last_write = fs::metadata(&source).unwrap().modified().unwrap();
+    padded_video(&source, "fragmented-audio.mp4", length);
+    fs::OpenOptions::new().write(true).open(&source).unwrap()
+        .set_times(fs::FileTimes::new().set_modified(last_write)).unwrap();
+    assert!(!f.db.connected_source_matches(&first.asset_id, &source).unwrap());
+    assert!(f.db.complete_connected_preview_versioned(&f.paths, &source, preview.to_str().unwrap()).is_err()
+        || cached_preview(&f.paths, &source).unwrap().is_none());
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    let replaced = read();
+    assert_eq!(replaced.asset_id, first.asset_id);
+    assert_ne!(replaced.version, first.version);
+    assert!((replaced.asset.duration.unwrap_or_default() - 1.28).abs() < 0.025);
+    assert!(replaced.asset.thumb_path.is_none());
+    assert_eq!(f.db.pending_connected_fingerprints("").unwrap(), [first.asset_id.clone()]);
+    let confirmed = f.db.preview_asset_originals(&[first.asset_id]).unwrap().pop().unwrap();
+    assert_eq!(confirmed.fingerprint, fingerprint(&source).unwrap());
+    f.db.trash_asset_original_with(&confirmed, |path| { fs::remove_file(path)?; Ok(()) }).unwrap();
+    assert!(!source.exists());
+}
+
+#[test]
+fn scan_restores_large_originals_only_when_the_full_fingerprint_matches() {
+    for from_trash in [true, false] {
+        let f = Fixture::new();
+        let folder = f.path.parent().unwrap().join("videos");
+        fs::create_dir(&folder).unwrap();
+        let source = folder.join("large.mp4");
+        let saved = f.path.with_file_name("saved.mp4");
+        let length = DEFERRED_FINGERPRINT_BYTES as u32 + 1024;
+        padded_video(&source, "fragmented.mp4", length);
+        let root = f.db.connect_directory(&folder, None).unwrap();
+        let entries = || f.db.connection_entry_ids(Some(&root), None, None, 0, 100).unwrap();
+        f.db.scan_connection(&f.paths, &root).unwrap();
+        let first = f.db.resolve_connection_entries(&entries()).unwrap().pop().unwrap();
+        let asset_id = first.asset_id;
+        f.db.complete_connected_fingerprint(&asset_id).unwrap();
+        let original = f.db.preview_asset_originals(std::slice::from_ref(&asset_id)).unwrap().pop().unwrap();
+        if from_trash {
+            f.db.trash_asset_original_with(&original, |path| { fs::rename(path, &saved)?; Ok(()) }).unwrap();
+        } else {
+            fs::rename(&source, &saved).unwrap();
+            let missing = f.db.preview_asset_originals(std::slice::from_ref(&asset_id)).unwrap().pop().unwrap();
+            assert!(missing.missing);
+            assert_eq!(f.db.cleanup_missing_original(&missing).unwrap(), 1);
+            let [_, _, ordinary] = connection_path_spellings(&source, &source);
+            f.db.conn.lock().unwrap().execute("UPDATE assets SET store_path=?2 WHERE id=?1", params![asset_id, ordinary]).unwrap();
+        }
+        assert!(entries().is_empty());
+
+        padded_video(&source, "fragmented-audio.mp4", length);
+        let error = f.db.scan_connection(&f.paths, &root).unwrap_err();
+        assert!(error.to_string().contains("原件校验不符"), "{error}");
+        assert!(entries().is_empty());
+        let conn = f.db.conn.lock().unwrap();
+        let marked: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=?1 UNION ALL SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=?1)", [&asset_id], |row| row.get(0)).unwrap();
+        assert!(marked);
+        drop(conn);
+
+        fs::remove_file(&source).unwrap();
+        fs::rename(&saved, &source).unwrap();
+        f.db.scan_connection(&f.paths, &root).unwrap();
+        let restored = f.db.resolve_connection_entries(&entries()).unwrap().pop().unwrap();
+        assert_eq!(restored.asset_id, asset_id);
+        assert!(restored.available);
+        assert!(!restored.asset.library_hidden);
+        assert!((restored.asset.duration.unwrap() - 0.4).abs() < 0.025);
+        let current = f.db.preview_asset_originals(&[asset_id]).unwrap().pop().unwrap();
+        assert_eq!(current.fingerprint, original.fingerprint);
+        assert!(!current.missing);
+    }
+}
+
+#[test]
+#[ignore = "50-video local input throughput benchmark; run explicitly"]
+fn benchmark_scan_fifty_large_videos() {
+    let f = Fixture::new();
+    let folder = f.path.parent().unwrap().join("benchmark");
+    fs::create_dir(&folder).unwrap();
+    let media: Vec<_> = (0..50).map(|i| {
+        let path = folder.join(format!("video-{i:02}.mp4"));
+        let mib = match i { 0 => 2048, 1 => 1024, _ => 100 + (i % 4) * 50 };
+        padded_video(&path, "fragmented.mp4", mib * 1024 * 1024);
+        path
+    }).collect();
+    let started = std::time::Instant::now();
+    let root = f.db.connect_directory(&folder, None).unwrap();
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    let ids = f.db.connection_entry_ids(Some(&root), None, None, 0, 100).unwrap();
+    let entries = f.db.resolve_connection_entries(&ids).unwrap();
+    let scan = started.elapsed();
+    assert_eq!(entries.len(), 50);
+    assert!(entries.iter().all(|entry| entry.asset.duration.is_some_and(|seconds| (seconds - 0.4).abs() < 0.025)));
+    let started = std::time::Instant::now();
+    for path in &media { fingerprint(path).unwrap(); }
+    println!("50 videos: scan+list={scan:?}; former first-pass SHA-256 alone={:?}", started.elapsed());
+}
+
 #[test]
 fn prepared_fingerprint_keeps_identity_and_rejects_a_later_file_version() {
     let f = Fixture::new();
@@ -140,6 +278,39 @@ fn failed_metadata_stays_pending_and_warm_thumbnail_can_retry() {
     f.db.conn.lock().unwrap().execute("UPDATE external_assets SET fingerprint=?2 WHERE asset_id=?1", params![asset.id, fingerprint(&f.path).unwrap()]).unwrap();
     assert!(f.db.complete_connected_preview(&f.paths, &f.path, &preview).unwrap().is_some());
     assert!(!f.db.connected_preview_pending(&f.path, &preview).unwrap());
+}
+
+#[test]
+fn video_metadata_sidecar_is_retained_until_the_preview_commit_succeeds() {
+    let f = Fixture::new();
+    let source = f.path.with_extension("mkv");
+    fs::write(&source, b"metadata is supplied by the test sidecar").unwrap();
+    let asset = f.db.index_connected_file(&f.paths, &source, None).unwrap();
+    let folder = f.paths.root.join("external-previews");
+    fs::create_dir_all(&folder).unwrap();
+    let key = preview_key(&source, &fs::metadata(&source).unwrap()).unwrap();
+    let preview = folder.join(format!("{key}.jpg"));
+    image::RgbImage::new(16, 12).save(&preview).unwrap();
+    let sidecar = preview.with_extension("json");
+    fs::write(&sidecar, br#"{"ext":"mkv","width":320,"height":240,"size":40,"duration":1.2}"#).unwrap();
+    let preview = preview.to_str().unwrap();
+    f.db.conn.lock().unwrap().execute_batch(
+        "CREATE TABLE preview_commit_check(asset_id TEXT REFERENCES assets(id) DEFERRABLE INITIALLY DEFERRED);
+         CREATE TRIGGER reject_preview_commit AFTER UPDATE OF thumb_path ON assets BEGIN
+             INSERT INTO preview_commit_check VALUES ('missing-asset');
+         END;",
+    ).unwrap();
+    assert!(f.db.complete_connected_preview(&f.paths, &source, preview).is_err());
+    assert!(sidecar.is_file());
+    assert!(f.db.get_asset(&asset.id).unwrap().unwrap().thumb_path.is_none());
+
+    f.db.conn.lock().unwrap().execute_batch("DROP TRIGGER reject_preview_commit;").unwrap();
+    let completed = f.db.complete_connected_preview(&f.paths, &source, preview).unwrap().unwrap();
+    assert_eq!((completed.width, completed.height, completed.duration), (Some(320), Some(240), Some(1.2)));
+    assert_eq!(completed.thumb_path.as_deref(), Some(preview));
+    assert!(!sidecar.exists());
+    assert!(Path::new(preview).is_file());
+    assert!(f.db.complete_connected_preview(&f.paths, &source, preview).unwrap().is_none());
 }
 
 #[test]

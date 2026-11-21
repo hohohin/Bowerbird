@@ -248,8 +248,6 @@ export const api = {
     invoke<boolean>("project_canvas_title_from_first_prompt", { projectId, title }),
   projectCanvasUpdateDraft: (projectId: string, draftJson: string) =>
     invoke<boolean>("project_canvas_update_draft", { projectId, draftJson }),
-  projectCanvasTouch: (projectId: string) =>
-    invoke<boolean>("project_canvas_touch", { projectId }),
   projectThreadCreate: (value: NewCreativeThread) =>
     invoke<CreativeThread>("project_thread_create", { value }),
   projectThreadArchive: (threadId: string) =>
@@ -649,8 +647,8 @@ export const api = {
   extensionFolderPath: () => invoke<string>("extension_folder_path"),
   // 设置
   getSettings: () => invoke<AppSettings>("get_settings"),
-  updateSettings: (settings: AppSettings) =>
-    invoke<SettingsSaveReceipt | null | void>("update_settings", { settings }),
+  updateSettings: (settings: AppSettings, applyScreenshotShortcuts = false) =>
+    invoke<SettingsSaveReceipt | null | void>("update_settings", { settings, applyScreenshotShortcuts }),
   libraryRoot: () => invoke<string>("library_root"),
   migrateLibraryRoot: (newRoot: string) =>
     invoke<void>("migrate_library_root", { newRoot }),

@@ -33,7 +33,7 @@ fn image_version(conn: &rusqlite::Connection, id: &str) -> AppResult<Option<Imag
 
 /// Called in the same transaction as the new source fingerprint. Human and
 /// historical records survive; only obsolete automatic classification is reset.
-pub(crate) fn requeue_changed_connected_asset(tx: &rusqlite::Transaction<'_>, id: &str) -> AppResult<()> {
+pub(crate) fn requeue_changed_connected_asset(tx: &rusqlite::Connection, id: &str) -> AppResult<()> {
     let manual: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM asset_tags WHERE asset_id=?1 AND origin='manual')", [id], |r| r.get(0))?;
     if manual { return Ok(()); }
     tx.execute(

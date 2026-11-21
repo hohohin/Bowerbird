@@ -64,7 +64,7 @@ try {
       await dock.locator('.ProseMirror').press('Control+Enter');
       assert.equal(await page.evaluate(() => Object.keys(window.store.getState().genJobs).length), 0);
       await notice.getByRole('button', { name: '配置自有订阅' }).click();
-      assert.equal(await page.evaluate(() => window.store.getState().subscriptionSettingsTarget), 'jimeng');
+      assert.equal(await page.evaluate(() => window.store.getState().settingsRequest?.subscription), 'jimeng');
     }
   }
   await page.goto(preview + '?detail-route');

@@ -94,7 +94,7 @@ H3 视频三模式共用可选录音素材 ID 与既有媒体连线，`comfy_vid
 ## 读取已连接目录与补齐预览
 
 - **入口／调用**：[folder_connections.rs](../../apps/desktop/src-tauri/src/core/folder_connections.rs) 的 `connection_folders_filtered`／`connection_entry_ids_filtered`／`connection_entry_groups` 供原生素材浏览命令使用；`read_connection_entries(ids)` 批量读索引，`resolve_connection_entries(ids)` 在同一读取基础上保留原件存在校验。浏览用前者，明确文件操作用后者；不能用索引可用状态代替删除前确认。
-- **索引与预览**：[connected_media.rs](../../apps/desktop/src-tauri/src/core/connected_media.rs) 的 crate 内 `prepare_connected_file`／`index_prepared_connected_file` 供目录扫描复用指纹，外部入口仍调用 `index_connected_file`。`complete_connected_preview_versioned` 完成预览元数据并返回内容版本，`current_preview_changes` 批量校验待发送事件；[commands/external_files.rs](../../apps/desktop/src-tauri/src/commands/external_files.rs) 用已有四并发渲染、单 worker 有界后台补齐与 `library://previews-changed`，不要再因预览完成触发全库刷新。
+- **索引与预览**：[connected_media.rs](../../apps/desktop/src-tauri/src/core/connected_media.rs) 的 `prepare_connected_path` 在事务外读取有限容器头，`index_connected_in` 供普通扫描在同一批事务登记素材和目录条目。大于 32 MiB 的原件可先登记文件版本，`complete_connected_fingerprint` 延后补齐完整 SHA-256；已有完整读取的严格操作用 `register_connected_fingerprint` 绑定实测版本。`complete_connected_preview_versioned` 按已登记文件版本更新封面及元数据，`current_preview_changes` 批量核对待发送事件。[commands/external_files.rs](../../apps/desktop/src-tauri/src/commands/external_files.rs) 分开调度视频与图片补齐，沿用 `library://previews-changed` 更新现有页面。
 - **扫描通知／边界**：`scan_connection_changes` 回调只标识内容是否变化；原 `scan_connection_with_progress`／`scan_connection_prioritized` 包装保留。命令层独立发 `library://connection-progress`，未变扫描不发素材失效。以上均为桌面本机目录模块内部能力；当前数据规模、基准与恢复限制见 [性能说明](../FOLDER-MODE.md#文件夹读取与预览性能2026-11-10)。
 
 ## 保持断开目录后的素材可见性
@@ -129,7 +129,7 @@ H3 视频三模式共用可选录音素材 ID 与既有媒体连线，`comfy_vid
 
 - **用途／关键词**：probe、缩略图、ffprobe、FFmpeg、视频封面、二进制发现。
 - **入口**：[media/probe.rs](../../apps/desktop/src-tauri/src/media/probe.rs) 的 `probe` 与 [media/thumb.rs](../../apps/desktop/src-tauri/src/media/thumb.rs) 的 `generate`／`generate_video`；确需启动工具时，用 crate 内 [media/tools.rs](../../apps/desktop/src-tauri/src/media/tools.rs) 的 `resolve(Tool::Ffmpeg/Ffprobe)`、`command`。
-- **调用**：`probe_video_ffprobe` 用 `resolve(Tool::Ffprobe)` 和 `command`；`generate_video` 的 FFmpeg 分支用同一 resolver。它们也保留平台原生媒体分支，不要求所有操作强制 FFmpeg。
+- **调用**：连接索引用 `probe_connected_video_header` 读取受限的 ISO BMFF 容器头。`generate_video_with_meta` 可从隔离的封面 Worker 同次取得视频尺寸和时长。`probe_video_ffprobe` 与封面 FFmpeg 回退沿用工具 resolver。
 - **边界／状态**：**可跨模块复用（桌面 Rust crate 内）**。resolver 只缓存成功解析的绝对路径，处理显式配置、随包目录和平台发现；不安装工具或修改 PATH。`tools` 是 `pub(crate)`，不是给外部应用导入的库；不要另写字符串 `ffmpeg` 子进程绕过同源探测和 Windows 隐藏窗口处理。播放 UI 另见 [桌面地图](DESKTOP.md)。
 
 ## 从本机调用需要登录的 Cloud 接口

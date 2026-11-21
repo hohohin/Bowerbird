@@ -40,9 +40,11 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 .composer-description-actions .composer-expand { display: grid; place-items: center; width: 32px; height: 28px; border-radius: 999px; }
 .composer-chat-history { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 8px; border: 1px solid var(--bb-line); border-radius: 999px; white-space: nowrap; }
 .composer-chat-history:hover, .composer-chat-history[aria-expanded="true"] { color: var(--bb-ink); background: var(--library-glass-hover); }
-.composer-chat-key-hint { margin: 0; padding: 0 20px 8px; font-size: 10px; color: var(--bb-muted); }
+.composer-glass :is(.composer-description, .composer-feedback) { padding-inline: 20px; }
+.composer-feedback { display: grid; gap: 4px; padding-bottom: 8px; overflow-wrap: anywhere; }
+.composer-chat-key-hint { margin: 0; font-size: 10px; color: var(--bb-muted); }
 .composer-editor-scroll .collection-scroll-viewport { max-height: min(224px, 30vh); }
-.composer-glass .composer-description { padding: 0 20px 12px; font-size: 16px; line-height: 36px; }
+.composer-glass .composer-description { padding-block: 0 12px; font-size: 16px; line-height: 36px; }
 .composer-glass .creation-editor .ProseMirror { min-height: 76px; }
 .composer-glass .creation-editor .ProseMirror.is-empty::before { opacity: 1; }
 .composer-glass .composer-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 0; padding: 10px 14px 12px; border-top: 1px solid rgb(var(--bb-ink-rgb) / 10%); }
@@ -136,7 +138,7 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
   .composer-profile { order: 3; flex-basis: 100%; }
   .composer-glass .composer-collapse { margin-left: auto; }
   .composer-description-heading { padding-inline: 14px; }
-  .composer-glass .composer-description { padding-inline: 14px; }
+  .composer-glass :is(.composer-description, .composer-feedback) { padding-inline: 14px; }
   .composer-glass .composer-toolbar { gap: 6px; padding-inline: 10px; }
   .composer-parameters { flex-basis: calc(100% - 100px); }
 }

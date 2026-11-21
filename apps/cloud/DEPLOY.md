@@ -1,5 +1,13 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-21 H3 视频 Skill 切换为官方结构版已部署
+
+获用户批准后，17:38:52（北京时间）以同目录 UTF-8 临时文件原子替换只读挂载的 `/opt/bowerbird/agent-worker/src/skills/text/h3-video-prompt/SKILL.md`。原方法备份为 `/opt/bowerbird/deploy-backups/h3-official-structure-20261121/SKILL.md`，替换前后哈希分别为 `45e895c7a6e5c163cf9bf1ee3346878b4f1219aebaffe5644fad4db04c00f5a7` 和 `5fc3920853580ceea0d8abb3adee69923b4ee717f6fee7cf7ef2265321e23523`，新文件 13,769 字节。
+
+宿主文件与 `agent-worker-generation-worker-1` 内 `/app/text-skills/` 挂载读回一致。容器内用现役 loader 加载 `text`、`reference`、`frames`（仅首帧与首尾帧）和 `r2v` 五种组合，均命中新哈希、`high` 思考并包含官方三字段／六字段结构。该文件在每次新任务开始时读取，无需重建镜像或重启 Worker；已开始的任务继续使用 checkpoint 冻结的方法。本轮无数据库迁移、无镜像切换、无付费模型请求。
+
+回退：把备份文件按同一原子方式写回原路径，运行中任务不受影响。方法改动不等于改写质量验收，官方结构对新任务的实际遵循度仍需真实优化任务核对。
+
 ## 2026-11-21 指定账号可重复转录与字级时间已部署
 
 经用户确认，16:21:37（北京时间）切换 VPS 理解 Worker，仅覆盖豆包录音文件识别适配器。现役镜像 `4fecd3f8645a51795939f8c23b644161265caaabddba9be750a0f5e7f1d3d671`，宿主与容器源码和候选一致，切换前后五组活动队列均为空，消费者正常。16:26:32 独立读回确认原试跑任务已在四个句段补齐 350 个原生字词时间，保留原结果有效期与唯一一笔 1 Bcoin 结算。

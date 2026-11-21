@@ -111,13 +111,34 @@ pub fn browse_page(path: Option<&str>, offset: usize, all: bool) -> AppResult<Di
     })
 }
 
-fn preview_key(path: &Path, metadata: &fs::Metadata) -> AppResult<String> {
-    let key = format!(
+pub(crate) fn preview_key(path: &Path, metadata: &fs::Metadata) -> AppResult<String> {
+    let mut key = format!(
         "{}:{}:{:?}",
         path.display(),
         metadata.len(),
         metadata.modified()?
     );
+    if video_path(path) {
+        use std::fmt::Write;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let _ = write!(key, ":{}:{}:{}:{}", metadata.dev(), metadata.ino(), metadata.ctime(), metadata.ctime_nsec());
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::{fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
+            use windows::Win32::{Foundation::HANDLE, Storage::FileSystem::{FileBasicInfo, GetFileInformationByHandleEx, FILE_BASIC_INFO, FILE_READ_ATTRIBUTES}};
+            let _ = write!(key, ":{}", metadata.creation_time());
+            // Detect an in-place rewrite even if a tool restores the last-write time.
+            if let Ok(file) = fs::OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES.0).open(path) {
+                let mut info = FILE_BASIC_INFO::default();
+                let result = unsafe { GetFileInformationByHandleEx(HANDLE(file.as_raw_handle()), FileBasicInfo,
+                    (&mut info as *mut FILE_BASIC_INFO).cast(), std::mem::size_of::<FILE_BASIC_INFO>() as u32) };
+                if result.is_ok() { let _ = write!(key, ":{}", info.ChangeTime); }
+            }
+        }
+    }
     Ok(format!("{:x}", Sha256::digest(key.as_bytes())))
 }
 
@@ -184,22 +205,31 @@ pub fn preview_with_index(paths: &LibraryPaths, db: Option<&Database>, path: &Pa
         let result = (|| -> AppResult<()> {
         // Historical thumbnails remain usable after moving files. Validate content
         // once on a cache miss; subsequent browsing only checks metadata/cache.
-        let indexed: Option<(String, String)> = if let Some(db) = db {
+        let is_video = video_path(&path);
+        let indexed: Option<(String, String, Option<String>)> = if let Some(db) = db {
             db.conn.lock().unwrap().query_row(
-                "SELECT a.thumb_path,COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path=?1 AND a.thumb_path IS NOT NULL AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL LIMIT 1",
-                [path.to_string_lossy().as_ref()], |row| Ok((row.get(0)?,row.get(1)?))).optional()?
+                "SELECT a.thumb_path,COALESCE(e.fingerprint,f.sha256),a.connected_scan_key FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path=?1 AND a.thumb_path IS NOT NULL AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL LIMIT 1",
+                [path.to_string_lossy().as_ref()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?
         } else { None };
-        let reused = if let Some((thumb, expected)) = indexed {
-            if Path::new(&thumb).is_file() && fingerprint(&path)? == expected {
+        let reused = if let Some((thumb, expected, indexed_key)) = indexed {
+            if Path::new(&thumb).is_file() && (indexed_key.as_deref() == Some(hash.as_str())
+                || (!is_video && indexed_key.is_none() && fingerprint(&path)? == expected)) {
                 fs::copy(thumb, &temporary)?; true
             } else { false }
         } else { false };
-        if reused || shell_thumbnail(&path, &temporary) {
+        let mut video_meta = None;
+        if reused || (!is_video && shell_thumbnail(&path, &temporary)) {
             // Already rendered by the library or Windows; do not decode the original again.
-        } else if video_path(&path) {
-            crate::media::thumb::generate_video(&path, &temporary, 480)?;
+        } else if is_video {
+            video_meta = crate::media::thumb::generate_video_with_meta(&path, &temporary, 480, db.is_some())?;
         } else {
             crate::media::thumb::generate(&compatible_image(paths, &path)?, &temporary, 480)?;
+        }
+        if let Some(meta) = video_meta {
+            // Metadata belongs to the same immutable cache key as the JPEG.
+            let mut metadata = tempfile::NamedTempFile::new_in(&folder)?;
+            serde_json::to_writer(metadata.as_file_mut(), &meta)?;
+            let _ = metadata.persist_noclobber(destination.with_extension("json"));
         }
         if preview_key(&path, &fs::metadata(&path)?)? != hash {
             return Err(invalid("文件正在变化，请刷新后重试缩略图"));
@@ -220,7 +250,7 @@ use shell_thumbnail::cached as shell_thumbnail;
 
 #[path = "connected_media.rs"]
 mod connected_media;
-pub(crate) use connected_media::connection_path_spellings;
+pub(crate) use connected_media::{connection_path_spellings, ConnectedFileFingerprint, DEFERRED_FINGERPRINT_BYTES};
 
 pub(super) fn restore_present_original(conn: &rusqlite::Connection, id: &str, canonical: &Path, hash: Option<&str>) -> AppResult<()> {
     let marked: Option<(String, Option<String>)> = conn.query_row(
@@ -239,7 +269,7 @@ pub(super) fn restore_present_original(conn: &rusqlite::Connection, id: &str, ca
             Some(hash) => hash,
             None => { measured = fingerprint(canonical)?; &measured }
         };
-        if expected.as_deref() != Some(hash) {
+        if hash.is_empty() || expected.as_deref() != Some(hash) {
             return Err(invalid("原件校验不符，已保留失效条目的清理状态"));
         }
         conn.execute("DELETE FROM removed_missing_asset_originals WHERE asset_id=?1", [id])?;
@@ -286,6 +316,16 @@ impl Database {
         if audio_path(path) || crate::core::text_documents::text_path(path) { return self.index_connected_file(paths, path, preferred_id); }
         let supplied = path.to_string_lossy().into_owned();
         let path = original(path)?;
+        let pending_id: Option<String> = self.conn.lock().unwrap().query_row(
+            "SELECT a.id FROM assets a JOIN external_assets e ON e.asset_id=a.id WHERE a.store_path IN (?1,?2)
+                AND a.connected_scan_key IS NOT NULL AND e.fingerprint='' AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id)
+                AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id) ORDER BY a.id=?3 DESC,a.rowid LIMIT 1",
+            params![supplied,path.to_string_lossy(),preferred_id], |row| row.get(0),
+        ).optional()?;
+        if let Some(id) = pending_id {
+            self.complete_connected_fingerprint(&id)?;
+            return self.get_asset(&id)?.ok_or_else(|| invalid("素材已不存在"));
+        }
         // Files created in BowerbirdLibrary keep their existing image identity when browsed.
         let managed: Option<String> = self.conn.lock().unwrap().query_row(
             "SELECT id FROM assets WHERE store_path IN (?1,?2) AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id) ORDER BY assets.rowid LIMIT 1",
@@ -451,10 +491,14 @@ impl Database {
     fn resolve_external_files(&self, references: &[String], compatible: bool) -> AppResult<Vec<String>> {
         references.iter().map(|path| {
             if compatible && (audio_path(Path::new(path)) || crate::core::text_documents::text_path(Path::new(path))) { return Err(invalid("此类素材暂不支持作为图片模型参考")); }
-            let row: Option<(String, Option<String>, Option<String>)> = self.conn.lock().unwrap().query_row(
-                "SELECT a.store_path,e.fingerprint,a.thumb_path FROM external_asset_paths p JOIN assets a ON a.id=p.asset_id LEFT JOIN external_assets e ON e.asset_id=a.id WHERE p.path=?1", [path], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-            if let Some((current, expected, thumb)) = row {
+            let row: Option<(String, String, Option<String>, Option<String>)> = self.conn.lock().unwrap().query_row(
+                "SELECT a.id,a.store_path,e.fingerprint,a.thumb_path FROM external_asset_paths p JOIN assets a ON a.id=p.asset_id LEFT JOIN external_assets e ON e.asset_id=a.id WHERE p.path=?1", [path], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+            if let Some((id, current, mut expected, thumb)) = row {
                 if compatible && (audio_path(Path::new(&current)) || crate::core::text_documents::text_path(Path::new(&current))) { return Err(invalid("此类素材暂不支持作为图片模型参考")); }
+                if expected.as_deref() == Some("") {
+                    self.complete_connected_fingerprint(&id)?;
+                    expected = self.conn.lock().unwrap().query_row("SELECT fingerprint FROM external_assets WHERE asset_id=?1", [&id], |r| r.get(0)).optional()?;
+                }
                 if let Some(expected) = expected {
                     let p = original(Path::new(&current))?;
                     if fingerprint(&p)? != expected { return Err(invalid("外部参考图已修改，请先确认更新引用")); }
@@ -480,6 +524,7 @@ impl Database {
         path: &Path,
         accept_changes: bool,
     ) -> AppResult<Asset> {
+        if !accept_changes { self.complete_connected_fingerprint(id)?; }
         let path = original(path)?;
         let managed: bool = self.conn.lock().unwrap().query_row(
             "SELECT EXISTS(SELECT 1 FROM assets WHERE store_path=?1 AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id))",
@@ -533,7 +578,7 @@ impl Database {
             "INSERT OR IGNORE INTO external_asset_paths(asset_id,path) VALUES(?1,?2)",
             params![id, path],
         )?;
-        tx.execute("UPDATE assets SET origin_path=?2,store_path=?2,thumb_path=?3,size=?4,width=?5,height=?6 WHERE id=?1",params![id,path,thumb,fs::metadata(&path)?.len() as i64,dimensions.0,dimensions.1])?;
+        tx.execute("UPDATE assets SET origin_path=?2,store_path=?2,thumb_path=?3,size=?4,width=?5,height=?6,connected_scan_key=NULL WHERE id=?1",params![id,path,thumb,fs::metadata(&path)?.len() as i64,dimensions.0,dimensions.1])?;
         let mtime = fs::metadata(&path)?.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|time| time.as_secs() as i64);
         tx.execute("UPDATE assets SET duration=?2,ext=?3,file_mtime=?4 WHERE id=?1", params![id,media.duration,media.ext,mtime])?;
         tx.execute("DELETE FROM removed_missing_asset_originals WHERE asset_id=?1", [id])?;

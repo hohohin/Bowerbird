@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ClipboardCopy, FileText, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, ScanSearch, Scan, Trash2, Ungroup } from "lucide-react";
-import { understandEngineUsable, useStore } from "../store";
+import { useStore } from "../store";
+import { understandEngineUsable } from "../lib/entitlement";
 import { api } from "../lib/api";
 import { buildAssetContextMenu, type AssetMenuAction, type AssetMenuSnapshot } from "../lib/assetContextMenu";
 import {

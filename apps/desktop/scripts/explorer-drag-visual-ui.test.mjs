@@ -147,6 +147,28 @@ try {
       return value;
     } finally { await page.close(); }
   });
+  await check('explicit-tag-hides-candidates-until-pointer-returns', async () => {
+    const page = await pageFor('light', true);
+    try {
+      const host = await pick(page, shapes[0]);
+      await page.evaluate(labels => {
+        window.visuals[0].move(300, 330, true);
+        window.visuals[0].update({ id: 'image-0', labels });
+      }, labels);
+      assert.equal(await host.locator('.candidate').first().isVisible(), false, 'late candidates stay hidden over an explicit tag');
+      assert.equal(await host.locator('.caption').isVisible(), false);
+      assert.equal(await host.locator('.card').isVisible(), true);
+      await page.evaluate(() => window.visuals[0].move(310, 330, false));
+      assert.equal(await host.locator('.candidate').first().isVisible(), true, 'leaving the tag restores existing candidates');
+      await page.evaluate(labels => {
+        window.visuals[0].hide();
+        window.visuals[0].update({ id: 'image-0', labels });
+      }, labels);
+      assert.equal(await host.locator('.card').isVisible(), false, 'a late update cannot reveal the visual after dragleave');
+      await page.evaluate(() => { window.visuals[0].move(320, 330, true); window.visuals[0].land(320, 330); });
+      assert.equal(await host.getByText('采集中…').isVisible(), true, 'the landing caption still appears on a tag drop');
+    } finally { await page.close(); }
+  });
   for (const width of [360, 900]) {
     await check(`panel-edges-${width}`, async () => {
       const page = await pageFor('dark', true, width);

@@ -2,10 +2,11 @@
 
 [返回复用地图](../Bowerbird开发计划.md#复用地图)。本页按 2026-11-03 当前工作区源码核对，包含未提交实现；状态表示可用边界，不表示已发版。视觉规则和样式加载顺序仍以 [UI-DESIGN-SPEC 第 11 节](../UI-DESIGN-SPEC.md#11-实现入口与使用顺序) 为入口，不在这里复制色值与动效规范。
 
-## 探索采集直接落入标签
+## 拖放采集落点
 
-- **入口：** [ExploreWorkspace.tsx](../../apps/desktop/src/components/ExploreWorkspace.tsx) 读取标签目录／分组的 `data-tag-id`／`data-tag-section`，复用 [localClassification.ts](../../apps/desktop/src/lib/localClassification.ts) 的全局／项目 `example` 人工归属接口；不另建标签体系。
-- **边界：** 明确标签落点冻结项目和标签，沿现有采集队列重试；传 `skipClassification` 到原生采集，内部 `ingest_from_bytes_with_classification` 控制单次自动入队，普通 `ingest_from_bytes` 默认保持自动处理。只用于明确的人工落点，不修改全局开关。未分类分组继续原流程。契约与验证见 [探索浏览器](../EMBEDDED-BROWSER.md#2026-11-04标签落点直接归类源码待发布)。
+- **入口：** [ExploreWorkspace.tsx](../../apps/desktop/src/components/ExploreWorkspace.tsx) 和 [FileDropImport.tsx](../../apps/desktop/src/components/FileDropImport.tsx) 共用 [captureDropTarget.ts](../../apps/desktop/src/lib/captureDropTarget.ts) 与 [CaptureDropFeedback.tsx](../../apps/desktop/src/components/CaptureDropFeedback.tsx)。预览和松手均按实际命中的目录行或瀑布流分组解析。文件夹使用 `data-file-import-collection-id`，标签使用 `data-tag-id`／`data-tag-section`。同一分栏内对应的行与分组同步描边，已离线文件夹在入库前拦截。
+- **交付：** 文件夹复用 `folderConnections.references`，标签复用 [localClassification.ts](../../apps/desktop/src/lib/localClassification.ts) 的全局／项目 `example` 人工归属接口。
+- **边界：** 两条入口均在松手时冻结项目和落点。探索采集明确投放到标签时传 `skipClassification`，沿现有采集队列重试；`ingest_from_bytes_with_classification` 控制单次自动入队。未分类分组继续原流程。探索分类契约见 [探索浏览器](../EMBEDDED-BROWSER.md#2026-11-04标签落点直接归类源码待发布)。
 
 ## 让新界面沿用主题、按钮和字段
 
@@ -39,7 +40,9 @@ H3 优化按钮共用 `H3OptimizeButton`，画板图片卡和视频卡均在提�
 - **用途／关键词：** dialog、确认、焦点循环、Esc、忙碌锁定、固定动作栏。
 - **入口：** [ModalShell.tsx](../../apps/desktop/src/components/ModalShell.tsx) 的 `ModalShell`；简单确认用 [ConfirmDialog.tsx](../../apps/desktop/src/components/ConfirmDialog.tsx) 的 `ConfirmDialog`。布局和状态样式沿用现有 `.app-modal-*`。
 - **实用证据：** [SettingsDialog.tsx](../../apps/desktop/src/components/SettingsDialog.tsx) 用于设置长表单；[CollectionDialogs.tsx](../../apps/desktop/src/components/CollectionDialogs.tsx) 用 `preventClose={busy}`；[ProjectDeleteDialog.tsx](../../apps/desktop/src/components/ProjectDeleteDialog.tsx) 组合复杂删除内容；[BatchBar.tsx](../../apps/desktop/src/components/BatchBar.tsx) 调用 `ConfirmDialog`。
-- **范围／状态：可跨模块复用。** 宿主控制挂载与 `onClose`，Shell 管遮罩、首焦点、Tab 和关闭后焦点恢复；字段可标 `data-modal-autofocus`。`ConfirmDialog.confirmDisabled` 只禁用确认按钮，不锁住取消／Esc；异步忙碌需要关闭锁时用 `ModalShell.preventClose`。全页项目管理和图片／会话预览不强套模态表单壳。
+- 顶栏、侧栏和提供方提示通过 `settingsRequest` 跳转，由 [AccountOnboarding](../../apps/desktop/src/components/AccountOnboarding.tsx) 承载同一个设置面板。[SettingsToggle](../../apps/desktop/src/components/SettingsToggle.tsx) 提供带可访问名称的布尔开关，[SubscriptionCard](../../apps/desktop/src/components/SubscriptionCard.tsx) 提供自有订阅的账号状态和重新检测入口。顶栏 [ScreenshotMenu](../../apps/desktop/src/components/ScreenshotMenu.tsx) 复用 `ContextMenu` 展示截图动作，快捷键与自动入库仍由设置面板编辑。
+- **范围／状态：可跨模块复用。** 宿主控制挂载与 `onClose`，Shell 管遮罩、首焦点、Tab 和关闭后焦点恢复。字段可标 `data-modal-autofocus`。Tab 在实际可用的控件间回绕，跳过隐藏分区、`inert` 区域和未展开的详情内容。`ConfirmDialog.confirmDisabled` 只禁用确认按钮，不锁住取消／Esc；异步忙碌需要关闭锁时用 `ModalShell.preventClose`。全页项目管理和图片／会话预览不强套模态表单壳。
+- 设置页和旧侧栏共用 [AccountLogoutConfirmation](../../apps/desktop/src/components/AccountLogoutConfirmation.tsx)，确认时核对打开弹窗时的账号身份。
 
 ## 添加普通单选下拉
 

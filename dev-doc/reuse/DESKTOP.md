@@ -75,7 +75,7 @@
 
 ## 修改普通应用设置
 
-- [store.ts](../../apps/desktop/src/store.ts) 的 `updateSettings(patch)` 只接收本次变更字段。设置面板、截图自动保存和分类授权共用 [settingsQueue.ts](../../apps/desktop/src/lib/settingsQueue.ts) 的顺序写入、确认快照和失败重试。快捷键、迁移等具有原生副作用的专用命令仍由各自入口维护。
+- [store.ts](../../apps/desktop/src/store.ts) 的 `updateSettings(patch)` 只接收本次变更字段。设置面板、截图偏好与分类授权共用 [settingsQueue.ts](../../apps/desktop/src/lib/settingsQueue.ts) 的顺序写入、确认快照和失败重试。快捷键变更通过 `update_settings` 同步原生注册与文件写入，失败保留原绑定。默认反推模型首次加载时将旧版偏好迁入 `settings.json`。资料迁移继续使用专用命令。
 
 ## 顺序保存画板，失败时阻止后续覆盖
 

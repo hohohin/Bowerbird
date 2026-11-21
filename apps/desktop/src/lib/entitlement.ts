@@ -1,6 +1,6 @@
 import { hasComfyEntitlement } from "./comfyVideo";
 import { H3_IMAGE } from "./genProviders";
-import type { EntitlementSnapshot, FeaturePolicy, GenJob } from "../lib/types";
+import type { AuthSnapshot, EntitlementSnapshot, FeaturePolicy, GenJob } from "../lib/types";
 import { isCloudProvider, normalizeGenerationProvider } from "../lib/genProviders";
 
 /** 账号界面只展示当前身份有效快照中的余额和订阅。 */
@@ -90,21 +90,24 @@ export function canStartAnotherJob(
   return runningCount < policy.max_parallel_jobs;
 }
 
-/**
- * 理解引擎（反推 / 命名 / 归类）当前是否就绪：按权益路由后判对应引擎健康。
- * Pro/Studio → codex CLI；免费档 → Bowerbird Cloud（需 cloud_available + 已登录）。
- * 供首启总览 / 设置就绪徽章 / 侧栏齿轮红点等「环境是否配齐」判断复用，
- * 不再各处直判 codexHealth（否则免费档登录 Cloud 后仍误报「未就绪」）。
- */
-export function understandReady(args: {
-  entitlement: EntitlementSnapshot | null;
+type UnderstandAccess = {
+  cloudEntitlement: EntitlementSnapshot | null;
   codexHealth: { ok: boolean } | null;
-  cloudAuth: { cloud_available: boolean; logged_in: boolean } | null;
-}): boolean {
-  const route = understandProvider(args.entitlement);
-  if (route === "codex") return !!args.codexHealth?.ok;
-  if (route === "bowerbird-cloud") {
-    return !!args.cloudAuth?.cloud_available && !!args.cloudAuth.logged_in;
-  }
-  return false;
+  cloudAuth: Pick<AuthSnapshot, "cloud_available" | "logged_in" | "user_id"> | null;
+};
+
+export function understandEngineUsable({ cloudAuth, cloudEntitlement, codexHealth }: UnderstandAccess,
+  provider: "bowerbird-cloud" | "codex",
+): boolean {
+  const current = accountEntitlement(cloudEntitlement, cloudAuth?.logged_in ? cloudAuth.user_id : null);
+  if (!current) return false;
+  const policy = effectivePolicy(current);
+  if (provider === "codex") return policy.can_use_byo && codexHealth?.ok === true;
+  const { daily, sub, topup } = current.balances;
+  return cloudAuth?.cloud_available === true && policy.can_use_cloud && daily + sub + topup > 0;
+}
+
+/** 就绪提示接受任意一个可用的反推引擎。 */
+export function understandReady(access: UnderstandAccess): boolean {
+  return understandEngineUsable(access, "codex") || understandEngineUsable(access, "bowerbird-cloud");
 }

@@ -3,7 +3,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEve
 import { PanelEdgeHandle } from "./PanelEdgeHandle";
 import { SourceBrowserPanel } from "./SourceBrowserPanel";
 import { localClassification, projectClassification } from "../lib/localClassification";
-import { UNTAGGED_SECTION } from "../lib/materialCatalogOrder";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { EXPLORER_MIME, parseExplorerImage } from "../lib/explorer";
@@ -19,9 +18,10 @@ import { ExplorerClassificationDock, type ExplorerClassificationItem } from "./E
 import { folderConnections } from "../lib/folderConnections";
 import { enqueueExplorerCapture } from "../lib/explorerCaptureHistory";
 import type { Asset } from "../lib/types";
+import { captureDropMessage, resolveCaptureDropTarget } from "../lib/captureDropTarget";
+import { useCaptureDropFeedback } from "./CaptureDropFeedback";
 
 export function ExploreWorkspace({ url, open, navigationId = 0, onClose, onCreateProject, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; onCreateProject?: (ids?: string[]) => Promise<unknown>; children: ReactNode }) {
-  const [over, setOver] = useState(false);
   const [width, setWidth] = useState(460);
   const [resizing, setResizing] = useState(false);
   const [maximumWidth, setMaximumWidth] = useState(1000);
@@ -48,17 +48,19 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, onCreat
     setClassifications(items => items.map(item => item.id.startsWith(`${dragId}:`) && /^https?:/.test(item.imageUrl)
       ? { ...item, imageUrl: thumbnail } : item));
   }, []);
-  const dragMotion = useExplorerDragMotion(root, open, activeProjectId, receiveThumbnail);
+  const { feedback: dropFeedback, show: showDropFeedback, clear: clearDropFeedback } = useCaptureDropFeedback("explorer");
+  const dragMotion = useExplorerDragMotion(root, open, activeProjectId, receiveThumbnail, clearDropFeedback);
   const clearFeedback = useCallback(() => setFeedback(null), []);
   const removeClassification = useCallback((id: string) => setClassifications(items => items.filter(item => item.id !== id)), []);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { sequence.current += 1; setFeedback(null); }, [open, activeProjectId]);
   useLayoutEffect(() => { setClassifications([]); }, [activeProjectId, projectRouteRevision]);
+  useLayoutEffect(clearDropFeedback, [open, clearDropFeedback]);
 
   async function drop(event: DragEvent) {
-    if (getDragAssets()?.length) { setOver(false); return; }
+    clearDropFeedback();
+    if (getDragAssets()?.length) return;
     const image = parseExplorerImage(event.dataTransfer);
-    setOver(false);
     if (!image) {
       if (event.dataTransfer.types.includes(EXPLORER_MIME) || event.dataTransfer.getData("text/plain").startsWith("bowerbird-explorer:")) {
         event.preventDefault(); event.stopPropagation();
@@ -74,25 +76,24 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, onCreat
     const mediaName = isVideo ? "视频" : "图片";
     const state = useStore.getState();
     if (state.projectRoutePending) { notifyError(null, "项目正在切换，请稍后重新拖入"); return; }
+    const destination = resolveCaptureDropTarget(event.target, state);
+    if (destination.disabled) {
+      dragMotion.reject(image.dragId);
+      if (image.dragId && !isVideo) void api.releaseSourceBrowserAnalysis(image.dragId).catch(() => {});
+      notifyError(null, captureDropMessage(destination));
+      return;
+    }
     const operation = ++sequence.current;
     setFeedback(null);
     const point = { x: event.clientX, y: event.clientY };
     const contextProjectId = state.activeProjectId;
-    const destination = event.target instanceof Element
-      ? event.target.closest<HTMLElement>("[data-project-drop-id], [data-file-import-project-id]") : null;
-    const target = destination
-      ? destination.dataset.projectDropId ?? (destination.dataset.fileImportProjectId || null)
-      : contextProjectId;
-    const collectionId = event.target instanceof Element
-      ? event.target.closest<HTMLElement>("[data-file-import-collection-id]")?.dataset.fileImportCollectionId || null : null;
-    const tagElement = event.target instanceof Element
-      ? event.target.closest<HTMLElement>(".is-tag-catalog [data-tag-id], .is-tag-catalog [data-tag-section]") : null;
-    const droppedTag = tagElement?.dataset.tagId ?? tagElement?.dataset.tagSection;
-    const tagId = droppedTag && droppedTag !== UNTAGGED_SECTION ? droppedTag : null;
+    const target = destination.projectId;
+    const collectionId = destination.kind === "folder" ? destination.id : null;
+    const tagId = destination.kind === "tag" ? destination.id : null;
     const completeLesson = beginOnboardingOperation("explore", target);
     const revision = state.projectRouteRevision;
-    const placeOnCanvas = prepareExplorerCanvasDrop(event.target, target, event.clientX, event.clientY);
-    const droppedOnCanvas = event.target instanceof Element && !!event.target.closest("[data-canvas-stage]");
+    const droppedOnCanvas = destination.kind === "canvas";
+    const placeOnCanvas = droppedOnCanvas ? prepareExplorerCanvasDrop(event.target, target, event.clientX, event.clientY) : null;
     // Older/incomplete page injections can lack a drag ID; start on drop then.
     const dragId = image.dragId ?? crypto.randomUUID().replaceAll("-", "");
     if (tagId && !isVideo) void api.releaseSourceBrowserAnalysis(dragId).catch(() => {});
@@ -220,21 +221,28 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, onCreat
         onDoubleClick: () => resize(460),
       }} />
     </aside>
-    <section className={`explore-main ${over ? "is-drop-target" : ""}`} aria-label="探索采集素材"
+    <section className="explore-main" aria-label="探索采集素材"
       onDragOverCapture={event => {
-        if (getDragAssets()?.length) { setOver(false); return; }
-        if (Array.from(event.dataTransfer.types).some(type => type === EXPLORER_MIME || type === "text/plain")) {
-          event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; setOver(true);
-          dragMotion.over(event.clientX, event.clientY);
-        }
+        const state = useStore.getState();
+        const types = event.dataTransfer.types;
+        const text = event.dataTransfer.getData("text/plain");
+        // Native fallback may expose only the text type until the actual drop.
+        const accepts = types.includes(EXPLORER_MIME) || (types.includes("text/plain") && (!text || text.startsWith("bowerbird-explorer:")));
+        if (getDragAssets()?.length || !accepts) { clearDropFeedback(); return; }
+        event.preventDefault(); event.stopPropagation();
+        if (state.projectRoutePending) { event.dataTransfer.dropEffect = "none"; clearDropFeedback(); return; }
+        const destination = resolveCaptureDropTarget(event.target, state);
+        event.dataTransfer.dropEffect = destination.disabled ? "none" : "copy";
+        showDropFeedback(destination, event.target);
+        dragMotion.over(event.clientX, event.clientY, destination.kind === "tag");
       }}
-      onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) { setOver(false); dragMotion.leave(); } }}
+      onDragLeave={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) { clearDropFeedback(); dragMotion.leave(); } }}
       onDropCapture={event => void drop(event)}>
       {open && <div className="explore-learning-hint"><LearningHint topic="explore" /></div>}
       {children}
       <ExplorerClassificationDock items={classifications} onDone={removeClassification} />
       {open && feedback && feedback.projectId === activeProjectId && <ExplorerCaptureFeedback value={feedback} onDone={clearFeedback} />}
-      {over && <div className="explore-drop-hint">松开采集</div>}
+      {dropFeedback}
     </section>
   </div>;
 }

@@ -11,7 +11,7 @@ import { SettingsDialog } from "./SettingsDialog";
  */
 export function AccountOnboarding() {
   const open = useStore((s) => s.accountOnboardingForceOpen);
-  const subscription = useStore(s => s.subscriptionSettingsTarget);
+  const settings = useStore(s => s.settingsRequest);
   const setOpen = useStore((s) => s.setAccountOnboardingForceOpen);
   const auth = useStore((s) => s.cloudAuth);
   const busy = useStore((s) => s.cloudBusy);
@@ -22,8 +22,8 @@ export function AccountOnboarding() {
   const [sent, setSent] = useState(false);
   const [wechatStarted, setWechatStarted] = useState(false);
 
-  if (subscription) return <SettingsDialog initialSection="models" initialSubscription={subscription}
-    onClose={() => useStore.setState({ subscriptionSettingsTarget: null })} />;
+  if (settings) return <SettingsDialog initialSection={settings.section} initialSubscription={settings.subscription} navigationRequest={settings}
+    onClose={() => useStore.setState({ settingsRequest: null })} />;
   if (!open) return null;
   if (auth?.logged_in) return <SettingsDialog initialSection="account" onClose={() => setOpen(false)} />;
 

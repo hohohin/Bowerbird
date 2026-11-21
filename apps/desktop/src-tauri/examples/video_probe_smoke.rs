@@ -1,5 +1,7 @@
 //! Uses only supplied fixture files; does not initialize Tauri or a user library.
 #![allow(dead_code, unused_imports)]
+#[path = "../src/media/audio.rs"]
+mod audio;
 #[path = "../src/error.rs"]
 mod error;
 #[path = "../src/media/tools.rs"]

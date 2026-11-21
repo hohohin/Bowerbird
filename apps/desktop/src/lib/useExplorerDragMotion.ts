@@ -12,7 +12,7 @@ interface DragPreview {
 }
 interface DragVisual {
   pick(value: DragVisualValue, x?: number, y?: number): void;
-  move(x: number, y: number): void;
+  move(x: number, y: number, hideCandidateLabels?: boolean): void;
   hide(): void;
   update(value: DragPreview): void;
   land(x: number, y: number): void;
@@ -21,7 +21,7 @@ interface DragVisual {
 }
 declare global { interface Window { createBowerbirdDragVisual(parent: HTMLElement): DragVisual } }
 
-export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boolean, projectId: string | null, onThumbnail?: (id: string, thumbnail: string) => void) {
+export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boolean, projectId: string | null, onThumbnail?: (id: string, thumbnail: string) => void, onDragEnd?: () => void) {
   const visual = useRef<DragVisual>();
   const active = useRef<(DragVisualValue & { dropped?: boolean; preview?: DragPreview; thumbnail?: string; shown?: boolean }) | null>(null);
   const clear = () => { visual.current?.clear(); active.current = null; };
@@ -36,8 +36,11 @@ export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boo
         if (payload.phase === "start") { clear(); active.current = payload; }
         else if (active.current?.id === payload.id && !active.current.dropped) {
           // Native dragend can precede the main WebView's drop event.
-          const id = payload.id;
-          setTimeout(() => { if (!disposed && active.current?.id === id && !active.current.dropped) clear(); }, 100);
+          const ended = active.current;
+          setTimeout(() => {
+            if (disposed || active.current !== ended || ended.dropped) return;
+            clear(); onDragEnd?.();
+          }, 100);
         }
       }),
       listen<DragPreview>("source-browser://drag-preview", ({ payload }) => {
@@ -53,7 +56,7 @@ export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boo
     ];
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && active.current && !active.current.dropped) {
-        event.preventDefault(); event.stopImmediatePropagation(); clear();
+        event.preventDefault(); event.stopImmediatePropagation(); clear(); onDragEnd?.();
       }
     };
     window.addEventListener("keydown", escape, true);
@@ -61,16 +64,20 @@ export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boo
       disposed = true; clear(); window.removeEventListener("keydown", escape, true);
       for (const subscription of subscriptions) void subscription.then(unlisten => unlisten()).catch(() => {});
     };
-  }, [open, projectId, root, onThumbnail]);
+  }, [open, projectId, root, onThumbnail, onDragEnd]);
   return {
-    over(x: number, y: number) {
+    over(x: number, y: number, hideCandidateLabels = false) {
       const value = active.current;
       if (!value || value.dropped) return;
       if (!value.shown) { visual.current?.pick({ ...value, imageUrl: value.preview?.thumbnail ?? visualUrl(value) }, x, y); value.shown = true; }
-      visual.current?.move(x, y);
+      visual.current?.move(x, y, hideCandidateLabels);
       if (value.preview) { visual.current?.update(value.preview); value.preview = undefined; }
     },
     leave() { visual.current?.hide(); },
+    reject(id?: string) {
+      const value = active.current;
+      if (value && !value.dropped && (!id || value.id === id)) clear();
+    },
     drop(image: ExplorerImage, id: string, x: number, y: number) {
       const imageUrl = active.current?.id === id ? active.current.thumbnail ?? visualUrl(image) : visualUrl(image);
       if (active.current?.id !== id || !active.current.shown) visual.current?.pick({ id, imageUrl }, x, y);

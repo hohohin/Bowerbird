@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
-const server = await createServer({ server: { host: "127.0.0.1", port: 1574, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: ".tmp/capture-drop-target/file-drop-vite", server: { host: "127.0.0.1", port: 1574, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
@@ -97,7 +97,7 @@ try {
   });
   const collection = '[data-file-import-collection-id="collection"]';
   await drag(collection, ["collection.png"]);
-  await page.getByText("松开添加到文件夹「测试集合」", { exact: true }).waitFor();
+  await page.getByText("素材即将采集到文件夹【测试集合】中", { exact: true }).waitFor();
   await drop(collection);
   await page.waitForFunction(() => window.calls.some(c => c.command === "create_material_references"));
   assert.equal((await imports()).length, before + 2);
@@ -106,4 +106,7 @@ try {
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "import_image_bytes" || c.command.startsWith("video_import_")).length), 0);
   assert.deepEqual(errors, []);
   console.log("PASS: original-path file connections, collapsed/expanded project targets, nested controls, frozen destination, batch failure isolation, internal-drag preservation and collection references.");
+} catch (error) {
+  console.error(error);
+  throw error;
 } finally { if (errors.length) console.error(errors); await browser.close(); await server.close(); }

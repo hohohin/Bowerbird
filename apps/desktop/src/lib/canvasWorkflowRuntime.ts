@@ -27,7 +27,7 @@ import { canStartAnotherAgentRun, canUseAgentRun, understandProvider } from "./e
 import { renderLayerDocument } from "./layerDocument";
 import { workflowLayerDecompose } from "./workflowLayerDecompose";
 import { readCanvasNote, emptyCanvasCell, canvasGridWeights, canvasTextMinSize } from "./canvasNotes";
-import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationCells, latestWorkflowSessionImage, completedCanvasSessions, submittedTurnState } from "./canvasSessionOutputs";
+import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationCells, latestWorkflowSessionImage, completedCanvasSessions, canvasSessionCompleted, canvasSessionCompletionLookup, submittedTurnState } from "./canvasSessionOutputs";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasContentInput, contentInputAxisIndex } from "./canvasContentInput";
 import { agentResultValue } from "./workflowAgentResult";
@@ -333,8 +333,10 @@ export class CanvasWorkflowController {
         if (stale()) return;
         if (canvasRead && canvas.canvas.projectId !== this.projectId) throw new Error("画板与当前项目不匹配，请重新加载工作流。");
         this.document = snapshot.document; this.revision = snapshot.revision;
-        this.persistedDocument = structuredClone(snapshot.document);
-        this.queuedDocument = structuredClone(snapshot.document);
+        // Both save baselines own the same immutable response. The recovery
+        // projection below copies only runs/steps whose transient state changes.
+        this.persistedDocument = snapshot.document;
+        this.queuedDocument = snapshot.document;
         // Old dimension wires now carry the complete prompt through the single text port.
         const describes = new Set(this.document.nodes.filter(node => node.kind === "instruction" && node.action === "describe").map(node => node.id));
         const splits = new Set(this.document.nodes.filter(node => node.kind === "instruction" && node.action === "layers").map(node => node.id));
@@ -353,16 +355,15 @@ export class CanvasWorkflowController {
           }) } : {}),
         })) };
         // A crash is not permission to repeat a billable request. Continue only queries known jobs.
-        const runs = workflowRuns(this.document);
-        for (const run of runs) for (const step of Object.values(run.steps)) {
-          step.comfyStopping = false;
-          step.comfyProgress = undefined;
-        }
-        for (const run of runs) if (run.status === "running") {
-          run.status = "waiting";
-          for (const id of run.order) if (run.steps[id].status === "running") run.steps[id] = { ...run.steps[id],
-            status: "waiting", error: "上次执行已中断，可继续取回已有任务；不会自动重新生成。" };
-        }
+        const runs = workflowRuns(snapshot.document).map<WorkflowRun>(saved => {
+          const interrupted = saved.status === "running" ? new Set(saved.order) : undefined;
+          const steps = Object.fromEntries(Object.entries(saved.steps).map<[string, WorkflowStep]>(([id, step]) => {
+            if (interrupted?.has(id) && step.status === "running") return [id, { ...step, comfyStopping: false, comfyProgress: undefined,
+              status: "waiting", error: "上次执行已中断，可继续取回已有任务；不会自动重新生成。" }];
+            return [id, step.comfyStopping || step.comfyProgress !== undefined ? { ...step, comfyStopping: false, comfyProgress: undefined } : step];
+          }));
+          return { ...saved, steps, status: interrupted ? "waiting" : saved.status };
+        });
         // Older runs kept locks from previous and future trigger phases.
         const triggerIds = new Set(this.document.nodes.filter(node => node.kind === "trigger").map(node => node.id));
         for (const run of runs) {
@@ -381,8 +382,8 @@ export class CanvasWorkflowController {
           run.writeNodeIds = workflowWriteNodes(nodes, run.order);
         }
         // Conversation metadata may hydrate later; baseline all completed turns before grouping them.
-        this.historicalSessionCompletions = new Set(completedCanvasSessions(canvas.nodes.filter(node => node.kind === "prompt")
-          .map(node => ({ canvasNodeId: node.id, cellId: "image" })), canvas.nodes, {}));
+        this.historicalSessionCompletions = new Set(canvas.nodes.filter(node => node.kind === "prompt"
+          && node.hiddenAt == null && canvasSessionCompleted(node, canvas.nodes)).map(node => node.id));
         const recovering = workflowLockedNodes({ ...this.document, runs });
         this.document = { ...this.document, nodes: reconcileCanvasWorkflowReferences(this.document.nodes, canvas.nodes).map(node => {
           // Old runs may own sparse pipe numbers. Keep their submitted inputs when
@@ -395,8 +396,9 @@ export class CanvasWorkflowController {
           return normalizeWorkflowLocalVideo(rebindGenerationReferences(node));
         }), runs, run: runs[runs.length - 1] ?? null };
         // Loading historical results never authorizes a new generation. Pending turns remain armed.
+        const completed = canvasSessionCompletionLookup(canvas.nodes, useStore.getState().genJobs);
         this.document.nodes = this.document.nodes.map(node => node.kind === "trigger" && node.inputs.completion?.some(input => input.canvasNodeId)
-          ? { ...node, completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions(node.inputs.completion, canvas.nodes, useStore.getState().genJobs)])] } : node);
+          ? { ...node, completionSeen: [...new Set([...(node.completionSeen ?? []), ...completed(node.inputs.completion)])] } : node);
         const latest = runs[runs.length - 1];
         const latestIssue = latest && ["failed", "waiting"].includes(latest.status) ? Object.values(latest.steps).find(step => step.status === "failed" && step.diagnostic)?.diagnostic ?? null : null;
         this.issue = latestIssue && !readDismissedNotices(`workflow:${this.projectId}`).has(latestIssue.id) ? latestIssue : null;

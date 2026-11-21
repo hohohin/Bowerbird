@@ -15,7 +15,7 @@ pub(super) fn probe_system(path: &Path, ext: &str, size: u64) -> AppResult<Probe
 
 // Redirect to a unique file rather than a pipe: a full pipe must not deadlock the
 // timeout loop. Only read a bounded metadata response, and clean up on every path.
-pub(super) fn run_probe(command: &mut Command, timeout: Duration) -> AppResult<Vec<u8>> {
+pub(crate) fn run_probe(command: &mut Command, timeout: Duration) -> AppResult<Vec<u8>> {
     let path = std::env::temp_dir().join(format!("bowerbird-probe-{}.json", ulid::Ulid::new()));
     let output = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
     let result = (|| {

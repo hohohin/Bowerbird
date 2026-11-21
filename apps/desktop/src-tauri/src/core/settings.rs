@@ -63,6 +63,14 @@ pub enum AppTheme {
     Dark,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UnderstandProviderPreference {
+    Auto,
+    BowerbirdCloud,
+    Codex,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -82,6 +90,9 @@ pub struct AppSettings {
     /// 自动命名与基础描述的提示词。
     #[serde(default = "default_auto_analyze_prompt")]
     pub auto_analyze_prompt: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_understand_provider: Option<UnderstandProviderPreference>,
 
     /// 自定义素材库根目录（images/thumbnails/library.db 所在地）；None = 应用数据目录。
     /// 由「迁移素材库位置」写入；仅存指向，文件体量很小，可留在 C 盘。
@@ -180,6 +191,7 @@ impl Default for AppSettings {
             screenshot_auto_save: true,
             auto_analyze_on_ingest: false,
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
+            default_understand_provider: None,
             library_root: None,
             library_id: None,
             pending_library_move: None,
@@ -271,10 +283,23 @@ impl SettingsState {
     }
 
     /// 覆盖普通设置并持久化；常用素材成员由专用命令维护，不能被旧快照覆盖。
-    pub fn update(&self, mut new_settings: AppSettings) -> AppResult<()> {
+    pub fn update(&self, new_settings: AppSettings) -> AppResult<()> {
+        self.update_preferences(new_settings, false)
+    }
+
+    pub(crate) fn update_preferences(
+        &self,
+        mut new_settings: AppSettings,
+        change_shortcuts: bool,
+    ) -> AppResult<()> {
         self.update_with(|settings| {
             new_settings.canvas_frequent_assets = settings.canvas_frequent_assets.clone();
-            new_settings.screenshot_shortcuts = settings.screenshot_shortcuts.clone();
+            if !change_shortcuts {
+                new_settings.screenshot_shortcuts = settings.screenshot_shortcuts.clone();
+            }
+            if new_settings.default_understand_provider.is_none() {
+                new_settings.default_understand_provider = settings.default_understand_provider;
+            }
             new_settings.library_root = settings.library_root.clone();
             new_settings.library_id = settings.library_id.clone();
             new_settings.pending_library_move = settings.pending_library_move.clone();
@@ -340,18 +365,22 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bb-shortcut-settings-{}", ulid::Ulid::new()));
         let path = dir.join("settings.json");
         let state = SettingsState::init(path.clone()).unwrap();
-        state
-            .update_with(|settings| {
-                settings.screenshot_shortcuts.capture = "Control+Shift+KeyS".into();
-                settings.screenshot_shortcuts.paste.clear();
-            })
-            .unwrap();
+        let mut selected = state.get();
+        selected.screenshot_shortcuts.capture = "Control+Shift+KeyS".into();
+        selected.screenshot_shortcuts.paste.clear();
+        selected.default_understand_provider = Some(super::UnderstandProviderPreference::BowerbirdCloud);
+        state.update_preferences(selected, true).unwrap();
+        state.update(old).unwrap();
         let restored = SettingsState::init(path.clone()).unwrap().get();
         assert_eq!(
             restored.screenshot_shortcuts,
             state.get().screenshot_shortcuts
         );
         assert!(restored.screenshot_shortcuts.paste.is_empty());
+        assert_eq!(
+            restored.default_understand_provider,
+            Some(super::UnderstandProviderPreference::BowerbirdCloud)
+        );
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         assert!(state

@@ -54,7 +54,7 @@ try {
   assert.ok(Math.abs(hiddenBox.height - imageBox.height - 2) < 0.1, "no empty caption strip");
 
   await page.evaluate(() => window.openSettings());
-  await page.getByRole("button", { name: "个性化与记忆", exact: true }).click();
+  await page.getByRole("button", { name: "个性化", exact: true }).click();
   const toggle = page.getByRole("switch", { name: "显示画板素材名称", exact: true });
   assert.equal(await toggle.getAttribute("aria-checked"), "false");
   await toggle.click();
@@ -68,7 +68,7 @@ try {
   await page.reload();
   await node("a").locator(".canvas-node-name").waitFor();
   await page.evaluate(() => window.openSettings());
-  await page.getByRole("button", { name: "个性化与记忆", exact: true }).click();
+  await page.getByRole("button", { name: "个性化", exact: true }).click();
   await toggle.click();
   await page.keyboard.press("Escape");
 
@@ -148,6 +148,7 @@ try {
   }
   assert.equal(undone.groups[0].zIndex, initial.groups[0].zIndex);
   await page.evaluate(() => window.save());
+  await page.clock.resume();
   await page.reload();
   await node("a").waitFor();
   assert.equal(await z("a"), initial.nodes.find(n => n.id === "a").zIndex);

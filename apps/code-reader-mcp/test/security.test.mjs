@@ -73,7 +73,7 @@ test('responses remain bounded for very long source lines', () => {
   assert.ok(result.lines[0].text.endsWith('[LINE TRUNCATED]'));
 });
 
-test('export reads tracked current edits, excludes untracked secrets and leaves source unchanged', async t => {
+test('export includes reviewed untracked implementations and tests while excluding other untracked files', async t => {
   const dir = await temporary(t);
   const root = path.join(dir, 'repo');
   await mkdir(root);
@@ -84,12 +84,31 @@ test('export reads tracked current edits, excludes untracked secrets and leaves 
   git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture');
   await writeFile(path.join(root, 'PROJECT.md'), 'current edit');
   await writeFile(path.join(root, '.env'), 'password=private');
+  const reviewFiles = [
+    'apps/agent-worker/src/control-plane/control-transport.ts',
+    'apps/agent-worker/src/control-plane/control-transport.test.ts',
+    'apps/desktop/src/lib/settingsQueue.ts',
+    'apps/desktop/scripts/settings-queue.test.mjs',
+    'apps/cloud/supabase/migrations/0091_agent_model_usage_settlement.sql',
+    'apps/cloud/scripts/agent-model-usage-settlement-db.test.mjs',
+  ];
+  for (const file of reviewFiles) {
+    await mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await writeFile(path.join(root, file), 'reviewed source\nAPI_KEY=abcdefghijklmnop');
+  }
+  await writeFile(path.join(root, 'apps/desktop/src/lib/unreviewed.ts'), 'excluded');
   const status = git('status', '--porcelain').toString();
   const out = path.join(dir, 'snapshot.json');
   const report = await exportSnapshot(root, out);
   const snapshot = validateSnapshot(JSON.parse(await readFile(out, 'utf8')));
-  assert.equal(report.exportedFiles, 1);
-  assert.equal(snapshot.files[0].content, 'current edit');
+  assert.equal(report.exportedFiles, 1 + reviewFiles.length);
+  assert.equal(snapshot.files.find(file => file.path === 'PROJECT.md').content, 'current edit');
+  for (const file of reviewFiles) {
+    const result = callTool(snapshot, 'read_file', { path: file });
+    assert.equal(result.lines[0].text, 'reviewed source');
+    assert.equal(result.lines[1].text, '[REDACTED: potential credential]');
+  }
+  assert.equal(snapshot.files.some(file => file.path.endsWith('unreviewed.ts')), false);
   assert.equal(git('status', '--porcelain').toString(), status);
   assert.equal(await readFile(path.join(root, '.env'), 'utf8'), 'password=private');
 });

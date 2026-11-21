@@ -2,7 +2,7 @@
 use crate::{
     cloud::{AuthClient, CloudClient, EntitlementService},
     codex::codex_cli::{codex_command, codex_home, resolve_codex_binary},
-    core::local_chat::{ChatConversation, ChatProvider, ChatSendInput, ChatSummary},
+    core::{local_chat::{ChatConversation, ChatProvider, ChatSendInput, ChatSummary}, paths::LibraryPaths},
     db::Database,
     error::{AppError, AppResult},
 };
@@ -105,28 +105,40 @@ fn emit(app: &AppHandle, db: &Database, id: &str) {
 }
 
 #[tauri::command]
-pub fn local_chat_list(
-    db: State<'_, Arc<Database>>,
+pub async fn local_chat_list(
+    paths: State<'_, Arc<LibraryPaths>>,
     project_id: String,
 ) -> AppResult<Vec<ChatSummary>> {
-    db.list_local_chats(&project_id)
+    let path = paths.db.clone();
+    tokio::task::spawn_blocking(move || Database::open_read_only(&path)?.list_local_chats(&project_id))
+        .await
+        .map_err(|error| AppError::Other(error.to_string()))?
 }
 #[tauri::command]
-pub fn local_chat_revision(db: State<'_, Arc<Database>>, conversation_id: String) -> AppResult<Option<i64>> {
-    db.local_chat_revision(&conversation_id)
+pub async fn local_chat_revision(db: State<'_, Arc<Database>>, conversation_id: String) -> AppResult<Option<i64>> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.local_chat_revision(&conversation_id))
+        .await
+        .map_err(|error| AppError::Other(error.to_string()))?
 }
 
 #[tauri::command]
-pub fn local_chat_get(
+pub async fn local_chat_get(
     db: State<'_, Arc<Database>>,
     conversation_id: String,
 ) -> AppResult<Option<ChatConversation>> {
-    db.get_local_chat(&conversation_id)
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.get_local_chat(&conversation_id))
+        .await
+        .map_err(|error| AppError::Other(error.to_string()))?
 }
 
 #[tauri::command]
-pub fn local_chat_get_by_request(db: State<'_, Arc<Database>>, request_id: String) -> AppResult<Option<ChatConversation>> {
-    db.local_chat_by_request(&request_id)
+pub async fn local_chat_get_by_request(db: State<'_, Arc<Database>>, request_id: String) -> AppResult<Option<ChatConversation>> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.local_chat_by_request(&request_id))
+        .await
+        .map_err(|error| AppError::Other(error.to_string()))?
 }
 
 #[tauri::command]

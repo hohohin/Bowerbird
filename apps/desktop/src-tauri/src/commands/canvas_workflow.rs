@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use tauri::State;
 use crate::{db::Database, error::{AppError, AppResult}};
 use crate::cloud::{AuthClient, EntitlementService};
+use crate::core::paths::LibraryPaths;
 use crate::core::project_canvas::{NewCanvasNode, insert_node_tx, touch_canvas_tx};
 
 pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<()> {
@@ -432,8 +433,10 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
 
 impl Database {
     fn workflow_get(&self, project_id: &str) -> AppResult<WorkflowSnapshot> {
-        let conn = self.conn.lock().unwrap();
-        let value: Option<(i64, String)> = conn.query_row("SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let value: Option<(i64, String)> = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row("SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?
+        };
         match value {
             Some((revision, raw)) => Ok(WorkflowSnapshot { revision, document: serde_json::from_str(&raw)? }),
             None => Ok(WorkflowSnapshot { revision: 0, document: json!({"schema_version":1,"nodes":[],"run":null}) }),
@@ -494,7 +497,12 @@ impl Database {
 }
 
 #[tauri::command]
-pub async fn canvas_workflow_get(db: State<'_, Arc<Database>>, project_id: String) -> AppResult<WorkflowSnapshot> { db.workflow_get(&project_id) }
+pub async fn canvas_workflow_get(paths: State<'_, Arc<LibraryPaths>>, project_id: String) -> AppResult<WorkflowSnapshot> {
+    let path = paths.db.clone();
+    tokio::task::spawn_blocking(move || Database::open_read_only(&path)?.workflow_get(&project_id))
+        .await
+        .map_err(|error| AppError::Other(error.to_string()))?
+}
 #[tauri::command]
 pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value, created_content: Option<NewCanvasNode>) -> AppResult<i64> {
     let before = db.workflow_get(&project_id)?.document;

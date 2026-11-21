@@ -75,7 +75,6 @@ import { createCanvasCellHitCache } from "../lib/canvasCellHitCache";
 import { lazyModule } from "../lib/lazyModule";
 import {
   useCallback,
-  startTransition,
   Suspense,
   useEffect,
   useId,
@@ -203,7 +202,7 @@ import { BOARD_ASSET_PICK_EVENT } from "./creation/useCreationEditor";
 import {
   canvasAssetNodeSize,
   canvasAssetMediaPath,
-  canvasPromptReferences,
+  canvasPromptReferenceLookup,
   agentPromptGroupMap,
   CANVAS_ARRANGE_NODES_EVENT,
   type CanvasArrangeNodesEventDetail,
@@ -339,8 +338,10 @@ function baseNodeRect(node: { x: number; y: number; width: number; height: numbe
   return { x: node.x, y: node.y, width: node.width, height: node.height - caption };
 }
 
-const ENTRY_BATCH_SIZE = 48;
-const OFFSCREEN_ENTRY_BATCH_SIZE = 12;
+const ENTRY_LIGHT_CARD_LIMIT = 48;
+const ENTRY_MIN_BATCH_WEIGHT = 24;
+const ENTRY_HEAVY_CARD_WEIGHT = 6;
+const ENTRY_FRAME_BUDGET_MS = 16;
 const EMPTY_ENTRY_CARDS: ReadonlySet<string> = new Set();
 
 function afterCanvasPaint(run: () => void) {
@@ -592,6 +593,7 @@ export function CanvasWorkspace({
   const [viewMode, setViewMode] = useState<CreativeViewMode>("canvas");
   const [composerSeedIds, setComposerSeedIds] = useState<string[]>([]);
   const sourceCollapsed = !useStore(state => state.canvasLibraryOpen);
+  const [sourceCatalogVisited, setSourceCatalogVisited] = useState(!sourceCollapsed);
   const frequentLibrary = useCanvasFrequentAssets(!sourceCollapsed, projectId);
   const [frequentPicking, setFrequentPicking] = useState(false);
   const frequentPickingRef = useRef(frequentPicking);
@@ -637,7 +639,11 @@ export function CanvasWorkspace({
   const inputDuringEntry = useRef(0);
   const openingStatus = useRef<HTMLDivElement>(null);
   const entryCardIdsRef = useRef(entryCardIds);
-  useLayoutEffect(() => { entryCardIdsRef.current = entryCardIds; }, [entryCardIds]);
+  const entryCommitAt = useRef(0);
+  useLayoutEffect(() => {
+    entryCardIdsRef.current = entryCardIds;
+    entryCommitAt.current = performance.now();
+  }, [entryCardIds]);
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadRevision, setLoadRevision] = useState(0);
   const restoredEntry = useRef<{ projectId: string; loadRevision: number }>();
@@ -1818,7 +1824,10 @@ export function CanvasWorkspace({
   }, [projectId]);
 
   useEffect(() => {
-    if (!sourceCollapsed) useLocalFileMode.getState().setOpen(true);
+    if (!sourceCollapsed) {
+      setSourceCatalogVisited(true);
+      useLocalFileMode.getState().setOpen(true);
+    }
   }, [sourceCollapsed]);
 
   useEffect(() => {
@@ -1927,7 +1936,7 @@ export function CanvasWorkspace({
           if (cancelled || token !== loadTokenRef.current) return;
           const exactAssets = await api.getAssetsByIds(projectCanvasAssetIds(snapshot.nodes));
           if (cancelled || token !== loadTokenRef.current) return;
-          if (snapshot.nodes.length >= ENTRY_BATCH_SIZE) {
+          if (snapshot.nodes.length >= ENTRY_LIGHT_CARD_LIMIT) {
             await new Promise<void>(resolve => {
               releasePaint = resolve;
               cancelPaint = afterCanvasPaint(resolve);
@@ -1943,9 +1952,6 @@ export function CanvasWorkspace({
           );
           if (initialSnapshotRestoredRef.current) {
             restoredEntry.current = { projectId, loadRevision };
-            void api.projectCanvasTouch(projectId).catch((reason) => {
-              if (!cancelled && token === loadTokenRef.current) reportError(reason);
-            });
           }
         }
       } catch (reason) {
@@ -5308,9 +5314,11 @@ export function CanvasWorkspace({
     const token = loadTokenRef.current;
     const stage = stageRef.current;
     const candidates = new Map([
-      ...graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null),
-      ...promptGraphNodes, ...agentGraphNodes, ...chatGraphNodes, ...visibleMaterials,
-      ...workflowNodes.filter(node => node.kind !== "text").map(node => ({ ...node, width: workflowCardWidth(node), height: 330 })),
+      ...[...graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null), ...promptGraphNodes, ...agentGraphNodes, ...chatGraphNodes]
+        .map(node => ({ ...node, weight: ENTRY_HEAVY_CARD_WEIGHT })),
+      ...visibleMaterials.map(node => ({ ...node,
+        weight: node.kind === "asset" && !isVideoPath(node.asset.storePath) && !isAudioPath(node.asset.storePath) && !isTextPath(node.asset.storePath) ? 1 : ENTRY_HEAVY_CARD_WEIGHT })),
+      ...workflowNodes.filter(node => node.kind !== "text").map(node => ({ ...node, width: workflowCardWidth(node), height: 330, weight: ENTRY_HEAVY_CARD_WEIGHT })),
     ].map(card => [card.id, card]));
     const wires: Array<[string, string]> = graphEdges.map(edge => [edge.fromNodeId, edge.toNodeId]);
     for (const node of workflowNodes) {
@@ -5321,15 +5329,20 @@ export function CanvasWorkspace({
       }
     }
     entryCandidates.current = new Set(candidates.keys());
-    const committed = new Set(mounted);
-    const remaining = new Set([...candidates.keys()].filter(id => !committed.has(id)));
+    let committed = new Set(mounted);
+    let remaining = new Set([...candidates.keys()].filter(id => !committed.has(id)));
     let nearby: string[] = [];
     let lastView: { x: number; y: number; zoom: number; width: number; height: number } | undefined;
     let initialViewReady = entryViewportReady;
     let expected: ReadonlySet<string> | null = mounted;
+    let lastCommitted: ReadonlySet<string> | null = mounted;
+    let active = true;
     let cancelBatch: (() => void) | undefined;
     let resume: number | undefined;
     let idle: number | undefined;
+    let batchBudget = ENTRY_LIGHT_CARD_LIMIT;
+    let batchStarted: number | undefined;
+    let viewportBatchCommitted = mounted.size > 0;
     let width = stage?.clientWidth ?? 0;
     let height = stage?.clientHeight ?? 0;
     function priority(pan: CanvasPoint, zoom: number) {
@@ -5338,7 +5351,6 @@ export function CanvasWorkspace({
       lastView = { ...pan, zoom, width, height };
       const buffer = 200;
       const inView = new Set([...remaining].filter(id => {
-        if (candidates.size < 150) return true;
         const card = candidates.get(id)!;
         return pan.x + card.x * zoom <= width + buffer && pan.x + (card.x + card.width) * zoom >= -buffer
           && pan.y + card.y * zoom <= height + buffer && pan.y + (card.y + card.height) * zoom >= -buffer;
@@ -5355,7 +5367,13 @@ export function CanvasWorkspace({
         if (remaining.has(fromId)) inView.add(fromId);
         if (remaining.has(toId)) inView.add(toId);
       }
-      nearby = [...inView];
+      const distanceToViewportStart = (id: string) => {
+        const card = candidates.get(id)!;
+        const x = pan.x + card.x * zoom, y = pan.y + card.y * zoom;
+        const intersects = x <= width && x + card.width * zoom >= 0 && y <= height && y + card.height * zoom >= 0;
+        return (intersects ? 0 : width + height) + Math.max(0, x) + Math.max(0, y);
+      };
+      nearby = [...inView].sort((a, b) => distanceToViewportStart(a) - distanceToViewportStart(b));
       if (nearby.length && (resume !== undefined || idle !== undefined)) {
         window.clearTimeout(resume);
         resume = undefined;
@@ -5376,12 +5394,25 @@ export function CanvasWorkspace({
     }
     function mountBatch() {
       const route = useStore.getState();
-      if (loadTokenRef.current !== token || route.projectRoutePending
+      if (!active || loadTokenRef.current !== token || route.projectRoutePending
         || route.activeProjectId !== projectId || route.projectRouteRevision !== projectRouteRevision) return;
-      if (entryCardIdsRef.current !== expected) {
-        scheduleBatch();
-        return;
+      const current = entryCardIdsRef.current;
+      if (current !== expected) {
+        if (current === lastCommitted) {
+          scheduleBatch();
+          return;
+        }
+        if (!current) return;
+        // Workflow readiness can restart the scheduler while the preceding
+        // transition is already committing. Continue from the painted set.
+        expected = current;
+        committed = new Set(current);
+        remaining = new Set([...candidates.keys()].filter(id => !committed.has(id)));
+        batchStarted = undefined;
+        lastView = undefined;
+        priority(panRef.current, zoomRef.current);
       }
+      lastCommitted = current;
       if (initialViewReady && (nodeDragRef.current || graphNodeDragRef.current || panDragRef.current)) {
         scheduleBatch();
         return;
@@ -5390,21 +5421,39 @@ export function CanvasWorkspace({
         scheduleBatch();
         return;
       }
-      const ids = nearby.splice(0, ENTRY_BATCH_SIZE);
-      if (!ids.length && initialViewReady) ids.push(...[...remaining].slice(0, OFFSCREEN_ENTRY_BATCH_SIZE));
+      if (batchStarted !== undefined) {
+        viewportBatchCommitted = true;
+        const elapsed = entryCommitAt.current - batchStarted;
+        if (elapsed > ENTRY_FRAME_BUDGET_MS) batchBudget = Math.max(ENTRY_MIN_BATCH_WEIGHT, Math.floor(batchBudget * .75));
+        else if (elapsed < ENTRY_FRAME_BUDGET_MS / 2) batchBudget = Math.min(ENTRY_LIGHT_CARD_LIMIT, batchBudget + ENTRY_HEAVY_CARD_WEIGHT);
+        batchStarted = undefined;
+      }
+      const ids: string[] = [];
+      let weight = 0;
+      const prioritized = nearby.length > 0;
+      for (const id of prioritized ? nearby : initialViewReady ? remaining : []) {
+        const cost = candidates.get(id)!.weight;
+        if (weight + cost > batchBudget) break;
+        ids.push(id);
+        weight += cost;
+      }
+      if (prioritized) nearby.splice(0, ids.length);
       for (const id of ids) { committed.add(id); remaining.delete(id); }
-      const ready = nearby.length === 0 && !initialViewReady;
+      // The first viewport batch makes the shell interactive. Neighboring
+      // cards and their wires continue to mount before the offscreen queue.
+      const ready = !initialViewReady && (viewportBatchCommitted || nearby.length === 0);
       const done = workflowSettled && remaining.size === 0;
       if (ready) {
         initialViewReady = true;
         inputDuringEntry.current = performance.now();
       }
       const next = done ? null : ids.length ? new Set(committed) : expected;
+      if (ids.length) batchStarted = performance.now();
       expected = next;
-      startTransition(() => {
-        if (ready || done) setEntryViewportReady(true);
-        setEntryCardIds(next);
-      });
+      // The paint scheduler already yields between small commits. A transition
+      // here can keep a background batch pending behind live workspace updates.
+      if (ready || done) setEntryViewportReady(previous => active ? true : previous);
+      if (next !== current) setEntryCardIds(previous => active && previous === current ? next : previous);
       if (done) {
         prioritizeEntry.current = undefined;
         resize.disconnect();
@@ -5418,8 +5467,9 @@ export function CanvasWorkspace({
     });
     if (stage) resize.observe(stage);
     priority(panRef.current, zoomRef.current);
-    mountBatch();
+    cancelBatch = afterCanvasPaint(mountBatch);
     return () => {
+      active = false;
       prioritizeEntry.current = undefined;
       resize.disconnect();
       cancelBatch?.();
@@ -5435,8 +5485,18 @@ export function CanvasWorkspace({
   const cardMounted = (id: string) => entryCardIds === null || entryCardIds.has(id) || (!!deferredCandidateIds && !deferredCandidateIds.has(id));
   const entryCardContext = useMemo(() => ({}), [graphNodes, visibleMaterials, workflowInteractive, genJobs]);
   const stagedCardContext = useCanvasEntryCardContext(entryCardContext, opening);
-  const promptReferences = useMemo(() => new Map(shownGraph.filter(node => node.kind === "prompt")
-    .map(node => [node.id, canvasPromptReferences(node.id, shownGraph, graphEdges, assetById).filter(asset => !hideCanvasOriginal(asset.id, asset.store_path))])), [shownGraph, graphEdges, assetById, hideCanvasOriginal, pendingOriginals]);
+  const lookupPromptReferences = useMemo(() => canvasPromptReferenceLookup(shownGraph, graphEdges), [shownGraph, graphEdges]);
+  const promptReferences = useMemo(() => {
+    const cache = new Map<string, ReturnType<typeof lookupPromptReferences>>();
+    return (node: ProjectGraphNode) => {
+      if (node.hiddenAt != null) return [];
+      const cached = cache.get(node.id);
+      if (cached) return cached;
+      const references = lookupPromptReferences(node.id, assetById).filter(asset => !hideCanvasOriginal(asset.id, asset.store_path));
+      cache.set(node.id, references);
+      return references;
+    };
+  }, [lookupPromptReferences, assetById, hideCanvasOriginal, pendingOriginals]);
   // ReadonlyPrompt creates its content in an effect; measure after it has mounted.
   useEffect(() => {
     const nodeId = pendingNewCards[0];
@@ -5885,8 +5945,8 @@ export function CanvasWorkspace({
           });
         }}>
         <div id={`${sourcePanelId}-content`} className="canvas-source-content">
-          <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode === "all" || fileMode === "tags" ? fileMode : "collections"} media={libraryMedia} projectId={projectId} semanticSearchEnabled={!sourceCollapsed}
-            projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>
+          {(sourceCatalogVisited || !sourceCollapsed) && <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode === "all" || fileMode === "tags" ? fileMode : "collections"} media={libraryMedia} projectId={projectId} semanticSearchEnabled={!sourceCollapsed}
+            projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>}
         </div>
         <CanvasFrequentAssets library={frequentLibrary} projectId={projectId} picking={frequentPicking} onPickingChange={setFrequentPicking}/>
       </aside>
@@ -6424,7 +6484,7 @@ export function CanvasWorkspace({
                   {imageOnly && failureKey && <span className={`canvas-conversation-failure${acknowledged ? " is-acknowledged" : ""}`}><button type="button"
                     onPointerDown={event => { event.stopPropagation(); cancelConversationImageClick(); }}
                     onClick={event => { event.stopPropagation(); if (!consumeSuppressedNodeClick(event)) openConversation(); }}>{acknowledged ? "查看会话详情" : "本轮生成失败 · 查看详情"}</button>{!acknowledged && dismissFailureButton(failureKey)}</span>}
-                  {!imageOnly && !previewUrl && <section className="canvas-prompt-content"><ReadonlyPrompt prompt={summary.text} references={promptReferences.get(latest.id) ?? []} /></section>}
+                  {!imageOnly && !previewUrl && <section className="canvas-prompt-content"><ReadonlyPrompt prompt={summary.text} references={promptReferences(latest)} /></section>}
                 </div>
               );
             })}
@@ -6474,7 +6534,7 @@ export function CanvasWorkspace({
                   <strong>{cloudAgentStepLabel(summary.currentStep ?? "")}</strong>
                   {(() => {
                     const prompt = graphNodes.find(candidate => agentPromptGroups.get(candidate.id)?.id === node.id);
-                    return prompt ? <section className="canvas-prompt-content"><ReadonlyPrompt prompt={promptNodeSummary(prompt).text} references={promptReferences.get(prompt.id) ?? []} /></section> : null;
+                    return prompt ? <section className="canvas-prompt-content"><ReadonlyPrompt prompt={promptNodeSummary(prompt).text} references={promptReferences(prompt)} /></section> : null;
                   })()}
                   <p>
                     {summary.progress != null ? `${summary.progress}%` : "等待进度"}

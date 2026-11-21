@@ -16,11 +16,21 @@ const menu = name => page.getByRole('menuitem', { name, exact: true });
 const dialog = () => page.getByRole('dialog');
 async function navigate(id) { await row(id).click(); await active(id); await page.waitForTimeout(120); }
 async function context(id) { await card(id).click({ button: 'right' }); await page.getByRole('menu').waitFor(); }
+async function checkTreeIndent() {
+  const [root, second, child, empty, nested] = await Promise.all(['root', 'second', 'child', 'empty', 'nested'].map(async id =>
+    (await row(id).locator('.catalog-tree-name').boundingBox()).x));
+  assert.equal(root, second, 'root names align with and without an expand arrow');
+  assert.equal(child, empty, 'sibling names align with and without an expand arrow');
+  assert.ok(child > root, 'child names are indented');
+  assert.equal(nested - child, child - root, 'each level adds the same indent');
+  assert.equal(await page.locator('.catalog-tree-icon').count(), 0, 'tree rows omit decorative folder icons');
+}
 try {
   await mkdir('.tmp/connected-collections', { recursive: true });
   await page.goto('http://127.0.0.1:17951/scripts/fixtures/connected-collections/preview.html');
   await page.getByRole('tab', { name: '文件夹', exact: true }).click();
   await card('root-0').waitFor();
+  await checkTreeIndent();
   await checkContextLookup(page, index => card(`root-${index}`), page.getByRole('button', { name: '取消选择', exact: true }),
     { idsCommand: 'connection_entry_ids', lookupCommand: 'resolve_connection_entries', firstId: 'root-0', secondId: 'root-1', coldId: 'root-124' });
   await checkContextRangeSelection(page, index => card(`root-${index}`), page.locator('.catalog-selection').getByRole('button', { name: '取消选择', exact: true }));
@@ -66,6 +76,7 @@ try {
   await page.waitForTimeout(200);
   await navigate('empty');
   assert.equal((await empty.boundingBox()).height, 40);
+  await checkTreeIndent();
   await page.screenshot({ path: '.tmp/connected-collections/compact-empty-light.png' });
   await page.setViewportSize({ width: 1280, height: 840 });
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });

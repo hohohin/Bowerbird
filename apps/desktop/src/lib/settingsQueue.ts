@@ -11,7 +11,7 @@ type SemanticSetting = typeof SEMANTIC_SETTINGS[number];
 
 // Native persistence accepts a full snapshot. Serialize reads and writes and
 // derive each snapshot from the last successful operation and its field patch.
-export function settingsQueue(read: () => Promise<AppSettings>, write: (value: AppSettings) => Promise<SettingsSaveReceipt | null | void>,
+export function settingsQueue(read: () => Promise<AppSettings>, write: (value: AppSettings, patch: Patch) => Promise<SettingsSaveReceipt | null | void>,
   current: () => AppSettings | null, publish: (value: AppSettings | null, failure: Failure | null) => void) {
   let tail = Promise.resolve();
   let confirmed: AppSettings | null = null;
@@ -48,7 +48,7 @@ export function settingsQueue(read: () => Promise<AppSettings>, write: (value: A
       try {
         confirmed ??= await read();
         const next = { ...confirmed, ...patch };
-        const receipt = await write(next);
+        const receipt = await write(next, patch);
         confirmed = next;
         if (receipt?.semanticIndexApplied === false) {
           const changed = SEMANTIC_SETTINGS.filter(key => key in patch || semanticFailure?.keys.includes(key));

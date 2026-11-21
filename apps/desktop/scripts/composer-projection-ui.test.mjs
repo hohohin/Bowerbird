@@ -172,8 +172,51 @@ try {
   const still = await dock.locator('.composer-projection-dots').evaluate(canvas => canvas.toDataURL());
   await page.waitForTimeout(420);
   assert.equal(await dock.locator('.composer-projection-dots').evaluate(canvas => canvas.toDataURL()), still, 'reduced motion keeps the dot field still');
+  await page.evaluate(() => {
+    const store = window.store;
+    const signedOut = { ok: false, reason: '未登录' };
+    store.setState({ activeGenProvider: 'jimeng', dreaminaHealth: signedOut, codexHealth: signedOut });
+  });
+  async function assertFeedbackInEditorColumn(feedback) {
+    await feedback.waitFor();
+    const bounds = await feedback.evaluate(node => {
+      const editor = node.closest('.creation-dock').querySelector('.ProseMirror').getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const lines = [...range.getClientRects()].filter(rect => rect.width > 0);
+      return { editorLeft: editor.left, editorRight: editor.right,
+        textLeft: Math.min(...lines.map(rect => rect.left)), textRight: Math.max(...lines.map(rect => rect.right)) };
+    });
+    assert.ok(Math.abs(bounds.textLeft - bounds.editorLeft) < 2 && bounds.textRight <= bounds.editorRight + 1,
+      `feedback stays inside the editor column: ${JSON.stringify(bounds)}`);
+  }
+  for (const [width, theme] of [[1440, 'dark'], [840, 'light']]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
+    for (const [mode, message] of [['图片', /即梦.*未登录/], ['视频', /即梦.*未登录/], ['对话', /ChatGPT.*未登录/]]) {
+      await dock.getByRole('button', { name: mode, exact: true }).click();
+      await assertFeedbackInEditorColumn(dock.getByRole('status').filter({ hasText: message }));
+      if (mode === '对话') await assertFeedbackInEditorColumn(dock.getByText(/Enter 换行/));
+    }
+  }
+  await dock.getByRole('button', { name: '图片', exact: true }).click();
+  await page.evaluate(async () => {
+    const store = window.store;
+    const assets = store.getState().assets;
+    const asset = { ...assets[0], id: 'composer-invalid-reference', ext: 'mp4',
+      name: '用于验证窄窗口内参考素材错误能完整换行的合成视频素材', store_path: '/fixture/reference.mp4' };
+    store.setState({ assets: [...assets, asset] });
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    window.dispatchEvent(new CustomEvent('bowerbird://board-asset-picked', { detail: { assetId: asset.id } }));
+  });
+  const referenceError = dock.getByRole('alert').filter({ hasText: '不能用于图片生成' });
+  await assertFeedbackInEditorColumn(referenceError);
+  await dock.locator('.composer-collapse').click();
+  await dock.getByRole('button', { name: '展开创作描述', exact: true }).waitFor();
+  assert.equal(await referenceError.isVisible(), false, 'feedback is hidden when the composer is collapsed');
+  assert.equal(await dock.getByRole('button', { name: '配置自有订阅' }).isVisible(), false);
   assert.deepEqual(errors, []);
-  console.log('PASS: real composer projection, themes, modes, menu, caret and reduced motion');
+  console.log('PASS: real composer projection, themes, modes, menu, caret, reduced motion and feedback layout');
 } catch (error) {
   await page.screenshot({ path: `${output}/failure.png` });
   console.log({ errors });

@@ -1,5 +1,5 @@
 use crate::{
-    core::{external_files::fingerprint, library::Analysis},
+    core::{external_files::{fingerprint, preview_key}, library::Analysis},
     db::Database,
     error::{AppError, AppResult},
     media::probe,
@@ -83,10 +83,13 @@ pub(super) fn snapshot_source(
 ) -> AppResult<(PathBuf, String, FileStamp)> {
     let path = source(db, asset_id)?;
     let before = FileStamp::read(&path)?;
+    let canonical = crate::core::folder_connections::registered_path_spelling(&path);
+    let key = preview_key(&canonical, &fs::metadata(&path)?)?;
     let hash = fingerprint(&path)?;
-    if FileStamp::read(&path)? != before {
+    if FileStamp::read(&path)? != before || preview_key(&canonical, &fs::metadata(&path)?)? != key {
         return Err(invalid("读取期间视频已变化，请重新转录"));
     }
+    db.register_connected_fingerprint(asset_id, &path, &key, &hash)?;
     Ok((path, hash, before))
 }
 

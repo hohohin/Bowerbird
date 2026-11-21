@@ -1454,10 +1454,12 @@ pub fn spawn_inbox_watcher(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-pub fn agent_z_health() -> Result<AgentZStatus, AppError> {
+pub async fn agent_z_health() -> Result<AgentZStatus, AppError> {
     #[cfg(windows)]
     {
-        imp::health()
+        tokio::task::spawn_blocking(imp::health)
+            .await
+            .map_err(|error| AppError::Other(error.to_string()))?
     }
     #[cfg(not(windows))]
     {

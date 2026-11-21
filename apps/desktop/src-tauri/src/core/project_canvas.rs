@@ -1372,6 +1372,36 @@ fn node_is_execution_owned(node: &CanvasNode) -> bool {
     }
 }
 
+fn ensure_project_canvas_tx(tx: &Transaction<'_>, project_id: &str, now: i64) -> AppResult<()> {
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound(format!("project {project_id}")));
+    }
+    tx.execute(
+        "INSERT OR IGNORE INTO project_canvases (project_id,draft_json,created_at,updated_at) VALUES (?1,'{\"schema_version\":1}',?2,?2)",
+        params![project_id, now],
+    )?;
+    Ok(())
+}
+
+fn touch_project_opened_tx(tx: &Transaction<'_>, project_id: &str, now: i64) -> AppResult<bool> {
+    let changed = tx.execute(
+        "UPDATE projects SET last_opened_at=?2,updated_at=COALESCE(updated_at,?2) WHERE id=?1",
+        params![project_id, now],
+    )?;
+    if changed > 0 {
+        tx.execute(
+            "UPDATE project_canvases SET updated_at=updated_at WHERE project_id=?1",
+            [project_id],
+        )?;
+    }
+    Ok(changed > 0)
+}
+
 fn project_canvas_snapshot_tx(
     tx: &Transaction<'_>,
     project_id: &str,
@@ -1468,18 +1498,7 @@ impl Database {
         let now = Utc::now().timestamp();
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
-            [project_id],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Err(AppError::NotFound(format!("project {project_id}")));
-        }
-        tx.execute(
-            "INSERT OR IGNORE INTO project_canvases (project_id,draft_json,created_at,updated_at) VALUES (?1,'{\"schema_version\":1}',?2,?2)",
-            params![project_id, now],
-        )?;
+        ensure_project_canvas_tx(&tx, project_id, now)?;
         let canvas = tx.query_row(
             "SELECT project_id,draft_json,created_at,updated_at FROM project_canvases WHERE project_id=?1",
             [project_id],
@@ -1487,6 +1506,17 @@ impl Database {
         )?;
         tx.commit()?;
         Ok(canvas)
+    }
+
+    pub fn open_project_canvas_scope(&self, project_id: &str) -> AppResult<()> {
+        required(project_id, "project id")?;
+        let now = Utc::now().timestamp();
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        ensure_project_canvas_tx(&tx, project_id, now)?;
+        touch_project_opened_tx(&tx, project_id, now)?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn materialize_project_canvas(
@@ -1624,18 +1654,9 @@ impl Database {
         let now = Utc::now().timestamp();
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        let changed = tx.execute(
-            "UPDATE projects SET last_opened_at=?2,updated_at=COALESCE(updated_at,?2) WHERE id=?1",
-            params![project_id, now],
-        )?;
-        if changed > 0 {
-            tx.execute(
-                "UPDATE project_canvases SET updated_at=updated_at WHERE project_id=?1",
-                [project_id],
-            )?;
-        }
+        let changed = touch_project_opened_tx(&tx, project_id, now)?;
         tx.commit()?;
-        Ok(changed > 0)
+        Ok(changed)
     }
 
     pub fn create_creative_thread(&self, value: &NewCreativeThread) -> AppResult<CreativeThread> {
@@ -3397,6 +3418,23 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
         db
+    }
+
+    #[test]
+    fn opening_project_canvas_scope_updates_last_opened_without_rewriting_canvas() {
+        let db = db();
+        materialize(&db, "p");
+        let canvas = db.get_project_canvas("p").unwrap().unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE projects SET last_opened_at = 1 WHERE id = 'p'", [])
+            .unwrap();
+
+        db.open_project_canvas_scope("p").unwrap();
+
+        assert!(db.get_project("p").unwrap().unwrap().last_opened_at > 1);
+        assert_eq!(db.get_project_canvas("p").unwrap(), Some(canvas));
     }
 
     #[test]

@@ -49,8 +49,15 @@ pub(super) async fn require_byo(
 pub struct CodexHealth {
     pub ok: bool,
     pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_in: Option<bool>,
 }
 
+fn codex_signed_in() -> bool {
+    codex_home().is_some_and(|home| {
+        std::fs::metadata(home.join("auth.json")).is_ok_and(|entry| entry.len() > 0)
+    })
+}
 /// Recheck at the native submission boundary, including default and restored selections.
 pub(super) async fn require_generation_cli(app: &AppHandle, provider: &str) -> Result<(), AppError> {
     if provider == "jimeng" {
@@ -87,26 +94,24 @@ pub async fn codex_health() -> Result<CodexHealth, AppError> {
     } else {
         false
     };
+    let logged_in = codex_signed_in();
     if !binary_ok {
         return Ok(CodexHealth {
             ok: false,
+            signed_in: Some(logged_in),
             reason: "未检测到可用的 Codex CLI，请在自有订阅设置中安装。".into(),
         });
     }
-    let logged_in = codex_home()
-        .map(|h| {
-            let p = h.join("auth.json");
-            std::fs::metadata(&p).map(|m| m.len() > 0).unwrap_or(false)
-        })
-        .unwrap_or(false);
     if !logged_in {
         return Ok(CodexHealth {
             ok: false,
+            signed_in: Some(false),
             reason: "Codex 自有订阅未登录，请先登录授权。".into(),
         });
     }
     Ok(CodexHealth {
         ok: true,
+        signed_in: Some(true),
         reason: String::new(),
     })
 }
@@ -123,7 +128,7 @@ pub async fn codex_logout(app: AppHandle) -> Result<CodexHealth, AppError> {
     crate::cli_credentials::clear_codex_auth(&app_dir)
         .map_err(|error| AppError::Codex(format!("退出 Codex 登录失败：{error}")))?;
     let _ = app.emit("codex://health-changed", ());
-    Ok(CodexHealth { ok: false, reason: "Bowerbird 的 Codex 未登录，请在设置中登录".into() })
+    Ok(CodexHealth { ok: false, signed_in: Some(false), reason: "Bowerbird 的 Codex 未登录，请在设置中登录".into() })
 }
 
 /// 当前安装/登录引导的取消信号（与反推 `DESCRIBE_CANCEL` / 生成 `GENERATE_CANCEL` 独立；
@@ -147,14 +152,16 @@ pub async fn codex_install(app: AppHandle) -> Result<CodexHealth, AppError> {
             let _ = app.emit("codex://health-changed", ());
             Ok(CodexHealth {
                 ok: true,
+                signed_in: None,
                 reason: String::new(),
             })
         }
         // 取消以错误抛出（前端 catch「已取消」回 idle 可重试，不显示为红色失败）。
         Err(AppError::Codex(reason)) if reason == "已取消" => Err(AppError::Codex(reason)),
-        Err(AppError::Codex(reason)) => Ok(CodexHealth { ok: false, reason }),
+        Err(AppError::Codex(reason)) => Ok(CodexHealth { ok: false, signed_in: None, reason }),
         Err(e) => Ok(CodexHealth {
             ok: false,
+            signed_in: None,
             reason: e.to_string(),
         }),
     }
@@ -215,19 +222,15 @@ pub async fn codex_login(app: AppHandle) -> Result<CodexHealth, AppError> {
         let head: String = drain_str.trim().chars().take(500).collect();
         return Ok(CodexHealth {
             ok: false,
+            signed_in: Some(codex_signed_in()),
             reason: format!("codex login 退出 {} | {head}", status),
         });
     }
     // 复查 auth.json（复用 codex_health 的登录态判定）。
-    let logged_in = codex_home()
-        .map(|h| {
-            let p = h.join("auth.json");
-            std::fs::metadata(&p).map(|m| m.len() > 0).unwrap_or(false)
-        })
-        .unwrap_or(false);
-    if !logged_in {
+    if !codex_signed_in() {
         return Ok(CodexHealth {
             ok: false,
+            signed_in: Some(false),
             reason: "未检测到 Bowerbird 独立登录态，请在设置中重试登录"
                 .into(),
         });
@@ -235,6 +238,7 @@ pub async fn codex_login(app: AppHandle) -> Result<CodexHealth, AppError> {
     let _ = app.emit("codex://health-changed", ());
     Ok(CodexHealth {
         ok: true,
+        signed_in: Some(true),
         reason: String::new(),
     })
 }

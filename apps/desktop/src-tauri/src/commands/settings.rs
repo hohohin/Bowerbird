@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, WebviewWindow};
 
 use crate::core::migrate;
 use crate::core::paths::LibraryPaths;
@@ -28,13 +28,23 @@ pub async fn get_settings(state: State<'_, SettingsState>) -> Result<AppSettings
 #[tauri::command]
 pub async fn update_settings(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SettingsState>,
     db: State<'_, Arc<Database>>,
     semantic: State<'_, Arc<SemanticSearch>>,
     settings: AppSettings,
+    apply_screenshot_shortcuts: Option<bool>,
 ) -> Result<UpdateSettingsReceipt, AppError> {
     let included_generated = state.semantic_index_preferences().include_generated;
-    state.update(settings)?;
+    if apply_screenshot_shortcuts.unwrap_or(false) {
+        let shortcuts = settings.screenshot_shortcuts.clone();
+        super::screenshot::replace_shortcuts(&window, &app, &shortcuts, || {
+            state.update_preferences(settings, true)
+        })
+        .map_err(AppError::Other)?;
+    } else {
+        state.update(settings)?;
+    }
     let scope_changed = included_generated != state.semantic_index_preferences().include_generated;
     let semantic_index_error = semantic.preferences_changed(&app, &db, scope_changed);
     Ok(UpdateSettingsReceipt {

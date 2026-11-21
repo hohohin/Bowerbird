@@ -227,10 +227,22 @@ pub async fn screenshot_set_shortcuts(
     app: AppHandle,
     shortcuts: ScreenshotShortcuts,
 ) -> Result<(), String> {
+    let settings = app.state::<SettingsState>();
+    replace_shortcuts(&window, &app, &shortcuts, || {
+        settings.update_with(|saved| saved.screenshot_shortcuts = shortcuts.clone())
+    })
+}
+
+pub(crate) fn replace_shortcuts(
+    window: &WebviewWindow,
+    app: &AppHandle,
+    shortcuts: &ScreenshotShortcuts,
+    persist: impl FnOnce() -> crate::error::AppResult<()>,
+) -> Result<(), String> {
     if window.label() != "main" {
         return Err("仅主窗口可修改快捷键".into());
     }
-    let next = parse_shortcuts(&shortcuts)?;
+    let next = parse_shortcuts(shortcuts)?;
     let state = app.state::<ScreenshotState>();
     let mut status = state.shortcuts.lock().unwrap();
     let settings = app.state::<SettingsState>();
@@ -241,7 +253,7 @@ pub async fn screenshot_set_shortcuts(
         if app.global_shortcut().is_registered(*key) {
             continue;
         }
-        if let Err(error) = register(&app, *key) {
+        if let Err(error) = register(app, *key) {
             for key in added {
                 let _ = app.global_shortcut().unregister(key);
             }
@@ -250,7 +262,7 @@ pub async fn screenshot_set_shortcuts(
         }
         added.push(*key);
     }
-    if let Err(error) = settings.update_with(|saved| saved.screenshot_shortcuts = shortcuts) {
+    if let Err(error) = persist() {
         for key in added {
             let _ = app.global_shortcut().unregister(key);
         }

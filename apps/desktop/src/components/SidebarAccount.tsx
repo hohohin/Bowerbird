@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, CircleArrowUp, Coins, LogIn, LogOut, Settings, Zap } from "lucide-react";
 import { useStore } from "../store";
 import { accountEntitlement, understandReady } from "../lib/entitlement";
-import { SettingsDialog } from "./SettingsDialog";
+import type { SettingsRequest, SettingsSection } from "../lib/types";
 import { useAppUpdater } from "../lib/appUpdater";
 import { NotificationBell } from "./NotificationBell";
+import { AccountLogoutConfirmation } from "./AccountLogoutConfirmation";
 
 /**
  * 顶栏头像进入账号管理，余额直达积分明细。旧侧栏保留菜单。
@@ -19,20 +20,19 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const topbar = placement === "topbar";
   const compact = topbar || collapsed;
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const balanceTriggerRef = useRef<HTMLButtonElement>(null);
-  const updateTriggerRef = useRef<HTMLButtonElement>(null);
   const update = useAppUpdater(s => s.update);
   const updatePhase = useAppUpdater(s => s.phase);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudBusy = useStore((s) => s.cloudBusy);
-  const logoutCloud = useStore((s) => s.logoutCloud);
   const setAccountOnboardingForceOpen = useStore((s) => s.setAccountOnboardingForceOpen);
   const loginOpen = useStore((s) => s.accountOnboardingForceOpen);
   const codexHealth = useStore((s) => s.codexHealth);
   const [open, setOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"system" | "account" | "credits" | "update">("system");
+  const [logoutUserId, setLogoutUserId] = useState<string | null>(null);
+  const request = useStore(s => s.settingsRequest);
+  const [settingsOrigin, setSettingsOrigin] = useState<{ request: SettingsRequest; trigger: "gear" | "account" | "credits" | "update" } | null>(null);
+  const settingsOpen = request !== null && settingsOrigin?.request === request;
   const rootRef = useRef<HTMLDivElement>(null);
 
   const loggedIn = cloudAuth?.logged_in === true;
@@ -44,14 +44,23 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const name = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";
   const avatarUrl = cloudAuth?.avatar_url ?? null;
   const tier = current?.tier.toUpperCase() ?? "";
-  // 旧版本浏览器扩展不再参与未就绪提醒。
-  const hasIssue = !understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth });
+  const hasIssue = !!current && !understandReady({ cloudEntitlement, codexHealth, cloudAuth });
+  const gearLabel = hasIssue ? "设置，反推模型未就绪" : "设置";
   const updateLabel = `${updatePhase === "downloading" ? "正在下载更新" : updatePhase === "ready" ? "更新已就绪" : updatePhase === "installing" ? "正在安装更新" : updatePhase === "installed" ? "重启完成更新" : "发现新版本"} ${update?.version ?? ""}`;
 
+  const interacting = open || settingsOpen || logoutUserId !== null;
   useEffect(() => {
-    onInteractionChange?.(open || settingsOpen);
+    onInteractionChange?.(interacting);
     return () => onInteractionChange?.(false);
-  }, [open, settingsOpen, onInteractionChange]);
+  }, [interacting, onInteractionChange]);
+
+  function openSettings(section: SettingsSection, source: "gear" | "account" | "credits" | "update") {
+    if (!topbar) triggerRef.current?.focus();
+    setOpen(false);
+    const next = { section };
+    setSettingsOrigin({ request: next, trigger: source });
+    useStore.setState({ settingsRequest: next });
+  }
 
   function openAccountDetail() {
     setOpen(false);
@@ -79,9 +88,9 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   return (
     <div ref={rootRef} className={topbar ? "topbar-account" : `relative border-t border-edge px-1 pb-1 pt-2 ${collapsed ? "mt-auto w-full" : "mt-2"}`}>
       {topbar && <span className="topbar-update-slot">
-        {update && <button ref={updateTriggerRef} type="button" className="topbar-update-button"
-          title={updateLabel} aria-label={updateLabel} aria-haspopup="dialog" aria-expanded={settingsOpen && settingsSection === "update"}
-          onClick={() => { setSettingsSection("update"); setSettingsOpen(true); }}>
+        {update && <button type="button" className="topbar-update-button"
+          title={updateLabel} aria-label={updateLabel} aria-haspopup="dialog" aria-expanded={settingsOpen && settingsOrigin?.trigger === "update"}
+          onClick={() => openSettings("about", "update")}>
           <CircleArrowUp size={18} aria-hidden="true" />
         </button>}
       </span>}
@@ -96,11 +105,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setOpen(false);
-                  setSettingsSection("account");
-                  setSettingsOpen(true);
-                }}
+                onClick={() => openSettings("account", "account")}
                 className="app-context-item px-2 py-1 text-xs"
                 title="查看会员权益与兑换 Pro"
                 role="menuitem"
@@ -110,13 +115,9 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setOpen(false);
-                  setSettingsSection("system");
-                  setSettingsOpen(true);
-                }}
+                onClick={() => openSettings(hasIssue ? "models" : "system", "gear")}
                 className="app-context-item px-2 py-1 text-xs"
-                title="设置（系统 / 账号 / 模型 / 关于）"
+                title={gearLabel} aria-label={gearLabel}
                 role="menuitem"
               >
                 <Settings size={13} />
@@ -129,8 +130,12 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
               </button>
               <button
                 type="button"
-                onClick={() => void logoutCloud()}
-                disabled={cloudBusy}
+                onClick={() => {
+                  triggerRef.current?.focus({ preventScroll: true });
+                  setOpen(false);
+                  setLogoutUserId(cloudAuth?.user_id ?? null);
+                }}
+                disabled={cloudBusy || !cloudAuth?.user_id}
                 className="app-context-item is-danger px-2 py-1 text-xs"
                 role="menuitem"
               >
@@ -151,48 +156,41 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setOpen(false);
-                  setSettingsSection("system");
-                  setSettingsOpen(true);
-                }}
+                onClick={() => openSettings("system", "gear")}
                 className="app-context-item px-2 py-1 text-xs"
-                title="设置（系统 / 账号 / 模型 / 关于）"
+                title="设置"
                 role="menuitem"
               >
                 <Settings size={13} />
                 设置
-                {hasIssue && (
-                  <span className="ml-auto flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold leading-none text-white">
-                    !
-                  </span>
-                )}
               </button>
             </>
           )}
         </div>
       )}
 
-      {topbar && !loggedIn && <button type="button" className="app-button-dark" title="系统设置" aria-label="系统设置"
-        onClick={() => { setSettingsSection("system"); setSettingsOpen(true); }}>
+      {topbar && <button type="button" className="app-button-dark relative" title={gearLabel} aria-label={gearLabel}
+        aria-haspopup="dialog" aria-expanded={settingsOpen && settingsOrigin?.trigger === "gear"}
+        onClick={() => openSettings(hasIssue ? "models" : "system", "gear")}>
         <Settings size={16} aria-hidden="true" />
+        {hasIssue && <span aria-hidden="true" className="absolute right-1 top-1 size-1.5 rounded-full bg-red-500" />}
       </button>}
-      {topbar && loggedIn && <button type="button" ref={balanceTriggerRef} className="app-topbar-credits app-button-dark"
+      {topbar && loggedIn && <button type="button" className="app-topbar-credits app-button-dark"
         title="查看积分明细" aria-label={`${creditsLabel}，查看积分明细`} aria-haspopup="dialog"
-        aria-expanded={settingsOpen && settingsSection === "credits"}
-        onClick={() => { setSettingsSection("credits"); setSettingsOpen(true); }}>
+        aria-expanded={settingsOpen && settingsOrigin?.trigger === "credits"}
+        onClick={() => openSettings("credits", "credits")}>
         <Coins size={16} aria-hidden="true" /><span>{creditsText}</span>
       </button>}
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => { if (topbar && !loggedIn) openAccountDetail(); else if (topbar) { setSettingsSection("account"); setSettingsOpen(true); } else setOpen((v) => !v); }}
+        onClick={() => { if (topbar && !loggedIn) openAccountDetail(); else if (topbar) openSettings("account", "account"); else setOpen((v) => !v); }}
         className={topbar ? "topbar-account-trigger" : `flex w-full items-center rounded-lg py-2 hover:bg-panel2 ${collapsed ? "justify-center" : "gap-2 px-2"}`}
         title={topbar ? (loggedIn ? "账号管理" : "登录 Bowerbird 账号") : loggedIn ? `${name} · ${tier || "已登录"}` : "未登录"}
         aria-label={topbar ? (loggedIn ? `${name}，账号管理` : "登录 Bowerbird 账号") : loggedIn ? `${name}，账号与设置` : "未登录，账号与设置"}
         data-tour="sidebar-account"
         aria-haspopup={topbar ? "dialog" : "menu"}
-        aria-expanded={topbar ? loginOpen || (settingsOpen && settingsSection === "account") : open}
+        aria-expanded={topbar ? loginOpen || (settingsOpen && settingsOrigin?.trigger === "account") : open}
       >
         {topbar && !loggedIn && <span className="text-xs text-muted">登录</span>}
         {loggedIn && avatarUrl ? (
@@ -212,8 +210,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
         )}
         {open ? <ChevronUp size={13} className="shrink-0 text-muted" /> : <ChevronDown size={13} className="shrink-0 text-muted" />}</>}
       </button>
-
-      {settingsOpen && <SettingsDialog initialSection={settingsSection === "update" ? "system" : settingsSection} onClose={() => { setSettingsOpen(false); (settingsSection === "update" ? updateTriggerRef.current ?? triggerRef.current : settingsSection === "credits" ? balanceTriggerRef.current : triggerRef.current)?.focus(); }} />}
+      {logoutUserId && <AccountLogoutConfirmation userId={logoutUserId} onClose={() => setLogoutUserId(null)} />}
     </div>
   );
 }

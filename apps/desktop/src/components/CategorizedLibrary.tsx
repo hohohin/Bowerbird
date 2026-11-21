@@ -8,7 +8,7 @@ import { catalogCache } from "../lib/catalogCache";
 import { openCatalogMenu } from "../lib/openCatalogMenu";
 import { hasPendingOriginalDeletions, isPendingOriginal, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { invalidateCatalog, useCatalogRevision } from "../lib/useCatalogRevision";
-import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
 import { materialCatalog, type CatalogKind, type MaterialCatalog, type CatalogFilter } from "../lib/materialCatalog";
 import { catalogInitial, collectionRows, orderCatalogTags, UNTAGGED_SECTION } from "../lib/materialCatalogOrder";
 import { type LibraryMedia } from "../lib/localFileMode";
@@ -451,7 +451,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
                   }
                 }}>
                 {children && <button className="catalog-tree-toggle" tabIndex={-1} aria-label={`${collapsed.has(item.id) ? "展开" : "收起"}${item.name}`} onClick={e => { e.stopPropagation(); toggle(item.id); }}>{collapsed.has(item.id) ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</button>}
-                <Folder className="catalog-tree-icon" size={14} aria-hidden="true"/><span className="catalog-tree-name">{item.name}</span>
+                <span className="catalog-tree-name">{item.name}</span>
                 <div className="catalog-tree-row-actions">
                 <button className="catalog-tree-add" aria-label={`在「${item.name}」中新建子文件夹`} title="新建子文件夹"
                   onClick={event => { event.stopPropagation(); setEditor({ parentId: item.id }); }}><Plus size={14}/></button>

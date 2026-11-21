@@ -27,7 +27,8 @@ fn current_description(db: &Database, asset_id: &str) -> AppResult<Option<VideoA
     let Ok(original) = source(db, asset_id) else {
         return Ok(None);
     };
-    if FileStamp::read(&original).as_ref().ok() != Some(&record.stamp)
+    if !db.connected_source_matches(asset_id, &original)?
+        || FileStamp::read(&original).as_ref().ok() != Some(&record.stamp)
         || record.text.trim().is_empty()
     {
         return Ok(None);
@@ -58,6 +59,29 @@ mod tests {
         core::{catalog_browser::CatalogFilter, library::Analysis},
     };
     use serde_json::{json, Value};
+
+    #[test]
+    fn video_revision_snapshots_full_fingerprint_before_background_work() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("videos");
+        std::fs::create_dir(&folder).unwrap();
+        let source = folder.join("large.mkv");
+        std::fs::File::create(&source).unwrap().set_len(crate::core::external_files::DEFERRED_FINGERPRINT_BYTES + 1).unwrap();
+        let paths = crate::core::paths::LibraryPaths::init(temp.path().join("library")).unwrap();
+        let db = Database::open(&paths.db).unwrap();
+        db.migrate().unwrap();
+        let root = db.connect_directory(&folder, None).unwrap();
+        db.scan_connection(&paths, &root).unwrap();
+        let pending = db.pending_connected_fingerprints("").unwrap();
+        assert_eq!(pending.len(), 1);
+        let (_, hash, _) = snapshot_source(&db, &pending[0]).unwrap();
+        assert_eq!(hash, crate::core::external_files::fingerprint(&source).unwrap());
+        assert!(db.pending_connected_fingerprints("").unwrap().is_empty());
+        let persisted: String = db.conn.lock().unwrap().query_row(
+            "SELECT sha256 FROM creative_file_fingerprints WHERE asset_id=?1", [&pending[0]], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(persisted, hash);
+    }
     use std::{fs, path::Path};
 
     fn description_fixture(db: &Database, asset_id: &str, text: &str) -> Value {

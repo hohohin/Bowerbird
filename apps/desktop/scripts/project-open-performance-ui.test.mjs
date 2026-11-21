@@ -260,6 +260,8 @@ try {
     assert.equal(await page.locator('.canvas-workspace').count(), 0, 'the project card reports progress while the native scope is pending');
     await page.evaluate(() => window.releaseProjectScope());
     await ready.locator('[data-workflow-card="workflow-0"]').waitFor();
+    assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'project_canvas_touch').length), 0,
+      'the native project scope records the open without a second write after hydration');
     console.log(`Project entry: return during mounting in ${report.returnDuringMountMs}ms, stale snapshot isolation, and deferred card reached by panning.`);
   }
   assert.deepEqual(errors, []);

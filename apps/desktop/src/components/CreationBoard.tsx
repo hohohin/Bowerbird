@@ -655,6 +655,7 @@ export function CreationBoard({
   const sendTooltipId = useId();
   const referenceError = isLocalVideo ? localVideoInputError(localPrompt, localFrames, generation.localVideo!, localAudio, localVideos) : !isVideo && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode
     ? imageInputError(references) : null;
+  const imageReferenceError = !isChat && !isLocalVideo ? referenceError : null;
   const sendDisabledReason = isChat
     ? submitting ? "正在发送消息，请稍候。" : providerIssue?.message
       ?? (chatProvider === "codex-local" ? chatCodexOptionError(chatCodexOptions ?? {}, chatModels.models) : null)
@@ -1515,13 +1516,15 @@ export function CreationBoard({
         </OverlayScrollArea>
         {isLocalVideo && onOptimizeLocalVideo && !isCollapsed && <H3OptimizeButton disabled={submitting || !localPrompt.trim() || !!localOptimizationError} busy={optimizingH3} onClick={() => void optimizeH3Prompt()} />}
         </div>
+        {!isCollapsed && (isChat || providerIssue || imageReferenceError) && <div className="composer-feedback">
+          {isChat && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
+          {isChat && chatProvider !== "codex-local" && references.length > 0 && <p className="composer-chat-key-hint">所选素材可用于建卡。图片内容分析可选择本机 Codex。</p>}
+          <ProviderIssueNotice issue={providerIssue} />
+          {imageReferenceError && <p role="alert" className="text-xs text-red-400">{imageReferenceError}</p>}
+        </div>}
         </div>
-        {isChat && !isCollapsed && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
-        {isChat && chatProvider !== "codex-local" && references.length > 0 && <p className="composer-chat-key-hint">所选素材可用于建卡。图片内容分析可选择本机 Codex。</p>}
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
         <BoardChipPreview hostRef={hostRef} />
-        {providerIssue && <ProviderIssueNotice issue={providerIssue} className="px-3 py-1 text-xs text-muted" />}
-        {!isChat && referenceError && !isLocalVideo && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
         {/* 素材、模型参数、帮助与发送保持同一条底栏。 */}
         <div className={`generation-toolbar composer-toolbar${isVideo ? " is-video" : ""}`}>
           {!isChat && !isVideo && !cloudAgentMode && !terminalAgent && <JoinPreviousGeneration key={galleryProjectId}

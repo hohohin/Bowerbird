@@ -17,6 +17,7 @@ import {
   canStartAnotherJob, countLimitedGenerationJobs,
   canUseByo,
   canUseGenerationProvider,
+  understandEngineUsable,
   understandProvider,
 } from "./lib/entitlement";
 import type {
@@ -42,7 +43,9 @@ import type {
   ProjectDeleteResult,
   PromptedAsset,
   RecentGenSession,
+  SettingsRequest,
   TagCount,
+  UnderstandProviderPref,
   VisualProfileSummary,
 } from "./lib/types";
 import { canonicalProviderKey, restoredImageProvider, dreaminaCliVersion, defaultCloudProvider, isKnownGenProvider, normalizeGenerationProvider } from "./lib/genProviders";
@@ -128,29 +131,16 @@ function saveDefaultProvider(v: string) {
   }
 }
 
-// —— 默认反推引擎（localStorage；"auto"=按账号档位自动路由，其余跳过每次的引擎选择浮层）——
+// 旧版默认反推引擎，升级后迁入 settings.json。
 const DEFAULT_UNDERSTAND_KEY = "bowerbird.defaultUnderstandProvider";
-const UNDERSTAND_PROVIDERS = ["auto", "bowerbird-cloud", "codex"] as const;
-export type UnderstandProviderPref = (typeof UNDERSTAND_PROVIDERS)[number];
 
-function loadDefaultUnderstandProvider(): string {
+function loadLegacyUnderstandProvider(): UnderstandProviderPref | null {
   try {
-    const v = localStorage.getItem(DEFAULT_UNDERSTAND_KEY);
-    return v && (UNDERSTAND_PROVIDERS as readonly string[]).includes(v) ? v : "auto";
+    const value = localStorage.getItem(DEFAULT_UNDERSTAND_KEY);
+    return value === "auto" || value === "bowerbird-cloud" || value === "codex" ? value : null;
   } catch {
-    return "auto";
+    return null;
   }
-}
-/** 反推引擎是否当下可用（与 DescribeProviderPicker 的门控一致）：Cloud 需登录+有余额；codex 需 Pro+ 且本机就绪。 */
-export function understandEngineUsable(
-  s: { cloudAuth: AuthSnapshot | null; cloudEntitlement: EntitlementSnapshot | null; codexHealth: CodexHealth | null },
-  provider: "bowerbird-cloud" | "codex",
-): boolean {
-  if (provider === "codex") return canUseByo(s.cloudEntitlement) && !!s.codexHealth?.ok;
-  const balances = s.cloudEntitlement
-    ? s.cloudEntitlement.balances.daily + s.cloudEntitlement.balances.sub + s.cloudEntitlement.balances.topup
-    : 0;
-  return !!s.cloudAuth?.cloud_available && !!s.cloudAuth.logged_in && balances > 0;
 }
 
 type Mode = "browse" | "manage";
@@ -395,7 +385,7 @@ interface State {
   dreaminaOnboardingForceOpen: boolean;
   setDreaminaOnboardingForceOpen: (v: boolean) => void;
   accountOnboardingForceOpen: boolean;
-  subscriptionSettingsTarget: "jimeng" | "codex" | "dsh" | null;
+  settingsRequest: SettingsRequest | null;
   setAccountOnboardingForceOpen: (v: boolean) => void;
   // —— 应用设置（从后端 settings.json 加载）——
   settings: AppSettings | null;
@@ -423,8 +413,7 @@ interface State {
   defaultProvider: string; // 全局默认出图 provider（"codex"/"jimeng"，localStorage 持久化）
   setDefaultProvider: (p: string) => void;
   // —— 默认反推引擎（设置「模型设置」可选并持久化）——
-  defaultUnderstandProvider: string; // "auto" | "bowerbird-cloud" | "codex"
-  setDefaultUnderstandProvider: (p: string) => void;
+  defaultUnderstandProvider: UnderstandProviderPref;
   activeGenProvider: string; // 当前会话出图 provider（创作板切换条改它，初值=defaultProvider，不持久化）
   setActiveGenProvider: (p: string) => void;
   // —— dreamina 登录流程（OAuth Device Flow；dreamina://login 逐行透传 stdout）——
@@ -584,10 +573,29 @@ function taskErrorMessage(error: unknown): string {
 }
 
 export const useStore = create<State>((set, get) => {
-  const saves = settingsQueue(() => api.getSettings(), settings => api.updateSettings(settings),
+  let legacyUnderstandProvider = loadLegacyUnderstandProvider();
+  let understandMigrationQueued = false;
+  function clearLegacyUnderstandProvider() {
+    if (!legacyUnderstandProvider) return;
+    legacyUnderstandProvider = null;
+    try { localStorage.removeItem(DEFAULT_UNDERSTAND_KEY); } catch { /* Native preference now takes priority. */ }
+  }
+  const saves = settingsQueue(async () => {
+    const settings = await api.getSettings();
+    if (settings.default_understand_provider) clearLegacyUnderstandProvider();
+    return settings;
+  }, async (settings, patch) => {
+    const receipt = await api.updateSettings(settings, !!patch.screenshot_shortcuts);
+    if (settings.default_understand_provider) clearLegacyUnderstandProvider();
+    return receipt;
+  },
     () => get().settings, (settings, failure) => {
       if (settings && settings.theme !== get().settings?.theme) applyTheme(settings.theme);
-      set({ settings, settingsSaveError: failure?.cause ?? null });
+      set({
+        settings,
+        settingsSaveError: failure?.cause ?? null,
+        defaultUnderstandProvider: settings?.default_understand_provider ?? legacyUnderstandProvider ?? "auto",
+      });
     });
   function runProjectRoute<T>(operation: () => Promise<T>): Promise<T> {
     const requestId = ++projectRouteRequestId;
@@ -1524,7 +1532,7 @@ export const useStore = create<State>((set, get) => {
   setDreaminaOnboardingForceOpen: (dreaminaOnboardingForceOpen) =>
     set({ dreaminaOnboardingForceOpen }),
   accountOnboardingForceOpen: false,
-  subscriptionSettingsTarget: null,
+  settingsRequest: null,
   setAccountOnboardingForceOpen: (accountOnboardingForceOpen) =>
     set({ accountOnboardingForceOpen }),
   // —— 应用设置 ——
@@ -1532,7 +1540,13 @@ export const useStore = create<State>((set, get) => {
   settingsSaveError: null,
   retrySettings: saves.retry,
   loadSettings: async () => {
-    try { await saves.load(); }
+    try {
+      await saves.load();
+      if (legacyUnderstandProvider && !understandMigrationQueued && !get().settings?.default_understand_provider) {
+        understandMigrationQueued = true;
+        await saves.update({ default_understand_provider: legacyUnderstandProvider });
+      }
+    }
     catch (error) { console.error("loadSettings failed", error); }
   },
   updateSettings: saves.update,
@@ -1680,16 +1694,7 @@ export const useStore = create<State>((set, get) => {
     // 改默认同步切当前选择（用户期望「默认」生效立即）。
     set({ defaultProvider, activeGenProvider: defaultProvider });
   },
-  defaultUnderstandProvider: loadDefaultUnderstandProvider(),
-  setDefaultUnderstandProvider: (p) => {
-    if (!(UNDERSTAND_PROVIDERS as readonly string[]).includes(p)) return;
-    try {
-      localStorage.setItem(DEFAULT_UNDERSTAND_KEY, p);
-    } catch {
-      /* localStorage 不可用时忽略 */
-    }
-    set({ defaultUnderstandProvider: p });
-  },
+  defaultUnderstandProvider: legacyUnderstandProvider ?? "auto",
   activeGenProvider: loadDefaultProvider(),
   setActiveGenProvider: (activeGenProvider) => {
     if (!canUseGenerationProvider(get().cloudEntitlement, activeGenProvider)) return;

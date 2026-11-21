@@ -128,7 +128,7 @@ export function AccountBilling({ loggedIn, entitlement }: {
       </div>}
       {!checkout.recoveryFailed && checkout.hasAttempt && <button className="app-modal-button" disabled={checkout.busy || checkout.restoring}
         onClick={() => { checkout.setOpen(true); void checkout.query(); }}>查看待支付订单</button>}
-      {checkout.open && <CheckoutDialog order={checkout.order} account={auth?.display_name || auth?.email || auth?.user_id || ""} busy={checkout.busy} error={checkout.error} onClose={() => checkout.setOpen(false)} onQuery={() => void checkout.query()} onRetry={() => void checkout.begin(`pro_${plan}`)} />}
+      {checkout.open && <CheckoutDialog order={checkout.order} account={auth?.display_name || auth?.email || auth?.user_id || ""} busy={checkout.busy} error={checkout.error} onClose={() => checkout.setOpen(false)} onQuery={() => void checkout.query()} onRetry={checkout.canRetry ? () => void checkout.retry() : undefined} />}
     </div>
   );
 }

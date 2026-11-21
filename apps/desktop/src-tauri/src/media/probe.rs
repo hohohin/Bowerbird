@@ -1,7 +1,7 @@
 //! 探测媒体元数据（尺寸 / 大小 / 扩展名 / 时长）。
 //! 图片走 image crate；视频依次尝试 ISO BMFF、系统媒体接口、可选 ffprobe。
 
-use std::path::Path;
+use std::{io::{Read, Seek}, path::Path};
 use super::tools::{self, Tool};
 
 use image::ImageReader;
@@ -9,7 +9,7 @@ use image::ImageReader;
 use crate::error::{AppError, AppResult};
 
 #[path = "probe_native.rs"]
-mod native;
+pub(super) mod native;
 pub use native::video_probe_worker;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -76,10 +76,120 @@ fn probe_video(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {
 }
 
 /// 纯 Rust 解析 ISO BMFF（mp4/mov/m4v）：mvhd 取时长，视频轨取宽高。
-fn probe_iso_native(path: &Path, ext: &str, size: u64) -> AppResult<ProbeMeta> {
+pub(super) fn probe_iso_native(path: &Path, ext: &str, size: u64) -> AppResult<ProbeMeta> {
     let file = std::fs::File::open(path)?;
     let len = file.metadata()?.len();
-    let reader = mp4::Mp4Reader::read_header(file, len)
+    read_iso(file, len, ext, size)
+}
+
+/// Bounded header-only read for synchronous connection indexing. Large payload
+/// boxes are skipped by seek, including mdat before a non-faststart moov.
+pub(crate) fn probe_connected_video_header(path: &Path, ext: &str, size: u64) -> Option<ProbeMeta> {
+    if !matches!(ext, "mp4" | "mov" | "m4v") { return None; }
+    let file = std::fs::File::open(path).ok()?;
+    let mut file = std::io::BufReader::with_capacity(8192, file);
+    validate_scan_boxes(&mut file, size)?;
+    file.rewind().ok()?;
+    let mut input = HeaderBudget { file, bytes: 4 * 1024 * 1024, seeks: 2048 };
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_iso(&mut input, size, ext, size)))
+        .ok()?.ok()
+}
+
+fn validate_scan_boxes(input: &mut (impl Read + Seek), len: u64) -> Option<()> {
+    // The general parser can allocate from declared box sizes before reading
+    // their contents. Cap the total size of parsed boxes before passing them in.
+    validate_box_range(input, 0, len, b"root", 0, &mut 1024, &mut (4 * 1024 * 1024))
+}
+
+fn validate_box_range(
+    input: &mut (impl Read + Seek), mut offset: u64, end: u64, parent: &[u8; 4], depth: u8,
+    boxes: &mut usize, bytes: &mut u64,
+) -> Option<()> {
+    if depth > 8 { return None; }
+    while offset < end {
+        *boxes = boxes.checked_sub(1)?;
+        if end - offset < 8 { return None; }
+        input.seek(std::io::SeekFrom::Start(offset)).ok()?;
+        let mut header = [0u8; 8];
+        input.read_exact(&mut header).ok()?;
+        let name: &[u8; 4] = header[4..].try_into().ok()?;
+        let mut size = u64::from(u32::from_be_bytes(header[..4].try_into().ok()?));
+        let mut header_size = 8;
+        if size == 1 {
+            let mut extended = [0u8; 8];
+            input.read_exact(&mut extended).ok()?;
+            size = u64::from_be_bytes(extended);
+            header_size = 16;
+        } else if size == 0 {
+            // The general parser treats a zero-sized box as end of input.
+            return (parent == b"root" && matches!(name, b"mdat" | b"free")).then_some(());
+        }
+        if size < header_size || size > end - offset { return None; }
+        if parent == b"root" && matches!(name, b"moov" | b"moof" | b"ftyp" | b"emsg") {
+            *bytes = bytes.checked_sub(size)?;
+        }
+        let content = offset + header_size;
+        let next = offset + size;
+        let child_header = match name {
+            b"moov" | b"moof" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"dinf" |
+            b"mvex" | b"traf" | b"udta" | b"ilst" => Some(content),
+            b"stsd" | b"dref" => Some(content.checked_add(8)?),
+            b"meta" => {
+                if next - content < 8 { return None; }
+                let mut marker = [0u8; 8];
+                input.read_exact(&mut marker).ok()?;
+                // Some QuickTime files omit the meta full-box header.
+                Some(if &marker[4..] == b"hdlr" { content } else if marker[..4] == [0; 4] { content + 4 } else { return None; })
+            }
+            _ if parent == b"ilst" => Some(content),
+            _ => None,
+        };
+        if let Some(child) = child_header {
+            if child > next { return None; }
+            validate_box_range(input, child, next, name, depth + 1, boxes, bytes)?;
+        }
+        offset += size;
+    }
+    Some(())
+}
+
+pub(crate) fn probe_connected_video_fallback(path: &Path) -> AppResult<ProbeMeta> {
+    let size = std::fs::metadata(path)?.len();
+    let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    if let Ok(meta) = native::probe_system(path, &ext, size) { return Ok(meta); }
+    probe_video_ffprobe(path, ext, size)
+}
+
+struct HeaderBudget {
+    file: std::io::BufReader<std::fs::File>,
+    bytes: usize,
+    seeks: usize,
+}
+
+impl std::io::Read for HeaderBudget {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.len() > self.bytes { return Err(std::io::Error::other("ISO header read budget exceeded")); }
+        let read = self.file.read(output)?;
+        self.bytes -= read;
+        Ok(read)
+    }
+}
+
+impl std::io::Seek for HeaderBudget {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        if self.seeks == 0 { return Err(std::io::Error::other("ISO header seek budget exceeded")); }
+        self.seeks -= 1;
+        self.file.seek(position)
+    }
+
+    fn stream_position(&mut self) -> std::io::Result<u64> {
+        self.file.stream_position()
+    }
+}
+
+fn read_iso(input: impl std::io::Read + std::io::Seek, len: u64, ext: &str, size: u64) -> AppResult<ProbeMeta> {
+    let reader = mp4::Mp4Reader::read_header(input, len)
         .map_err(|e| AppError::Media(format!("mp4 解析失败：{e}")))?;
     let track = reader
         .tracks()
@@ -144,7 +254,7 @@ fn probe_iso_native(path: &Path, ext: &str, size: u64) -> AppResult<ProbeMeta> {
     checked_meta(ext, size, width, height, duration)
 }
 
-fn checked_meta(ext: &str, size: u64, width: u32, height: u32, duration: f64) -> AppResult<ProbeMeta> {
+pub(super) fn checked_meta(ext: &str, size: u64, width: u32, height: u32, duration: f64) -> AppResult<ProbeMeta> {
     if width == 0 || height == 0 || !duration.is_finite() || duration <= 0.0 {
         return Err(AppError::Media("视频没有有效尺寸或时长".into()));
     }
@@ -157,7 +267,7 @@ fn checked_meta(ext: &str, size: u64, width: u32, height: u32, duration: f64) ->
     })
 }
 
-fn probe_video_ffprobe(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {
+pub(super) fn probe_video_ffprobe(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {
     let binary = tools::resolve(Tool::Ffprobe)?;
     let mut command = tools::command(binary);
     command

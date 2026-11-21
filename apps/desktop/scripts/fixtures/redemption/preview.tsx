@@ -5,6 +5,7 @@ import { SidebarAccount } from "../../../src/components/SidebarAccount";
 import { AccountOnboarding } from "../../../src/components/AccountOnboarding";
 import { OverlayScrollbars } from "../../../src/components/OverlayScrollbars";
 import { SettingsDialog } from "../../../src/components/SettingsDialog";
+import { ScreenshotMenu } from "../../../src/components/ScreenshotMenu";
 import { useStore } from "../../../src/store";
 
 
@@ -23,6 +24,8 @@ const pro = { ...free, tier: "pro", balances: { daily: 30, sub: 1100, topup: 0 }
   policy: { ...policy, can_use_byo: true, max_parallel_jobs: 4, understand_daily_limit: null } };
 const monthlyPro = { ...pro, balances: { daily: 0, sub: 1000, topup: 400 } };
 w.free = free;
+w.pro = pro;
+w.settings = { theme: 'light', auto_analyze_on_ingest: false, auto_analyze_prompt: '', board_shift_pick: true, hide_project_assets: true, dreamina_model_version: '4.7', screenshot_shortcuts: { capture: 'F1', paste: 'F3' } };
 const callbacks = new Map();
 w.__TAURI_INTERNALS__ = {
   transformCallback: (callback: any) => { const id = callbacks.size + 1; callbacks.set(id, callback); return id; },
@@ -35,15 +38,20 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:app|version") return "26.9.14";
     if (command === "screenshot_shortcut_status") return { error: w.shortcutError ?? null };
     if (command === "screenshot_record_shortcut") return;
-    if (command === "screenshot_set_shortcuts") {
-      if (w.shortcutError) throw w.shortcutError;
-      useStore.setState({ settings: { ...useStore.getState().settings!, screenshot_shortcuts: args.shortcuts } }); return;
+    if (command === "get_settings") return { ...w.settings };
+    if (command === "update_settings") {
+      if (args.applyScreenshotShortcuts && w.shortcutError) throw w.shortcutError;
+      w.settings = args.settings;
+      return;
     }
     if (command === "screenshot_start" || command === "screenshot_paste") { if (w.screenshotError) throw w.screenshotError; return; }
-    if (command === "update_settings") return;
     if (command === "file_workspace_status") return { proposed_root: "D:/fixture/BowerbirdLibrary" };
     if (command === "library_root") return "synthetic-library";
-    if (command === "codex_health" || command === "dreamina_health") return { ok: false };
+    if (command === "codex_health") return { ok: false, reason: "未检测到可用的 Codex CLI" };
+    if (command === "dreamina_health") return { ok: false, reason: "即梦未登录", status: "login_required" };
+    if (command === "local_chat_dsh_account") return { state: "signedOut" };
+    if (command === "cloud_logout") return { cloud_available: true, logged_in: false, user_id: null };
+    if (command === "cloud_entitlement") return null;
     if (command === "cloud_sync_entitlement") return pro;
     if (command === "cloud_start_pro_trial") return { ...pro, balances: useStore.getState().cloudEntitlement?.balances ?? { daily: 0, sub: 0, topup: 0 } };
     if (command === "cloud_redeem_code") {
@@ -62,9 +70,12 @@ w.__TAURI_INTERNALS__ = {
 };
 useStore.setState({ cloudAuth: { cloud_available: true, logged_in: true, user_id: "test-user", email: "test@example.test",
   display_name: null, avatar_url: null, access_expires_at: null, reason: null }, cloudEntitlement: free,
-  cloudBusy: false, loadSettings: async () => {}, defaultProvider: "codex",
-  settings: { theme: 'light', auto_analyze_on_ingest: false, auto_analyze_prompt: '', board_shift_pick: true, hide_project_assets: true, dreamina_model_version: '4.7', screenshot_shortcuts: { capture: 'F1', paste: 'F3' } } as any });
-createRoot(document.getElementById("root")!).render(location.search === "?journey" ? <><SidebarAccount placement="topbar" /><AccountOnboarding /></> : <><OverlayScrollbars /><SettingsDialog onClose={() => {}} /></>);
+  cloudBusy: false, defaultProvider: "codex", settings: w.settings });
+createRoot(document.getElementById("root")!).render(location.search === "?journey"
+  ? <><ScreenshotMenu /><SidebarAccount placement="topbar" /><AccountOnboarding /></>
+  : location.search === "?sidebar"
+    ? <SidebarAccount />
+    : <><OverlayScrollbars /><SettingsDialog onClose={() => {}} /></>);
 
 import "../../../src/components/TacticalDialogs.css";
 import "../../../src/components/CanvasSecondaryTactical.css";

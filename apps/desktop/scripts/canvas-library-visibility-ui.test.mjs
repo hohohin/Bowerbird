@@ -21,7 +21,7 @@ try {
   await hide().waitFor();
   assert.equal(await hide().isDisabled(), true);
   await page.keyboard.press("Escape");
-  await page.getByRole("tab", { name: "全局素材", exact: true }).click();
+  await page.getByRole("tab", { name: "全部素材", exact: true }).click();
   await source("existing").click({ button: "right" });
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   assert.equal(await hide().count(), 0);
@@ -44,7 +44,7 @@ try {
   assert.deepEqual(await node("old").boundingBox(), geometry);
   assert.equal(await node("old").locator(":scope > img").getAttribute("src"), original);
   assert.deepEqual(await page.evaluate(() => window.snapshot()), before);
-  await page.getByRole("tab", { name: "全局素材", exact: true }).click();
+  await page.getByRole("tab", { name: "全部素材", exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.canvas-source-panel [data-asset-id="existing"]'));
   await page.evaluate(() => window.save());
   await page.reload();

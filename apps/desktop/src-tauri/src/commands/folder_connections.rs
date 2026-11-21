@@ -251,6 +251,75 @@ fn finish_refresh(app: &AppHandle, originals: bool, result: AppResult<bool>) {
         changed(app);
     }
 }
+
+enum DeferredFingerprintSchedule {
+    Idle,
+    Running,
+    Recheck,
+}
+
+impl DeferredFingerprintSchedule {
+    fn request(&mut self) -> bool {
+        let start = matches!(self, Self::Idle);
+        *self = if start { Self::Running } else { Self::Recheck };
+        start
+    }
+
+    fn finish_pass(&mut self, after: &mut String) -> bool {
+        if matches!(self, Self::Recheck) {
+            *self = Self::Running;
+            after.clear();
+            true
+        } else {
+            *self = Self::Idle;
+            false
+        }
+    }
+}
+
+fn fill_deferred_fingerprints(db: Arc<Database>) {
+    // Checking for a rescan and releasing the worker are one transition. A
+    // refresh either requests another pass or takes ownership of a new worker.
+    static SCHEDULE: Mutex<DeferredFingerprintSchedule> = Mutex::new(DeferredFingerprintSchedule::Idle);
+    if !SCHEDULE.lock().unwrap().request() { return; }
+    tauri::async_runtime::spawn(async move {
+        let mut after = String::new();
+        loop {
+            let next = db.clone();
+            let batch = match tokio::task::spawn_blocking({
+                let after = after.clone();
+                move || next.pending_connected_fingerprints(&after)
+            }).await {
+                Ok(Ok(batch)) => batch,
+                Ok(Err(error)) => {
+                    tracing::debug!(%error, "connected fingerprint query failed");
+                    Vec::new()
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "connected fingerprint query interrupted");
+                    Vec::new()
+                }
+            };
+            if batch.is_empty() {
+                if SCHEDULE.lock().unwrap().finish_pass(&mut after) { continue; }
+                break;
+            }
+            after = batch.last().cloned().unwrap_or_default();
+            for id in batch {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                while REFRESH.lock().unwrap().running || mutation_waiting() || GATE.available_permits() == 0 {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                }
+                let db = db.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(error) = db.complete_connected_fingerprint(&id) {
+                        tracing::debug!(%error, "connected fingerprint remains pending");
+                    }
+                }).await;
+            }
+        }
+    });
+}
 fn start_refresh(
     app: AppHandle,
     db: Arc<Database>,
@@ -309,6 +378,8 @@ fn start_refresh(
                 continue;
             }
             queue.running = false;
+            drop(queue);
+            fill_deferred_fingerprints(db.clone());
             break;
         }
     });
@@ -661,6 +732,40 @@ pub async fn remove_connection_references(
 #[cfg(test)]
 mod maintenance_tests {
     use super::*;
+
+    #[test]
+    fn deferred_fingerprint_pass_rewinds_for_an_older_asset_requeued_during_pagination() {
+        let mut schedule = DeferredFingerprintSchedule::Idle;
+        assert!(schedule.request());
+        let mut after = String::from("asset-032");
+        let pending_after = |cursor: &str| ["asset-004", "asset-033"]
+            .into_iter().filter(|id| *id > cursor).collect::<Vec<_>>();
+
+        assert!(!schedule.request());
+        assert!(!schedule.request());
+        assert_eq!(pending_after(&after), ["asset-033"]);
+        after = String::from("asset-033");
+        assert!(pending_after(&after).is_empty());
+        assert!(schedule.finish_pass(&mut after));
+        assert_eq!(pending_after(&after).first(), Some(&"asset-004"));
+
+        assert!(!schedule.finish_pass(&mut after), "coalesced requests only require one extra pass");
+    }
+
+    #[test]
+    fn deferred_fingerprint_exit_hands_off_wakeups_on_both_sides_of_completion() {
+        let schedule = Mutex::new(DeferredFingerprintSchedule::Idle);
+        let mut after = String::from("last");
+        assert!(schedule.lock().unwrap().request());
+        assert!(!schedule.lock().unwrap().request());
+        assert!(schedule.lock().unwrap().finish_pass(&mut after));
+        assert!(after.is_empty());
+
+        assert!(!schedule.lock().unwrap().finish_pass(&mut after));
+        assert!(schedule.lock().unwrap().request(), "request after retirement starts a new worker");
+        assert!(!schedule.lock().unwrap().request(), "successor also coalesces concurrent requests");
+        assert!(schedule.lock().unwrap().finish_pass(&mut after));
+    }
 
     #[test]
     fn catalog_grants_reuse_only_successful_same_version_in_the_same_app() {

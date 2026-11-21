@@ -1,4 +1,5 @@
 import type { CanvasNode, GenJob } from "./types";
+import { canvasNodePayload as payload } from "./canvasNodePayload.ts";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasDocumentTextValue, canvasNoteValue, readCanvasNote, type CanvasNotePayload } from "./canvasNotes";
 import { contentInputAxisIndex } from "./canvasContentInput";
@@ -7,34 +8,41 @@ import { activePromptReferences, isWorkflowGenerationResult, workflowActiveSessi
   workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowInput, type WorkflowNode, type WorkflowStep } from "./canvasWorkflow";
 import { isVideoPath } from "./videoGeneration";
 
-function payload(node: CanvasNode) {
-  try { return JSON.parse(node.payloadJson); } catch { return {}; }
-}
-
 /** Result of the exact submitted turn, independent of other turns in its gallery. */
 export function submittedTurnState(id: string, nodes: readonly CanvasNode[]): "pending" | "done" | "closed" {
   const turn = nodes.find(node => node.id === id && node.kind === "prompt" && node.hiddenAt == null);
   if (!turn) return "closed";
   const status = payload(turn).status;
-  if (["failed", "cancelled", "canceled", "stopped"].includes(status)) return "closed";
-  return status === "done" && canvasSessionImages(turn, nodes).some(output => output.hiddenAt == null) ? "done" : "pending";
+  if (status && ["failed", "cancelled", "canceled", "stopped"].includes(status)) return "closed";
+  return canvasSessionCompleted(turn, nodes) ? "done" : "pending";
+}
+
+export function canvasSessionCompleted(session: CanvasNode, nodes: readonly CanvasNode[]) {
+  return payload(session).status === "done" && canvasSessionImages(session, nodes).some(output => output.hiddenAt == null);
 }
 
 /** Completion follows the connected conversation, while image data stays tied to its exact turn. */
 export function completedCanvasSessions(inputs: WorkflowInput[], nodes: readonly CanvasNode[], jobs: Parameters<typeof canvasConversationCards>[1]) {
-  const conversations = canvasConversationCards(nodes, jobs);
-  const sessions = inputs.flatMap(input => {
-    if (input.pendingCompletionSession) {
-      const turn = nodes.find(node => node.kind === "prompt" && node.id === input.pendingCompletionSession && node.hiddenAt == null);
-      return turn ? [turn] : [];
-    }
-    if (!input.canvasNodeId || input.cellId !== "image") return [];
-    const source = nodes.find(node => node.id === input.canvasNodeId && node.kind === "prompt" && node.hiddenAt == null);
-    if (!source) return [];
-    return conversations.cards.get(conversations.aliases.get(source.id) ?? source.id)?.sessions ?? [source];
-  });
-  return [...new Set(sessions.filter(session => payload(session).status === "done"
-    && canvasSessionImages(session, nodes).some(output => output.hiddenAt == null)).map(session => session.id))];
+  return canvasSessionCompletionLookup(nodes, jobs)(inputs);
+}
+
+export function canvasSessionCompletionLookup(nodes: readonly CanvasNode[], jobs: Parameters<typeof canvasConversationCards>[1]) {
+  const sessionsById = new Map(nodes.filter(node => node.kind === "prompt" && node.hiddenAt == null).map(node => [node.id, node]));
+  let conversations: ReturnType<typeof canvasConversationCards> | undefined;
+  return (inputs: WorkflowInput[]) => {
+    const sessions = inputs.flatMap(input => {
+      if (input.pendingCompletionSession) {
+        const turn = sessionsById.get(input.pendingCompletionSession);
+        return turn ? [turn] : [];
+      }
+      if (!input.canvasNodeId || input.cellId !== "image") return [];
+      const source = sessionsById.get(input.canvasNodeId);
+      if (!source) return [];
+      conversations ??= canvasConversationCards(nodes, jobs);
+      return conversations.cards.get(conversations.aliases.get(source.id) ?? source.id)?.sessions ?? [source];
+    });
+    return [...new Set(sessions.filter(session => canvasSessionCompleted(session, nodes)).map(session => session.id))];
+  };
 }
 
 /** All generation-card sessions, including those visible on the canvas. */
