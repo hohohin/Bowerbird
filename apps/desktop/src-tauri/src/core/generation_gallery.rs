@@ -150,12 +150,20 @@ pub(super) fn with_gallery_cache<T>(
 ) -> crate::error::AppResult<T> {
     if !required { return query(conn, WORKFLOW_GALLERY_CTE); }
     let tx = conn.unchecked_transaction()?;
+    let provenance = catalog_provenance(&tx)?;
+    let value = query(&tx, provenance)?;
+    tx.commit()?;
+    Ok(value)
+}
+
+/// Reuse the connection's provenance cache inside a caller's existing transaction.
+pub(super) fn catalog_provenance(tx: &rusqlite::Transaction<'_>) -> crate::error::AppResult<&'static str> {
     // Pin the main database before checking data_version, including changes
     // committed by another connection (which cannot fire our TEMP triggers).
     tx.query_row("SELECT rootpage FROM main.sqlite_schema WHERE name='assets'", [], |_| Ok(()))?;
     let version: i64 = tx.query_row("PRAGMA main.data_version", [], |r| r.get(0))?;
     let initialized: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_temp_master WHERE name='catalog_cache_version')", [], |r| r.get(0))?;
-    if !initialized { init_catalog_cache(&tx)?; }
+    if !initialized { init_catalog_cache(tx)?; }
     let current: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM catalog_cache_version WHERE version=?1)", [version], |r| r.get(0))?;
     if !current {
         tx.execute_batch(&format!("DELETE FROM catalog_provenance;
@@ -165,9 +173,7 @@ pub(super) fn with_gallery_cache<T>(
         tx.execute("DELETE FROM catalog_cache_version", [])?;
         tx.execute("INSERT INTO catalog_cache_version VALUES(?1)", [version])?;
     }
-    let value = query(&tx, CACHED_GALLERY_CTE)?;
-    tx.commit()?;
-    Ok(value)
+    Ok(CACHED_GALLERY_CTE)
 }
 
 impl crate::db::Database {

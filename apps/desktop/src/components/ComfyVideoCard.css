@@ -28,6 +28,10 @@
 .comfy-audio-input small, .comfy-audio-source { color: var(--bb-muted); }
 .workflow-card .comfy-audio-row button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; }
 .comfy-audio-row button:focus-visible { outline: 1px solid var(--bb-blue); outline-offset: -2px; }
+.comfy-r2v-groups { display:grid; gap:5px; }
+.comfy-r2v-groups > small { color:var(--bb-muted); }
+.comfy-r2v-source { border-top:1px solid var(--bb-line); }
+.comfy-r2v-source > small { max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .comfy-video-card .comfy-video-options { padding-bottom: 8px; border-bottom: 1px solid var(--bb-line); }
 /* The header keeps a full button hit target around the small status dot. */
 .workflow-card > header .comfy-environment-dot { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; }

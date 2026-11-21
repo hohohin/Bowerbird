@@ -30,7 +30,7 @@ try {
   await q(`create role anon; create role supabase_auth_admin; create role authenticated; create role service_role bypassrls; create schema auth; create schema extensions;
     create table auth.users(id uuid primary key); create function auth.uid() returns uuid language sql as $$select null::uuid$$;
     create function extensions.gen_random_uuid() returns uuid language sql as $$select gen_random_uuid()$$`);
-  for(const p of ["0001","0002","0003","0004","0006","0008","0009","0012","0021","0023","0028","0030","0031","0033","0040","0043","0044","0082","0090"]) {
+  for(const p of ["0001","0002","0003","0004","0006","0008","0009","0012","0021","0023","0028","0030","0031","0033","0040","0043","0044","0051","0082","0090"]) {
     await q(sql(p).replace("create extension if not exists pgcrypto with schema extensions;",""));
   }
   // Only later columns used by this checkout's live procedures.
@@ -39,12 +39,13 @@ try {
   const user=randomUUID();
   await q("insert into auth.users values($1)",[user]);
   await q("select grant_topup_credits($1,'fixture-funds',1000)",[user]);
-  const run=async (budget=48) => {
+  const run=async (budget=48, skillId="bowerbird-controlled-image-edit") => {
     const id=randomUUID(), lease=randomUUID();
-    const [{hold_id:hold}]=await q("select hold_id from credit_hold($1,$2,'agent_controlled_image_edit',$3)",[user,id,budget]);
+    const service=skillId==="bowerbird-unified-agent" ? "agent_unified_test" : "agent_controlled_image_edit";
+    const [{hold_id:hold}]=await q("select hold_id from credit_hold($1,$2,$3,$4)",[user,id,service,budget]);
     await q(`insert into agent_runs(id,user_id,skill_id,skill_version,kernel_version,status,input_count,input_manifest_hash,
       request_object_key,budget_credits,hold_id,pricing_version,lease_id,lease_owner,lease_expires_at,content_expires_at)
-      values($1,$2,'bowerbird-controlled-image-edit','1','1','running',1,repeat('a',64),'fixture',$3,$4,1,$5,'test',now()+interval '1 hour',now()+interval '1 day')`,[id,user,budget,hold,lease]);
+      values($1,$2,$6,'1','1','running',1,repeat('a',64),'fixture',$3,$4,1,$5,'test',now()+interval '1 hour',now()+interval '1 day')`,[id,user,budget,hold,lease,skillId]);
     return {id,lease,hold};
   };
   const finish=(r,status="failed",lease=r.lease)=>q("select actual_credits from settle_agent_run($1,$2,$3)",[r.id,lease,status]);
@@ -94,6 +95,51 @@ try {
     and not (c.status='failed' and coalesce(c.safe_error_code,'') in ('deepseek_http_error','deepseek_not_dispatched'))
     and not exists(select from agent_usage_items u where u.run_id=c.run_id and u.call_id=c.call_id)`)).rows;
   await b.query("set role service_role");
+
+  const rewriteRun=async (payload,runtime="dsh")=>{
+    const rewrite=await run(30,"bowerbird-unified-agent");
+    await q("update agent_runs set status='exporting',agent_runtime=$2 where id=$1",[rewrite.id,runtime]);
+    await q(`insert into agent_events(run_id,seq,type,display_payload,content_expires_at)
+      values($1,10,'text.rewrite.started','{}',now()+interval '1 day'),
+        ($1,90,'text.result',$2,now()+interval '1 day')`,[rewrite.id,JSON.stringify(payload)]);
+    return rewrite;
+  };
+  const finishRewrite=rewrite=>b.query("select status,actual_credits from settle_agent_run($1,$2,'succeeded')",[rewrite.id,rewrite.lease]);
+  const plainText={schemaVersion:1,text:"An optimized H3 video prompt."};
+  const withContinuation={...plainText,dshContinuation:true};
+  const h3=await rewriteRun(withContinuation);
+  await insertCall(h3,"dsh-turn");
+  await posted(a,h3,"dsh-turn",null);
+  await assert.rejects(()=>finishRewrite(h3),{code:"55000",message:"succeeded unified agent run requires at least one result"});
+  assert.equal((await hold(h3)).status,"held");
+  console.log("RED baseline: 0091 rejects a recorded H3 result with the continuation flag");
+
+  await q(sql("0097"));
+  assert.deepEqual((await finishRewrite(h3)).rows,[{status:"succeeded",actual_credits:2}]);
+  assert.equal((await hold(h3)).actual_amount,2);
+  await assert.rejects(()=>finishRewrite(h3),/lease/);
+  assert.equal((await rows(h3)).filter(row=>row.kind==="confirm" && row.meta?.actual===2).length,1);
+  for(const runtime of ["dsh","legacy_kernel"]) {
+    const plain=await rewriteRun(plainText,runtime);
+    assert.deepEqual((await finishRewrite(plain)).rows,[{status:"succeeded",actual_credits:0}]);
+    assert.equal((await hold(plain)).status,"rolled_back");
+  }
+  for(const [payload,runtime] of [
+    [withContinuation,"legacy_kernel"],
+    [{...withContinuation,dshContinuation:false},"dsh"],
+    [{...withContinuation,dshContinuation:"true"},"dsh"],
+    [{...withContinuation,dshContinuation:null},"dsh"],
+    [{...withContinuation,extra:true},"dsh"],
+    [{...withContinuation,text:" "},"dsh"],
+    [{...withContinuation,schemaVersion:2},"dsh"],
+  ]) {
+    const invalid=await rewriteRun(payload,runtime);
+    await assert.rejects(()=>finishRewrite(invalid),{code:"55000",message:"succeeded unified agent run requires at least one result"});
+    assert.equal((await hold(invalid)).status,"held");
+    await finish(invalid);
+  }
+  console.log("PASS H3 continuation settlement, old text shapes, one confirmed charge and strict metadata validation");
+
   const constraintsRun=await run();
   const writePrepared=(id,tool,model)=>q(`insert into agent_tool_calls
     (run_id,call_id,phase,tool_name,args_hash,status,direct_deepseek_v1_model,model_write_lease)

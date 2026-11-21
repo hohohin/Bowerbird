@@ -128,7 +128,7 @@ async function create(
 ): Promise<Response> {
   const userId = user.id;
   const paid = raw.action === "create_paid";
-  const allowedKeys = ["action", "idempotency_key", "messages", "tools_enabled", "engine", "conversation_id", "skill", "image_card_provider", "video_card_options", "dsh_options"];
+  const allowedKeys = ["action", "idempotency_key", "messages", "tools_enabled", "engine", "conversation_id", "skill", "image_card_provider", "video_card_options", "h3_r2v", "dsh_options"];
   if (paid) allowedKeys.push("pricing_version", "max_credits", "max_output_tokens");
   if (
     Object.keys(raw).some((key) => !allowedKeys.includes(key)) ||
@@ -143,6 +143,7 @@ async function create(
     dsh_options: raw.dsh_options,
     image_card_provider: raw.image_card_provider,
     video_card_options: raw.video_card_options,
+    h3_r2v: raw.h3_r2v,
     ...(raw.tools_enabled === undefined
       ? {}
       : { tools_enabled: raw.tools_enabled }),
@@ -294,6 +295,7 @@ Deno.serve(async (request: Request) => {
         rates_nano: quote.data.rates_nano,
         image_card_provider: true,
         video_card_options: true,
+        h3_r2v: true,
         dsh_vps_skills_available: await skillsAvailable(admin, user),
       } : {}),
       }, 200, cors);
@@ -328,6 +330,7 @@ Deno.serve(async (request: Request) => {
           dsh_vps_v2_available: available,
           image_card_provider: available,
           video_card_options: available,
+          h3_r2v: available,
           dsh_vps_skills_available: available && await skillsAvailable(admin, user),
         },
         200,

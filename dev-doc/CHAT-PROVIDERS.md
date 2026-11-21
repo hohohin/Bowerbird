@@ -218,4 +218,6 @@ DeepSeek · Cloud 与 DSH · Cloud 的共用后端已部署启用，测试 **0 B
 
 建卡工具的生图供应商目录包含 MiniMax-H3-Image，使用 generation、mediaType=image、provider=minimax-h3-image，可通过 referenceAliases 引入当轮参考图。普通视频卡支持逐卡 videoChannel 和完整 videoOptions，未指定时沿用应用默认值。H3 视频使用 comfy-video，支持 text、reference、frames 三模式；参考模式的 firstFrameAlias 表示参考图，0.98 分辨率仅适用于 text/reference。端口与模式不匹配时整批拒绝。
 
+2026-11-21 源码新增 `comfy-video` 的 `mode: r2v`。`referenceAliases` 按当轮选择顺序引用本机素材，桌面根据原件类型分别接入图片、视频和独立音频。批内图片与视频生成结果分别接 `reference-image` 和 `reference-video`。草稿可留空，立即运行需有至少一个来源。Cloud 客户端收到 `h3_r2v` 时回传该能力，新工具定义随当轮提供。既有 Codex 原生会话保留初始工具定义，新会话即使用当前版本。
+
 2026-11-18 源码回归覆盖逐卡模型、参数、H3 三模式及无效连线。上线前需同步云端工具目录与能力声明。只读检查发现当时现役 Worker 的建卡 schema 完全没有 provider 字段，解释了云端 Agent 看不到 H3 Image 选项。

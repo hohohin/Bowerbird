@@ -9,19 +9,20 @@ use std::{
 };
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
-use tokio::sync::Semaphore;
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::{Notify, Semaphore};
 
 use crate::{
-    core::catalog_browser::CatalogFilter,
+    core::{catalog_browser::CatalogFilter, settings::SettingsState},
     db::Database,
     error::{AppError, AppResult},
 };
 
 use super::{
-    index::{self, IndexState},
+    index::{self, IndexState, WorkerWake},
     model,
     query::{self, SearchSnapshot},
+    schedule::{self, PreferenceChange},
 };
 
 const SESSION_IDLE: Duration = Duration::from_secs(300);
@@ -104,7 +105,6 @@ struct Request {
 }
 
 struct Session {
-    pane: String,
     last_access: Instant,
     snapshot: Arc<SearchSnapshot>,
 }
@@ -113,6 +113,15 @@ struct Session {
 struct Queries {
     active: HashMap<String, Request>,
     sessions: HashMap<String, Session>,
+}
+
+impl Queries {
+    fn clear(&mut self) {
+        for (_, request) in self.active.drain() {
+            request.cancel.store(true, Ordering::Release);
+        }
+        self.sessions.clear();
+    }
 }
 
 pub(crate) struct SemanticSearch {
@@ -126,6 +135,7 @@ pub(crate) struct SemanticSearch {
     paging: Semaphore,
     last_progress: Mutex<Option<Instant>>,
     worker_error: Mutex<Option<&'static str>>,
+    worker_wake: Notify,
 }
 
 #[derive(Clone, Serialize)]
@@ -140,6 +150,12 @@ pub(crate) struct Status {
     downloaded_bytes: u64,
     model_error: Option<String>,
     worker_error: Option<&'static str>,
+    automatic_indexing: bool,
+    index_interval_minutes: u32,
+    include_generated: bool,
+    updating: bool,
+    last_update_at: Option<i64>,
+    next_update_at: Option<i64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -222,6 +238,7 @@ impl SemanticSearch {
             paging: Semaphore::new(3),
             last_progress: Mutex::new(None),
             worker_error: Mutex::new(None),
+            worker_wake: Notify::new(),
         }
     }
 
@@ -230,16 +247,70 @@ impl SemanticSearch {
         let available = model::installed(&self.model_root);
         let supported = model::supported();
         let model_state = model.availability(&self.model_root, available);
+        let (index, schedule) = index::status_with_schedule(db)?;
+        let worker_error = *self.worker_error.lock().unwrap();
+        let ready = supported && model_state == "ready" && worker_error.is_none();
+        let enabled = index.index_state == "running";
         Ok(Status {
-            index: index::status(db)?,
+            index,
             supported,
             model_state,
             download_bytes: model::download_bytes(),
             installed_bytes: model::installed_bytes(),
             downloaded_bytes: model.downloaded,
             model_error: model.last_error.clone(),
-            worker_error: *self.worker_error.lock().unwrap(),
+            worker_error,
+            automatic_indexing: schedule.preferences.automatic,
+            index_interval_minutes: schedule.preferences.interval_minutes,
+            include_generated: schedule.preferences.include_generated,
+            updating: ready && enabled && schedule.active(),
+            last_update_at: schedule.last_update_at,
+            next_update_at: if ready && enabled && schedule.preferences.automatic && !schedule.active() {
+                schedule.next_update_at
+            } else {
+                None
+            },
         })
+    }
+
+    pub(crate) fn sync_preferences(&self, app: &AppHandle, db: &Database) -> AppResult<()> {
+        let settings = app.state::<SettingsState>();
+        // Serializes policy application with snapshot publication and page delivery.
+        let mut queries = self.queries.lock().unwrap();
+        let changed = schedule::reconcile(
+            db,
+            || settings.semantic_index_preferences(),
+            chrono::Utc::now().timestamp(),
+        )?;
+        if matches!(changed, PreferenceChange::Scope) {
+            queries.clear();
+        }
+        drop(queries);
+        if matches!(changed, PreferenceChange::Scope) {
+            self.emit_sessions_reset(app, db);
+        }
+        if !matches!(changed, PreferenceChange::None) {
+            self.worker_wake.notify_one();
+            self.progress(app, db, "index", true);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn preferences_changed(
+        &self,
+        app: &AppHandle,
+        db: &Database,
+        scope_changed: bool,
+    ) -> Option<String> {
+        let result = self.sync_preferences(app, db);
+        self.worker_wake.notify_one();
+        if let Err(error) = result {
+            if scope_changed {
+                self.reset_queries(app, db);
+            }
+            return Some(wire_error(error));
+        }
+        None
     }
 
     fn progress(&self, app: &AppHandle, db: &Database, phase: &'static str, force: bool) {
@@ -270,13 +341,18 @@ impl SemanticSearch {
         db: &Database,
         action: &str,
     ) -> AppResult<Operation> {
-        if matches!(action, "start" | "resume" | "rebuild") {
+        self.sync_preferences(app, db)?;
+        if matches!(action, "start" | "update" | "resume" | "rebuild") {
             self.check_model()?;
+            let retrying_disk_error = self.worker_error.lock().unwrap().is_some();
+            if retrying_disk_error {
+                index::recover(db)?;
+            }
             *self.worker_error.lock().unwrap() = None;
         }
         if !matches!(
             action,
-            "start" | "resume" | "rebuild" | "pause" | "cancel" | "disable"
+            "start" | "update" | "resume" | "rebuild" | "pause" | "cancel" | "disable"
         ) {
             return Err(code("invalid_scope"));
         }
@@ -285,6 +361,7 @@ impl SemanticSearch {
             self.reset_queries(app, db);
         }
         self.progress(app, db, "index", true);
+        self.worker_wake.notify_one();
         Ok(Operation {
             operation_id: status.operation_id,
         })
@@ -299,6 +376,7 @@ impl SemanticSearch {
         if !model::supported() {
             return Err(code("unsupported_platform"));
         }
+        self.sync_preferences(&app, &db)?;
         let mut state = self.model.lock().unwrap();
         if action == "cancel" {
             if let Some(install) = &state.install {
@@ -344,6 +422,7 @@ impl SemanticSearch {
             state.corrupt = false;
             drop(state);
             self.progress(&app, &db, "download", true);
+            self.worker_wake.notify_one();
             return Ok(Operation {
                 operation_id: Some(id),
             });
@@ -394,6 +473,7 @@ impl SemanticSearch {
             drop(state);
             if completed {
                 search.progress(&app, &db, "download", true);
+                search.worker_wake.notify_one();
             }
         });
         Ok(Operation {
@@ -441,13 +521,11 @@ impl SemanticSearch {
     }
 
     fn reset_queries(&self, app: &AppHandle, db: &Database) {
-        let mut queries = self.queries.lock().unwrap();
-        for request in queries.active.values() {
-            request.cancel.store(true, Ordering::Release);
-        }
-        queries.active.clear();
-        queries.sessions.clear();
-        drop(queries);
+        self.queries.lock().unwrap().clear();
+        self.emit_sessions_reset(app, db);
+    }
+
+    fn emit_sessions_reset(&self, app: &AppHandle, db: &Database) {
         let library_id = index::library_id(&db.conn.lock().unwrap());
         if let Ok(library_id) = library_id {
             let _ = app.emit("semantic://sessions-reset", SessionsReset { library_id });
@@ -462,6 +540,7 @@ impl SemanticSearch {
         if let Some(id) = session {
             queries.sessions.remove(id);
         }
+        self.worker_wake.notify_one();
     }
 
     fn begin(&self, id: &str, pane: &str) -> AppResult<Arc<AtomicBool>> {
@@ -523,7 +602,7 @@ impl SemanticSearch {
         };
         let deadline = Instant::now() + budget;
         let result = self
-            .run_query(path, text, filter, top_k, cancel.clone(), deadline)
+            .run_query(path.clone(), text, filter, top_k, cancel.clone(), deadline)
             .await;
         let mut queries = self.queries.lock().unwrap();
         let current = queries
@@ -533,11 +612,12 @@ impl SemanticSearch {
         if current {
             queries.active.remove(&request_id);
         }
+        self.worker_wake.notify_one();
         if !current || cancel.load(Ordering::Acquire) {
             return Err(code("cancelled"));
         }
         let snapshot = result?;
-        queries.sessions.retain(|_, session| session.pane != pane);
+        snapshot.validate_policy(&path)?;
         let session_id = ulid::Ulid::new().to_string();
         let response = SearchResponse {
             request_id,
@@ -563,7 +643,6 @@ impl SemanticSearch {
         queries.sessions.insert(
             session_id,
             Session {
-                pane,
                 last_access: Instant::now(),
                 snapshot: Arc::new(snapshot),
             },
@@ -677,10 +756,33 @@ impl SemanticSearch {
     pub(crate) fn watch(self: Arc<Self>, app: AppHandle, db: Arc<Database>) {
         tauri::async_runtime::spawn(async move {
             if let Err(error) = index::recover(&db) {
-                tracing::warn!(%error, "semantic index recovery failed");
+                self.note_worker_error(&app, &db, &wire_error(error));
             }
+            let mut wake = WorkerWake::Continue;
             loop {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                match wake {
+                    WorkerWake::Continue => {
+                        // Keep the existing pacing while a round has runnable work.
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    WorkerWake::At(at) => {
+                        let seconds = (at - chrono::Utc::now().timestamp()).clamp(0, 60) as u64;
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_secs(seconds)) => {},
+                            _ = self.worker_wake.notified() => {},
+                        }
+                    }
+                    WorkerWake::Command => self.worker_wake.notified().await,
+                }
+                wake = WorkerWake::Command;
+                if let Err(error) = self.sync_preferences(&app, &db) {
+                    // Preference retries use their own receipt and guard. A
+                    // mirror write failure must not latch a worker I/O error.
+                    if wire_error(error) != "disk_full" {
+                        wake = WorkerWake::At(chrono::Utc::now().timestamp() + 5);
+                    }
+                    continue;
+                }
                 if self.check_model().is_err()
                     || !self.queries.lock().unwrap().active.is_empty()
                     || self.worker_error.lock().unwrap().is_some()
@@ -688,10 +790,12 @@ impl SemanticSearch {
                     continue;
                 }
                 let engine = self.clone();
+                let worker_app = app.clone();
                 let db_copy = db.clone();
                 let model_epoch = self.model_epoch.load(Ordering::Acquire);
                 let result = tauri::async_runtime::spawn_blocking(move || {
-                    index::run_one(&db_copy, |image| {
+                    let settings = worker_app.state::<SettingsState>();
+                    index::run_one_for_settings(&db_copy, &settings, |image| {
                         if engine.model_epoch.load(Ordering::Acquire) != model_epoch
                             || engine.check_model().is_err()
                         {
@@ -710,6 +814,7 @@ impl SemanticSearch {
                 .await;
                 match result {
                     Ok(Ok(tick)) => {
+                        wake = tick.wake;
                         if tick.model_failed {
                             self.note_corrupt_model(model_epoch);
                         }
@@ -717,20 +822,29 @@ impl SemanticSearch {
                             let _ = app.emit("library://assets-changed", ());
                         }
                         if tick.progress {
-                            self.progress(&app, &db, "index", false);
+                            self.progress(&app, &db, "index", tick.round_changed || tick.model_failed);
                         }
                     }
                     Ok(Err(error)) => {
-                        let category = wire_error(error);
-                        if category == "disk_full" {
-                            *self.worker_error.lock().unwrap() = Some("disk_full");
+                        self.note_worker_error(&app, &db, &wire_error(error));
+                        if self.worker_error.lock().unwrap().is_none() {
+                            wake = WorkerWake::At(chrono::Utc::now().timestamp() + 5);
                         }
-                        self.progress(&app, &db, "index", false);
                     }
-                    Err(error) => tracing::warn!(%error, "semantic index worker stopped"),
+                    Err(error) => {
+                        tracing::warn!(%error, "semantic index worker task failed");
+                        wake = WorkerWake::At(chrono::Utc::now().timestamp() + 5);
+                    }
                 }
             }
         });
+    }
+
+    fn note_worker_error(&self, app: &AppHandle, db: &Database, error: &str) {
+        if error == "disk_full" {
+            *self.worker_error.lock().unwrap() = Some("disk_full");
+        }
+        self.progress(app, db, "index", true);
     }
 }
 

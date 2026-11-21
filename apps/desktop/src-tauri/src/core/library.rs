@@ -377,18 +377,35 @@ const ASSET_COLS_A: &str = "a.id, a.name, a.ext, a.origin_path, a.store_path, a.
     a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id, \
     a.reference_count, a.library_hidden";
 
-// Match a current, indexed video revision without opening every original during search.
-pub(super) fn video_transcript_keyword_match(pattern: &str) -> String {
-    let video = super::material_catalog::VIDEO;
-    format!("({video} AND EXISTS(SELECT 1 FROM analyses vt WHERE vt.asset_id=a.id AND vt.kind='video_transcript' \
-        AND json_extract(vt.payload,'$.current')=1 AND json_extract(vt.payload,'$.status')='completed' \
+// Search uses the current indexed revision. Reading an individual description also checks its original.
+const CURRENT_VIDEO_RECORD: &str = "CASE WHEN json_valid(vt.payload) THEN
+        json_extract(vt.payload,'$.current')=1 AND json_extract(vt.payload,'$.status')='completed' \
         AND a.size IS json_extract(vt.payload,'$.assetSize') \
         AND a.file_mtime IS json_extract(vt.payload,'$.assetModified') \
         AND EXISTS(SELECT 1 FROM assets vta LEFT JOIN external_assets vte ON vte.asset_id=vta.id \
             LEFT JOIN creative_file_fingerprints vtf ON vtf.asset_id=vta.id WHERE vta.id=a.id \
             AND (COALESCE(vte.fingerprint,vtf.sha256) IS json_extract(vt.payload,'$.indexedHash') \
                 OR COALESCE(vte.fingerprint,vtf.sha256)=json_extract(vt.payload,'$.sourceHash'))) \
-        AND json_extract(vt.payload,'$.text') LIKE {pattern} ESCAPE '\\'))")
+        AND (vt.kind='video_transcript' OR (
+            json_type(vt.payload,'$.schemaVersion')='integer' AND json_extract(vt.payload,'$.schemaVersion')=1
+            AND json_type(vt.payload,'$.current')='true'
+            AND json_type(vt.payload,'$.sourceHash')='text' AND length(json_extract(vt.payload,'$.sourceHash'))=64
+            AND json_extract(vt.payload,'$.sourceHash') NOT GLOB '*[^0-9a-f]*'
+            AND json_type(vt.payload,'$.assetSize') IN ('integer','null')
+            AND json_type(vt.payload,'$.assetModified') IN ('integer','null')
+            AND json_type(vt.payload,'$.indexedHash') IN ('text','null')
+            AND json_type(vt.payload,'$.stamp.size')='integer' AND json_extract(vt.payload,'$.stamp.size')>=0
+            AND json_type(vt.payload,'$.stamp.modifiedNanos')='text' AND length(json_extract(vt.payload,'$.stamp.modifiedNanos'))>0
+            AND json_type(vt.payload,'$.text')='text' AND length(trim(json_extract(vt.payload,'$.text')))>0
+            AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id)
+            AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id)
+        )) ELSE 0 END";
+
+pub(super) fn video_understanding_keyword_match(pattern: &str) -> String {
+    let video = super::material_catalog::VIDEO;
+    format!("({video} AND EXISTS(SELECT 1 FROM analyses vt WHERE vt.asset_id=a.id AND vt.kind IN ('video_transcript','video_analysis') \
+        AND ({CURRENT_VIDEO_RECORD}) \
+        AND (CASE WHEN json_valid(vt.payload) THEN json_extract(vt.payload,'$.text') LIKE {pattern} ESCAPE '\\' ELSE 0 END)))")
 }
 
 /// 瀑布流「同流程合并」：列表已 `ORDER BY created_at DESC` → 同 generation_session_id 的首见者
@@ -1460,11 +1477,11 @@ impl Database {
         }
         // 每个词一个参数位 ?N；term_cond 生成该词的多维度 OR 块（正词取原式、负词包 NOT）。
         let term_cond = |p: usize| {
-            let transcript = video_transcript_keyword_match(&format!("?{p}"));
+            let video_text = video_understanding_keyword_match(&format!("?{p}"));
             format!(
                 "(a.name LIKE ?{p} ESCAPE '\\' \
                   OR COALESCE(a.source_url,'') LIKE ?{p} ESCAPE '\\' \
-                  OR {transcript} \
+                  OR {video_text} \
                   OR EXISTS(SELECT 1 FROM asset_tags at JOIN tags t ON t.id = at.tag_id \
                     WHERE at.asset_id = a.id AND t.name LIKE ?{p} ESCAPE '\\') \
                   OR EXISTS(SELECT 1 FROM asset_prompts ap JOIN prompts pm ON pm.id = ap.prompt_id \
@@ -1532,6 +1549,17 @@ impl Database {
     }
 
     // ============ 拆解分析（§5.6，Phase 5）============
+    pub(crate) fn current_video_analysis_payload(&self, asset_id: &str) -> AppResult<Option<String>> {
+        let video = super::material_catalog::VIDEO;
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            &format!("SELECT vt.payload FROM analyses vt JOIN assets a ON a.id=vt.asset_id
+                      WHERE a.id=?1 AND {video} AND vt.kind='video_analysis' AND ({CURRENT_VIDEO_RECORD})
+                      ORDER BY vt.created_at DESC,vt.id DESC LIMIT 1"),
+            [asset_id], |row| row.get(0),
+        ).optional()?)
+    }
+
     pub fn insert_analysis(&self, a: &Analysis) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(

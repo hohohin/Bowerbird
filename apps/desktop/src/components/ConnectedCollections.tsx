@@ -34,6 +34,7 @@ import { ModalShell } from "./ModalShell";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { VideoTranscriptBatchButton } from "./VideoTranscriptBatch";
 import { videoSourceKey } from "../lib/videoSourceKey";
+import { isVideoAsset } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset } from "../lib/textMedia";
 import { stopAudioPreview, stopAudioPreviewInFolder } from "../lib/audioPreview";
@@ -252,7 +253,12 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     return alive.current && !!root.current?.isConnected && !root.current.closest('[inert], [aria-hidden="true"]');
   }
   function openDetail(asset: Pick<Asset, "id">) { if (onOpenAsset) onOpenAsset(asset); else useStore.getState().openDetail(asset.id); }
-  function openAsset(asset: Asset) { if (busy || !entryOf(asset).available) return; if (onInsertAsset) onInsertAsset(asset); else openDetail(asset); }
+  function openAsset(asset: Asset) {
+    if (busy || !entryOf(asset).available) return;
+    if (onInsertAsset) onInsertAsset(asset);
+    else if (isVideoAsset(asset)) activate(asset);
+    else openDetail(asset);
+  }
   function activate(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
     if (onInsertAsset && isAudioAsset(asset)) { onInsertAsset(asset); return; }
@@ -261,7 +267,14 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     if (!onInsertAsset && projectId && state.activeProjectId !== projectId) return;
     if (!onInsertAsset && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
     else if (isAudioAsset(asset)) openDetail(asset);
-    else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (canShowOverlay()) setPreview({ asset, path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! }); });
+    else void run(async () => {
+      if (!asset.store_path) throw new Error("原文件暂不可用");
+      const version = selectionVersion.current;
+      const path = await externalFiles.media(asset.store_path);
+      if (!canShowOverlay() || filterRef.current !== filterKey || selectionVersion.current !== version) return;
+      if (useStore.getState().projectRouteRevision !== state.projectRouteRevision) return;
+      setPreview({ asset, path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! });
+    });
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
     const entry = entryOf(asset);

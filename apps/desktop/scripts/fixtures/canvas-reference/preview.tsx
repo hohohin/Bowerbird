@@ -503,5 +503,6 @@ function Fixture() {
 installCatalogPagingMock(window);
 if (mediaImport) installMediaImportMock(w, assets);
 installDeletionTaskMock();
+const content = detailRoute ? <App /> : <Fixture />;
 createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("strict")
-  ? <React.StrictMode>{detailRoute ? <App /> : <Fixture />}</React.StrictMode> : detailRoute ? <App /> : <Fixture />);
+  ? <React.StrictMode>{content}</React.StrictMode> : content);

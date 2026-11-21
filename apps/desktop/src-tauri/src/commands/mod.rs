@@ -81,6 +81,8 @@ pub mod video_poster;
 pub mod canvas_image_preview;
 pub mod video_trim;
 pub mod video_audio;
+pub mod video_analysis;
+mod video_asset_revision;
 pub mod video_transcript;
 pub mod comfy_video;
 pub mod comfy_setup;

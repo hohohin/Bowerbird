@@ -73,12 +73,49 @@ try {
   await history.getByRole('button', { name: `移除通知：${asset.name}` }).click();
   assert.equal(await history.getByRole('button', { name: /^反推 ·/ }).count(), 0);
   await page.keyboard.press('Escape');
+
+  await page.locator('.asset-detail:not(.asset-detail-panel-only)').getByRole('button', { name: '返回', exact: true }).click();
+  await page.waitForFunction(() => window.store.getState().detailAssetId === null);
+  const videoAsset = { id: 'notification-video', name: '通知中的视频', ext: 'mp4', store_path: '/notification-video.mp4', duration: 1 };
+  await page.evaluate(async videoAsset => {
+    const ipc = window.__TAURI_INTERNALS__;
+    const invoke = ipc.invoke;
+    ipc.invoke = (command, args) => {
+      if (command === 'codex_describe_asset' && args.assetId === videoAsset.id) return Promise.reject('视频无法使用图片反推');
+      if (command === 'get_assets_by_ids' && args.assetIds.includes(videoAsset.id)) {
+        window.videoNotificationLookup = args.assetIds;
+        return Promise.resolve([videoAsset]);
+      }
+      if (command === 'external_files_media' && args.path === videoAsset.store_path) {
+        window.videoNotificationPath = args.path;
+        return Promise.resolve('/src-tauri/tests/fixtures/media/fragmented.mp4');
+      }
+      return invoke(command, args);
+    };
+    const { describeAssetWithNotice } = await import('/src/lib/describeNotices.ts');
+    try { await describeAssetWithNotice(videoAsset.id, videoAsset.name, '提取画面特征', 'codex'); }
+    catch (error) { if (error !== '视频无法使用图片反推') throw error; }
+  }, videoAsset);
+  await bell.click();
+  await history.getByRole('button', { name: `反推 · ${videoAsset.name} · 失败，查看素材` }).click();
+  const videoPreview = page.getByRole('dialog', { name: '视频与会话预览', exact: true });
+  await videoPreview.getByRole('button', { name: '打开转录文稿', exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.videoNotificationLookup), [videoAsset.id]);
+  assert.equal(await page.evaluate(() => window.videoNotificationPath), videoAsset.store_path);
+  assert.equal(await page.evaluate(() => window.store.getState().detailAssetId), null);
+  assert.equal(await history.count(), 0);
+  const videoSource = await videoPreview.locator('video').getAttribute('src');
+  assert.equal(new URL(videoSource, page.url()).pathname, '/src-tauri/tests/fixtures/media/fragmented.mp4');
+  await page.waitForFunction(() => document.querySelector('[aria-label="视频与会话预览"] video')?.readyState >= HTMLMediaElement.HAVE_METADATA);
+  await videoPreview.getByRole('button', { name: '关闭预览', exact: true }).click();
+  await videoPreview.waitFor({ state: 'hidden' });
+
   await page.evaluate(async () => { const { notify } = await import('/src/lib/notify.ts'); notify('已保存', 'success'); notify('文件已被占用，请关闭其他程序后重试', 'error'); });
   await page.locator('.app-toast').filter({ hasText: '已保存' }).waitFor();
   await page.locator('.app-toast').filter({ hasText: '文件已被占用' }).waitFor();
   assert.equal(await page.getByRole('status', { name: '新通知' }).count(), 0, 'generic save/error retain formal Toast behavior');
   assert.deepEqual(errors, []); assert.deepEqual(remote, []);
-  console.log('PASS production notification bell: actual App/Toolbar/library, reserved update slot, completion channel, exact canvas route, draft, history and ordinary Toast');
+  console.log('PASS production notification bell: App/Toolbar, canvas and draft, original image detail, failed video describe shared preview and ordinary Toast');
 } catch (error) {
   console.log('UI errors', errors);
   console.log((await page.locator('body').innerText()).slice(-1500));

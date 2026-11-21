@@ -210,14 +210,36 @@ export function workflowImageCardProjection(document: CanvasWorkflow, nodes: rea
   return { anchors, origins };
 }
 
+// Canvas edits replace the snapshot array, so each immutable snapshot can
+// share one exact-turn output index across its cards and wires.
+const sessionOutputsBySnapshot = new WeakMap<readonly CanvasNode[], Map<string, CanvasNode[]>>();
+
+function sessionOutputKey(projectId: string, jobId: unknown, turnKey: unknown) {
+  if (!jobId || !turnKey || typeof jobId === "object" || typeof turnKey === "object") return undefined;
+  return JSON.stringify([projectId, jobId, turnKey]);
+}
+
 /** A session socket exposes only this turn's results, never its reference images or later turns. */
 export function canvasSessionImages(session: CanvasNode, nodes: readonly CanvasNode[]) {
+  if (session.kind !== "prompt") return [];
   const turn = payload(session);
-  if (session.kind !== "prompt" || !turn.job_id || !turn.turn_key) return [];
-  return nodes.filter(node => {
-    const execution = node.kind === "asset" && node.role === "output" && payload(node).execution;
-    return node.assetId && node.projectId === session.projectId && execution?.job_id === turn.job_id && execution?.turn_key === turn.turn_key;
-  });
+  const key = sessionOutputKey(session.projectId, turn.job_id, turn.turn_key);
+  if (!key) return [];
+  let outputs = sessionOutputsBySnapshot.get(nodes);
+  if (!outputs) {
+    outputs = new Map();
+    for (const node of nodes) {
+      if (node.kind !== "asset" || node.role !== "output" || !node.assetId) continue;
+      const execution = payload(node).execution;
+      const owner = sessionOutputKey(node.projectId, execution?.job_id, execution?.turn_key);
+      if (!owner) continue;
+      const candidates = outputs.get(owner);
+      if (candidates) candidates.push(node);
+      else outputs.set(owner, [node]);
+    }
+    sessionOutputsBySnapshot.set(nodes, outputs);
+  }
+  return outputs.get(key)?.slice() ?? [];
 }
 
 /** Match the runtime's exact-turn lookup, including its single latest image. */

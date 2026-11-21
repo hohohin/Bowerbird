@@ -43,6 +43,7 @@ html[data-theme] .canvas-camera-grid {
 }
 /* Offstage rich card bodies still provide their real size, focus and wire anchors. */
 .canvas-plane > [data-canvas-offscreen]:not(:focus-within) { contain:paint;clip-path:inset(100%); }
+.canvas-plane > [data-canvas-offscreen][data-canvas-node]:not(:focus-within) { content-visibility:auto;contain-intrinsic-block-size:auto 320px; }
 .canvas-plane :is(.workflow-wires,.canvas-graph-edges) > path[data-canvas-offscreen] { display:none; }
 html[data-theme] .canvas-tactical .canvas-drawing-tools {
   border:1px solid var(--cs-rule);border-radius:0;background:var(--cs-console);

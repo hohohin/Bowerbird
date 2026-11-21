@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { ArrowDownToLine, Check, Film, Image, RotateCcw, X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { cancelExplorerCapture, isCaptureActive, retryExplorerCapture, useExplorerCaptures, type ExplorerCaptureRecord } from "../lib/explorerCaptureHistory";
 import { api } from "../lib/api";
+import { externalFiles } from "../lib/externalFiles";
 import { notifyError } from "../lib/notify";
+import type { Asset } from "../lib/types";
+import { isVideoAsset } from "../lib/videoGeneration";
+import { videoSourceKey } from "../lib/videoSourceKey";
 import { useStore } from "../store";
+import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { ModalShell } from "./ModalShell";
 import "./ExplorerCaptureHistory.css";
 
@@ -76,29 +81,55 @@ function useCapturePopoverPosition(button: RefObject<HTMLButtonElement>, opened:
   }, [button, opened]);
   return position;
 }
-async function openCapturedAsset(id: string, close: () => void) {
-  try {
-    const assets = await api.getAssetsByIds([id]);
-    if (!assets.length) throw new Error("素材已不存在，请检查素材库");
-    close(); useStore.getState().openDetail(id);
-  } catch (error) { notifyError(error, "暂时无法打开素材，请在素材库中查看"); }
-}
 export function ExplorerCaptureHistory({ visible = true }: { visible?: boolean }) {
   const records = useExplorerCaptures(state => state.records);
   const active = records.filter(isCaptureActive).length;
+  const projectId = useStore(state => state.activeProjectId);
   const [opened, setOpened] = useState(false);
+  const [preview, setPreview] = useState<{ asset: Asset; path: string; projectId: string | null }>();
   const button = useRef<HTMLButtonElement>(null);
-  const close = useCallback(() => setOpened(false), []);
+  const request = useRef(0);
+  const close = useCallback(() => { request.current++; setOpened(false); }, []);
   const position = useCapturePopoverPosition(button, opened);
-  useEffect(() => { if (!visible) close(); }, [visible, close]);
+  useLayoutEffect(() => {
+    setPreview(undefined);
+    if (!visible) close();
+    return () => { request.current++; };
+  }, [visible, projectId, close]);
+  async function openCapturedAsset(id: string) {
+    const revision = ++request.current;
+    const routeRevision = useStore.getState().projectRouteRevision;
+    const isCurrent = () => revision === request.current && useStore.getState().projectRouteRevision === routeRevision;
+    try {
+      const [asset] = await api.getAssetsByIds([id]);
+      if (!isCurrent()) return;
+      if (!asset) throw new Error("素材已不存在，请检查素材库");
+      if (isVideoAsset(asset)) {
+        if (!asset.store_path) throw new Error("素材原文件不可用");
+        const path = await externalFiles.media(asset.store_path);
+        if (!isCurrent()) return;
+        close();
+        setPreview({ asset, path, projectId });
+      } else {
+        close();
+        useStore.getState().openDetail(asset.id);
+      }
+    } catch (error) {
+      if (isCurrent()) notifyError(error, "暂时无法打开素材，请在素材库中查看");
+    }
+  }
   return <>
-    <button ref={button} type="button" className={`explorer-capture-trigger${active ? " is-active" : ""}`} onClick={() => setOpened(value => !value)} title="采集记录" aria-label="采集记录" aria-haspopup="dialog" aria-expanded={opened}>
+    <button ref={button} type="button" className={`explorer-capture-trigger${active ? " is-active" : ""}`} onClick={() => opened ? close() : setOpened(true)} title="采集记录" aria-label="采集记录" aria-haspopup="dialog" aria-expanded={opened}>
       <ArrowDownToLine size={16} aria-hidden />{active > 0 && <span className="explorer-capture-count explore-capture-status" aria-hidden>{active}</span>}
       <span className="sr-only">{active ? `${active} 项正在采集` : ""}</span>
     </button>
     {opened && visible && <ModalShell title="采集记录" onClose={close} className="explorer-capture-popover" panelProps={{ style: position }}>
-      {records.length ? <ul className="explorer-capture-list">{records.map(item => <CaptureRow key={item.id} item={item} onView={id => void openCapturedAsset(id, close)} />)}</ul>
+      {records.length ? <ul className="explorer-capture-list">{records.map(item => <CaptureRow key={item.id} item={item} onView={id => void openCapturedAsset(id)} />)}</ul>
         : <div className="explorer-capture-empty">暂无采集记录</div>}
     </ModalShell>}
+    {visible && preview?.projectId === projectId && <LibraryVideoPreview
+      asset={preview.asset} path={preview.path} projectId={projectId} sourceKey={videoSourceKey(preview.asset)}
+      onClose={() => { setPreview(undefined); button.current?.focus({ preventScroll: true }); }}/>
+    }
   </>;
 }

@@ -52,6 +52,7 @@ export type NodeDshAcpPortOptions = {
   activity?: ToolActivity;
   imageCardProvider?: boolean;
   videoCardOptions?: boolean;
+  h3R2v?: boolean;
   chatOptions?: import("../../../cloud/supabase/functions/_shared/chat.ts").DshChatOptionsSelection;
   planningReasoningEffort?: "high";
   profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution" | "chat";
@@ -214,6 +215,7 @@ export class NodeDshAcpPort implements DshAcpPort {
       chat: options.profileMode === "chat",
       imageCardProvider: options.imageCardProvider,
       videoCardOptions: options.videoCardOptions,
+      h3R2v: options.h3R2v,
       chatOptions: options.chatOptions,
       planningReasoningEffort: options.planningReasoningEffort,
       nativeSession: options.nativeSession,

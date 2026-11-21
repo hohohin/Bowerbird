@@ -7,11 +7,13 @@ import { prepareVideoCollectionProject } from "../lib/videoCollectionCanvas";
 import type { Asset, GenJob } from "../lib/types";
 import { isVideoPath } from "../lib/videoGeneration";
 
-export function LibraryVideoPreview({ asset, job, path, sourceKey, projectId, onClose }: {
+export function LibraryVideoPreview({ asset, job, path, sourceKey, projectId, onClose, openTranscript }: {
   asset: Asset; job?: GenJob; path: string; sourceKey?: string; projectId: string | null; onClose: () => void;
+  openTranscript?: boolean;
 }) {
   if (!isVideoPath(path)) return <Lightbox images={[path]} index={0} onIndexChange={() => {}} onClose={onClose}/>;
-  return <CreationImagePreview asset={asset} job={job} projectId={projectId} onClose={onClose} video={{
+  return <CreationImagePreview asset={asset} job={job} projectId={projectId} onClose={onClose}
+    openTranscript={openTranscript} video={{
     path, sourceKey, frameTarget: "library", onAddFrame: async frame => {
       if (projectId) await prepareVideoCollectionProject(projectId);
       await saveVideoFrame(frame, projectId);

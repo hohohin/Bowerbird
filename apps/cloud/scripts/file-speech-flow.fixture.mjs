@@ -11,6 +11,7 @@ const origin = 'https://isolated-bowerbird.test';
 const controlUrl = `${origin}/functions/v1/understand-worker`;
 const providerUrl = 'https://openspeech.bytedance.com/api/v3/auc/bigmodel';
 const userToken = 'isolated-user';
+const otherToken = 'isolated-other-user';
 const workerToken = 'isolated-worker';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const keyFor = job => `file-speech:${job}`;
@@ -20,9 +21,9 @@ function makeAudio(seconds) {
     '-t', String(seconds), '-ac', '1', '-b:a', '32k', '-f', 'mp3', 'pipe:1'], { windowsHide: true, maxBuffer: 2 ** 21 });
 }
 
-function postgresAdapter(q, user, bucket) {
+function postgresAdapter(q, user, otherUser, bucket) {
   const rpc = {
-    begin_file_speech_upload: ['p_user_id', 'p_key', 'p_hash', 'p_expected_credits', 'p_unit_cost_micros', 'p_daily_limit', 'p_per_minute', 'p_source_duration_ms'],
+    begin_file_speech_upload: ['p_user_id', 'p_key', 'p_hash', 'p_expected_credits', 'p_unit_cost_micros', 'p_daily_limit', 'p_per_minute', 'p_source_duration_ms', 'p_pilot'],
     transition_text_upload: ['p_table', 'p_id', 'p_hash', 'p_enqueue'],
     reconcile_stale_understand_jobs: ['p_limit'],
     expire_unsubmitted_text_jobs: ['p_table'],
@@ -34,7 +35,13 @@ function postgresAdapter(q, user, bucket) {
     complete_understand_job: ['p_job_id', 'p_lease_id', 'p_status', 'p_result_text', 'p_error_code', 'p_safe_message', 'p_file_speech_capable'],
   };
   return {
-    auth: { async getUser(token) { assert.equal(token, userToken); return { data: { user: { id: user } }, error: null }; } },
+    auth: {
+      async getUser(token) {
+        if (token === userToken) return { data: { user: { id: user } }, error: null };
+        if (token === otherToken) return { data: { user: { id: otherUser, app_metadata: { bowerbird_test: true } } }, error: null };
+        return { data: { user: null }, error: { message: 'invalid fixture token' } };
+      },
+    },
     storage: { from(name) { assert.equal(name, 'generation-temp'); return bucket; } },
     async rpc(name, args = {}) {
       assert.ok(Object.hasOwn(rpc, name), `Unexpected RPC ${name}`);
@@ -66,6 +73,7 @@ function postgresAdapter(q, user, bucket) {
             return { data: (await q('select * from service_costs where service=$1', [fields.service]))[0] ?? null, error: null };
           }
           assert.equal(table, 'understand_jobs');
+          assert.notEqual(fields.file_speech_pilot, true, 'availability does not use the history of pilot jobs');
           const keyMatch = 'idempotency_key' in fields;
           const data = (await q(keyMatch
             ? 'select * from understand_jobs where idempotency_key=$1 and user_id=$2'
@@ -94,7 +102,8 @@ function postgresAdapter(q, user, bucket) {
 
 export async function verifyFileSpeechFlow(q, root) {
   const user = randomUUID();
-  await q('insert into auth.users(id) values($1)', [user]);
+  const otherUser = randomUUID();
+  await q('insert into auth.users(id) values($1),($2)', [user, otherUser]);
   const signed = new Map();
   const store = new Map();
   const storageRoot = path.join(root, 'isolated-file-speech-storage');
@@ -151,7 +160,7 @@ export async function verifyFileSpeechFlow(q, root) {
     SUPABASE_URL: origin, SUPABASE_PUBLISHABLE_KEY: userToken, SUPABASE_SECRET_KEY: workerToken,
     UNDERSTAND_WORKER_TOKEN: workerToken, FILE_SPEECH_ENABLED: 'true', BOWERBIRD_CLOUD_MOCK: 'false',
   };
-  globalThis[testClient] = postgresAdapter(q, user, bucket);
+  globalThis[testClient] = postgresAdapter(q, user, otherUser, bucket);
   globalThis.Deno = { env: { get: name => env[name] }, serve: handler => handlers.push(handler) };
   globalThis.fetch = async () => { throw new Error('Unexpected external fetch in isolated file speech fixture'); };
   const source = `export const createClient = () => globalThis[Symbol.for(${JSON.stringify(Symbol.keyFor(testClient))})];`;
@@ -165,7 +174,7 @@ export async function verifyFileSpeechFlow(q, root) {
     await import('../supabase/functions/understand-worker/index.ts');
     assert.equal(handlers.length, 2);
     const [proxy, control] = handlers;
-    await testScenarios({ q, proxy, control, signed, store, storagePath, put,
+    await testScenarios({ q, proxy, control, signed, store, storagePath, put, env, user,
       preserve: key => { preserveOnDelete = key; } });
   } finally {
     hooks.deregister();
@@ -175,15 +184,15 @@ export async function verifyFileSpeechFlow(q, root) {
   }
 }
 
-async function testScenarios({ q, proxy, control, signed, store, storagePath, put, preserve }) {
+async function testScenarios({ q, proxy, control, signed, store, storagePath, put, env, user, preserve }) {
   const post = (handler, endpoint, token, body) => handler(new Request(endpoint, {
     method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'x-worker-id': 'fixture-cleanup' },
     body: JSON.stringify(body),
   }));
-  const userPost = async (body, expected = 200) => {
-    const response = await post(proxy, `${origin}/functions/v1/understand-proxy`, userToken, body);
+  const userPost = async (body, expected = 200, token = userToken) => {
+    const response = await post(proxy, `${origin}/functions/v1/understand-proxy`, token, body);
     const payload = await response.json();
-    assert.equal(response.status, expected, JSON.stringify(payload));
+    assert.equal(response.status, expected, payload.error?.message ?? `Unexpected response to ${body.action}`);
     return payload;
   };
   const find = (idempotencyKey, expected = 200) => userPost({ action: 'get-by-key', idempotency_key: idempotencyKey }, expected);
@@ -218,7 +227,12 @@ async function testScenarios({ q, proxy, control, signed, store, storagePath, pu
     const marker = `完整文稿 ${seconds} 秒结尾`;
     const transcriptText = `音轨开头 ${marker}`;
     const utterances = [
-      { text: '音轨开头', start_time: 50, end_time: 150 },
+      { text: '音轨开头', start_time: 50, end_time: 150, words: [
+        { text: '音', start_time: 50, end_time: 75 },
+        { text: '轨', start_time: 75, end_time: 100 },
+        { text: '开', start_time: 100, end_time: 125 },
+        { text: '头', start_time: 125, end_time: 150 },
+      ] },
       { text: marker, start_time: duration - 50, end_time: duration },
     ];
     const runWorker = async (crashDuringDefer = false) => {
@@ -317,7 +331,10 @@ async function testScenarios({ q, proxy, control, signed, store, storagePath, pu
       assert.equal(delivered.charge.transaction_id, first.charge.transaction_id);
       const result = JSON.parse(delivered.text);
       assert.equal(result.text, transcriptText);
-      assert.deepEqual(result.utterances, utterances.map(({ text, start_time: startMs, end_time: endMs }) => ({ text, startMs, endMs })));
+      assert.deepEqual(result.utterances, utterances.map(({ text, start_time: startMs, end_time: endMs, words }) => ({
+        text, startMs, endMs,
+        ...(words ? { words: words.map(word => ({ text: word.text, startMs: word.start_time, endMs: word.end_time })) } : {}),
+      })));
       assert.equal(result.timingSource, 'doubao-speech');
       assert.deepEqual(await userPost(prepare), delivered);
       assert.deepEqual(await entries(jobId), ['confirm']);
@@ -364,4 +381,63 @@ async function testScenarios({ q, proxy, control, signed, store, storagePath, pu
   assert.deepEqual(await entries(failed.jobId), ['rollback']);
   assert.ok(store.has(long.audioKey) && store.has(failed.audioKey));
   console.log('PASS actual Edge TTL refusal and cleanup with PostgreSQL tombstones, two filesystem objects, partial-delete retry, preserved receipts and unresolved reservation');
+
+  const capabilityRequest = { action: 'file-speech-capabilities' };
+  const unavailable = { available: false, credits: null, max_duration_ms: 7_200_000 };
+  const beforePilot = makeAudio(2);
+  const pilotKey = keyFor(randomUUID());
+  const pilotInput = {
+    action: 'file-speech-prepare', idempotency_key: pilotKey, expected_credits: 1,
+    audio: { bytes: beforePilot.length, sha256: hash(beforePilot), duration_ms: 2000, source_duration_ms: 2000 },
+  };
+  const pilotLookup = { action: 'get-by-key', idempotency_key: pilotKey };
+  env.FILE_SPEECH_PILOT_USER_ID = user;
+  assert.deepEqual(await userPost(capabilityRequest), unavailable, 'a pilot cannot use the public price');
+  assert.deepEqual(await userPost(capabilityRequest, 200, otherToken), unavailable, 'pilot configuration takes priority over the public switch');
+  await userPost(pilotInput, 503);
+  await q(`update service_costs set unit_cost=1,pricing_version=9003,parameters=parameters||'{"pilot_only":true}'
+    where service='library_file_speech'`);
+  delete env.FILE_SPEECH_ENABLED;
+  assert.deepEqual(await userPost(capabilityRequest), { available: true, credits: 1, max_duration_ms: 7_200_000 });
+  assert.deepEqual(await userPost(capabilityRequest, 200, otherToken), unavailable);
+  await userPost(capabilityRequest, 401, 'invalid-token');
+  await userPost(pilotInput, 503, otherToken);
+  await userPost({ ...pilotInput, expected_credits: 2 }, 409);
+  const trial = await userPost(pilotInput, 202);
+  assert.equal(trial.status, 'uploading');
+  assert.equal(signed.get(trial.upload_url), fileSpeechAudioKey(trial.job_id));
+  const trialPrice = { available: true, credits: 1, max_duration_ms: 7_200_000 };
+  assert.deepEqual(await userPost(capabilityRequest), trialPrice, 'an earlier trial does not block the test account');
+  assert.deepEqual(await userPost(capabilityRequest, 200, otherToken), unavailable,
+    'other users do not receive the private pilot status');
+  const nextInput = { ...pilotInput, idempotency_key: keyFor(randomUUID()) };
+  const nextTrial = await userPost(nextInput, 202);
+  assert.notEqual(nextTrial.job_id, trial.job_id);
+  assert.notEqual(nextTrial.charge.transaction_id, trial.charge.transaction_id);
+  assert.deepEqual(await userPost(capabilityRequest), trialPrice, 'two trial records still leave a private quote available');
+  const nextReplay = await userPost(nextInput, 202);
+  assert.equal(nextReplay.job_id, nextTrial.job_id);
+  assert.equal(nextReplay.charge.transaction_id, nextTrial.charge.transaction_id);
+  await userPost(nextInput, 503, otherToken);
+  await userPost(pilotLookup, 404, otherToken);
+  const trialCommit = { action: 'file-speech-commit', job_id: trial.job_id };
+  await userPost(trialCommit, 404, otherToken);
+
+  delete env.FILE_SPEECH_PILOT_USER_ID;
+  assert.deepEqual(await userPost(capabilityRequest), unavailable);
+  await userPost({ ...pilotInput, idempotency_key: keyFor(randomUUID()) }, 503);
+  assert.equal((await userPost(pilotLookup, 202)).job_id, trial.job_id);
+  const resumed = await userPost(pilotInput, 202);
+  assert.equal(resumed.job_id, trial.job_id);
+  assert.equal(resumed.charge.transaction_id, trial.charge.transaction_id);
+  assert.equal(signed.get(resumed.upload_url), fileSpeechAudioKey(trial.job_id));
+  put(fileSpeechAudioKey(trial.job_id), beforePilot, 'audio/mpeg');
+  assert.equal((await userPost(trialCommit, 202)).status, 'queued');
+  assert.equal((await userPost(pilotLookup, 202)).job_id, trial.job_id);
+  env.FILE_SPEECH_ENABLED = 'true';
+  assert.deepEqual(await userPost(capabilityRequest), unavailable, 'public mode may not quote a pilot-only price');
+  await userPost({ ...pilotInput, idempotency_key: keyFor(randomUUID()) }, 503);
+  assert.equal((await q('select count(*)::int as total from understand_jobs where user_id=$1 and file_speech_pilot', [user]))[0].total, 2);
+  assert.equal((await q('select count(*)::int as total from credit_holds where idempotency_key in ($1,$2)', [pilotKey, nextInput.idempotency_key]))[0].total, 2);
+  console.log('PASS pilot Edge ACL, repeat private quotes and independent holds, same-key replay, closed-mode original prepare/get/commit');
 }

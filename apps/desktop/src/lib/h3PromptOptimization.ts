@@ -1,9 +1,35 @@
 import type { ComfyVideoMode, ComfyVideoOptions } from "./comfyVideo";
 
-export interface H3PromptInput {
+export interface H3R2VPromptReferences {
+  referenceImageCount: number;
+  referenceVideoCount: number;
+  referenceAudioCount: number;
+}
+
+export interface H3PromptInput extends Partial<H3R2VPromptReferences> {
   prompt: string; mode: ComfyVideoMode; seconds: number; ratio: ComfyVideoOptions["ratio"];
   firstFrameCount: number; lastFrameCount: number;
   audioReference?: true;
+}
+
+export function h3R2VPromptReferences(references: import("./comfyVideo").H3VideoReferences): H3R2VPromptReferences {
+  return { referenceImageCount: references.referenceImages?.length ?? 0, referenceVideoCount: references.referenceVideos?.length ?? 0,
+    referenceAudioCount: references.referenceAudios?.length ?? 0 };
+}
+
+/** Keep explicit reference roles and reject tags that cannot exist in the submitted graph. */
+export function restoreH3R2VReferences(original: string, optimized: string, counts: Partial<H3R2VPromptReferences>): string {
+  const tags = /<(Picture|Video|Audio) (\d+)>/gi;
+  const limits = { picture: counts.referenceImageCount ?? 0, video: counts.referenceVideoCount ?? 0,
+    audio: (counts.referenceAudioCount ?? 0) + (counts.referenceVideoCount ?? 0) };
+  const found = new Set<string>();
+  for (const match of optimized.matchAll(tags)) {
+    const type = match[1].toLowerCase() as keyof typeof limits;
+    const index = Number(match[2]);
+    if (index < 1 || index > limits[type]) return original;
+    found.add(match[0].toLowerCase());
+  }
+  return [...original.matchAll(tags)].every(match => found.has(match[0].toLowerCase())) ? optimized : original;
 }
 
 export interface H3ImagePromptInput {

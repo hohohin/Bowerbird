@@ -12,8 +12,9 @@ const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 page.setDefaultTimeout(8000);
 const errors = []; page.on('pageerror', error => errors.push(error.message));
 const syntheticVoice = { id: 'voice', name: '合成录音.wav', ext: 'wav', store_path: '/synthetic-voice.wav', duration: 3, source: 'external' };
+const syntheticClip = { id: 'r2v-clip', name: '合成参考视频.mp4', ext: 'mp4', store_path: '/synthetic-clip.mp4', duration: 3, source: 'external' };
 async function mock() {
-  await page.evaluate(async voice => {
+  await page.evaluate(async ([voice, clip]) => {
     window.store.setState({ cloudAuth: { logged_in: true, user_id: 'tester' }, cloudEntitlement: { user_id: 'tester', tier: 'pro', offline_state: 'fresh', balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true }, generation_services: [] } });
     const invoke = window.__TAURI_INTERNALS__.invoke;
     window.h3Calls = []; window.envCalls = []; window.h3Status = 'done';
@@ -45,14 +46,14 @@ async function mock() {
       return invoke(command, args);
     };
     const { api } = await import('/src/lib/api.ts');
-    api.getAssetsByIds = async ids => ids.filter(id => id !== 'missing-audio').map(id => id === 'h3-result' ? window.h3Asset : id === voice.id ? voice : {
+    api.getAssetsByIds = async ids => ids.filter(id => id !== 'missing-audio').map(id => id === 'h3-result' ? window.h3Asset : id === voice.id ? voice : id === clip.id ? clip : {
       id, store_path: '/synthetic.png', width: 256, height: 256,
       thumb_path: `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
         <rect width="256" height="256" fill="${id === 'a' ? '#395264' : '#63455a'}"/>
         <circle cx="${id === 'a' ? 150 : 96}" cy="135" r="48" fill="#c0a49a"/></svg>`)}`,
     });
     window.store.setState({ startGeneration: async () => { throw Error('Must use local H3'); } });
-  }, syntheticVoice);
+  }, [syntheticVoice, syntheticClip]);
 }
 try {
   await page.goto('http://127.0.0.1:1698/scripts/fixtures/canvas-reference/preview.html');
@@ -357,6 +358,35 @@ try {
   await page.getByRole('button', { name: '下载模型', exact: true }).click();
   await page.waitForFunction(() => window.envCalls.some(call => call.action === 'install' && call.mode === 'reference'));
   await page.getByRole('dialog', { name: '本地部署工作流环境设置', exact: true }).waitFor({ state: 'hidden' });
-  console.log('H3 modes UI/runtime: image-card save and reopen alongside H3 audio, mode inputs, invalid sources and original-task recovery passed');
+
+  await modes.click();
+  await page.getByRole('option', { name: '多素材参考（R2V）', exact: true }).click();
+  const groups = [ ['参考图片输入', 'reference-image', ['a', 'b']], ['参考视频输入', 'reference-video', ['r2v-clip']], ['独立录音输入', 'r2v-audio', ['voice']] ];
+  for (const [group, port, ids] of groups) {
+    await setDragged(ids);
+    await card.getByRole('group', { name: group, exact: true }).dispatchEvent('drop');
+    await setDragged(null);
+    await page.waitForFunction(([port, count]) => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'h3').inputs[port]?.length === count, [port, ids.length]);
+  }
+  assert.match(await card.getByRole('group', { name: '参考图片输入' }).innerText(), /<Picture 1>[\s\S]*<Picture 2>/);
+  await page.evaluate(clip => {
+    const refs = JSON.parse(sessionStorage.getItem('reference-drafts') || '[]');
+    sessionStorage.setItem('reference-drafts', JSON.stringify([...refs, clip]));
+  }, syntheticClip);
+  await page.reload(); await card.waitFor(); await mock();
+  await card.getByRole('group', { name: '参考视频输入', exact: true }).getByText('合成参考视频.mp4').waitFor();
+  await runButton.click();
+  await page.waitForFunction(() => window.h3Calls.some(call => call.action === 'start'));
+  const submitted = await page.evaluate(() => window.h3Calls.find(call => call.action === 'start').input);
+  assert.equal(submitted.mode, 'r2v');
+  assert.equal(submitted.firstFrame, '');
+  assert.equal(submitted.ratio, 'auto');
+  for (const [inputField, group] of ['referenceImages', 'referenceVideos', 'referenceAudios'].map((field, i) => [field, groups[i]])) {
+    assert.deepEqual(submitted[inputField], group[2]);
+  }
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
+  assert.deepEqual((await readBoard()).document.run.steps.h3.generationRunInput.references, groups.map(group => group[2]));
+  assert.deepEqual(errors, []);
+  console.log('H3 modes UI/runtime: image-card save, R2V media ordering and reopen, invalid sources and original-task recovery passed');
 } catch (error) { console.error('page errors', errors, 'body', (await page.locator('body').innerText()).slice(-3500)); throw error; }
 finally { await browser.close(); await server.close(); }

@@ -2,16 +2,13 @@ import { TacticalSelect } from "./TacticalSelect";
 import { AssetTagPicker } from "./AssetTagPicker";
 import { userErrorMessage } from "../lib/userError";
 import { isPendingOriginal, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
-import { VideoPlayer } from "./VideoPlayer";
+import type { VideoAnalysisView } from "./VideoTranscriptPanel";
 import { AudioWaveform } from "./AudioWaveform";
 import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset, isSpreadsheetPath } from "../lib/textMedia";
 import { videoDurationLabel } from "./VideoHoverPreview";
 import "./AudioFileMediaCard.css";
-import { saveVideoFrame } from "../lib/saveVideoFrame";
-import { saveVideoFrameToCanvas } from "../lib/videoFrameCanvas";
-import { videoSourceKey } from "../lib/videoSourceKey";
-import { prepareVideoCollectionProject } from "../lib/videoCollectionCanvas";
+import { isVideoAsset } from "../lib/videoGeneration";
 import { LearningHint } from "./OnboardingTour";
 import { type ReactNode, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -54,13 +51,8 @@ import {
   saveDescribePromptHistory,
 } from "../lib/describePrompt";
 
-const VIDEO_EXTS = ["mp4", "mov", "webm", "mkv", "avi", "m4v"];
 const TextDocumentEditor = lazy(() => import("./TextDocumentEditor").then(module => ({ default: module.TextDocumentEditor })));
 const SpreadsheetDocumentViewer = lazy(() => import("./SpreadsheetDocumentViewer").then(module => ({ default: module.SpreadsheetDocumentViewer })));
-
-function isVideo(ext?: string | null) {
-  return !!ext && VIDEO_EXTS.includes(ext.toLowerCase());
-}
 
 interface CaptionSection {
   title: string;
@@ -140,16 +132,18 @@ function Meta({ label, value }: { label: string; value: ReactNode }) {
 }
 
 /**
- * 资产详情页（浏览模式下覆盖主区）：大图 + 元信息 + 反推描述 + 提示词板块 + 来源外链。
- * 大图走 store_path（原图全尺寸）；视频复用 VideoPlayer；SVG/图片用 <img>。
+ * 详情页承载图片、音频和文档，视频预览通过 panelOnly 复用属性面板。
  */
-export function AssetDetail({ onExploreSource = (url) => { void open(url); }, selection, panelOnly = false, initialAsset, onReady }: {
+export function AssetDetail({ onExploreSource = (url) => { void open(url); }, selection, panelOnly = false, initialAsset, onReady,
+  onOpenVideoAnalysis, videoAnalysisStatus }: {
   onExploreSource?: (url: string) => void;
-  /** Information-only inspector; the host owns the image and generation conversation. */
+  /** Information-only inspector; the host owns playback and the generation conversation. */
   panelOnly?: boolean;
   initialAsset?: Asset;
   /** Initial inspector content has settled; the host can reveal it without empty sections flashing. */
   onReady?: (assetId: string) => void;
+  onOpenVideoAnalysis?: (view: VideoAnalysisView) => void;
+  videoAnalysisStatus?: string;
   selection?: { assetId: string; onClose: () => void; onOpen: (id: string) => void; onContextMenu?: ReturnType<typeof useStore.getState>["openContextMenu"]; onNavigate?: () => void };
 }) {
   const selectedId = useStore((s) => s.detailAssetId);
@@ -200,12 +194,15 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const asset: Asset | undefined = group.find((a) => a.id === id) ?? listedAsset
     ?? (resolvedAsset?.id === id ? resolvedAsset : undefined)
     ?? (initialAsset?.id === id ? initialAsset : undefined);
+  const videoAsset = isVideoAsset(asset);
+  const standaloneVideo = videoAsset && !panelOnly;
   const pendingDeletion = usePendingOriginalDeletion();
   useEffect(() => {
-    if (isPendingOriginal(id, asset?.store_path)) closeDetail();
-  }, [id, asset?.store_path, pendingDeletion, closeDetail]);
+    if (standaloneVideo || isPendingOriginal(id, asset?.store_path)) closeDetail();
+  }, [id, asset?.store_path, pendingDeletion, closeDetail, standaloneVideo]);
   // 同流程轮播位置（生成图组内第几张；-1 = 不在组 / 非生成图）。
-  const groupPos = asset ? group.findIndex((a) => a.id === asset.id) : -1;
+  const detailGroup = useMemo(() => group.filter(item => !isVideoAsset(item)), [group]);
+  const groupPos = detailGroup.findIndex(item => item.id === id);
 
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [editingPrompt, setEditingPrompt] = useState(false);
@@ -320,7 +317,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
     setTags([]);
     setAssetCollections([]);
     setGenerationSource(null);
-    if (!id) return;
+    if (!id || standaloneVideo) return;
     // Keep ordinary details progressive; an embedded host reveals after the initial requests settle.
     void Promise.allSettled([
       api.listAnalysesByAsset(id).then(value => { if (alive) setAnalyses(value); }),
@@ -337,13 +334,13 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
     return () => {
       alive = false;
     };
-  }, [id, activeProjectId, panelOnly]);
+  }, [id, activeProjectId, panelOnly, standaloneVideo]);
 
   // 同流程轮播：本图是生成图（或被合并掉的 sibling）时取整组过程图。非生成图置空。
   // sibling 不在主列表 → assets.find 落空 → 仍走 listGenerationGroup 取组。
   // 组已含 id（轮播切 sibling）→ 跳过，免每次切换都 fetch。
   useEffect(() => {
-    if (!id || panelOnly) {
+    if (!id || panelOnly || standaloneVideo) {
       setGroup([]);
       return;
     }
@@ -364,11 +361,11 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, activeProjectId, panelOnly]);
+  }, [id, activeProjectId, panelOnly, standaloneVideo]);
 
   // 左右方向键切换过程图（输入框内不拦截，留给光标移动）。
   useEffect(() => {
-    if (panelOnly || group.length <= 1 || groupPos < 0) return;
+    if (panelOnly || detailGroup.length <= 1 || groupPos < 0) return;
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement | null;
       if (t?.closest('[role="dialog"]') !== detailRoot.current?.closest('[role="dialog"]')) return;
@@ -376,15 +373,15 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
         return;
       if (e.key === "ArrowLeft" && groupPos > 0) {
         e.preventDefault();
-        openDetail(group[groupPos - 1].id);
-      } else if (e.key === "ArrowRight" && groupPos < group.length - 1) {
+        openDetail(detailGroup[groupPos - 1].id);
+      } else if (e.key === "ArrowRight" && groupPos < detailGroup.length - 1) {
         e.preventDefault();
-        openDetail(group[groupPos + 1].id);
+        openDetail(detailGroup[groupPos + 1].id);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [group, groupPos, openDetail, panelOnly]);
+  }, [detailGroup, groupPos, openDetail, panelOnly]);
 
   // 反推后台化：本图在别处（或本页点反推后离开再回来）跑完落地时，
   // 后端 emit analyses://changed；命中本图则自动刷新 analyses。
@@ -578,7 +575,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const textAsset = !!asset && isTextAsset(asset);
   const [audioDuration, setAudioDuration] = useState<number | null | undefined>(asset?.duration);
   useEffect(() => setAudioDuration(asset?.duration), [asset?.id, asset?.duration, asset?.file_mtime]);
-  const imagePath = useCompatibleImagePath(panelOnly || audioAsset || textAsset ? null : asset?.store_path);
+  const imagePath = useCompatibleImagePath(panelOnly || audioAsset || textAsset || videoAsset ? null : asset?.store_path);
   const src = imagePath ? convertFileSrc(imagePath) : undefined;
   const zoom = useImageZoom(src);
 
@@ -611,6 +608,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
       .filter((candidate: Asset | undefined): candidate is Asset => !!candidate);
   }, [generationSource, genMeta, group, assets]);
 
+  if (standaloneVideo) return null;
   if (!asset || !id) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted">
@@ -726,41 +724,28 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
             </Suspense>}
             {audioAsset && asset.store_path && <AudioWaveform assetId={asset.id} path={asset.store_path} name={asset.name}
               version={`${asset.file_mtime ?? 0}:${asset.size ?? 0}`} duration={audioDuration} onDuration={setAudioDuration} className="audio-detail-waveform"/>}
-            {src &&
-              (isVideo(asset.ext) ? (
-                <VideoPlayer key={videoSourceKey(asset)} path={asset.store_path!} sourceKey={videoSourceKey(asset)}
-                  embedded fitContainer showTrim frameTarget="library" onAddFrame={async frame => {
-                    if (activeProjectId) await prepareVideoCollectionProject(activeProjectId);
-                    await saveVideoFrame(frame, activeProjectId);
-                  }} onSaveTrim={async request => {
-                    if (activeProjectId) await prepareVideoCollectionProject(activeProjectId);
-                    return api.trimVideo(request, activeProjectId ?? undefined);
-                  }}
-                  onAddFrameToCanvas={activeProjectId ? frame => saveVideoFrameToCanvas(frame, activeProjectId) : undefined} />
-              ) : (
-                <img
-                  ref={zoom.imgRef}
-                  src={src}
-                  alt={asset.name}
-                  draggable={false}
-                  onMouseDown={zoom.onMouseDown}
-                  onDoubleClick={zoom.onDoubleClick}
-                  onContextMenu={(e) => {
-                    // 右键打开菜单；preventDefault 让 zoom onMouseDown 不会误平移。
-                    e.preventDefault();
-                    e.stopPropagation();
-                      openContextMenu(e.clientX, e.clientY, asset.id, { asset });
-                  }}
-                  className="max-h-full max-w-full select-none object-contain"
-                  style={zoom.style}
-                />
-              ))}
+            {src && <img
+              ref={zoom.imgRef}
+              src={src}
+              alt={asset.name}
+              draggable={false}
+              onMouseDown={zoom.onMouseDown}
+              onDoubleClick={zoom.onDoubleClick}
+              onContextMenu={(e) => {
+                // 右键打开菜单；preventDefault 让 zoom onMouseDown 不会误平移。
+                e.preventDefault();
+                e.stopPropagation();
+                openContextMenu(e.clientX, e.clientY, asset.id, { asset });
+              }}
+              className="max-h-full max-w-full select-none object-contain"
+              style={zoom.style}
+            />}
           </div>
           {/* 过程图轮播：图片下方常驻「◀ 1/2 ▶」+ 左右方向键切换 */}
-          {group.length > 1 && groupPos >= 0 && (
+          {detailGroup.length > 1 && groupPos >= 0 && (
             <div className="flex shrink-0 items-center justify-center gap-2 border-t border-edge bg-panel py-1.5 text-muted">
               <button
-                onClick={() => openDetail(group[groupPos - 1].id)}
+                onClick={() => openDetail(detailGroup[groupPos - 1].id)}
                 disabled={groupPos === 0}
                 className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-panel2 hover:text-ink disabled:opacity-30"
                 title="上一张过程图（←）"
@@ -768,11 +753,11 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                 <ChevronLeft size={15} />
               </button>
               <span className="min-w-[3rem] text-center tabular-nums text-xs">
-                {groupPos + 1} / {group.length}
+                {groupPos + 1} / {detailGroup.length}
               </span>
               <button
-                onClick={() => openDetail(group[groupPos + 1].id)}
-                disabled={groupPos === group.length - 1}
+                onClick={() => openDetail(detailGroup[groupPos + 1].id)}
+                disabled={groupPos === detailGroup.length - 1}
                 className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-panel2 hover:text-ink disabled:opacity-30"
                 title="下一张过程图（→）"
               >
@@ -1020,8 +1005,18 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
 
           {detailTab === "info" && (
             <>
+          {panelOnly && videoAsset && onOpenVideoAnalysis && <section className="asset-detail-card flex flex-col gap-3" aria-label="视频分析">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-xs font-medium text-muted">视频分析</h2>
+              {videoAnalysisStatus && <span className="text-xs text-muted">{videoAnalysisStatus}</span>}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="app-button-primary" onClick={() => onOpenVideoAnalysis("analysis")}>分析</button>
+              <button type="button" className="app-button-secondary" onClick={() => onOpenVideoAnalysis("transcript")}>转录文稿</button>
+            </div>
+          </section>}
           {/* 反推：点击后选引擎（Bowerbird Cloud / 本机 codex）；全部引擎不可用时置灰。 */}
-          {!audioAsset && !textAsset && <div className="asset-detail-card space-y-2">
+          {!audioAsset && !textAsset && !videoAsset && <div className="asset-detail-card space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium uppercase tracking-wide text-muted">
                 反推

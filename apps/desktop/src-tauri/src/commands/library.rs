@@ -913,7 +913,7 @@ pub async fn list_analyses_by_asset(
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
         let mut results = db.list_analyses_by_asset(&asset_id)?;
-        results.retain(|analysis| analysis.kind != "video_transcript");
+        results.retain(|analysis| !matches!(analysis.kind.as_str(), "video_transcript" | "video_analysis"));
         Ok(results)
     })
         .await

@@ -267,6 +267,129 @@ fn search(path: &Path, filter: CatalogFilter, k: usize) -> query::SearchSnapshot
     .unwrap()
 }
 
+fn include_generated(db: &Database, include: bool) {
+    db.conn.lock().unwrap().execute(
+        "UPDATE semantic_index_preferences SET include_generated=?1,policy_revision=policy_revision+1
+        WHERE id=1 AND include_generated<>?1",
+        [include],
+    ).unwrap();
+}
+
+#[test]
+fn source_policy_excludes_stored_vectors_before_ranking_and_keeps_them_reusable() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("library.db");
+    let image = temp.path().join("asset.png");
+    png(&image, 17);
+    let db = Database::open(&file).unwrap();
+    db.migrate().unwrap();
+    db.create_project("p", "P", "/p", "/p", "blank").unwrap();
+    for id in ["a-session", "b-workflow", "c-legacy-meta", "d-manual-group"] {
+        insert_asset(&db, id, &image);
+    }
+    db.conn.lock().unwrap().execute_batch(r#"
+        UPDATE assets SET generation_session_id='session' WHERE id='a-session';
+        INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p',1,
+            '{"runs":[{"steps":{"src":{"generatedAssetIds":["b-workflow"]}}}]}');
+        INSERT INTO analyses(id,asset_id,kind,payload) VALUES('legacy','c-legacy-meta','generation_meta','{"job_id":"legacy"}');
+        INSERT INTO generation_gallery_merges(source_key,group_key) VALUES('asset:d-manual-group','manual:group');
+    "#).unwrap();
+    index::control(&db, "start").unwrap();
+    for _ in 0..4 {
+        assert!(run(&db));
+    }
+    let cached_hash = stored(&db, "b-workflow");
+    let old = search(&file, query_filter(None), 1);
+    assert_eq!((old.eligible, old.indexed), (4, 4));
+    assert_eq!(old.ids(&file, 0, 1).unwrap(), ["a-session"]);
+
+    include_generated(&db, false);
+    let status = index::status(&db).unwrap();
+    assert_eq!((status.eligible, status.indexed), (1, 1));
+    assert_eq!(old.validate_policy(&file).unwrap_err().to_string(), "stale_session");
+    assert_eq!(old.page(&file, 0, 1).err().unwrap().to_string(), "stale_session");
+    let scoped = search(&file, query_filter(None), 1);
+    assert_eq!((scoped.eligible, scoped.indexed), (1, 1));
+    assert_eq!(scoped.ids(&file, 0, 1).unwrap(), ["d-manual-group"]);
+    let mut filter = query_filter(None);
+    filter.generated = Some(true);
+    let empty = search(&file, filter, 10);
+    assert_eq!((empty.eligible, empty.indexed, empty.len()), (0, 0, 0));
+    assert!(empty.ids(&file, 0, 1).unwrap().is_empty());
+    assert_eq!(stored(&db, "b-workflow"), cached_hash);
+    index::run_one(&db, |_| panic!("the first round already indexed its scope")).unwrap();
+    index::control(&db, "update").unwrap();
+    index::run_one(&db, |_| panic!("the audit should reuse the matching SHA")).unwrap();
+    let waiting_for_audit: i64 = db.conn.lock().unwrap().query_row(
+        "SELECT COUNT(*) FROM semantic_jobs WHERE status<>'ready'",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert_eq!(waiting_for_audit, 0);
+
+    include_generated(&db, true);
+    assert_eq!(empty.ids(&file, 0, 1).unwrap_err().to_string(), "stale_session");
+    assert_eq!(old.ids(&file, 0, 1).unwrap_err().to_string(), "stale_session");
+    assert_eq!(index::status(&db).unwrap().indexed, 4);
+    db.conn.lock().unwrap().execute(
+        "UPDATE semantic_jobs SET status='pending' WHERE asset_id='b-workflow'",
+        [],
+    ).unwrap();
+    let tick = index::run_one(&db, |_| panic!("SHA-matched vector should be reused")).unwrap();
+    assert!(tick.progress);
+    assert_eq!(stored(&db, "b-workflow"), cached_hash);
+}
+
+#[test]
+fn source_policy_blocks_new_claims_and_rechecks_late_provenance_at_commit() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("library.db");
+    let image = temp.path().join("asset.png");
+    png(&image, 17);
+    let db = Database::open(&file).unwrap();
+    db.migrate().unwrap();
+    for id in ["a-already-generated", "b-late-provenance", "c-ordinary"] {
+        insert_asset(&db, id, &image);
+    }
+    db.conn.lock().unwrap().execute(
+        "UPDATE assets SET source='comfy-h3' WHERE id='a-already-generated'", [],
+    ).unwrap();
+    include_generated(&db, false);
+    index::control(&db, "start").unwrap();
+    index::run_one(&db, |_| {
+        db.conn.lock().unwrap().execute(
+            r#"INSERT INTO analyses(id,asset_id,kind,payload) VALUES('late','b-late-provenance','generation_meta','{"job_id":"late"}')"#,
+            [],
+        ).unwrap();
+        Ok(axis(1.0, 0.0))
+    }).unwrap();
+    assert_eq!(index::status(&db).unwrap().indexed, 0);
+    assert!(run(&db));
+    let scoped = search(&file, query_filter(None), 10);
+    assert_eq!(scoped.ids(&file, 0, 10).unwrap(), ["c-ordinary"]);
+    db.conn.lock().unwrap().execute(
+        r#"INSERT INTO analyses(id,asset_id,kind,payload) VALUES('third','c-ordinary','generation_meta','{"job_id":"third"}')"#,
+        [],
+    ).unwrap();
+    assert_eq!(scoped.ids(&file, 0, 10).unwrap_err().to_string(), "stale_session");
+    assert_eq!(index::status(&db).unwrap().eligible, 0);
+    assert_eq!(stored(&db, "c-ordinary"), source::digest_at_path(&image).unwrap());
+
+    // Excluded identities have jobs from the original backfill. A later inclusion
+    // can process them even when the backfill cursor has already reached the end.
+    assert!(index::status(&db).unwrap().backfill_complete);
+    include_generated(&db, true);
+    index::run_one(&db, |_| {
+        include_generated(&db, false);
+        include_generated(&db, true);
+        Ok(axis(1.0, 0.0))
+    }).unwrap();
+    assert_eq!(index::status(&db).unwrap().indexed, 1);
+    assert!(run(&db));
+    assert!(run(&db));
+    assert_eq!(index::status(&db).unwrap().indexed, 3);
+}
+
 #[test]
 fn irrelevant_vectors_do_not_fill_the_result_limit() {
     let temp = tempfile::tempdir().unwrap();

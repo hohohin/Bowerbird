@@ -1,13 +1,19 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore, type Dispatch, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowUpRight, Bell, Check, CircleAlert, LoaderCircle, X } from 'lucide-react';
-import { listenForNotices, type NoticeDetail } from '../lib/notify';
+import { api } from '../lib/api';
+import { externalFiles } from '../lib/externalFiles';
+import { listenForNotices, notifyError, type NoticeDetail } from '../lib/notify';
+import type { Asset } from '../lib/types';
+import { isVideoAsset } from '../lib/videoGeneration';
+import { videoSourceKey } from '../lib/videoSourceKey';
 import { useStore } from '../store';
 import { useLocalChatStore } from '../lib/localChatStore';
 import { useDescribeNotices, type DescribeNotice } from '../lib/describeNotices';
 import { libraryGenerationTasks, type LibraryActivityTask } from '../lib/libraryGenerationActivity';
 import { openLibraryActivityTask, useLibraryGenerationRuntime } from '../lib/libraryGenerationRuntime';
 import { dismissNotices, readDismissedNotices, subscribeDismissedNotices } from '../lib/dismissedNotices';
+import { LibraryVideoPreview } from './LibraryVideoPreview';
 import './NotificationBell.css';
 
 type GenerationNotice = NoticeDetail;
@@ -23,16 +29,6 @@ function bellState(state: BellState, action: Action): BellState {
 
 type BellTask = LibraryActivityTask | DescribeNotice;
 
-function openTask(task: BellTask) {
-  const state = useStore.getState();
-  if (task.source === 'describe') {
-    if (state.mode === 'manage') state.exitManage();
-    state.openDetail(task.assetId);
-  } else if (task.source === 'generation') state.openGenerationJob(task.id);
-  else if (task.source === 'agent') state.openCloudAgentRun(state.cloudAgentRuns[task.id]);
-  else openLibraryActivityTask(task);
-}
-
 const BELL_SCOPE = 'notification-bell';
 const getDismissed = () => readDismissedNotices(BELL_SCOPE);
 
@@ -42,7 +38,7 @@ function TaskRow({ task, projectName, onOpen, onRemove }: { task: BellTask; proj
   const context = projectName ? `${kind} · ${projectName}` : kind;
   const destination = task.source === 'describe' ? '查看素材' : '查看画板';
   return <div role="listitem"><button type="button" className={`notification-bell-task is-${task.status}`}
-    onClick={() => { onOpen(); openTask(task); }} aria-label={`${context} · ${task.title} · ${task.statusLabel}，${destination}`}>
+    onClick={onOpen} aria-label={`${context} · ${task.title} · ${task.statusLabel}，${destination}`}>
     <Icon size={14} aria-hidden/><span className="notification-bell-copy"><span>{task.title}</span><small>{context}</small></span>
     <span className="notification-bell-status">{task.statusLabel}</span><ArrowUpRight size={13} aria-hidden/>
   </button>{task.dismissKey && <button type="button" className="notification-bell-remove" aria-label={`移除通知：${task.title}`} title="移除此条通知"
@@ -119,7 +115,7 @@ function LatestNotice({ notice, close, dismiss }: { notice: GenerationNotice; cl
 }
 
 type RecentTasks = ReturnType<typeof useRecentTasks>;
-function TaskHistory({ recent, close, dismiss }: { recent: RecentTasks; close: () => void; dismiss: () => void }) {
+function TaskHistory({ recent, dismiss, onOpenTask }: { recent: RecentTasks; dismiss: () => void; onOpenTask: (task: BellTask) => void }) {
   const content = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   function remove(keys: string[]) {
@@ -136,17 +132,16 @@ function TaskHistory({ recent, close, dismiss }: { recent: RecentTasks; close: (
       <button ref={closeButton} type="button" aria-label="关闭通知面板" onClick={dismiss}><X size={14}/></button></div>
     <div className="notification-bell-history" role="list" aria-label="近期任务">
       {!recent.tasks.length && <p>暂无任务</p>}
-      {recent.tasks.map(task => <TaskRow key={`${task.source}:${task.id}`} task={task} projectName={task.source === 'describe' ? undefined : recent.projects.find(project => project.id === task.projectId)?.name} onOpen={close} onRemove={remove}/>)}
+      {recent.tasks.map(task => <TaskRow key={`${task.source}:${task.id}`} task={task} projectName={task.source === 'describe' ? undefined : recent.projects.find(project => project.id === task.projectId)?.name} onOpen={() => onOpenTask(task)} onRemove={remove}/>)}
     </div>
   </div>;
 }
 
-function BellContents({ state, recent, close, dismiss }: { state: BellState; recent: RecentTasks; close: () => void; dismiss: () => void }) {
-  return state.view === 'latest' && state.latest ? <LatestNotice notice={state.latest} close={close} dismiss={dismiss}/> : <TaskHistory recent={recent} close={close} dismiss={dismiss}/>;
-}
-
 export function NotificationBell() {
   const [state, dispatch] = useReducer(bellState, { view: 'closed', latest: null, pinned: false, unread: false });
+  const [preview, setPreview] = useState<{ asset: Asset; path: string; projectId: string | null; routeRevision: number }>();
+  const projectRouteRevision = useStore(value => value.projectRouteRevision);
+  const openRequest = useRef(0);
   const button = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null);
   const recent = useRecentTasks();
   const unread = state.unread || recent.unread;
@@ -154,8 +149,32 @@ export function NotificationBell() {
   useBellNotices(state, dispatch);
   useBellDismiss(state.view, button, panel, dispatch);
   const close = () => dispatch({ type: 'close' });
-  const dismiss = () => { close(); button.current!.focus(); };
+  const dismiss = () => { close(); button.current?.focus({ preventScroll: true }); };
   const interact = () => dispatch({ type: 'interact' });
+  async function openTask(task: BellTask) {
+    dismiss();
+    const intent = ++openRequest.current;
+    const origin = useStore.getState();
+    if (task.source === 'generation') { origin.openGenerationJob(task.id); return; }
+    if (task.source === 'agent') { origin.openCloudAgentRun(origin.cloudAgentRuns[task.id]); return; }
+    if (task.source !== 'describe') { openLibraryActivityTask(task); return; }
+    const isCurrent = () => button.current?.isConnected && intent === openRequest.current && useStore.getState().projectRouteRevision === origin.projectRouteRevision;
+    try {
+      const asset = origin.assets.find(item => item.id === task.assetId) ?? (await api.getAssetsByIds([task.assetId]))[0];
+      if (!isCurrent()) return;
+      if (!asset) throw new Error('素材已不存在，请检查素材库');
+      if (isVideoAsset(asset)) {
+        if (!asset.store_path) throw new Error('素材原文件不可用');
+        const path = await externalFiles.media(asset.store_path);
+        if (isCurrent()) setPreview({ asset, path, projectId: origin.activeProjectId, routeRevision: origin.projectRouteRevision });
+      } else {
+        if (useStore.getState().mode === 'manage') origin.exitManage();
+        origin.openDetail(asset.id);
+      }
+    } catch (error) {
+      if (isCurrent()) notifyError(error, '暂时无法打开素材，请在素材库中查看');
+    }
+  }
   return <>
     <button ref={button} type="button" className="notification-bell-button" aria-label={`通知${unread ? '，有未读消息' : ''}`}
       title="通知" aria-haspopup="dialog" aria-expanded={state.view !== 'closed'}
@@ -165,7 +184,10 @@ export function NotificationBell() {
     {state.view !== 'closed' && createPortal(<div key={state.view === 'latest' ? state.latest?.id : state.view} ref={panel} className={`notification-bell-panel is-${state.view}`} role={state.view === "latest" ? "status" : "dialog"}
       aria-label={{ latest: '新通知', history: '通知历史' }[state.view]} style={{ position: 'fixed', ...position }}
       onMouseEnter={interact} onFocusCapture={interact} onPointerDownCapture={interact}>
-      <BellContents state={state} recent={recent} close={close} dismiss={dismiss}/>
+      {state.view === 'latest' && state.latest ? <LatestNotice notice={state.latest} close={close} dismiss={dismiss}/>
+        : <TaskHistory recent={recent} dismiss={dismiss} onOpenTask={task => void openTask(task)}/>}
     </div>, document.body)}
+    {preview?.routeRevision === projectRouteRevision && <LibraryVideoPreview asset={preview.asset} path={preview.path}
+      projectId={preview.projectId} sourceKey={videoSourceKey(preview.asset)} onClose={() => setPreview(undefined)}/>}
   </>;
 }

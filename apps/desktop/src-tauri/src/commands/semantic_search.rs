@@ -16,12 +16,16 @@ use crate::{
 
 #[tauri::command]
 pub(crate) async fn semantic_status(
+    app: AppHandle,
     search: State<'_, Arc<SemanticSearch>>,
     db: State<'_, Arc<Database>>,
 ) -> Result<Status, String> {
     let search = search.inner().clone();
     let db = db.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || search.status(&db).map_err(wire_error))
+    tauri::async_runtime::spawn_blocking(move || {
+        search.sync_preferences(&app, &db).map_err(wire_error)?;
+        search.status(&db).map_err(wire_error)
+    })
         .await
         .map_err(|_| "internal_error".to_owned())?
 }
@@ -60,7 +64,9 @@ pub(crate) async fn semantic_index_control(
 
 #[tauri::command]
 pub(crate) async fn semantic_search_start(
+    app: AppHandle,
     search: State<'_, Arc<SemanticSearch>>,
+    db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
     request_id: String,
     pane_id: String,
@@ -68,6 +74,7 @@ pub(crate) async fn semantic_search_start(
     filter: CatalogFilter,
     top_k: Option<usize>,
 ) -> Result<SearchResponse, String> {
+    search.sync_preferences(&app, &db).map_err(wire_error)?;
     search
         .inner()
         .start(
@@ -84,12 +91,15 @@ pub(crate) async fn semantic_search_start(
 
 #[tauri::command]
 pub(crate) async fn semantic_search_page(
+    app: AppHandle,
     search: State<'_, Arc<SemanticSearch>>,
+    db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
     session_id: String,
     offset: usize,
     limit: usize,
 ) -> Result<Vec<Hit>, String> {
+    search.sync_preferences(&app, &db).map_err(wire_error)?;
     search
         .read_session(paths.db.clone(), session_id, move |snapshot, path| {
             snapshot.page(path, offset, limit)
@@ -100,12 +110,15 @@ pub(crate) async fn semantic_search_page(
 
 #[tauri::command]
 pub(crate) async fn semantic_search_ids(
+    app: AppHandle,
     search: State<'_, Arc<SemanticSearch>>,
+    db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
     session_id: String,
     offset: usize,
     limit: usize,
 ) -> Result<Vec<String>, String> {
+    search.sync_preferences(&app, &db).map_err(wire_error)?;
     search
         .read_session(paths.db.clone(), session_id, move |snapshot, path| {
             snapshot.ids(path, offset, limit)

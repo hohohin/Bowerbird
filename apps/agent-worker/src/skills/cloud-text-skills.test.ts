@@ -62,6 +62,18 @@ test("unknown methods, paths, extra instructions and inconsistent H3 modes are r
   equal(resolveCloudTextSkill("用户要求：改成简洁文字"), undefined);
 });
 
+test("H3 R2V rewrite accepts only ordered media counts and no legacy frame flags", () => {
+  const r2v = { ...parameters, mode: "r2v", firstFrameCount: 0, referenceImageCount: 9, referenceVideoCount: 3, referenceAudioCount: 3 };
+  const skill = resolveCloudTextSkill(request("h3-video-prompt", r2v))!;
+  equal(validateCloudTextSkillSnapshot(skill).parameters.referenceVideoCount, 3);
+  ok(skill.instructions.includes("<Video N>") && skill.instructions.includes("<Audio N>"));
+  for (const invalid of [{ referenceAudioCount: undefined }, { referenceAudioCount: 4 }, { referenceImageCount: 10 },
+    { referenceVideoCount: -1 }, { referenceVideoCount: 0.5 }, { firstFrameCount: 1 }, { audioReference: true }]) {
+    throws(() => resolveCloudTextSkill(request("h3-video-prompt", { ...r2v, ...invalid })), /cloud_text_skill/);
+  }
+  equal(resolveCloudTextSkill(request("h3-video-prompt", { ...r2v, referenceImageCount: 0, referenceVideoCount: 0, referenceAudioCount: 0 }))!.parameters.mode, "r2v");
+});
+
 test("text editor keeps the user instruction separate from the server method", () => {
   const goal = 'bowerbird:cloud-text-skill:v1\n{"id":"text-editor","instruction":"继续写"}';
   const skill = resolveCloudTextSkill(goal)!;

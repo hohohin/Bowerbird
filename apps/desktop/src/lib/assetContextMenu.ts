@@ -1,6 +1,6 @@
 import { isAudioAsset } from "./audioMedia.ts";
 import { isTextAsset } from "./textMedia.ts";
-import { isVideoPath } from "./videoGeneration.ts";
+import { isVideoAsset } from "./videoGeneration.ts";
 import { userErrorMessage } from "./userError.ts";
 import type { MenuItemDescriptor } from "./contextMenuModel";
 import type { Asset } from "./types";
@@ -10,7 +10,7 @@ const CANVAS_IMAGE_EXTS = [...ANNOTATABLE_EXTS, "avif", "svg", "ico", "tif", "ti
 
 export type AssetDescribeEngine = "bowerbird-cloud" | "codex";
 export type AssetMenuAction =
-  | "move-incomplete" | "add-to-chat" | "open-detail" | "edit" | "pinterest" | "select" | "rename"
+  | "move-incomplete" | "add-to-chat" | "open-detail" | "open-transcript" | "edit" | "pinterest" | "select" | "rename"
   | "describe-cloud" | "describe-codex" | "dimensions" | "artboard" | "reuse" | "layers" | "history"
   | "assign" | "project-picker" | "reveal" | "open-system" | "copy-image" | "copy-path" | "references"
   | "show-in-library" | "hide-in-library" | "remove-references" | "remove-from-canvas" | "ungroup"
@@ -19,7 +19,7 @@ export type AssetMenuAction =
   | "delete-canvas-item" | "remove-canvas-group" | "remove-canvas-group-from-project" | "delete-canvas-group";
 
 type AssetMenuIcon = "edit" | "folder-plus" | "folder-tree" | "trash" | "ungroup" | "layers"
-  | "status-unavailable" | "status-ready" | "scan-search" | "scan" | "board" | "clipboard" | "message";
+  | "status-unavailable" | "status-ready" | "scan-search" | "scan" | "board" | "clipboard" | "message" | "file-text";
 type AssetMenuSlot = "canvas-selection" | "generation-group" | "merge-generation-group" | "transfers";
 type AssetMenuItem = MenuItemDescriptor<AssetMenuAction, AssetMenuIcon, AssetMenuSlot>;
 type AssetActionOptions = Omit<Extract<AssetMenuItem, { kind: "action" }>, "kind" | "id" | "label">;
@@ -72,8 +72,9 @@ export function buildAssetContextMenu(s: AssetMenuSnapshot): {
   const canvasImage = !!storePath && CANVAS_IMAGE_EXTS.includes(ext);
   const audio = !!asset && isAudioAsset(asset);
   const text = !!asset && isTextAsset(asset);
+  const video = isVideoAsset(asset);
   const allImages = s.targets.length > 0 && s.targets.every(target =>
-    !!target?.store_path && !isVideoPath(target.store_path) && !isAudioAsset(target) && !isTextAsset(target));
+    !!target?.store_path && !isVideoAsset(target) && !isAudioAsset(target) && !isTextAsset(target));
   const generated = !audio && !text && !!asset?.generation_session_id;
   const action = (id: AssetMenuAction, label: string, options: AssetActionOptions = {}): AssetMenuItem =>
     ({ kind: "action", id, label, disabled: busy, ...options });
@@ -164,8 +165,8 @@ export function buildAssetContextMenu(s: AssetMenuSnapshot): {
   if (canvas) common.push(canvasSelection);
   if (s.hasGenerationGroup) common.push({ kind: "slot", id: "generation-group" });
   if (!canvas && !audio && !text && !s.manage && s.hasDetail) common.push(action("add-to-chat", "添加到对话框"));
-  const detail = text ? "打开文本编辑器" : audio ? "打开音频详情" : isVideoPath(storePath) ? "打开视频详情" : "打开图片详情";
-  common.push(action("open-detail", detail));
+  if (video) common.push(action("open-transcript", "转录文稿", { icon: "file-text", disabled: busy || !storePath || file?.entries?.available === false }));
+  else if (asset) common.push(action("open-detail", text ? "打开文本编辑器" : audio ? "打开音频详情" : "打开图片详情"));
   if (annotatable) common.push(action("edit", "编辑", { icon: "edit" }));
   if (s.canSearchPinterest) common.push(pinterest);
   if (!canvas && (!s.embedded || file)) common.push(action("select", !file && s.manage ? "选择/取消选择" : "选择"));

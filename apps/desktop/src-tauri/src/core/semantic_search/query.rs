@@ -11,14 +11,13 @@ use std::{
 use rusqlite::{
     params_from_iter,
     types::{Value, ValueRef},
-    Connection, OptionalExtension,
+    Connection, OptionalExtension, Transaction,
 };
 use serde::Serialize;
 
 use crate::{
     core::{
         catalog_browser::CatalogFilter,
-        generation_gallery::{with_gallery_cache, WORKFLOW_GALLERY_CTE},
         library::{asset_from_row, Asset},
     },
     db::Database,
@@ -29,6 +28,7 @@ use super::{
     embedding::{Embedding, RankedImage, TopImages},
     index::{self, INDEXABLE_FORMAT, VECTOR_JOINS},
     model,
+    scope::Policy,
 };
 
 pub(crate) const MAX_RESULTS: usize = 240;
@@ -42,6 +42,7 @@ pub(crate) struct SearchSnapshot {
     pub eligible: usize,
     pub indexed: usize,
     pub truncated: bool,
+    policy_revision: i64,
     filter: CatalogFilter,
     ranked: Vec<RankedImage>,
 }
@@ -99,14 +100,11 @@ fn active_index(conn: &Connection) -> AppResult<Option<(String, i64)>> {
 
 fn with_snapshot<T>(
     conn: &Connection,
-    filter: &CatalogFilter,
-    read: impl FnOnce(&Connection, &str) -> AppResult<T>,
+    read: impl FnOnce(&Transaction<'_>, &Policy) -> AppResult<T>,
 ) -> AppResult<T> {
-    if filter.generated.is_some() {
-        return with_gallery_cache(conn, true, read);
-    }
     let tx = conn.unchecked_transaction()?;
-    let result = read(&tx, WORKFLOW_GALLERY_CTE)?;
+    let scope = Policy::read(&tx)?;
+    let result = read(&tx, &scope)?;
     tx.commit()?;
     Ok(result)
 }
@@ -140,7 +138,7 @@ pub(crate) fn search(
     let text = Embedding::normalize(text).ok_or_else(|| code("model_corrupt"))?;
     check_time(&cancel, deadline)?;
     let filter = validated_filter(filter)?;
-    let result = with_snapshot(&conn, &filter, |conn, provenance| {
+    let result = with_snapshot(&conn, |conn, scope| {
         let library_id = index::library_id(conn)?;
         if !project_exists(conn, &filter)? {
             return Err(code("invalid_scope"));
@@ -149,13 +147,16 @@ pub(crate) fn search(
         if model_key != model::MODEL_ID {
             return Err(code("model_missing"));
         }
+        let provenance = scope.provenance(conn, filter.generated.is_some())?;
         let (condition, values) = filter.sql()?;
+        let source_policy = scope.condition();
         let valid = index::valid_vector_condition();
         let mut sql = conn.prepare(&format!(
             "WITH {provenance}
             SELECT a.id,sv.content_sha256,CASE WHEN {valid} THEN sv.vec_f32le END
             FROM assets a {VECTOR_JOINS} WHERE {condition} AND {INDEXABLE_FORMAT}
-              AND COALESCE(sj.status,'')<>'unsupported' AND a.id>? ORDER BY a.id LIMIT ?"
+              AND {source_policy} AND COALESCE(sj.status,'')<>'unsupported'
+              AND a.id>? ORDER BY a.id LIMIT ?"
         ))?;
         let mut bindings = vec![Value::Text(model_key.clone())];
         bindings.extend(values);
@@ -199,6 +200,7 @@ pub(crate) fn search(
             library_id,
             model_key,
             index_revision,
+            policy_revision: scope.revision,
             eligible,
             indexed,
             truncated,
@@ -215,6 +217,15 @@ impl SearchSnapshot {
         self.ranked.len()
     }
 
+    pub(super) fn validate_policy(&self, path: &Path) -> AppResult<()> {
+        let readonly = Database::open_read_only(path)?;
+        let conn = readonly.conn.lock().unwrap();
+        if Policy::read(&conn)?.revision != self.policy_revision {
+            return Err(code("stale_session"));
+        }
+        Ok(())
+    }
+
     fn slice(&self, offset: usize, limit: usize) -> &[RankedImage] {
         let start = offset.min(self.ranked.len());
         let end = (start + limit.min(MAX_PAGE)).min(self.ranked.len());
@@ -226,27 +237,34 @@ impl SearchSnapshot {
     fn read<T>(
         &self,
         path: &Path,
-        action: impl FnOnce(&Connection, &str) -> AppResult<T>,
+        action: impl FnOnce(&Connection) -> AppResult<T>,
     ) -> AppResult<T> {
         let readonly = Database::open_read_only(path)?;
         let conn = readonly.conn.lock().unwrap();
         let deadline = Instant::now() + std::time::Duration::from_secs(10);
         conn.progress_handler(3_000, Some(move || Instant::now() >= deadline));
-        let result = with_snapshot(&conn, &self.filter, |conn, provenance| {
+        let result = with_snapshot(&conn, |conn, scope| {
             let same_library = index::library_id(conn)? == self.library_id;
             let same_model = active_index(conn)?.is_some_and(|(key, _)| key == self.model_key);
-            if !same_library || !same_model || !project_exists(conn, &self.filter)? {
+            if scope.revision != self.policy_revision
+                || !same_library
+                || !same_model
+                || !project_exists(conn, &self.filter)?
+            {
                 return Err(code("stale_session"));
             }
             if self.ranked.is_empty() {
-                return action(conn, provenance);
+                return action(conn);
             }
+            let provenance = scope.provenance(conn, self.filter.generated.is_some())?;
             let (condition, values) = self.filter.sql()?;
+            let source_policy = scope.condition();
             let placeholders = vec!["?"; self.ranked.len()].join(",");
             let valid = index::valid_vector_condition();
             let mut query = conn.prepare(&format!(
                 "WITH {provenance} SELECT a.id,sv.content_sha256 FROM assets a {VECTOR_JOINS}
-                WHERE {condition} AND {INDEXABLE_FORMAT} AND {valid} AND a.id IN ({placeholders})"
+                WHERE {condition} AND {INDEXABLE_FORMAT} AND {valid} AND {source_policy}
+                AND COALESCE(sj.status,'')<>'unsupported' AND a.id IN ({placeholders})"
             ))?;
             let mut bindings = vec![Value::Text(self.model_key.clone())];
             bindings.extend(values);
@@ -261,7 +279,7 @@ impl SearchSnapshot {
             {
                 return Err(code("stale_session"));
             }
-            action(conn, provenance)
+            action(conn)
         });
         if Instant::now() >= deadline {
             return Err(code("resource_limit"));
@@ -270,7 +288,7 @@ impl SearchSnapshot {
     }
 
     pub(crate) fn page(&self, path: &Path, offset: usize, limit: usize) -> AppResult<Vec<Hit>> {
-        self.read(path, |conn, _| {
+        self.read(path, |conn| {
             let mut stmt = conn.prepare("SELECT * FROM assets WHERE id=?1")?;
             self.slice(offset, limit)
                 .iter()
@@ -285,7 +303,7 @@ impl SearchSnapshot {
     }
 
     pub(crate) fn ids(&self, path: &Path, offset: usize, limit: usize) -> AppResult<Vec<String>> {
-        self.read(path, |_, _| {
+        self.read(path, |_| {
             Ok(self
                 .slice(offset, limit)
                 .iter()

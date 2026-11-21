@@ -6,7 +6,7 @@ import { Check, ImagePlus, Layers, Play, SearchX } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { parseColors } from "../lib/assetColors";
-import { isVideoPath } from "../lib/videoGeneration";
+import { isVideoAsset } from "../lib/videoGeneration";
 import { useVideoPoster } from "../lib/videoPoster";
 import { setDragAssets } from "../lib/dragPayload";
 import type { Asset } from "../lib/types";
@@ -151,7 +151,7 @@ const Thumb = memo(function Thumb({
   }, [thumbnailPath]);
 
   // 列表不创建视频解码器；缺封面仍保留卡片选择、拖动及主动打开原视频的入口。
-  const video = isVideoPath(shown.store_path);
+  const video = isVideoAsset(shown);
 
   // 没有缩略图的占位（非图片格式或解码失败）。
   if (!thumbnailPath && !video) {
@@ -343,7 +343,7 @@ const Thumb = memo(function Thumb({
         setPickMenu(at ?? (rect ? { x: rect.left, y: rect.bottom + 4 } : { x: 8, y: 8 }));
       }
     } else if (onOpenPreview) onOpenPreview(shown, group);
-    else st.openDetail(shown.id);
+    else if (!video) st.openDetail(shown.id);
   }
   // 浮层定位：默认鼠标右下偏移，靠右/下边时翻转到左/上，留 pad 不贴边。尺寸跟随缩略图×2。
   let previewLeft = 0;
@@ -562,7 +562,7 @@ const Thumb = memo(function Thumb({
             >
               添加到编辑框
             </button>
-            <button
+            {!video && <button
               type="button"
               role="menuitem"
               className="app-context-item px-2 py-1.5"
@@ -572,7 +572,7 @@ const Thumb = memo(function Thumb({
               }}
             >
               打开图片详情
-            </button>
+            </button>}
           </div>,
           document.body
         )}

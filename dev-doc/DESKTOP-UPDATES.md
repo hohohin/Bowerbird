@@ -59,6 +59,8 @@ macOS 的双架构回执单独维护。[macOS 全量发布验收](../macOS/RELEA
 - **Windows Authenticode。** 对最终安装器和从该包提取的 `bowerbird-desktop.exe` 分别运行 `Get-AuthenticodeSignature -LiteralPath $File` 和 Windows SDK 的 `signtool verify /pa /all /v /tw $File`。要求 PowerShell 状态为 `Valid`、SignTool 退出码为 0，签名者与批准的发布者匹配且时间戳有效。留存文件名、SHA-256、发布者证书主题及指纹、证书链、时间戳和验签原始输出。[Microsoft SignTool](https://learn.microsoft.com/windows/win32/seccrypto/signtool)
 - **Tauri updater。** 在对应冻结版本工作区保留最终安装包及相邻的 `.sig`，运行 `node Windows/update-manifest.mjs --inspect $Installer`，用客户端内置更新公钥验签。留存版本、`windows-x86_64`、安装包 SHA-256、验签结果和清单对应签名字段。公网读回按批准的分发流程复验最终字节，核对下载包 SHA-256 和清单签名。[本机验签入口](../Windows/update-manifest.mjs)
 
+自 2026-11-21 起，Windows 官网发布按用户授权在缺少 Authenticode 时继续，保留 Tauri 更新签名和公网安装包完整回读验签。下文可信发布者签名验收用于接入该能力时。
+
 ## Windows 26.11.2101 已公开发布（2026-11-21）
 
 北京时间 03:37:49 公网核验通过，源码 80dc5245。用户授权本版跳过 Authenticode，保留 Tauri updater 签名。CDN 完整回读并验签，SHA-256 为 87b809b80c7efc7104b3c80a84b85be1345eed16be71e16177352c942f3478ea 。官网与应用内更新已切换，回滚目标 20261121-cloud-capacity-8-4。原生测试 1382 通过、55 跳过。未做旧版实机升级重启。证据见 .tmp/release-windows-26.11.2101/。

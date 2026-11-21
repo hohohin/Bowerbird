@@ -15,6 +15,7 @@ import { AlignCenter, AlignLeft, AlignRight, Bold, Check, ChevronsDownUp, Chevro
 import { canvasCellValue, canvasGridWeights, canvasTextCsv, canvasTextMinSize, emptyCanvasCell, type CanvasNotePayload, type CanvasTextCell } from "../lib/canvasNotes";
 import { notifyError } from "../lib/notify";
 import { parseCanvasTableClipboard, pasteCanvasTable } from "../lib/canvasTablePaste";
+import { useLatestCallback } from "../lib/useCanvasFrame";
 
 const MIN_GRID_WEIGHT_SHARE = 0.04;
 
@@ -71,36 +72,50 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
   const columns = value.cells[0]?.length ?? 1;
   const columnWeights = canvasGridWeights(resizing?.axis === "column" ? resizing.weights : value.column_widths, columns);
   const rowWeights = canvasGridWeights(resizing?.axis === "row" ? resizing.weights : value.row_heights, rows);
+  const mediaCells = JSON.stringify(value.cells.map(line => line.map(item =>
+    item.content_type === "image" && canvasCellValue(item).imageRefs.length > 0,
+  )));
+  const fittingPaused = bubble || resizing !== null || resizingCard;
+  const fitMedia = useLatestCallback((element: HTMLDivElement, mediaRows: readonly { index: number; row: HTMLElement; contents: HTMLElement[] }[]) => {
+    const currentZoom = getZoom?.() ?? zoom;
+    const gridHeight = element.getBoundingClientRect().height / currentZoom;
+    if (gridHeight <= 0) return;
+    const unit = rowWeights.reduce((sum, weight) => sum + weight, 0) / gridHeight;
+    const weights = [...rowWeights];
+    let growth = 0;
+    for (const { index, row, contents } of mediaRows) {
+      const current = row.getBoundingClientRect().height / currentZoom;
+      const required = Math.max(current, ...contents.map(content => content.getBoundingClientRect().height / currentZoom + 1));
+      const extra = required - current;
+      if (extra <= 0.5) continue;
+      growth += extra;
+      weights[index] += extra * unit;
+    }
+    if (growth > 0) onChange({ ...value, row_heights: weights }, { width, height: height + growth }, "layout");
+  });
   useLayoutEffect(() => {
     const element = grid.current;
-    if (!element || bubble || resizing || resizingCard) return;
-    const contents = Array.from(element.querySelectorAll<HTMLElement>(".canvas-image-content"));
-    if (!contents.length) return;
+    if (!element || fittingPaused) return;
+    const mediaRows = Array.from(element.querySelectorAll<HTMLElement>(".canvas-text-row")).flatMap((row, index) => {
+      const contents = Array.from(row.querySelectorAll<HTMLElement>(".canvas-image-content"));
+      return contents.length ? [{ index, row, contents }] : [];
+    });
+    if (!mediaRows.length) return;
     let frame = 0;
-    const fitMedia = () => {
-      const currentZoom = getZoom?.() ?? zoom;
-      const gridHeight = element.getBoundingClientRect().height / currentZoom;
-      if (gridHeight <= 0) return;
-      const unit = rowWeights.reduce((sum, weight) => sum + weight, 0) / gridHeight;
-      let growth = 0;
-      const weights = Array.from(element.querySelectorAll<HTMLElement>(".canvas-text-row")).map((row, index) => {
-        const current = row.getBoundingClientRect().height / currentZoom;
-        const required = Math.max(current, ...Array.from(row.querySelectorAll<HTMLElement>(".canvas-image-content"))
-          .map(content => content.getBoundingClientRect().height / currentZoom + 1));
-        const extra = required - current > 0.5 ? required - current : 0;
-        growth += extra;
-        return rowWeights[index] + extra * unit;
-      });
-      if (growth > 0) onChange({ ...value, row_heights: weights }, { width, height: height + growth }, "layout");
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => fitMedia(element, mediaRows));
     };
-    // Media uses its natural aspect ratio at the current column width. Observe
-    // late image/poster loads too, then persist just the extra space it needs.
-    const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(fitMedia); };
+    // Measurements follow row and media size changes, including late image
+    // loads, without restarting on each unrelated canvas render.
     const observer = new ResizeObserver(schedule);
-    contents.forEach(content => observer.observe(content));
-    schedule();
+    observer.observe(element);
+    for (const { row, contents } of mediaRows) {
+      observer.observe(row);
+      contents.forEach(content => observer.observe(content));
+    }
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
-  }, [value, width, height, zoom, getZoom, bubble, resizing, resizingCard, referenceAssets, onChange]);
+  }, [fittingPaused, fitMedia, mediaCells]);
   const boundaryFraction = (weights: number[], index: number) => weights.slice(0, index).reduce((sum, weight) => sum + weight, 0) / weights.reduce((sum, weight) => sum + weight, 0);
   function changeLineHeight(change: number) {
     setRemoved(null);

@@ -1,5 +1,5 @@
 import { contentTableRows, type ContentTable } from "./contentTable.ts";
-import { comfyAudioLabel, comfyVideoMode, DEFAULT_COMFY_VIDEO } from "./comfyVideo.ts";
+import { comfyAudioLabel, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_R2V_LIMITS, type ComfyVideoMode } from "./comfyVideo.ts";
 import type { VideoOptions } from "./videoGeneration";
 import { workflowTriggerMode } from "./workflowTriggerSchedule.ts";
 
@@ -19,6 +19,12 @@ export class WorkflowInputError extends WorkflowNodeError {
 export type WorkflowKind = "director3d" | "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
 export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
 export const H3_VIDEO_AUDIO_PORT = "reference-audio";
+export const H3_R2V_INPUT_PORTS = { image: "reference-image", video: "reference-video", audio: "r2v-audio" } as const;
+export const H3_R2V_INPUT_LIMITS: Readonly<Partial<Record<string, number>>> = {
+  [H3_R2V_INPUT_PORTS.image]: H3_R2V_LIMITS.image,
+  [H3_R2V_INPUT_PORTS.video]: H3_R2V_LIMITS.video,
+  [H3_R2V_INPUT_PORTS.audio]: H3_R2V_LIMITS.audio,
+};
 export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
 export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; referenceRanks?: number[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[]; deliveries?: Record<string, { nodeId: string; cellId: string; append: boolean; value: WorkflowValue }> }
@@ -46,6 +52,8 @@ export interface WorkflowNode {
   comfyVideo?: import("./comfyVideo").ComfyVideoOptions;
   /** A local audio connection is inactive when the card uses a remote video model. */
   savedComfyAudio?: WorkflowInput[];
+  /** R2V connections have no equivalent sockets on remote video cards. */
+  savedComfyR2V?: Partial<Record<typeof H3_R2V_INPUT_PORTS[keyof typeof H3_R2V_INPUT_PORTS], WorkflowInput[]>>;
   /** Reversible rendering of ordinary @ mentions in the H3 text editor. */
   videoPrompt?: { ordinary: string; local: string };
   /** Ordinary input positions assigned to each H3 frame, including after its source is replaced. */
@@ -199,11 +207,11 @@ export function normalizeWorkflowLocalVideo(node: WorkflowNode): WorkflowNode {
   const { image: _image, ...inputs } = node.inputs;
   const tailOnly = frames.length === 1 && frames[0].h3TailOnly;
   return { ...node, kind: "comfy-video", comfyVideo: node.generation!.localVideo, prompt,
-    savedComfyAudio: undefined,
+    savedComfyAudio: undefined, savedComfyR2V: undefined,
     videoFrameSlots: frames.map(({ slot, referenceRanks }) => ({ slot, referenceRanks })),
     videoPrompt: prompt === node.prompt ? undefined : { ordinary: node.prompt, local: prompt },
     generation: { ...node.generation, localVideo: undefined },
-    inputs: { ...inputs, "first-frame": inputs["first-frame"] ?? (tailOnly ? [] : frames.slice(0, 1)), "last-frame": inputs["last-frame"] ?? (tailOnly ? frames : frames.slice(1)),
+    inputs: { ...inputs, ...node.savedComfyR2V, "first-frame": inputs["first-frame"] ?? (tailOnly ? [] : frames.slice(0, 1)), "last-frame": inputs["last-frame"] ?? (tailOnly ? frames : frames.slice(1)),
       ...(node.savedComfyAudio?.length ? { [H3_VIDEO_AUDIO_PORT]: node.savedComfyAudio } : {}) } };
 }
 
@@ -214,7 +222,13 @@ export function selectWorkflowVideoProvider(node: WorkflowNode, channel: "jimeng
   const generation = { ...node.generation, media: "video" as const, localVideo: undefined, videoChannel: channel,
     videoOptions: options ?? node.generation?.videoOptions };
   if (node.kind !== "comfy-video") return { ...node, generation };
-  const { "first-frame": first = [], "last-frame": last = [], [H3_VIDEO_AUDIO_PORT]: audio, ...inputs } = node.inputs;
+  const { "first-frame": first = [], "last-frame": last = [], [H3_VIDEO_AUDIO_PORT]: audio,
+    [H3_R2V_INPUT_PORTS.image]: referenceImages, [H3_R2V_INPUT_PORTS.video]: referenceVideos,
+    [H3_R2V_INPUT_PORTS.audio]: referenceAudios, ...inputs } = node.inputs;
+  const savedComfyR2V = referenceImages?.length || referenceVideos?.length || referenceAudios?.length ? {
+    [H3_R2V_INPUT_PORTS.image]: referenceImages, [H3_R2V_INPUT_PORTS.video]: referenceVideos,
+    [H3_R2V_INPUT_PORTS.audio]: referenceAudios,
+  } : undefined;
   const frames = [...first, ...last];
   const prompt = node.videoPrompt?.local === node.prompt ? node.videoPrompt.ordinary : node.prompt;
   // Slot numbers belong to the ordinary editor. The H3 sockets can be in
@@ -239,7 +253,7 @@ export function selectWorkflowVideoProvider(node: WorkflowNode, channel: "jimeng
     } else image.push(input);
   }
   return normalizeWorkflowInputSlots({ ...node, kind: "generation", generation, prompt, videoPrompt: undefined, videoFrameSlots: undefined,
-    savedComfyAudio: audio?.length ? audio : undefined,
+    savedComfyAudio: audio?.length ? audio : undefined, savedComfyR2V,
     inputs: { ...inputs, image, text: (inputs.text ?? []).map(remoteInput) } });
 }
 
@@ -252,6 +266,12 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   if (node.textSource) return [];
   if (node.kind === "comfy-video") {
     const mode = comfyVideoMode(node.comfyVideo);
+    if (mode === "r2v") return [
+      { id: H3_R2V_INPUT_PORTS.image, label: "参考图片", type: "image" },
+      { id: H3_R2V_INPUT_PORTS.video, label: "参考视频", type: "image" },
+      { id: H3_R2V_INPUT_PORTS.audio, label: "参考音频", type: "image" },
+      { id: "text", label: "文本", type: "text" },
+    ];
     return [...(mode !== "text" ? [{ id: "first-frame", label: mode === "reference" ? "参考图" : "首帧", type: "image" as const }] : []),
       ...(mode === "frames" ? [{ id: "last-frame", label: "尾帧（可选）", type: "image" as const }] : []), { id: "text", label: "文本", type: "text" },
       { id: H3_VIDEO_AUDIO_PORT, label: comfyAudioLabel(mode), type: "image" }];
@@ -329,6 +349,15 @@ export function workflowInputProducers(nodes: WorkflowNode[], input: WorkflowInp
   return id ? [id] : [];
 }
 
+function workflowSaveDependencies(node: WorkflowNode): WorkflowNode["inputs"] {
+  if (node.kind === "trigger") return {};
+  if (node.kind !== "comfy-video") return node.inputs;
+  const r2v = comfyVideoMode(node.comfyVideo) === "r2v";
+  // Keep legacy inactive-frame validation without treating parked R2V sources as live edges.
+  return Object.fromEntries(Object.entries(node.inputs).filter(([port]) => r2v
+    ? !["first-frame", "last-frame", H3_VIDEO_AUDIO_PORT].includes(port) : !Object.prototype.hasOwnProperty.call(H3_R2V_INPUT_LIMITS, port)));
+}
+
 /** Wiring checks graph structure, independently of prompt validity or cached outputs. */
 export function assertWorkflowAcyclic(nodes: WorkflowNode[], startId: string, includeInactiveInputs = false): void {
   const byId = new Map(nodes.map(node => [node.id, node]));
@@ -338,7 +367,7 @@ export function assertWorkflowAcyclic(nodes: WorkflowNode[], startId: string, in
     if (visited.has(id)) return;
     visiting.add(id);
     const node = byId.get(id);
-    const inputs = node ? includeInactiveInputs && node.kind !== "trigger" ? node.inputs : workflowExecutionInputs(node) : {};
+    const inputs = node ? includeInactiveInputs ? workflowSaveDependencies(node) : workflowExecutionInputs(node) : {};
     for (const input of Object.values(inputs).flat()) {
       for (const producer of workflowInputProducers(nodes, input)) visit(producer);
     }
@@ -410,7 +439,7 @@ export function workflowExecutionNodes(nodes: WorkflowNode[], startId: string): 
 }
 
 /** Completion wires are events, never data prerequisites or an ordinary graph cycle. */
-function workflowExecutionInputs(node: WorkflowNode): WorkflowNode["inputs"] {
+export function workflowExecutionInputs(node: WorkflowNode): WorkflowNode["inputs"] {
   if (node.kind === "comfy-video") {
     const active = new Set([...workflowInputs(node).map(port => port.id), "signal"]);
     return Object.fromEntries(Object.entries(node.inputs).filter(([id]) => active.has(id)));
@@ -608,8 +637,11 @@ export function generationReferencePreviewOrder(node: WorkflowNode, values: Reco
   return orderedGenerationReferences(node.inputs, values, [...ids]);
 }
 
-export function h3RunReferences(values: Record<string, WorkflowValue[]>) {
-  return ["first-frame", "last-frame", H3_VIDEO_AUDIO_PORT].map(port => (values[port] ?? []).flatMap(value => value.assetIds ?? []));
+export function h3RunReferences(values: Record<string, WorkflowValue[]>, mode: ComfyVideoMode = "frames"): [string[], string[], string[]] {
+  const ports = mode === "r2v" ? [H3_R2V_INPUT_PORTS.image, H3_R2V_INPUT_PORTS.video, H3_R2V_INPUT_PORTS.audio]
+    : ["first-frame", "last-frame", H3_VIDEO_AUDIO_PORT];
+  const ids = (port: string) => (values[port] ?? []).flatMap(value => value.assetIds ?? []);
+  return [ids(ports[0]), ids(ports[1]), ids(ports[2])];
 }
 
 export function lastGenerationRunInput(document: CanvasWorkflow, nodeId: string): WorkflowStep["generationRunInput"] {
@@ -757,11 +789,13 @@ export function compileAgentPrompt(node: WorkflowNode, values: Record<string, Wo
 export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, cellText?: (nodeId: string, cellId: string) => string | WorkflowValue | undefined): Record<string, WorkflowValue[]> {
   const result: Record<string, WorkflowValue[]> = {};
   for (const port of workflowInputs(node)) {
+    const media = port.id === H3_VIDEO_AUDIO_PORT || port.id === H3_R2V_INPUT_PORTS.audio ? "录音"
+      : port.id === H3_R2V_INPUT_PORTS.video ? "视频" : "图片";
     result[port.id] = (node.inputs[port.id] ?? []).map(input => {
       try {
       if (input.dimension && port.type === "text") return { type: "text", text: input.dimension.body };
       if (input.groupId && port.type === "image") {
-        if (!input.assetIds?.length) throw new Error(port.id === H3_VIDEO_AUDIO_PORT ? "文件夹中没有可用录音" : "文件夹中没有可用图片，请添加图片后重新运行");
+        if (!input.assetIds?.length) throw new Error(media === "图片" ? "文件夹中没有可用图片，请添加图片后重新运行" : `文件夹中没有可用${media}`);
         return { type: "image", assetIds: input.assetIds };
       }
       if (input.assetId && port.type === "image") return { type: "image", assetIds: [input.videoFrame?.assetId ?? input.assetId] };
@@ -776,7 +810,7 @@ export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, c
             sibling => sibling.autoConnect === input.autoConnect && sibling.canvasNodeId === input.canvasNodeId,
           )) return value;
           if (value.type === "text" && !value.text?.trim() && !value.nodeIds?.length) throw new Error("来源卡片或单元格中没有可用文本");
-          if (value.type === "image" && !value.assetIds?.length && !value.nodeIds?.length) throw new Error(port.id === H3_VIDEO_AUDIO_PORT ? "来源卡片或单元格中没有可用录音" : "来源卡片或单元格中没有可用图片");
+          if (value.type === "image" && !value.assetIds?.length && !value.nodeIds?.length) throw new Error(`来源卡片或单元格中没有可用${media}`);
           return value;
       }
       const source = nodes.find(candidate => candidate.id === input.nodeId);
@@ -808,7 +842,7 @@ export function workflowDependencies(nodes: WorkflowNode[], order: string[]): st
   for (const id of ids) {
     const node = nodes.find(node => node.id === id);
     if (!node || node.kind === "trigger") continue;
-    for (const input of Object.values(node.inputs).flat()) {
+    for (const input of Object.values(workflowExecutionInputs(node)).flat()) {
       if (input.portId === "signal") continue;
       for (const producer of workflowInputProducers(nodes, input)) ids.add(producer);
     }

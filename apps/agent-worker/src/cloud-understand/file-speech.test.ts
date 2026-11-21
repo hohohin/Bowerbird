@@ -117,6 +117,88 @@ test("preserves the full two-hour transcript and millisecond timing without word
   });
 });
 
+test("preserves recorded word times, zero-duration points and original utterance text", async () => {
+  const text = "中文 AI，1970 年。片尾。";
+  const utterances = [
+    { text: "中文 AI，1970 年。", start_time: 20, end_time: 700, words: [
+      { text: "中", start_time: 20, end_time: 60, confidence: 0 },
+      { text: "文", start_time: 60, end_time: 125 },
+      { text: " ", start_time: -1, end_time: -1 },
+      { text: "AI", start_time: 140, end_time: 200 },
+      { text: "，" },
+      { text: "一九七零", start_time: 200, end_time: 600 },
+      { text: "年", start_time: 600, end_time: 600 },
+    ] },
+    { text: "片尾。", start_time: 850, end_time: 1120, words: [
+      { text: "片", start_time: 900, end_time: 950 },
+      { text: "尾", start_time: 950, end_time: 1080 },
+      { text: "。", start_time: 1080, end_time: 1100 },
+    ] },
+  ];
+  const result = await queryFileSpeech({ ...queryInput, durationMs: 1000 }, "test-key",
+    async () => reply("20000000", { result: { text, utterances } }));
+  if (result.status !== "completed") throw new Error(`Expected completed, received ${result.status}`);
+  deepEqual(JSON.parse(result.resultText), {
+    text, timingSource: "doubao-speech", utterances: [
+      { text: "中文 AI，1970 年。", startMs: 20, endMs: 700, words: [
+        { text: "中", startMs: 20, endMs: 60 },
+        { text: "文", startMs: 60, endMs: 125 },
+        { text: "AI", startMs: 140, endMs: 200 },
+        { text: "一九七零", startMs: 200, endMs: 600 },
+        { text: "年", startMs: 600, endMs: 600 },
+      ] },
+      { text: "片尾。", startMs: 850, endMs: 1120, words: [
+        { text: "片", startMs: 900, endMs: 950 },
+        { text: "尾", startMs: 950, endMs: 1000 },
+      ] },
+    ],
+  });
+});
+
+test("isolates invalid optional word arrays from the transcript and other sentences", async () => {
+  const first = { text: "甲。", start_time: 100, end_time: 500 };
+  const second = { text: "乙。", start_time: 600, end_time: 900, words: [{ text: "乙", start_time: 650, end_time: 800 }] };
+  for (const words of [
+    null, [{ text: "甲", start_time: 99, end_time: 200 }],
+    [{ text: "甲", start_time: 100.5, end_time: 200 }],
+    [{ text: "甲", start_time: -1, end_time: -1 }],
+    [{ text: "甲", start_time: 150, end_time: 149 }],
+    [{ text: "甲", start_time: 150, end_time: 501 }],
+    [{ text: "甲", start_time: 150, end_time: 300 }, { text: "乙", start_time: 299, end_time: 400 }],
+  ]) {
+    const result = await queryFileSpeech(queryInput, "test-key", async () => reply("20000000", {
+      result: { text: first.text + second.text, utterances: [{ ...first, words }, second] },
+    }));
+    if (result.status !== "completed") throw new Error(`Expected completed, received ${result.status}`);
+    deepEqual(JSON.parse(result.resultText).utterances, [
+      { text: first.text, startMs: 100, endMs: 500 },
+      { text: second.text, startMs: 600, endMs: 900, words: [{ text: "乙", startMs: 650, endMs: 800 }] },
+    ]);
+  }
+});
+
+test("delivers all sentences when two hours of validated word timings exceed the result budget", async () => {
+  const spoken = "字".repeat(24) + "。";
+  const segments = Array.from({ length: 3600 }, (_, index) => {
+    const start = index * 2000;
+    return {
+      text: spoken, start_time: start, end_time: start + 2000,
+      words: Array.from({ length: 24 }, (_, word) => ({
+        text: "字", start_time: start + word * 80, end_time: start + (word + 1) * 80,
+      })),
+    };
+  });
+  const text = spoken.repeat(segments.length);
+  const result = await queryFileSpeech(queryInput, "test-key", async () => reply("20000000", {
+    result: { text, utterances: segments },
+  }));
+  if (result.status !== "completed") throw new Error(`Expected completed, received ${result.status}`);
+  deepEqual(JSON.parse(result.resultText), {
+    text, timingSource: "doubao-speech",
+    utterances: segments.map(({ text, start_time, end_time }) => ({ text, startMs: start_time, endMs: end_time })),
+  });
+});
+
 test("rejects missing or invalid timing and bounds normalized UTF-8 results", async () => {
   const read = (text: string, utterances: unknown[]) =>
     queryFileSpeech({ ...queryInput, durationMs: 1_000 }, "test-key", async () => reply("20000000", { result: { text, utterances } }));

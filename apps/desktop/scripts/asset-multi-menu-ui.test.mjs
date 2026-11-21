@@ -151,7 +151,10 @@ try {
   for (const kind of ['video', 'mixed', 'external']) {
     await open(kind);
     if (kind !== 'external') for (const name of ['反推提示词', '批量反推', '编辑', '分层编辑', '复制图片']) assert.equal(await page.getByRole('menuitem', { name, exact: true }).count(), 0);
-    if (kind === 'video') await page.getByRole('menuitem', { name: '打开视频详情' }).waitFor();
+    if (kind === 'video') {
+      assert.equal(await root().getByRole('menuitem', { name: '打开视频详情', exact: true }).count(), 0);
+      assert.equal(await root().getByRole('menuitem', { name: '转录文稿', exact: true }).isEnabled(), true);
+    }
     if (kind === 'external') { await page.getByRole('menuitem', { name: '删除', exact: true }).click(); assert.equal(await page.getByRole('menuitem', { name: '移出园丁鸟' }).count(), 0); }
     await close();
   }
@@ -180,7 +183,7 @@ try {
   await root().getByRole('menuitem', { name: '打开所在文件夹' }).click();
   await page.waitForFunction(() => window.releaseReveal);
   await close(); await open('video'); await page.evaluate(() => { window.releaseReveal(); window.holdReveal = false; });
-  await page.getByRole('menuitem', { name: '打开视频详情' }).waitFor(); await close();
+  await root().getByRole('menuitem', { name: '转录文稿', exact: true }).waitFor(); await close();
   // Both themes, every corner, short/narrow windows and resize while submenu is open.
   for (const theme of ['light', 'dark']) for (const [width, height] of [[1280,840],[700,320],[480,360]]) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);

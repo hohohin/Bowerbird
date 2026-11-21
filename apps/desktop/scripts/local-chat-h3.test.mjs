@@ -17,7 +17,7 @@ assert.ok(example?.workflow?.document, 'export the Rust H3 fixture first');
 const plain = value => JSON.parse(JSON.stringify(value));
 const clone = value => structuredClone(value);
 
-function fixture(initial = example.workflow) {
+function fixture(initial = example.workflow, assetExtensions = {}) {
   let saved = clone(initial);
   const calls = [], modules = new Map();
   const account = { cloudAuth: { logged_in: true, user_id: 'fixture-user' },
@@ -28,7 +28,7 @@ function fixture(initial = example.workflow) {
     projectCanvasGet: async () => clone(canvas),
     canvasWorkflowAuthorize: async () => { calls.push({ command: 'authorize' }); },
     projectThreadCreate: async () => {},
-    getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.png`, width: 640, height: 960 })),
+    getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.${assetExtensions[id] ?? 'png'}`, width: 640, height: 960 })),
     canvasWorkflowSave: async (_id, revision, document) => {
       assert.equal(revision, saved.revision);
       saved = { revision: revision + 1, document: clone(document) };
@@ -47,7 +47,8 @@ function fixture(initial = example.workflow) {
   };
   const real = new Set(['canvasWorkflow', 'workflowExternalChanges', 'canvasCardNames', 'workflowDiagnostics',
     'contentTable', 'workflowLoop', 'canvasNotes', 'canvasNoteSource', 'canvasSessionOutputs', 'canvasConversationCards',
-    'comfyVideo', 'videoGeneration', 'workflowTriggerSchedule', 'workflowProviderIssue', 'workflowAgentChat', 'chatProvider']);
+    'comfyVideo', 'videoGeneration', 'workflowTriggerSchedule', 'workflowProviderIssue', 'workflowAgentChat', 'chatProvider',
+    'audioMedia', 'workflowAutoConnect']);
   const context = vm.createContext({ console, crypto: webcrypto, structuredClone, setTimeout, clearTimeout });
   function load(path) {
     if (modules.has(path)) return modules.get(path).exports;
@@ -99,7 +100,7 @@ test('Rust-created H3 graph loads, saves, reloads and remains unstarted', async 
   const cards = h3Cards(c.document.nodes);
   assert.equal(cards.length, 2);
   for (const card of cards) {
-    assert.deepEqual(plain(f.helpers.workflowInputs(card)).map(port => port.id), ['first-frame', 'last-frame', 'text']);
+    assert.deepEqual(plain(f.helpers.workflowInputs(card)).map(port => port.id), ['first-frame', 'last-frame', 'text', 'reference-audio']);
     assert.deepEqual(plain(f.helpers.workflowOutputs(card)), [{ id: 'image', label: '视频', type: 'image' }]);
     assert.equal(f.helpers.workflowTitle(card), '视频生成');
     assert.equal(f.helpers.workflowCardWidth(card), 320);
@@ -160,6 +161,42 @@ test('H3 resolves a generation output as its first frame without submitting that
   assert.equal(starts.length, 1, c.issue?.message);
   assert.equal(starts[0].args.input.firstFrame, source.outputs.image.assetIds[0]);
   assert.deepEqual(plain(f.saved().document.run.order), [card.id]);
+});
+
+test('R2V card graph resolves typed attached assets and upstream outputs, then resumes its original native task', async () => {
+  const base = h3Cards(example.workflow.document.nodes)[0];
+  const card = { ...base, id: 'r2v', prompt: '<Picture 1> 的主体按 <Video 1> 的动作移动，参考 <Audio 1> 的声音。',
+    comfyVideo: { ...base.comfyVideo, mode: 'r2v', ratio: 'auto' },
+    inputs: {
+      'reference-image': [{ assetId: 'still-asset' }, { nodeId: 'image-draft', portId: 'image' }],
+      'reference-video': [{ assetId: 'clip-asset' }, { nodeId: 'video-draft', portId: 'image' }],
+      'r2v-audio': [{ assetId: 'voice-asset' }],
+    }, outputs: {} };
+  const image = { ...example.workflow.document.nodes.find(node => node.kind === 'generation'), id: 'image-draft', inputs: {},
+    outputs: { image: { type: 'image', assetIds: ['generated-still'] } } };
+  const video = { ...base, id: 'video-draft', comfyVideo: { ...base.comfyVideo, mode: 'text' }, inputs: {},
+    outputs: { image: { type: 'image', assetIds: ['generated-clip'] } } };
+  const f = fixture({ revision: 0, document: { schema_version: 1, nodes: [image, video, card], run: null } },
+    { 'clip-asset': 'mp4', 'generated-clip': 'mp4', 'voice-asset': 'wav' });
+  await f.controller.load();
+  await f.controller.save();
+  const restored = f.newController(); await restored.load();
+  const local = restored.document.nodes.find(node => node.id === card.id);
+  assert.deepEqual(plain(f.helpers.workflowInputs(local)).map(port => port.id), ['reference-image', 'reference-video', 'r2v-audio', 'text']);
+  assert.equal(nativeCalls(f).length, 0);
+  await restored.start(card.id, true);
+  const starts = nativeCalls(f).filter(call => call.command === 'comfy_video' && call.args.action === 'start');
+  assert.equal(starts.length, 1, restored.issue?.message);
+  const [{ args: { input, requestId } }] = starts;
+  assert.equal(input.mode, 'r2v');
+  assert.equal(input.firstFrame, '');
+  assert.deepEqual(input.referenceImages, ['still-asset', 'generated-still']);
+  assert.deepEqual(input.referenceVideos, ['clip-asset', 'generated-clip']);
+  assert.deepEqual(input.referenceAudios, ['voice-asset']);
+  assert.deepEqual(plain(f.saved().document.run.order), [card.id]);
+  const count = nativeCalls(f).length;
+  const resume = f.newController(); await resume.load(); await resume.continue();
+  assert.deepEqual(nativeCalls(f).slice(count).map(call => [call.args.action, call.args.requestId]), [['status', requestId]]);
 });
 
 test('an unfilled H3 draft loads but explicit execution requires a first frame and current H3 entitlement', async () => {

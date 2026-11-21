@@ -109,6 +109,7 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0058_library_identity.sql")),
         M::up(include_str!("../../sql/0059_chat_cloud_provider.sql")),
         M::up(include_str!("../../sql/0060_semantic_image_embeddings.sql")),
+        M::up(include_str!("../../sql/0061_semantic_index_preferences.sql")),
     ])
 }
 

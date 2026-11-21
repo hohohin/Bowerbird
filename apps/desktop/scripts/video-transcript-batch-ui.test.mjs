@@ -17,10 +17,33 @@ async function installMock(available = false) {
   await page.evaluate(available => {
     window.store.setState({ cloudAuth: { logged_in: true, user_id: 'test-owner', cloud_available: true } });
     window.transcriptCalls = [];
+    window.videoMediaReads = [];
     window.transcriptCapabilities = { available, credits: available ? 5 : null, maxDurationMs: 7200000 };
     const prior = window.__TAURI_INTERNALS__.invoke;
     const record = (status, extra) => ({ status, text: '', utterances: [], ...extra });
+    const menuAsset = scope => ({
+      id: `menu-video-${scope}`, name: `转录视频 ${scope}`, ext: 'mp4', source: 'imported',
+      width: 320, height: 180, store_path: `/menu-video-${scope}.mp4`, generation_session_id: scope === 'p' ? 'video-session' : null,
+    });
     window.__TAURI_INTERNALS__.invoke = async (command, args = {}) => {
+      if (args.filter?.media === 'videos') {
+        const scope = args.filter.projectId || 'global';
+        if (command === 'catalog_overview') return { ...await prior(command, args), total: 1 };
+        if (command === 'catalog_page') return [menuAsset(scope)];
+      }
+      if (command === 'get_assets_by_ids' && args.assetIds.every(id => id.startsWith('menu-video-'))) {
+        return args.assetIds.map(id => menuAsset(id.slice('menu-video-'.length)));
+      }
+      if (['list_analyses_by_asset', 'list_asset_tags', 'list_asset_collections'].includes(command)) return [];
+      if (command === 'external_files_media' && args.path.endsWith('.mp4')) {
+        window.videoMediaReads.push(args.path);
+        return args.path;
+      }
+      if (command === 'generation_history' && args.assetId === 'menu-video-p') return {
+        session_id: 'video-session', media: 'video', references: [],
+        turns: [{ turn_key: 'generated', media: 'video', provider: 'jimeng', prompt: '会话测试', images: ['/menu-video-p.mp4'] }],
+      };
+      if (command === 'generation_history' && ['menu-video-global', 'video-0'].includes(args.assetId)) return { turns: [], references: [] };
       if (command === 'catalog_graph_page') {
         window.transcriptCalls.push({ command, args });
         const prefix = args.filter.projectId || 'global';
@@ -30,7 +53,12 @@ async function installMock(available = false) {
         window.transcriptCalls.push({ command, args });
         return window.transcriptCapabilities;
       }
-      if (command === 'video_transcript_get') return args.assetId.endsWith('saved') ? record('completed') : null;
+      if (command === 'video_transcript_get') {
+        window.transcriptCalls.push({ command, args });
+        if (args.assetId === 'menu-video-p') return record('interrupted', { quoteRequired: true });
+        if (args.assetId === 'video-0' && window.savedFolderTranscript) return record('completed', { text: '文件夹视频现有文稿' });
+        return args.assetId.endsWith('saved') ? record('completed') : null;
+      }
       if (command === 'video_transcript_quote') {
         window.transcriptCalls.push({ command, args });
         if (args.assetId.endsWith('unavailable')) throw new Error('无法确认视频时长，请检查原件');
@@ -63,6 +91,35 @@ async function openBatch() {
   await dialog().waitFor();
 }
 
+const preview = () => page.getByRole('dialog', { name: '视频与会话预览', exact: true });
+const workspace = () => page.getByRole('dialog', { name: '视频分析工作区', exact: true });
+const transcript = () => workspace().getByRole('region', { name: '转录文稿', exact: true });
+
+async function checkTranscriptMenu(card, assetId, label) {
+  const before = await page.evaluate(() => window.transcriptCalls.length);
+  await card.click({ button: 'right' });
+  assert.equal(await page.getByRole('menuitem', { name: '打开视频详情', exact: true }).count(), 0);
+  await page.getByRole('menuitem', { name: '转录文稿', exact: true }).click();
+  await transcript().getByText(label, { exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(start => window.transcriptCalls.slice(start)
+    .filter(call => call.command === 'video_transcript_get')
+    .map(call => call.args.assetId), before), [assetId]);
+  assert.equal(await page.evaluate(start => window.transcriptCalls.slice(start)
+    .some(call => ['video_transcript_quote', 'video_transcript_start'].includes(call.command)), before), false);
+  await page.keyboard.press('Escape');
+  await workspace().waitFor({ state: 'hidden' });
+}
+
+async function openSharedPreview(action, path) {
+  const before = await page.evaluate(() => window.videoMediaReads.length);
+  await action();
+  await preview().getByRole('region', { name: '视频详情', exact: true }).waitFor();
+  await preview().getByRole('region', { name: '视频播放器', exact: true }).waitFor();
+  assert.equal(await preview().count(), 1);
+  assert.equal(await page.evaluate(() => window.store.getState().detailAssetId), null);
+  assert.deepEqual(await page.evaluate(start => window.videoMediaReads.slice(start), before), [path]);
+}
+
 try {
   await page.goto(`${base}scripts/fixtures/catalog-paging/preview.html?navigation&home`);
   await page.waitForFunction(() => window.store && window.__TAURI_INTERNALS__?.invoke);
@@ -73,6 +130,36 @@ try {
   const entry = page.getByRole('button', { name: '批量转录视频', exact: true });
   assert.equal(await entry.count(), 0);
   assert.deepEqual(await page.evaluate(() => window.transcriptCalls.map(call => call.command)), ['video_transcript_capabilities']);
+  const globalVideo = page.locator('[data-asset-id="menu-video-global"]');
+  await globalVideo.click();
+  await preview().waitFor();
+  assert.equal(await workspace().count(), 0);
+  await preview().getByRole('button', { name: '打开转录文稿', exact: true }).click();
+  await transcript().getByText('视频转录服务暂不可用。', { exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await workspace().waitFor({ state: 'hidden' });
+  await preview().waitFor();
+  await page.keyboard.press('Escape');
+  await preview().waitFor({ state: 'hidden' });
+  await checkTranscriptMenu(globalVideo, 'menu-video-global', '视频转录服务暂不可用。');
+  await page.evaluate(() => { window.transcriptCapabilities = { available: false, credits: null, reason: 'pilot_exhausted', maxDurationMs: 7200000 }; });
+  await openSharedPreview(() => globalVideo.dblclick(), '/menu-video-global.mp4');
+  const detail = preview().getByRole('region', { name: '视频详情', exact: true });
+  const analysisEntry = detail.getByRole('region', { name: '视频分析', exact: true });
+  await analysisEntry.getByRole('button', { name: '分析', exact: true }).click();
+  await workspace().getByRole('region', { name: '转录操作', exact: true }).getByText('本次试转录名额已使用。', { exact: true }).waitFor();
+  assert.equal(await workspace().getByRole('searchbox', { name: '搜索文稿', exact: true }).count(), 0);
+  await page.keyboard.press('Escape');
+  await workspace().waitFor({ state: 'hidden' });
+  await analysisEntry.getByRole('button', { name: '转录文稿', exact: true }).click();
+  await transcript().getByText('本次试转录名额已使用。', { exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await workspace().waitFor({ state: 'hidden' });
+  assert.equal(await detail.getByText('反推', { exact: true }).count(), 0);
+  assert.equal(await page.evaluate(() => window.transcriptCalls.some(call =>
+    ['video_transcript_quote', 'video_transcript_start'].includes(call.command))), false);
+  await page.keyboard.press('Escape');
+  await preview().waitFor({ state: 'hidden' });
   await page.evaluate(() => {
     window.transcriptCapabilities = { available: true, credits: 5, maxDurationMs: 7200000 };
     window.mode.getState().setMedia('images');
@@ -111,6 +198,13 @@ try {
   await dialog().getByRole('button', { name: '选择新的范围', exact: true }).click();
   await dialog().getByText('项目内视频 · 项目A', { exact: true }).waitFor();
   await page.waitForFunction(() => window.transcriptCalls.some(call => call.command === 'catalog_graph_page' && call.args.filter.projectId === 'p'));
+  await dialog().getByRole('button', { name: '关闭', exact: true }).click();
+  const projectVideo = page.locator('[data-asset-id="menu-video-p"]');
+  await checkTranscriptMenu(projectVideo, 'menu-video-p', '转录 · 5 Bcoin');
+  await openSharedPreview(() => projectVideo.press('Enter'), '/menu-video-p.mp4');
+  await preview().getByRole('region', { name: '独立会话面板', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await preview().waitFor({ state: 'hidden' });
 
   await page.goto(`${base}scripts/fixtures/connected-collections/preview.html`);
   await page.waitForFunction(() => window.store && window.__TAURI_INTERNALS__?.invoke);
@@ -120,6 +214,17 @@ try {
   await dialog().getByText('本次可处理 1 个视频，跳过 0 个。', { exact: true }).waitFor();
   assert.equal(await dialog().getByRole('checkbox', { name: '包含子文件夹' }).isChecked(), false);
   assert.ok(await page.evaluate(() => window.requests.some(call => call.command === 'connection_entry_ids' && call.args.folderId === 'second' && call.args.media === 'videos')));
+  await dialog().getByRole('button', { name: '关闭', exact: true }).click();
+  await page.evaluate(() => {
+    window.savedFolderTranscript = true;
+    window.transcriptCapabilities = { available: false, credits: null, maxDurationMs: 7200000 };
+  });
+  const connectedVideo = page.locator('[data-connection-entry="video-0"] .folder-media-card');
+  await checkTranscriptMenu(connectedVideo, 'video-0', '文件夹视频现有文稿');
+  await openSharedPreview(() => connectedVideo.press('Enter'), '/fixture/video-0.mp4');
+  await page.keyboard.press('Escape');
+  await preview().waitFor({ state: 'hidden' });
+  console.log('PASS: video menus open exact transcripts and browse double-click/Enter use one shared preview across global, project and connected views');
   console.log('PASS: batch actions hidden when unpriced, no original scan, scope and full-track quote, no further submissions on unknown state or a changed price');
 } finally {
   await browser.close();

@@ -17,6 +17,35 @@ pub struct Capabilities {
     pub(super) available: bool,
     pub(super) credits: Option<i64>,
     pub(super) max_duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reason: Option<CapabilityReason>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CapabilityReason {
+    PilotExhausted,
+}
+
+impl Capabilities {
+    fn from_response(value: Value) -> AppResult<Self> {
+        let available = value["available"]
+            .as_bool()
+            .ok_or_else(|| invalid("无法读取视频转录服务状态"))?;
+        let credits = value["credits"].as_i64().filter(|credits| *credits > 0);
+        let max_duration_ms = value["max_duration_ms"]
+            .as_u64()
+            .filter(|duration| (1..=MAX_DURATION_MS).contains(duration))
+            .ok_or_else(|| invalid("视频转录服务时长配置无效"))?;
+        let reason = (!available && value["reason"].as_str() == Some("pilot_exhausted"))
+            .then_some(CapabilityReason::PilotExhausted);
+        Ok(Self {
+            available: available && credits.is_some(),
+            credits: credits.filter(|_| available),
+            max_duration_ms,
+            reason,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -124,19 +153,7 @@ impl Service<'_> {
         if !status.is_success() {
             return Err(error_response(&value, "读取视频转录报价失败，请刷新后重试"));
         }
-        let available = value["available"]
-            .as_bool()
-            .ok_or_else(|| invalid("无法读取视频转录服务状态"))?;
-        let credits = value["credits"].as_i64().filter(|credits| *credits > 0);
-        let max_duration_ms = value["max_duration_ms"]
-            .as_u64()
-            .filter(|duration| (1..=MAX_DURATION_MS).contains(duration))
-            .ok_or_else(|| invalid("视频转录服务时长配置无效"))?;
-        Ok(Capabilities {
-            available: available && credits.is_some(),
-            credits: credits.filter(|_| available),
-            max_duration_ms,
-        })
+        Capabilities::from_response(value)
     }
 
     pub(super) async fn prepare(&self, attempt: &Attempt) -> AppResult<Preparation> {
@@ -278,4 +295,33 @@ fn parse_job(value: Value, id: Option<&str>) -> AppResult<Job> {
         return Err(invalid("云端转录任务身份不匹配，请检查原任务"));
     }
     Ok(job)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn video_transcript_capabilities_preserves_the_known_pilot_reason() {
+        let cloud = |reason| {
+            json!({
+                "available": false, "credits": null, "max_duration_ms": 7_200_000, "reason": reason,
+            })
+        };
+        let exhausted = Capabilities::from_response(cloud("pilot_exhausted")).unwrap();
+        assert_eq!(
+            serde_json::to_value(exhausted).unwrap(),
+            json!({"available":false,"credits":null,"maxDurationMs":7200000,"reason":"pilot_exhausted"})
+        );
+        for value in [
+            cloud("unknown_future_state"),
+            json!({"available":false,"credits":null,"max_duration_ms":7_200_000}),
+        ] {
+            let ordinary = Capabilities::from_response(value).unwrap();
+            assert!(serde_json::to_value(ordinary)
+                .unwrap()
+                .get("reason")
+                .is_none());
+        }
+    }
 }

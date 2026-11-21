@@ -3,130 +3,241 @@ import type { CanvasNode } from "./types";
 
 export type WorkflowPortTarget = { node: CanvasNode; kind: "output" | "input" | "cell"; port: string; image?: boolean };
 type Rect = { x: number; y: number; width: number; height: number };
-const targetKey = (target: Pick<WorkflowPortTarget, "node" | "kind" | "port" | "image">) =>
-  JSON.stringify([target.node.id, target.kind, target.port, !!target.image]);
+type CardTargets = { node: CanvasNode; ports: Map<string, WorkflowPortTarget> };
+type CardPorts = { card: HTMLElement; ports: Map<string, HTMLElement>; observed: Set<HTMLElement> };
 
-/** Cache only connected sockets, relative to their card; camera and card translation need no DOM reads. */
-export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets: WorkflowPortTarget[]) {
-  const geometry = useRef(new Map<string, Rect>());
-  const previous = useRef<WorkflowPortTarget[]>([]);
-  const cleanup = useRef<() => void>();
-  const measureChanged = useRef<(ids: Set<string>) => void>();
+const cardSelector = "[data-canvas-node-id]";
+const cellSelector = "[data-canvas-cell]";
+const socketSelector = `[data-workflow-cell],[data-workflow-text-input],${cellSelector}`;
+const portSelector = `${socketSelector},[data-canvas-connect-side]`;
+const targetKey = (kind: WorkflowPortTarget["kind"], port: string, image = false) => `${kind}:${image ? 1 : 0}:${port}`;
+
+function findCardPorts(card: HTMLElement, wanted: CardTargets["ports"]): CardPorts {
+  const ports = new Map<string, HTMLElement>();
+  const observed = new Set<HTMLElement>([card]);
+  for (const port of card.querySelectorAll<HTMLElement>(socketSelector)) {
+    const kind = port.hasAttribute("data-workflow-cell") ? "output" : port.hasAttribute("data-workflow-text-input") ? "input" : "cell";
+    const name = port.dataset.workflowCell ?? port.dataset.workflowTextInput ?? port.dataset.canvasCell!;
+    const key = targetKey(kind, name, kind === "input" && port.dataset.contentInputType === "image");
+    if (wanted.has(key) && !ports.has(key)) ports.set(key, port);
+    // Resizing a preceding row can move a socket without resizing that socket.
+    if (port.hasAttribute("data-canvas-cell")) observed.add(port);
+  }
+  for (const [key, { kind, port }] of wanted) {
+    if (ports.has(key) || kind === "cell") continue;
+    // Older whole-card bindings keep their identity while sharing the new socket.
+    if (kind === "output" && !["*", "*text", "*latest", "*latest-image", "*auto"].includes(port)) continue;
+    if (kind === "input" && !["", "*auto"].includes(port)) continue;
+    const handle = card.querySelector<HTMLElement>(`[data-canvas-connect-side="${kind}"]`);
+    if (handle) ports.set(key, handle);
+  }
+  for (const port of ports.values()) observed.add(port);
+  if (!ports.size) observed.clear();
+  return { card, ports, observed };
+}
+
+function measureCard({ card, ports }: CardPorts, zoom: number) {
+  const rects = new Map<string, Rect>();
+  const measured = new Map<HTMLElement, Rect>();
+  let cardRect: DOMRect | undefined;
+  for (const [key, port] of ports) {
+    if (!card.isConnected || !port.isConnected) continue;
+    let rect = measured.get(port);
+    if (!rect) {
+      if (port.hasAttribute("data-canvas-connect-side")) {
+        rect = { x: port.dataset.canvasConnectSide === "output" ? card.offsetWidth : 0, y: card.offsetHeight / 2, width: 0, height: 0 };
+      } else {
+        cardRect ??= card.getBoundingClientRect();
+        const box = port.getBoundingClientRect();
+        rect = { x: (box.left - cardRect.left) / zoom, y: (box.top - cardRect.top) / zoom, width: box.width / zoom, height: box.height / zoom };
+      }
+      measured.set(port, rect);
+    }
+    rects.set(key, rect);
+  }
+  return rects;
+}
+
+function sameRects(previous: Map<string, Rect> | undefined, next: Map<string, Rect>) {
+  if ((previous?.size ?? 0) !== next.size) return false;
+  for (const [key, rect] of next) {
+    const old = previous?.get(key);
+    // Subpixel rounding changes under zoom are not changes to board geometry.
+    if (!old || Math.abs(old.x - rect.x) > .01 || Math.abs(old.y - rect.y) > .01
+      || Math.abs(old.width - rect.width) > .01 || Math.abs(old.height - rect.height) > .01) return false;
+  }
+  return true;
+}
+
+function observeGeometry(plane: HTMLElement, getZoom: () => number, geometry: Map<string, Map<string, Rect>>, redraw: () => void) {
+  const cards = new Map([...plane.querySelectorAll<HTMLElement>(cardSelector)].map(card => [card.dataset.canvasNodeId!, card]));
+  const bindings = new Map<string, CardPorts>();
+  const owners = new Map<Element, string>();
+  const dirty = new Set<string>();
+  const changedPorts = new Set<string>();
+  let targets = new Map<string, CardTargets>();
+  let frame = 0;
+
+  function schedule(id: string, refreshPorts = false) {
+    if (!targets.has(id)) return;
+    if (refreshPorts) changedPorts.add(id);
+    dirty.add(id);
+    if (!frame) frame = requestAnimationFrame(flush);
+  }
+  const resize = new ResizeObserver(entries => {
+    for (const { target } of entries) {
+      const id = owners.get(target);
+      if (id !== undefined) schedule(id);
+    }
+  });
+  function bind(id: string) {
+    const previous = bindings.get(id);
+    const card = cards.get(id);
+    const wanted = targets.get(id);
+    const next = card && wanted && plane.contains(card) ? findCardPorts(card, wanted.ports) : undefined;
+    for (const element of previous?.observed ?? []) {
+      if (next?.observed.has(element)) continue;
+      owners.delete(element);
+      resize.unobserve(element);
+    }
+    for (const element of next?.observed ?? []) {
+      if (previous?.observed.has(element)) continue;
+      owners.set(element, id);
+      resize.observe(element);
+    }
+    if (next) bindings.set(id, next);
+    else bindings.delete(id);
+    return next;
+  }
+  function flush() {
+    frame = 0;
+    const zoom = getZoom();
+    if (!Number.isFinite(zoom) || zoom <= 0) return;
+    const deadline = performance.now() + 5;
+    let changed = false;
+    let count = 0;
+    for (const id of dirty) {
+      dirty.delete(id);
+      const binding = changedPorts.delete(id) ? bind(id) : bindings.get(id);
+      const rects = binding ? measureCard(binding, zoom) : new Map<string, Rect>();
+      if (!sameRects(geometry.get(id), rects)) {
+        if (rects.size) geometry.set(id, rects);
+        else geometry.delete(id);
+        changed = true;
+      }
+      // A newly loaded board can have hundreds of ports on first paint.
+      if (++count >= 48 || performance.now() >= deadline) break;
+    }
+    if (dirty.size) frame = requestAnimationFrame(flush);
+    if (changed) redraw();
+  }
+  function trackCard(card: HTMLElement, removedId?: string) {
+    if (removedId !== undefined && cards.get(removedId) === card) {
+      cards.delete(removedId);
+      schedule(removedId, true);
+    }
+    const id = card.dataset.canvasNodeId;
+    if (id !== undefined && plane.contains(card)) {
+      cards.set(id, card);
+      schedule(id, true);
+    }
+  }
+  const mutations = new MutationObserver(records => {
+    for (const { target, attributeName, oldValue, addedNodes, removedNodes } of records) {
+      if (!(target instanceof HTMLElement)) continue; // Wire SVG changes do not affect sockets.
+      if (attributeName === "data-canvas-node-id") {
+        trackCard(target, oldValue ?? undefined);
+        continue;
+      }
+      const card = target.closest<HTMLElement>(cardSelector);
+      if (card) {
+        if (attributeName || [...addedNodes, ...removedNodes].some(node => node instanceof HTMLElement
+          && (node.matches(portSelector) || node.querySelector(portSelector)))) schedule(card.dataset.canvasNodeId!, true);
+        continue;
+      }
+      for (const node of removedNodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (node.matches(cardSelector)) trackCard(node, node.dataset.canvasNodeId);
+        for (const child of node.querySelectorAll<HTMLElement>(cardSelector)) trackCard(child, child.dataset.canvasNodeId);
+      }
+      for (const node of addedNodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (node.matches(cardSelector)) trackCard(node);
+        for (const child of node.querySelectorAll<HTMLElement>(cardSelector)) trackCard(child);
+      }
+    }
+  });
+  mutations.observe(plane, { childList: true, subtree: true, attributes: true, attributeOldValue: true,
+    attributeFilter: ["data-canvas-node-id", "data-workflow-cell", "data-workflow-text-input", "data-content-input-type", "data-canvas-cell", "data-canvas-connect-side"] });
+  const scroll = (event: Event) => {
+    const card = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(cardSelector) : null;
+    if (card) schedule(card.dataset.canvasNodeId!);
+  };
+  plane.addEventListener("scroll", scroll, true);
+
+  return {
+    update(nextTargets: WorkflowPortTarget[]) {
+      const previous = targets;
+      targets = new Map();
+      for (const target of nextTargets) {
+        const { node, kind, port, image } = target;
+        let card = targets.get(node.id);
+        if (!card) { card = { node, ports: new Map() }; targets.set(node.id, card); }
+        card.ports.set(targetKey(kind, port, image), target);
+      }
+      let removed = false;
+      for (const id of previous.keys()) {
+        if (targets.has(id)) continue;
+        dirty.delete(id);
+        changedPorts.delete(id);
+        bind(id);
+        removed = geometry.delete(id) || removed;
+      }
+      for (const [id, { node, ports }] of targets) {
+        const old = previous.get(id);
+        const refresh = !old || ports.size !== old.ports.size || [...ports.keys()].some(key => !old.ports.has(key));
+        if (refresh) {
+          const rects = geometry.get(id);
+          for (const key of rects?.keys() ?? []) {
+            if (!ports.has(key)) { rects?.delete(key); removed = true; }
+          }
+          schedule(id, true);
+        } else if (node !== old.node && (node.payloadJson !== old.node.payloadJson || node.width !== old.node.width || node.height !== old.node.height)) {
+          schedule(id);
+        }
+      }
+      if (removed) redraw();
+    },
+    dispose() {
+      resize.disconnect();
+      mutations.disconnect();
+      cancelAnimationFrame(frame);
+      plane.removeEventListener("scroll", scroll, true);
+      geometry.clear();
+    },
+  };
+}
+
+/** Cache connected sockets in board coordinates without synchronously measuring the SVG transform. */
+export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets: WorkflowPortTarget[], getZoom: () => number) {
+  const geometry = useRef(new Map<string, Map<string, Rect>>());
+  const observer = useRef<ReturnType<typeof observeGeometry>>();
+  const zoom = useRef(getZoom);
   const [, redraw] = useState(0);
   useLayoutEffect(() => {
-    const unique = [...new Map(targets.map(target => [targetKey(target), target])).values()];
-    if (unique.length === previous.current.length && unique.every((target, index) => targetKey(target) === targetKey(previous.current[index]))) {
-      const changed = new Set<string>();
-      unique.forEach(({ node }, i) => {
-        const old = previous.current[i].node;
-        if (node.payloadJson !== old.payloadJson || node.width !== old.width || node.height !== old.height) changed.add(node.id);
-      });
-      previous.current = unique;
-      if (changed.size) measureChanged.current?.(changed);
-      return;
-    }
-    previous.current = unique;
-    cleanup.current?.();
     const plane = root.current?.parentElement;
-    const cards = new Map(Array.from(plane?.querySelectorAll<HTMLElement>("[data-canvas-node-id]") ?? [])
-      .map(card => [card.dataset.canvasNodeId!, card]));
-    const wanted = new Map(unique.map(target => [targetKey(target), target]));
-    const nodeIds = new Set(unique.map(target => target.node.id));
-    const elements = new Map<string, { card: HTMLElement; port: HTMLElement }>();
-    for (const id of nodeIds) {
-      const card = cards.get(id);
-      if (!card) continue;
-      for (const port of card.querySelectorAll<HTMLElement>("[data-workflow-cell],[data-workflow-text-input],[data-canvas-cell]")) {
-        const kind = port.hasAttribute("data-workflow-cell") ? "output" : port.hasAttribute("data-workflow-text-input") ? "input" : "cell";
-        const key = JSON.stringify([id, kind, port.dataset.workflowCell ?? port.dataset.workflowTextInput ?? port.dataset.canvasCell,
-          kind === "input" && port.dataset.contentInputType === "image"]);
-        if (wanted.has(key) && !elements.has(key)) elements.set(key, { card, port });
-      }
-      // Old whole-card bindings keep their identity while sharing the new socket.
-      for (const [key, target] of wanted) {
-        if (target.node.id !== id || elements.has(key) || target.kind === "cell") continue;
-        if (target.kind === "output" && !["*", "*text", "*latest", "*latest-image", "*auto"].includes(target.port)) continue;
-        if (target.kind === "input" && !["", "*auto"].includes(target.port)) continue;
-        const port = card.querySelector<HTMLElement>(`[data-canvas-connect-side="${target.kind}"]`);
-        if (port) elements.set(key, { card, port });
-      }
-    }
-    let frame = 0;
-    const measure = (changedIds?: Set<string>) => {
-      const next = changedIds ? new Map(geometry.current) : new Map<string, Rect>();
-      const bounds = new Map<HTMLElement, DOMRect>();
-      const transform = root.current?.getScreenCTM();
-      const scale = transform ? Math.hypot(transform.a, transform.b) : 0;
-      for (const [key, { card, port }] of elements) {
-        if (changedIds && !changedIds.has(card.dataset.canvasNodeId!)) continue;
-        next.delete(key);
-        if (!card.isConnected || !port.isConnected) continue;
-        let cardRect = bounds.get(card);
-        if (!cardRect) { cardRect = card.getBoundingClientRect(); bounds.set(card, cardRect); }
-        if (!scale || !Number.isFinite(scale)) continue;
-        if (port.hasAttribute("data-canvas-connect-side")) {
-          next.set(key, { x: port.dataset.canvasConnectSide === "output" ? card.offsetWidth : 0, y: card.offsetHeight / 2, width: 0, height: 0 });
-          continue;
-        }
-        const rect = port.getBoundingClientRect();
-        next.set(key, { x: (rect.left - cardRect.left) / scale, y: (rect.top - cardRect.top) / scale,
-          width: rect.width / scale, height: rect.height / scale });
-      }
-      // Subpixel rounding changes under zoom are not changes to the board geometry.
-      const changed = next.size !== geometry.current.size || [...next].some(([key, rect]) => {
-        const old = geometry.current.get(key);
-        return !old || Math.abs(old.x - rect.x) > .01 || Math.abs(old.y - rect.y) > .01
-          || Math.abs(old.width - rect.width) > .01 || Math.abs(old.height - rect.height) > .01;
-      });
-      if (changed) { geometry.current = next; redraw(value => value + 1); }
-    };
-    measureChanged.current = measure;
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; measure(); }); };
-    const observer = new ResizeObserver(schedule);
-    const observed = new Set<HTMLElement>();
-    for (const { card, port } of elements.values()) {
-      observed.add(port);
-      if (observed.has(card)) continue;
-      observed.add(card);
-      // Resizing a preceding row can move a socket without resizing that socket.
-      for (const cell of card.querySelectorAll<HTMLElement>("[data-canvas-cell]")) observed.add(cell);
-    }
-    for (const element of observed) observer.observe(element);
-    // Child-local state may replace a socket while this memoized layer receives identical props.
-    // Watch identity/children only; card position styles, camera transforms and SVG paths are irrelevant.
-    let refreshFrame = 0;
-    const mutations = new MutationObserver(records => {
-      const relevant = records.some(record => {
-        const target = record.target instanceof Element ? record.target : record.target.parentElement;
-        const card = target?.closest<HTMLElement>("[data-canvas-node-id]");
-        if (card && nodeIds.has(card.dataset.canvasNodeId!)) {
-          if (record.type === "attributes") return true;
-          return [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element
-            && (node.matches("[data-workflow-cell],[data-workflow-text-input],[data-canvas-cell]")
-              || node.querySelector("[data-workflow-cell],[data-workflow-text-input],[data-canvas-cell]")));
-        }
-        return [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element
-          && [node, ...node.querySelectorAll<HTMLElement>("[data-canvas-node-id]")]
-            .some(element => nodeIds.has((element as HTMLElement).dataset.canvasNodeId ?? "")));
-      });
-      if (relevant && !refreshFrame) refreshFrame = requestAnimationFrame(() => {
-        refreshFrame = 0; previous.current = []; redraw(value => value + 1);
-      });
-    });
-    if (plane && nodeIds.size) mutations.observe(plane, { childList: true, subtree: true, attributes: true,
-      attributeFilter: ["data-canvas-node-id", "data-workflow-cell", "data-workflow-text-input", "data-content-input-type", "data-canvas-cell"] });
-    plane?.addEventListener("scroll", schedule, true);
-    measure();
-    cleanup.current = () => {
-      measureChanged.current = undefined;
-      observer.disconnect(); mutations.disconnect(); cancelAnimationFrame(frame); cancelAnimationFrame(refreshFrame);
-      plane?.removeEventListener("scroll", schedule, true);
-    };
+    if (!plane) return;
+    const active = observeGeometry(plane, () => zoom.current(), geometry.current, () => redraw(value => value + 1));
+    observer.current = active;
+    return () => { active.dispose(); observer.current = undefined; };
+  }, [root]);
+  useLayoutEffect(() => {
+    zoom.current = getZoom;
+    observer.current?.update(targets);
   });
-  useLayoutEffect(() => () => { cleanup.current?.(); previous.current = []; }, []);
   return (node: CanvasNode | undefined, kind: WorkflowPortTarget["kind"], port: string, image = false) => {
     if (!node) return undefined;
-    const rect = geometry.current.get(targetKey({ node, kind, port, image }));
+    const rect = geometry.current.get(node.id)?.get(targetKey(kind, port, image));
     return rect && { ...rect, x: node.x + rect.x, y: node.y + rect.y };
   };
 }

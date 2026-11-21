@@ -7,9 +7,17 @@ use tauri::{AppHandle, State};
 
 use crate::core::migrate;
 use crate::core::paths::LibraryPaths;
+use crate::core::semantic_search::runtime::SemanticSearch;
 use crate::core::settings::{AppSettings, SettingsState};
 use crate::db::Database;
 use crate::error::AppError;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSettingsReceipt {
+    semantic_index_applied: bool,
+    semantic_index_error: Option<String>,
+}
 /// 获取当前设置快照。
 #[tauri::command]
 pub async fn get_settings(state: State<'_, SettingsState>) -> Result<AppSettings, AppError> {
@@ -19,10 +27,20 @@ pub async fn get_settings(state: State<'_, SettingsState>) -> Result<AppSettings
 /// 全量覆盖设置并持久化到 settings.json。
 #[tauri::command]
 pub async fn update_settings(
+    app: AppHandle,
     state: State<'_, SettingsState>,
+    db: State<'_, Arc<Database>>,
+    semantic: State<'_, Arc<SemanticSearch>>,
     settings: AppSettings,
-) -> Result<(), AppError> {
-    state.update(settings)
+) -> Result<UpdateSettingsReceipt, AppError> {
+    let included_generated = state.semantic_index_preferences().include_generated;
+    state.update(settings)?;
+    let scope_changed = included_generated != state.semantic_index_preferences().include_generated;
+    let semantic_index_error = semantic.preferences_changed(&app, &db, scope_changed);
+    Ok(UpdateSettingsReceipt {
+        semantic_index_applied: semantic_index_error.is_none(),
+        semantic_index_error,
+    })
 }
 
 /// 当前素材库根目录（images / thumbnails / library.db 所在地）。

@@ -572,6 +572,9 @@ export interface AppSettings {
   cloud_auto_understand: boolean;
   board_shift_pick: boolean;
   hide_project_assets: boolean;
+  semantic_index_automatic?: boolean;
+  semantic_index_interval_minutes?: 15 | 60;
+  semantic_index_include_generated?: boolean;
   canvas_show_asset_names: boolean;
   generation_completion_popup: boolean;
   h3_auto_optimize_prompt: boolean;
@@ -590,6 +593,11 @@ export interface AppSettings {
   agent_z_mode_enabled: boolean;
   agent_g_mode_enabled: boolean;
   agent_ds_mode_enabled: boolean;
+}
+
+export interface SettingsSaveReceipt {
+  semanticIndexApplied: boolean;
+  semanticIndexError: string | null;
 }
 
 export interface AuthSnapshot {

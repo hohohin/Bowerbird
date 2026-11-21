@@ -10,6 +10,7 @@ import type {
   AgentPromptInput,
   AgentPromptResult,
   AppSettings,
+  SettingsSaveReceipt,
   AuthSnapshot,
   Asset,
   AssetDeleteMode,
@@ -649,7 +650,7 @@ export const api = {
   // 设置
   getSettings: () => invoke<AppSettings>("get_settings"),
   updateSettings: (settings: AppSettings) =>
-    invoke<void>("update_settings", { settings }),
+    invoke<SettingsSaveReceipt | null | void>("update_settings", { settings }),
   libraryRoot: () => invoke<string>("library_root"),
   migrateLibraryRoot: (newRoot: string) =>
     invoke<void>("migrate_library_root", { newRoot }),

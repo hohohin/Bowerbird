@@ -1,140 +1,111 @@
-import { useEffect, useRef, useState } from "react";
-import { Copy } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../store";
+import { accountEntitlement } from "../lib/entitlement";
 import { userErrorMessage } from "../lib/userError";
-import { videoTime } from "../lib/videoFrame";
-import { quoteVideoTranscript, startVideoTranscript, useVideoTranscriptPrice, type useVideoTranscript, type VideoTranscript, type VideoTranscriptQuote } from "../lib/videoTranscript";
+import { quoteVideoTranscript, refreshVideoTranscriptTiming, startVideoTranscript, useVideoTranscript, type useVideoTranscriptPrice } from "../lib/videoTranscript";
+import { VideoTranscriptReader } from "./VideoTranscriptReader";
 
-function TranscriptStart({ assetId, owner, label, prepareOnMount, focusPanel, refreshTranscript, onStart }: {
-  assetId: string;
-  owner: string;
-  label: string;
-  prepareOnMount: boolean;
-  focusPanel: () => void;
-  refreshTranscript: () => void;
-  onStart: (quote?: VideoTranscriptQuote, credits?: number) => void;
-}) {
-  const [request, setRequest] = useState(prepareOnMount ? 1 : 0);
-  const [quote, setQuote] = useState<VideoTranscriptQuote>();
-  const [error, setError] = useState("");
-  const price = useVideoTranscriptPrice(quote?.chargeRequired && !quote.cloudPending && !quote.noAudio ? owner : null);
+export type VideoAnalysisView = "analysis" | "transcript";
 
+function SavedVideoDescription({ assetId }: { assetId: string }) {
+  const [description, setDescription] = useState<{ text: string } | null>(null);
   useEffect(() => {
-    if (!request) return;
     let current = true;
-    void quoteVideoTranscript(assetId).then(value => {
-      if (current) setQuote(value);
-    }).catch(reason => {
-      if (current) setError(userErrorMessage(reason, "无法核对视频音轨，请检查原件后重试。"));
-    });
+    void invoke<{ text: string } | null>("video_analysis_get", { assetId }).then(result => {
+      if (current) setDescription(result);
+    }).catch(() => { if (current) setDescription(null); });
     return () => { current = false; };
-  }, [assetId, request]);
-
-  function prepare() {
-    focusPanel();
-    setQuote(undefined);
-    setError("");
-    price.refresh();
-    setRequest(value => value + 1);
-  }
-
-  if (!request) return <button type="button" className="app-button-primary" onClick={prepare}>核对转录费用</button>;
-  if (error) return <>
-    <p role="alert">{error}</p>
-    <button type="button" onClick={prepare}>重新核对转录费用</button>
-  </>;
-  if (!quote) return <p role="status">正在核对音轨和费用…</p>;
-  if (quote.noAudio) return <p role="status">此视频没有音轨。</p>;
-  if (quote.cloudPending) return <button type="button" className="app-button-primary" onClick={() => onStart()}>恢复原任务</button>;
-  if (!quote.chargeRequired) return <button type="button" onClick={() => { refreshTranscript(); prepare(); }}>刷新转录状态</button>;
-  if (price.loading) return <p role="status">正在读取转录价格…</p>;
-  if (price.credits === null) return <>
-    <p role="status">视频转录服务暂不可用。</p>
-    <button type="button" onClick={price.refresh}>刷新服务状态</button>
-  </>;
-  const credits = price.credits;
-  return <>
-    <p>整条音轨 · {videoTime(quote.durationSeconds).split(".")[0]} · {credits} Bcoin</p>
-    <p>将完整音轨发送至 Bowerbird Cloud，文稿保存在素材库。</p>
-    <button type="button" className="app-button-primary" onClick={() => onStart(quote, credits)}>{label}</button>
-  </>;
+  }, [assetId]);
+  if (!description?.text) return null;
+  return <section className="flex flex-col gap-2" aria-label="画面描述">
+    <h3 className="font-medium">画面描述</h3>
+    <p className="whitespace-pre-wrap break-words">{description.text}</p>
+  </section>;
 }
 
-function TranscriptText({ transcript, onSeek }: {
-  transcript: VideoTranscript;
-  onSeek: (time: number) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const [copyStatus, setCopyStatus] = useState("");
-  const search = query.trim().toLocaleLowerCase();
-  const lines = search ? transcript.utterances.filter(line => line.text.toLocaleLowerCase().includes(search)) : transcript.utterances;
-  const showText = transcript.utterances.length === 0 && (!search || transcript.text.toLocaleLowerCase().includes(search));
-
-  async function copyTranscript() {
-    try {
-      await navigator.clipboard.writeText(transcript.text);
-      setCopyStatus("已复制");
-    } catch {
-      setCopyStatus("复制失败，请选中文稿后手动复制。");
-    }
-  }
-
-  return <>
-    <div className="video-transcript-toolbar">
-      <input type="search" aria-label="搜索文稿" placeholder="搜索文稿" value={query} onChange={event => setQuery(event.target.value)}/>
-      <button type="button" onClick={() => void copyTranscript()} aria-label="复制全文" title="复制全文"><Copy size={15} aria-hidden="true"/></button>
-    </div>
-    {copyStatus && <p role="status" className="video-transcript-feedback">{copyStatus}</p>}
-    {lines.length > 0 ? <ol className="video-transcript-lines">
-      {lines.map((line, index) => <li key={`${line.startMs}:${line.endMs}:${index}`}>
-        <button type="button" onClick={() => onSeek(line.startMs / 1000)} aria-label={`跳转至 ${videoTime(line.startMs / 1000)}`}>
-          {videoTime(line.startMs / 1000)}
-        </button>
-        <span>{line.text}</span>
-      </li>)}
-    </ol> : showText ? <p className="video-transcript-text">{transcript.text}</p> : <p role="status">文稿中没有匹配的内容。</p>}
-  </>;
-}
-
-export function VideoTranscriptPanel({ assetId, hidden, active, canStartNew, state, onSeek }: {
+export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSeconds, onSeek, view, onRead, price }: {
   assetId: string;
-  hidden: boolean;
+  sourceKey: string;
   active: boolean;
-  canStartNew: boolean;
-  state: ReturnType<typeof useVideoTranscript>;
+  durationSeconds?: number | null;
   onSeek: (time: number) => void;
+  view: VideoAnalysisView;
+  onRead: () => void;
+  price: ReturnType<typeof useVideoTranscriptPrice>;
 }) {
-  const { transcript, error: loadError, update, refresh } = state;
+  const auth = useStore(state => state.cloudAuth);
+  const owner = auth?.logged_in ? auth.user_id : null;
+  const entitlement = useStore(state => accountEntitlement(state.cloudEntitlement, owner));
+  const { transcript, error: loadError, update, refresh } = useVideoTranscript(assetId, sourceKey, owner);
+  const balances = entitlement?.offline_state === "fresh" ? entitlement.balances : null;
+  const balance = balances ? balances.daily + balances.sub + balances.topup : null;
+  const insufficient = price.credits !== null && balance !== null && balance < price.credits;
+  const overLimit = durationSeconds != null && Number.isFinite(durationSeconds) && price.maxDurationMs != null
+    && durationSeconds * 1000 > price.maxDurationMs;
   const [startError, setStartError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [refreshingTiming, setRefreshingTiming] = useState(false);
+  const [timingError, setTimingError] = useState<{ owner: string; message: string }>();
+  const [lastAttempt, setLastAttempt] = useState<{ owner: string; priceRevision: number }>();
   const panel = useRef<HTMLDivElement>(null);
   const pending = useRef(false);
   const mounted = useRef(false);
-  const userId = useStore(state => state.cloudAuth?.logged_in ? state.cloudAuth.user_id : null);
+  const context = useRef(0);
   const focusPanel = () => panel.current?.focus({ preventScroll: true });
+  const priceNeedsRefresh = !submitting && transcript?.status === "interrupted" && !transcript.cloudPending
+    && !!lastAttempt && lastAttempt.owner === owner && lastAttempt.priceRevision === price.revision;
+  const refreshPrice = price.refresh;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+  useLayoutEffect(() => {
+    return () => { context.current++; };
+  }, [assetId, sourceKey, active, owner]);
+  useEffect(() => {
+    if (priceNeedsRefresh) refreshPrice();
+  }, [priceNeedsRefresh, refreshPrice]);
 
-  async function start(quote?: VideoTranscriptQuote, expectedCredits?: number) {
-    const auth = useStore.getState().cloudAuth;
-    if (pending.current || !userId || !auth?.logged_in || auth.user_id !== userId) return;
-    if (quote && !canStartNew) return;
+  function isCurrent(requestContext: number, expectedOwner: string) {
+    const currentAuth = useStore.getState().cloudAuth;
+    return mounted.current && context.current === requestContext && !!currentAuth?.logged_in && currentAuth.user_id === expectedOwner;
+  }
+
+  async function start(resume: boolean) {
+    if (pending.current || !owner || !active) return;
+    const expectedCredits = resume ? undefined : price.credits ?? undefined;
+    if (!resume && (expectedCredits === undefined || overLimit || insufficient || priceNeedsRefresh)) return;
+    const requestContext = context.current;
+    if (!isCurrent(requestContext, owner)) return;
     pending.current = true;
     focusPanel();
     setSubmitting(true);
     setStartError("");
+    let startInvoked = false;
     try {
-      const current = await startVideoTranscript(assetId, userId, expectedCredits, quote);
-      if (!mounted.current) return;
+      const quote = resume ? undefined : await quoteVideoTranscript(assetId);
+      if (!isCurrent(requestContext, owner)) return;
+      if (quote?.noAudio) {
+        update({ status: "no_audio", text: "", utterances: [] });
+        return;
+      }
+      if (quote && (!quote.chargeRequired || quote.cloudPending)) {
+        refresh();
+        return;
+      }
+      if (expectedCredits !== undefined) setLastAttempt({ owner, priceRevision: price.revision });
+      startInvoked = true;
+      const current = await startVideoTranscript(assetId, owner, expectedCredits, quote);
+      if (!isCurrent(requestContext, owner)) return;
       update(current);
       if (current.status === "running") refresh();
     } catch (reason) {
-      if (mounted.current) {
-        setStartError(userErrorMessage(reason, "转录请求暂时无法确认，请检查任务状态后重试。"));
+      if (isCurrent(requestContext, owner)) {
+        setStartError(userErrorMessage(reason, "转录暂未完成，请检查原件和任务状态后重试。"));
         refresh();
+        if (startInvoked && expectedCredits !== undefined) refreshPrice();
       }
     } finally {
       pending.current = false;
@@ -142,29 +113,92 @@ export function VideoTranscriptPanel({ assetId, hidden, active, canStartNew, sta
     }
   }
 
-  return <div ref={panel} className="video-transcript-panel" tabIndex={-1} hidden={hidden}>
-    {loadError ? <>
+  async function refreshTiming() {
+    if (pending.current || !owner || !active || !transcript?.canRefreshTiming) return;
+    const requestContext = context.current;
+    if (!isCurrent(requestContext, owner)) return;
+    pending.current = true;
+    focusPanel();
+    setRefreshingTiming(true);
+    setTimingError(undefined);
+    try {
+      const completed = await refreshVideoTranscriptTiming(assetId, owner);
+      if (isCurrent(requestContext, owner)) update(completed);
+    } catch (reason) {
+      if (isCurrent(requestContext, owner)) {
+        setTimingError({ owner, message: userErrorMessage(reason, "暂时无法补齐字级时间，请稍后重试。") });
+      }
+    } finally {
+      pending.current = false;
+      if (mounted.current) setRefreshingTiming(false);
+    }
+  }
+
+  let content;
+  if (loadError) {
+    content = <>
       <p role="alert">{userErrorMessage(loadError, "转录状态暂时无法读取，请刷新。")}</p>
       <button type="button" onClick={() => { focusPanel(); refresh(); }}>刷新转录状态</button>
-    </> : submitting || transcript?.status === "running"
-      ? <p role="status">{submitting ? "正在准备转录…" : "正在转录，关闭预览后可回来查看。"}</p>
-      : transcript === undefined ? <p role="status">正在读取转录文稿…</p>
-      : transcript?.status === "completed" ? <TranscriptText transcript={transcript} onSeek={onSeek}/>
-      : transcript?.status === "no_audio" ? <p role="status">此视频没有音轨。</p>
-      : transcript?.status === "no_speech" ? <p role="status">未识别到语音。</p>
-      : <>
-        {startError && <p role="alert">{startError}</p>}
-        {transcript?.status === "interrupted" && <>
-          <p role="status">{userErrorMessage(transcript.error, transcript.cloudPending
-            ? "转录尚未完成，可恢复原任务。" : "转录尚未完成。")}</p>
-        </>}
-        {transcript?.cloudPending ? (userId
-          ? <button type="button" className="app-button-primary" onClick={() => void start()}>恢复原任务</button>
-          : <p>请登录原 Bowerbird 账号后恢复。</p>)
-          : active && canStartNew && userId && <TranscriptStart key={userId} assetId={assetId} owner={userId}
-            prepareOnMount={Boolean(transcript?.quoteRequired || transcript?.priceChanged)}
-            focusPanel={focusPanel} refreshTranscript={refresh} label={transcript?.status === "interrupted" ? "重试转录" : "获取转录"}
-            onStart={(quote, credits) => void start(quote, credits)}/>}
-      </>}
+    </>;
+  } else if (submitting || transcript?.status === "running") {
+    content = <p role="status">{submitting ? "正在准备转录…" : "正在转录，关闭窗口后可回来查看。"}</p>;
+  } else if (transcript === undefined) {
+    content = <p role="status">正在读取转录文稿…</p>;
+  } else if (transcript?.status === "completed") {
+    content = view === "analysis" ? <>
+      <p role="status">已完成转录。</p>
+      <button type="button" className="app-button-primary" onClick={onRead}>查看转录文稿</button>
+    </> : <>
+      <VideoTranscriptReader transcript={transcript} onSeek={onSeek}/>
+      {(transcript.canRefreshTiming && owner || timingError?.owner === owner) && <div className="video-analysis-reader-note">
+        {timingError && timingError.owner === owner && <p role="alert">{timingError.message}</p>}
+        {transcript.canRefreshTiming && owner && <div className="video-analysis-repair">
+          <button type="button" className="app-button-secondary" disabled={refreshingTiming || !active}
+            onClick={() => void refreshTiming()}>补齐字级时间</button>
+          <span role="status">{refreshingTiming ? "正在补齐字级时间…" : "原任务补齐，不消耗 Bcoin"}</span>
+        </div>}
+      </div>}
+    </>;
+  } else if (transcript?.status === "no_audio" || transcript?.status === "no_speech") {
+    content = <p role="status">{transcript.status === "no_audio" ? "此视频没有音轨。" : "未识别到语音。"}</p>;
+  } else {
+    let action;
+    if (transcript?.cloudPending) {
+      action = owner ? <button type="button" className="app-button-primary" onClick={() => void start(true)}>恢复原任务</button>
+        : <p>请登录原 Bowerbird 账号后恢复。</p>;
+    } else if (!owner && auth?.cloud_available) {
+      action = <p>请先登录 Bowerbird 账号。</p>;
+    } else if (price.loading || priceNeedsRefresh) {
+      action = <p role="status">正在读取转录价格…</p>;
+    } else if (price.credits === null) {
+      const message = price.connectionError ? "暂时无法连接转录服务。"
+        : price.reason === "pilot_exhausted" ? "本次试转录名额已使用。" : "视频转录服务暂不可用。";
+      action = <>
+        <p role="status">{message}</p>
+        {(price.connectionError || price.unavailable) &&
+          <button type="button" onClick={() => { focusPanel(); refreshPrice(); }}>刷新服务状态</button>}
+      </>;
+    } else if (overLimit) {
+      action = <p role="status">视频时长超过转录上限，请先裁剪后重试。</p>;
+    } else {
+      action = <>
+        <p>将完整音轨发送至 Bowerbird Cloud，文稿保存在素材库。</p>
+        {insufficient && <p role="status">可用积分不足，请补充积分后继续。</p>}
+        <button type="button" className="app-button-primary" disabled={!active || insufficient} onClick={() => void start(false)}>
+          转录 · {price.credits} Bcoin
+        </button>
+      </>;
+    }
+    content = <>
+      {view === "transcript" && transcript === null && <p className="video-analysis-empty-title">暂无转录文稿</p>}
+      {startError && <p role="alert">{startError}</p>}
+      {transcript?.status === "interrupted" && <p role="status">{transcript.priceChanged ? "转录价格已变化，请确认新价格。"
+        : userErrorMessage(transcript.error, transcript.cloudPending ? "转录尚未完成，可恢复原任务。" : "转录尚未完成。")}</p>}
+      {action}
+    </>;
+  }
+  return <div ref={panel} className="video-transcript-panel" tabIndex={-1}>
+    {view === "analysis" && <SavedVideoDescription key={`${assetId}:${sourceKey}`} assetId={assetId}/>}
+    {content}
   </div>;
 }

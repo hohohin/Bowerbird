@@ -9,6 +9,8 @@ use crate::{cloud::{AuthClient, EntitlementService}, core::{ingest, library::Ass
 use crate::core::library::{GenerationHistory, GenerationHistoryTurn};
 #[path = "comfy_progress.rs"]
 mod progress;
+#[path = "comfy_video_r2v.rs"]
+mod r2v;
 
 struct RequestIo {
     account: String,
@@ -39,14 +41,14 @@ const LORA: &str = "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetenso
 pub(super) fn model_names() -> [&'static str; 5] { [UNET, CLIP, VAE, AUDIO, LORA] }
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum Mode { #[default] Frames, Reference, Text }
+pub enum Mode { #[default] Frames, Reference, Text, R2v }
 impl Mode {
     fn workflow(self) -> &'static str {
-        match self { Self::Frames => WORKFLOW, Self::Reference => "13_H3_R2V_768p_Base20_Review_First", Self::Text => "12_H3_T2V_768p_Turbo8_Review_First" }
+        match self { Self::Frames => WORKFLOW, Self::Reference => "13_H3_R2V_768p_Base20_Review_First", Self::Text => "12_H3_T2V_768p_Turbo8_Review_First", Self::R2v => "video_minimax_h3_r2v" }
     }
 }
 pub(super) fn model_names_for_mode(mode: Mode) -> &'static [&'static str] {
-    match mode { Mode::Reference => &[REFERENCE_UNET, CLIP, VAE, AUDIO], _ => &[UNET, CLIP, VAE, AUDIO, LORA] }
+    match mode { Mode::Reference | Mode::R2v => &[REFERENCE_UNET, CLIP, VAE, AUDIO], _ => &[UNET, CLIP, VAE, AUDIO, LORA] }
 }
 
 fn error(message: impl Into<String>) -> AppError { AppError::Other(message.into()) }
@@ -59,6 +61,8 @@ pub struct Input {
     last_frame: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     audio_asset_id: Option<String>,
+    #[serde(flatten)]
+    references: r2v::References,
     prompt: String,
 }
 #[derive(Deserialize, Serialize)]
@@ -94,9 +98,9 @@ pub(super) fn generation_history(root: &Path, db: &Database, asset_id: &str) -> 
         return Ok(None);
     }
     let input = record.input;
-    let references = [Some(input.first_frame), input.last_frame, input.audio_asset_id].into_iter().flatten()
-        .filter(|id| !id.is_empty())
-        .map(|id| db.get_prompted_asset(&id))
+    let references = [Some(input.first_frame.as_str()), input.last_frame.as_deref(), input.audio_asset_id.as_deref()].into_iter().flatten()
+        .chain(input.references.ids().map(String::as_str)).filter(|id| !id.is_empty())
+        .map(|id| db.get_prompted_asset(id))
         .collect::<AppResult<Vec<_>>>()?.into_iter().flatten().collect::<Vec<_>>();
     let turn = GenerationHistoryTurn {
         error: None,
@@ -164,6 +168,7 @@ fn validate_input(input: &Input) -> AppResult<()> {
     validate_options(input)?;
     if input.prompt.trim().is_empty() || input.prompt.chars().count() > 16000 { return Err(error("请填写 1–16000 字提示词")); }
     if input.audio_asset_id.as_deref().is_some_and(|id| id.trim().is_empty()) { return Err(error("请选择有效的参考音频素材")); }
+    input.references.validate(input.mode, !input.first_frame.is_empty() || input.last_frame.is_some() || input.audio_asset_id.is_some())?;
     match input.mode {
         Mode::Text if !input.first_frame.is_empty() || input.last_frame.is_some() => return Err(error("文生视频不接收图片，请移除图片或切换模式")),
         Mode::Reference if input.first_frame.is_empty() || input.last_frame.is_some() => return Err(error("单图模式需要一张参考图，不接收尾帧")),
@@ -208,17 +213,25 @@ fn graph(input: &Input, first: &str, last: Option<&str>, audio: Option<&str>, se
     match input.mode {
         Mode::Frames => if let Some(last) = last { graph["30"] = json!({"class_type":"LoadImage","inputs":{"image":last}}); graph["9"]["inputs"]["last_frame"] = json!(["30",0]); },
         Mode::Text => { graph.as_object_mut().unwrap().remove("5"); graph["9"]["inputs"].as_object_mut().unwrap().remove("first_frame"); },
-        Mode::Reference => {
+        Mode::Reference | Mode::R2v => {
             graph["1"]["inputs"]["unet_name"] = json!(REFERENCE_UNET);
             graph.as_object_mut().unwrap().remove("7");
-            graph["8"]["inputs"]["model"] = json!(["1",0]);
-            graph["8"]["inputs"]["shift_video"] = json!(12.0);
-            graph["9"] = json!({"class_type":"MiniMaxH3ReferenceToVideo","inputs":{"clip":["2",0],"vae":["3",0],"audio_vae":["4",0],"ref_images.ref_image_0":["5",0],"ref_image_size":"match","width":width,"height":height,"length":length,"prompt":input.prompt}});
+            graph["9"] = json!({"class_type":"MiniMaxH3ReferenceToVideo","inputs":{"clip":["2",0],"vae":["3",0],"audio_vae":["4",0],"ref_image_size":"match","width":width,"height":height,"length":length,"prompt":input.prompt}});
             graph["12"]["inputs"]["sampler_name"] = json!("res_multistep");
             graph["13"]["inputs"]["steps"] = json!(20);
+            if input.mode == Mode::Reference {
+                graph["8"]["inputs"]["model"] = json!(["1",0]);
+                graph["8"]["inputs"]["shift_video"] = json!(12.0);
+                graph["9"]["inputs"]["ref_images.ref_image_0"] = json!(["5",0]);
+            } else {
+                // Comfy-Org R2V's default Base20 path uses the unmodified Ref2VA model.
+                for node in ["5", "8"] { graph.as_object_mut().unwrap().remove(node); }
+                graph["11"]["inputs"]["model"] = json!(["1",0]);
+                graph["13"]["inputs"]["model"] = json!(["1",0]);
+            }
         },
     }
-    if input.mode != Mode::Frames {
+    if matches!(input.mode, Mode::Text | Mode::Reference) {
         graph["15"] = json!({"class_type":"VAEDecodeTiled","inputs":{"samples":["14",0],"vae":["3",0],"tile_size":256,"overlap":64,"temporal_size":64,"temporal_overlap":8}});
     }
     if let Some(audio) = audio {
@@ -240,19 +253,25 @@ pub(super) async fn check_for_mode(http: &reqwest::Client, base: &str, mode: Mod
 
 async fn check_workflow(http: &reqwest::Client, base: &str, mode: Mode, has_audio: bool) -> AppResult<()> {
     let info = json_response(http.get(format!("{base}/object_info"))).await?;
-    let sample = Input { endpoint: base.into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode, first_frame:"".into(), last_frame:None, audio_asset_id:None, prompt:"".into() };
+    let sample = Input { endpoint: base.into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode, first_frame:"".into(), last_frame:None, audio_asset_id:None, references:Default::default(), prompt:"".into() };
     if has_audio && (!info["LoadAudio"]["input"]["required"]["audio"].is_array() || match mode {
-        Mode::Reference => info["MiniMaxH3ReferenceToVideo"]["input"]["optional"]["ref_audios"][0] != "COMFY_AUTOGROW_V3",
+        Mode::Reference | Mode::R2v => info["MiniMaxH3ReferenceToVideo"]["input"]["optional"]["ref_audios"][0] != "COMFY_AUTOGROW_V3",
         Mode::Frames | Mode::Text => info["MiniMaxH3AddGuide"]["input"]["optional"]["audio"][0] != "AUDIO",
     }) {
         return Err(error("当前 ComfyUI 不支持 H3 参考音频，请选择兼容的本机环境"));
     }
-    for node in graph(&sample,"",None,has_audio.then_some(""),0,"check",None)?.as_object().unwrap().values() {
+    let mut sample_graph = graph(&sample,"",None,has_audio.then_some(""),0,"check",None)?;
+    if mode == Mode::R2v {
+        r2v::check_schema(&info)?;
+        r2v::add_reference_nodes(&mut sample_graph, &r2v::References { images:vec![String::new()], videos:vec![String::new()], audios:vec![String::new()] });
+    }
+    for node in sample_graph.as_object().unwrap().values() {
         let class = node["class_type"].as_str().unwrap();
         if !info[class].is_object() { return Err(error("本机 ComfyUI 尚不支持此 H3 工作流，需要准备兼容版本")); }
     }
-    for (class,field,model,label) in [("UNETLoader","unet_name",if mode == Mode::Reference {REFERENCE_UNET} else {UNET},"视频主模型"),("CLIPLoader","clip_name",CLIP,"文本理解模型"),("VAELoader","vae_name",VAE,"画面解码模型"),("VAELoader","vae_name",AUDIO,"音频解码模型"),("LoraLoaderModelOnly","lora_name",LORA,"8 步加速模型")] {
-        if mode == Mode::Reference && model == LORA { continue; }
+    let reference = matches!(mode, Mode::Reference | Mode::R2v);
+    for (class,field,model,label) in [("UNETLoader","unet_name",if reference {REFERENCE_UNET} else {UNET},"视频主模型"),("CLIPLoader","clip_name",CLIP,"文本理解模型"),("VAELoader","vae_name",VAE,"画面解码模型"),("VAELoader","vae_name",AUDIO,"音频解码模型"),("LoraLoaderModelOnly","lora_name",LORA,"8 步加速模型")] {
+        if reference && model == LORA { continue; }
         if !info[class]["input"]["required"][field][0].as_array().is_some_and(|list| list.iter().any(|v| v.as_str() == Some(model))) {
             return Err(error(format!("缺少{label}，需要下载完整的 H3 模型包")));
         }
@@ -312,7 +331,7 @@ async fn upload_input(http: &reqwest::Client, base: &str, part: reqwest::multipa
     Ok(if folder.is_empty() { name.into() } else { format!("{folder}/{name}") })
 }
 
-async fn upload_audio(http: &reqwest::Client, base: &str, db: &Database, id: &str, request: &str, mode: Mode) -> AppResult<String> {
+async fn upload_audio(http: &reqwest::Client, base: &str, db: &Database, id: &str, request: &str, role: &str, mode: Mode) -> AppResult<String> {
     let asset = db.get_asset(id)?.ok_or_else(|| error("参考音频素材不存在，请重新选择"))?;
     let ext = asset.ext.filter(|ext| audio::is_audio(ext)).ok_or_else(|| error("请选择 WAV、MP3、FLAC、M4A 或 OGG 音频素材"))?.to_ascii_lowercase();
     let path = db.resolve_asset_original(id)?;
@@ -337,7 +356,7 @@ async fn upload_audio(http: &reqwest::Client, base: &str, db: &Database, id: &st
         }
         Ok((bytes, ext))
     }).await.map_err(|e| error(e.to_string()))??;
-    let part = reqwest::multipart::Part::bytes(bytes).file_name(format!("{request}-audio.{ext}"));
+    let part = reqwest::multipart::Part::bytes(bytes).file_name(format!("{request}-{role}.{ext}"));
     upload_input(http, base, part, "音频").await
 }
 
@@ -345,14 +364,20 @@ async fn prepare_prompt(http: &reqwest::Client, db: &Database, record: &Record, 
     validate_input(&record.input)?;
     let base = endpoint(&record.input.endpoint)?;
     check_workflow(http, &base, record.input.mode, record.input.audio_asset_id.is_some()).await?;
+    let seed = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()) & ((1_u64<<53)-1);
+    if record.input.mode == Mode::R2v {
+        let (uploaded, size) = r2v::upload_references(http, &base, db, &record.input.references, request).await?;
+        let mut prompt = graph(&record.input, "", None, None, seed, request, Some(size))?;
+        r2v::add_reference_nodes(&mut prompt, &uploaded);
+        return Ok(prompt);
+    }
     let audio = match record.input.audio_asset_id.as_deref() {
-        Some(id) => Some(upload_audio(http, &base, db, id, request, record.input.mode).await?),
+        Some(id) => Some(upload_audio(http, &base, db, id, request, "audio", record.input.mode).await?),
         None => None,
     };
     let (first,first_size) = if record.input.mode == Mode::Text { (String::new(),None) }
         else { let (name,size) = upload(http,&base,db,&record.input.first_frame,request,"first").await?; (name,Some(size)) };
     let last = match record.input.last_frame.as_deref() { Some(id) => Some(upload(http,&base,db,id,request,"last").await?.0), None => None };
-    let seed = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()) & ((1_u64<<53)-1);
     graph(&record.input,&first,last.as_deref(),audio.as_deref(),seed,request,first_size)
 }
 
@@ -793,12 +818,50 @@ mod tests {
         assert_eq!(shared.posts.load(Ordering::SeqCst),3);
         server.abort(); let _=server.await; fs::remove_dir_all(root).unwrap();
     }
-    fn input() -> Input { Input { endpoint:"http://127.0.0.1:8188".into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode:Mode::Frames, first_frame:"first".into(), last_frame:None, audio_asset_id:None, prompt:"test prompt".into() } }
+    fn input() -> Input { Input { endpoint:"http://127.0.0.1:8188".into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode:Mode::Frames, first_frame:"first".into(), last_frame:None, audio_asset_id:None, references:Default::default(), prompt:"test prompt".into() } }
     fn mode_input(mode: &str) -> Input {
         let mut value = serde_json::to_value(input()).unwrap();
         value["mode"] = json!(mode); value["seconds"] = json!(5);
-        if mode == "text" { value["firstFrame"] = json!(""); }
+        if matches!(mode, "text" | "r2v") { value["firstFrame"] = json!(""); }
         serde_json::from_value(value).unwrap()
+    }
+    #[test]
+    fn h3_mode_r2v_preserves_official_graph_and_independent_reference_order() {
+        let mut i = mode_input("r2v");
+        i.ratio = "auto".into();
+        i.prompt = "Follow <Picture 1>, <Video 2>, <Audio 1>".into();
+        assert!(validate_input(&i).is_err());
+        i.references.images = (0..9).map(|n| format!("pic-{n}.png")).collect();
+        i.references.videos = (0..3).map(|n| format!("vid-{n}.mp4")).collect();
+        i.references.audios = (0..3).map(|n| format!("sound-{n}.wav")).collect();
+        assert!(validate_input(&i).is_ok());
+        let freeze = serde_json::to_value(&i).unwrap();
+        assert_eq!(freeze["referenceVideos"][0], "vid-0.mp4");
+        assert_eq!(serde_json::from_value::<Input>(freeze).unwrap(), i);
+        let mut graph = graph(&i,"",None,None,42,"r2v",Some((9,16))).unwrap();
+        r2v::add_reference_nodes(&mut graph,&i.references);
+        assert_eq!(graph["1"]["inputs"]["unet_name"],REFERENCE_UNET);
+        assert_eq!(graph["9"]["class_type"],"MiniMaxH3ReferenceToVideo");
+        assert_eq!(graph["9"]["inputs"]["prompt"],i.prompt);
+        assert_eq!(graph["9"]["inputs"]["length"],124);
+        assert!(graph["9"]["inputs"]["width"].as_u64() < graph["9"]["inputs"]["height"].as_u64());
+        assert_eq!(graph["9"]["inputs"]["ref_images.ref_image_8"],json!(["108",0]));
+        assert_eq!(graph["9"]["inputs"]["ref_videos.ref_video_1"],json!(["113",0]));
+        assert_eq!(graph["9"]["inputs"]["ref_video_audios.ref_video_audio_1"],json!(["113",1]));
+        assert_eq!(graph["9"]["inputs"]["ref_audios.ref_audio_2"],json!(["122",0]));
+        assert_eq!(graph["112"]["inputs"]["file"],"vid-1.mp4");
+        assert_eq!(graph["113"]["inputs"]["video"],json!(["112",0]));
+        assert_eq!(graph["122"]["inputs"]["audio"],"sound-2.wav");
+        assert_eq!(graph["12"]["inputs"]["sampler_name"], "res_multistep");
+        assert_eq!(graph["13"]["inputs"],json!({"model":["1",0],"scheduler":"simple","steps":20,"denoise":1.0}));
+        assert!(graph.get("7").is_none() && graph.get("8").is_none());
+        assert_eq!(graph["15"]["class_type"],"VAEDecode");
+        assert_eq!(graph["26"]["inputs"]["fps"],24.0);
+        i.references.images.push("too-many".into());
+        assert!(validate_input(&i).is_err());
+        i.references.images.pop();
+        i.mode = Mode::Frames; i.first_frame = "first".into();
+        assert!(validate_input(&i).is_err());
     }
     #[test]
     fn h3_mode_text_has_no_image_dependency_and_uses_turbo_tiled_decode() {
@@ -918,12 +981,12 @@ mod tests {
         let http = client().unwrap();
         let no_service = "http://127.0.0.1:0";
         for (id, mode, expected) in [(&asset.id, Mode::Text, "请选择 WAV"), (&short.id, Mode::Reference, "至少需要 2 秒"), (&long.id, Mode::Frames, "不超过 15 秒")] {
-            let error = upload_audio(&http, no_service, &db, id, "request", mode).await.unwrap_err();
+            let error = upload_audio(&http, no_service, &db, id, "request", "audio", mode).await.unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
         }
-        for (mode, has_audio) in [(Mode::Text,false), (Mode::Reference,false), (Mode::Text,true), (Mode::Reference,true), (Mode::Frames,true)] {
+        for (mut i, has_audio) in [(mode_input("text"),false), (mode_input("reference"),false), (mode_input("text"),true), (mode_input("reference"),true), (input(),true)] {
             let shared = Arc::new(Mock { prompt:Mutex::new(None),uploads:AtomicUsize::new(0),posts:AtomicUsize::new(0) });
-            let mut i = match mode { Mode::Text => mode_input("text"), Mode::Reference => mode_input("reference"), Mode::Frames => input() };
+            let mode = i.mode;
             if mode != Mode::Text { i.first_frame = asset.id.clone(); }
             if has_audio { i.audio_asset_id = Some(sound.id.clone()); }
             let mut info = json!({});

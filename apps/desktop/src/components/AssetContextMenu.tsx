@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, ScanSearch, Scan, Trash2, Ungroup } from "lucide-react";
+import { ClipboardCopy, FileText, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, ScanSearch, Scan, Trash2, Ungroup } from "lucide-react";
 import { understandEngineUsable, useStore } from "../store";
 import { api } from "../lib/api";
 import { buildAssetContextMenu, type AssetMenuAction, type AssetMenuSnapshot } from "../lib/assetContextMenu";
@@ -8,8 +8,11 @@ import {
   removeAssetsFromProject, reuseGenerationPrompt, revealAssetFolder, setAssetLibraryVisibility,
 } from "../lib/assetMenuCommands";
 import { canUseByo } from "../lib/entitlement";
+import { externalFiles } from "../lib/externalFiles";
+import { notifyError } from "../lib/notify";
 import { canSearchPinterest } from "../lib/pinterestSearch";
 import type { Asset } from "../lib/types";
+import { videoSourceKey } from "../lib/videoSourceKey";
 import { AssetTransferMenuItems, useAssetTransferDialogs } from "./AssetTransferMenuItems";
 import { BatchAddToProjectsDialog } from "./BatchAddToProjectsDialog";
 import { CanvasAssetDeleteDialog } from "./CanvasAssetDeleteDialog";
@@ -19,6 +22,7 @@ import { ContextMenu } from "./ContextMenu";
 import { ContextMenuItems } from "./ContextMenuItems";
 import { GenerationGroupMenuItem, MergeGenerationGroupMenuItem } from "./GenerationGroupMenuItem";
 import { ImageEditIcon } from "./ImageEditIcon";
+import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { RenameDialog } from "./RenameDialog";
 import { useAssetMenuHost, type AssetMenuContext, type AssetMenuHostSelection } from "./useAssetMenuHost";
 
@@ -38,6 +42,7 @@ const ICONS = {
   board: <LayoutDashboard size={13} />,
   clipboard: <ClipboardCopy size={13} />,
   message: <MessageSquare size={13} />,
+  "file-text": <FileText size={13} />,
 };
 
 /** 单选双列，多选单列；全局素材库、画布和嵌入式工作区共用。 */
@@ -61,6 +66,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
   const [groupCheck, setGroupCheck] = useState<{ menu: AssetMenuContext; projectId: string | null; ids: string[] | null } | null>(null);
   const [selectionAssets, setSelectionAssets] = useState<{ menu: AssetMenuContext; assets: Asset[] } | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; external: boolean; localPath?: string } | null>(null);
+  const [transcriptPreview, setTranscriptPreview] = useState<{ asset: Asset; path: string; projectId: string | null } | null>(null);
   const [assignCollectionIds, setAssignCollectionIds] = useState<SelectionOperation | null>(null);
   const [projectPickIds, setProjectPickIds] = useState<SelectionOperation | null>(null);
   const [pendingCanvasDelete, setPendingCanvasDelete] = useState<{ assetIds: string[]; projectId: string | null; localPaths?: Record<string, string>; onComplete?: () => void } | null>(null);
@@ -69,6 +75,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
   useEffect(() => {
     if (!embedded && menu && menu.workspaceProjectId !== undefined && menu.workspaceProjectId !== activeProjectId) close();
   }, [menu, activeProjectId, selection]);
+  useEffect(() => { setTranscriptPreview(null); }, [activeProjectId]);
 
   useEffect(() => {
     setMenuBusy(false);
@@ -109,6 +116,8 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
   }, [menu, activeProjectId]);
 
   if (!menu) return <>
+    {transcriptPreview && <LibraryVideoPreview {...transcriptPreview} sourceKey={videoSourceKey(transcriptPreview.asset)}
+      openTranscript onClose={() => setTranscriptPreview(null)} />}
     {assignCollectionIds && <CollectionAssignDialog assetIds={assignCollectionIds.ids} onSaved={assignCollectionIds.onComplete} onClose={() => setAssignCollectionIds(null)} />}
     {transfer.dialogs}
     {pendingCanvasDelete && <CanvasAssetDeleteDialog target={pendingCanvasDelete} onComplete={pendingCanvasDelete.onComplete} onClose={() => setPendingCanvasDelete(null)} />}
@@ -131,7 +140,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
   const resolveAsset = (id: string) => resolvedSelection?.find(item => item.id === id)
     ?? canvas?.assets?.find(item => item.id === id) ?? assets.find(item => item.id === id);
   const resolveTarget = (id: string) => file ? file.assets.find(item => item.id === id) : resolveAsset(id);
-  const asset = menu.asset ?? resolveAsset(assetId);
+  const asset = menu.asset ?? resolveTarget(assetId);
   const targets = targetIds.map(id => id === assetId ? asset ?? resolveTarget(id) : resolveTarget(id));
   const canvasImagesPending = canvasMulti && canvas.imageOnly && targets.some(target => !target)
     ? resolvedSelection ? "部分所选素材不可用" : "正在检查所选素材…" : undefined;
@@ -194,6 +203,22 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
       close();
     });
   };
+  const openTranscript = async () => {
+    if (!asset || !storePath || busy || !isCurrent()) return;
+    const routeRevision = useStore.getState().projectRouteRevision;
+    const isCurrentPreview = () => isCurrent() && useStore.getState().projectRouteRevision === routeRevision;
+    setMenuBusy(true);
+    try {
+      const path = await externalFiles.media(storePath);
+      if (!isCurrentPreview()) return;
+      setTranscriptPreview({ asset, path, projectId: membershipProjectId });
+      close();
+    } catch (error) {
+      if (isCurrentPreview()) notifyError(error, "无法打开视频预览");
+    } finally {
+      if (isCurrent()) setMenuBusy(false);
+    }
+  };
 
   const onSelect = (action: AssetMenuAction) => {
     const store = useStore.getState();
@@ -203,6 +228,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
       case "move-incomplete": menu.moveIncompleteSelection?.(); close(); break;
       case "add-to-chat": host.navigate(); store.addAssetToBoardFromDetail(assetId); close(); break;
       case "open-detail": host.openDetail(menu); break;
+      case "open-transcript": void openTranscript(); break;
       case "edit": host.navigate(); store.openAnnotator(assetId); close(); break;
       case "pinterest": host.searchPinterest(assetId); break;
       case "select": host.select(menu); break;

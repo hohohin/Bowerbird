@@ -111,7 +111,7 @@ function VisualFileMediaCard({ entry, selected, revision, labels, onSelect, onAc
     onClick={e => {
       cancelClick();
       if (!onActivate || e.ctrlKey || e.metaKey || e.shiftKey) { onSelect(e.ctrlKey || e.metaKey, e.shiftKey); return; }
-      // Let a double click open details without first opening a preview or inserting twice.
+      // Let the host handle a double click without also running the single-click action.
       if (e.detail < 2) clickTimer.current = window.setTimeout(onActivate, 300);
     }} onDoubleClick={e => { cancelClick(); if (!e.ctrlKey && !e.metaKey && !e.shiftKey) onOpen(); }}
     onContextMenu={e => { cancelClick(); e.preventDefault(); e.stopPropagation(); onContextMenu(e.clientX, e.clientY); }}

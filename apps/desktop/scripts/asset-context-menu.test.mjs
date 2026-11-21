@@ -35,7 +35,7 @@ test("single media matrix keeps labels and capabilities for every host", () => {
     ["png", "打开图片详情", true, true, true],
     ["svg", "打开图片详情", false, true, true],
     ["tiff", "打开图片详情", false, true, true],
-    ["mp4", "打开视频详情", false, false, false],
+    ["mp4", undefined, false, false, false],
     ["mp3", "打开音频详情", false, false, false],
     ["md", "打开文本编辑器", false, false, false],
   ];
@@ -52,6 +52,7 @@ test("single media matrix keeps labels and capabilities for every host", () => {
       const context = `${source}/${ext}`;
       assert.deepEqual(result.columns.map(col => col[0].heading), ["常用", "文件"], context);
       assert.equal(find(result, "open-detail")?.label, detail, context);
+      assert.equal(find(result, "open-transcript")?.label, ext === "mp4" ? "转录文稿" : undefined, context);
       for (const id of ["edit", "copy-image", "layers"]) assert.equal(!!find(result, id), editable, `${context} ${id}`);
       assert.equal(!!find(result, "describe"), describable, context);
       assert.equal(!!find(result, "dimensions"), describable, context);
@@ -59,6 +60,12 @@ test("single media matrix keeps labels and capabilities for every host", () => {
       assert.equal(!!find(result, "transfers"), source !== "local", context);
     }
   }
+});
+
+test("transcript menu is single-video only and respects a disconnected entry", () => {
+  const video = asset("mp4");
+  assert.equal(find(model({ asset: video, file: { local: false, entries: { available: false } } }), "open-transcript")?.disabled, true);
+  assert.equal(find(model({ mode: "multi", selectedCount: 2, asset: video, targets: [video, asset("mov")] }), "open-transcript"), undefined);
 });
 
 test("library browsing, managing and embedded detail have distinct selection actions", () => {

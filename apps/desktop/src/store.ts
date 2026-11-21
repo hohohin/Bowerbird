@@ -1030,7 +1030,7 @@ export const useStore = create<State>((set, get) => {
           activeCloudAgentRunId: null,
         }),
       });
-      await get().reloadVisualProfiles();
+      void get().reloadVisualProfiles();
     });
   },
   exitProject: () => runProjectRoute(async () => {

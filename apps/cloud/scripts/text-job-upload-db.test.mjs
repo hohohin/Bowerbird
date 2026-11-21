@@ -520,6 +520,147 @@ try {
   const { verifyChatPaidBilling } = await import("./chat-paid-db.fixture.mjs");
   await verifyChatPaidBilling(q,db,rival);
 
+  const currentCostPolicy = async () => (await q(`select qual from pg_policies where schemaname='public'
+    and tablename='service_costs' and policyname='service_costs_select_active'`))[0].qual;
+  const pricePolicyBeforePilot = await currentCostPolicy();
+  await q(fs.readFileSync(path.join(dir, "0098_file_speech_pilot.sql"), "utf8"));
+  assert.equal(await currentCostPolicy(), pricePolicyBeforePilot);
+  assert.match(pricePolicyBeforePilot, /chat_paid_flash_v1/);
+  assert.match(pricePolicyBeforePilot, /chat_paid_pro_v1/);
+  const pilotAccount = randomUUID();
+  await q("insert into auth.users(id) values($1)", [pilotAccount]);
+  const readCatalog = async role => {
+    await q("begin");
+    try {
+      await q(`set local role ${role}`);
+      return (await q("select service from service_costs order by service")).map(row => row.service);
+    } finally {
+      await q("rollback");
+    }
+  };
+  const publicCatalog = await readCatalog("authenticated");
+  assert.ok(publicCatalog.includes("library_file_speech"));
+  assert.ok(publicCatalog.includes("chat_deepseek"));
+  assert.equal(publicCatalog.includes("chat_paid_flash_v1") || publicCatalog.includes("chat_paid_pro_v1"), false);
+  const startPilot = async (key, mode, conn = db, price = 1, manifest = hash,
+    { account = pilotAccount, dailyLimit = 1_000_000_000, rateLimit = 50, duration = 7_200_000 } = {}) => (await q(
+    "select begin_file_speech_upload($1,$2,$3,$4,50000,$5,$6,$7,$8::boolean) as job",
+    [account, key, manifest, price, dailyLimit, rateLimit, duration, mode], conn,
+  ))[0].job;
+  await assert.rejects(startPilot(speechKey(), true), error => error.detail === "price_unavailable");
+  await q(`update service_costs set unit_cost=1,pricing_version=9001,parameters=parameters||'{"pilot_only":true}'
+    where service='library_file_speech'`);
+  for (const role of ["anon", "authenticated"]) {
+    assert.deepEqual(await readCatalog(role), publicCatalog.filter(service => service !== "library_file_speech"));
+    const [{ allowed }] = await q(`select has_function_privilege($1,
+      'begin_file_speech_upload(uuid,text,text,integer,numeric,bigint,integer,integer,boolean)','execute') as allowed`, [role]);
+    assert.equal(allowed, false);
+  }
+  const [{ allowed }] = await q(`select has_function_privilege('service_role',
+    'begin_file_speech_upload(uuid,text,text,integer,numeric,bigint,integer,integer,boolean)','execute') as allowed`);
+  assert.equal(allowed, true);
+  await assert.rejects(beginFileSpeech(speechKey(), 1), error => error.detail === "price_unavailable");
+  await assert.rejects(startPilot(speechKey(), null), error => error.detail === "file_speech_closed");
+  await assert.rejects(startPilot(speechKey(), true, db, 2), error => error.detail === "stale_quote");
+
+  const acceptedPilotKey = speechKey();
+  const extraPilotKey = speechKey();
+  let approvedPilot;
+  let competingPilot;
+  await q("begin");
+  try {
+    approvedPilot = await startPilot(acceptedPilotKey, true);
+    competingPilot = assert.rejects(startPilot(extraPilotKey, true, rival), error => error.detail === "file_speech_pilot_used");
+    let blocked = false;
+    for (let attempt = 0; !blocked && attempt < 20; attempt++) {
+      blocked = (await q("select pg_backend_pid()=any(pg_blocking_pids($1)) as blocked", [rival.processID]))[0].blocked;
+      if (!blocked) await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(blocked, true, "different keys for one account wait on the pilot admission lock");
+    await q("commit");
+  } catch (error) {
+    await q("rollback");
+    throw error;
+  }
+  await competingPilot;
+  assert.equal(approvedPilot.file_speech_pilot, true);
+  assert.equal(approvedPilot.file_speech_source_duration_ms, 7_200_000);
+  assert.equal(approvedPilot.estimated_credits, 1);
+  assert.deepEqual((await q("select reserved_cost_micros::int as micro from credit_holds where user_id=$1", [pilotAccount])), [{ micro: 2_000_000 }]);
+  assert.equal((await startPilot(acceptedPilotKey, null)).id, approvedPilot.id);
+  await assert.rejects(startPilot(acceptedPilotKey, null, db, 1, "b".repeat(64)), error => error.detail === "manifest_conflict");
+  await q("update service_costs set unit_cost=2,pricing_version=9002 where service='library_file_speech'");
+  await assert.rejects(startPilot(extraPilotKey, true, db, 2), error => error.detail === "file_speech_pilot_used");
+  assert.equal((await startPilot(acceptedPilotKey, null)).hold_id, approvedPilot.hold_id);
+  console.log("file speech pilot 0098 baseline: private catalog, one concurrent two-hour job, stable original hold, and ¥2 provider reserve passed");
+
+  await q(fs.readFileSync(path.join(dir, "0099_file_speech_repeat_test_account.sql"), "utf8"));
+  await q("update service_costs set unit_cost=1,pricing_version=9001 where service='library_file_speech'");
+  for (const role of ["anon", "authenticated"]) {
+    assert.deepEqual(await readCatalog(role), publicCatalog.filter(service => service !== "library_file_speech"));
+  }
+  assert.deepEqual((await q(`select to_regclass('public.understand_jobs_single_file_speech_pilot') is null as lifetime_index_gone,
+    has_function_privilege('authenticated','begin_file_speech_upload(uuid,text,text,integer,numeric,bigint,integer,integer,boolean)','execute') as user_execute,
+    has_function_privilege('service_role','begin_file_speech_upload(uuid,text,text,integer,numeric,bigint,integer,integer,boolean)','execute') as service_execute`))[0],
+    { lifetime_index_gone: true, user_execute: false, service_execute: true });
+  const rejectedKey = speechKey();
+  await assert.rejects(startPilot(rejectedKey, null, db, 1, hash, { account: user }), error => error.detail === "file_speech_closed");
+  await assert.rejects(startPilot(rejectedKey, false), error => error.detail === "price_unavailable");
+  await assert.rejects(startPilot(rejectedKey, true, db, 2), error => error.detail === "stale_quote");
+  await assert.rejects(startPilot(rejectedKey, true, db, 1, hash, { duration: 7_200_001 }), error => error.code === "22023");
+  const differentKey = speechKey();
+  const [repeat, shortRepeat] = await Promise.all([
+    startPilot(extraPilotKey, true),
+    startPilot(differentKey, true, rival, 1, hash, { duration: 54_264 }),
+  ]);
+  assert.equal(new Set([approvedPilot, repeat, shortRepeat].map(job => job.id)).size, 3);
+  assert.equal(new Set([approvedPilot, repeat, shortRepeat].map(job => job.hold_id)).size, 3);
+  assert.equal(repeat.file_speech_source_duration_ms, 7_200_000);
+  assert.equal(shortRepeat.file_speech_source_duration_ms, 54_264);
+  for (const [key, expected] of [[acceptedPilotKey, approvedPilot], [extraPilotKey, repeat], [differentKey, shortRepeat]]) {
+    const replayed = await startPilot(key, null, db, 1, hash, { duration: expected.file_speech_source_duration_ms });
+    assert.equal(replayed.id, expected.id);
+    assert.equal(replayed.hold_id, expected.hold_id);
+    assert.equal((await q("select $1::timestamptz=$2::timestamptz as same",
+      [replayed.content_expires_at, expected.content_expires_at]))[0].same, true);
+  }
+  await assert.rejects(startPilot(extraPilotKey, null, db, 1, "b".repeat(64)), error => error.detail === "manifest_conflict");
+  await assert.rejects(startPilot(differentKey, null), error => error.detail === "manifest_conflict");
+  await assert.rejects(startPilot(rejectedKey, null), error => error.detail === "file_speech_closed");
+  assert.deepEqual(await q(`select held.estimated_amount as credits,held.reserved_cost_micros::int as micro
+    from credit_holds held join understand_jobs job on held.id=job.hold_id where job.file_speech_pilot and job.user_id=$1`, [pilotAccount]),
+    Array.from({ length: 3 }, () => ({ credits: 1, micro: 2_000_000 })));
+  const [{ micros }] = await q("select cost_micros::int as micros from system_usage_daily where business_date=timezone('Asia/Shanghai', now())::date");
+  await assert.rejects(startPilot(rejectedKey, true, db, 1, hash, { dailyLimit: micros + 1_999_999 }),
+    error => error.detail === "daily_cost_limit");
+  await q("begin");
+  try {
+    await startPilot(speechKey(), true);
+    await assert.rejects(startPilot(rejectedKey, true, db, 1, hash, { rateLimit: 1 }), error => error.detail === "rate_limit_per_minute");
+  } finally { await q("rollback"); }
+  await q("begin");
+  try {
+    await q("update credit_lots set remaining_amount=0 where user_id=$1", [pilotAccount]);
+    await assert.rejects(startPilot(rejectedKey, true), error => error.detail === "insufficient_credits");
+  } finally { await q("rollback"); }
+  assert.equal((await q("select count(*)::int n from credit_holds where idempotency_key=$1", [rejectedKey]))[0].n, 0);
+  for (const [key, job] of [[extraPilotKey, repeat], [differentKey, shortRepeat]]) {
+    await transitionSpeech(job);
+    const lease = await claimSpeech("repeat-pilot-fixture");
+    assert.equal(lease.id, job.id);
+    await submitSpeech(job, lease);
+    assert.equal((await finishSpeech(job, lease, "succeeded", '{"text":"fixture"}'))[0].actual_credits, 1);
+    assert.equal((await startPilot(key, null, db, 1, hash, { duration: job.file_speech_source_duration_ms })).status, "succeeded");
+    assert.deepEqual(await ledger(job), ["confirm"]);
+  }
+
+  await q("update service_costs set unit_cost=6,pricing_version=2,parameters=parameters-'pilot_only' where service='library_file_speech'");
+  assert.deepEqual(await readCatalog("authenticated"), publicCatalog);
+  const unchangedPublic = await beginFileSpeech(speechKey(), 6);
+  assert.equal(unchangedPublic.file_speech_pilot, false);
+  assert.equal((await q("select reserved_cost_micros::int as micro from credit_holds where id=$1", [unchangedPublic.hold_id]))[0].micro, 600);
+  console.log("file speech pilot 0099: private catalog and admission, repeated jobs at 1 Bcoin and ¥2 reserve each, stable original TTL and hold, existing usage guards, and public reservation passed");
+
   if (mode === "--file-speech-flow") {
     const { verifyFileSpeechFlow } = await import("./file-speech-flow.fixture.mjs");
     await verifyFileSpeechFlow(q, root);

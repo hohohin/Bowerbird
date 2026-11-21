@@ -30,6 +30,31 @@ fn default_true() -> bool {
     true
 }
 
+fn default_semantic_index_interval_minutes() -> u32 {
+    15
+}
+
+fn semantic_index_interval_minutes(minutes: u32) -> u32 {
+    if minutes == 60 {
+        60
+    } else {
+        default_semantic_index_interval_minutes()
+    }
+}
+
+fn deserialize_semantic_index_interval_minutes<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    u32::deserialize(deserializer).map(semantic_index_interval_minutes)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SemanticIndexPreferences {
+    pub automatic: bool,
+    pub interval_minutes: u32,
+    pub include_generated: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AppTheme {
@@ -78,6 +103,16 @@ pub struct AppSettings {
     /// 全局素材视图中隐藏已加入任一项目的素材（瀑布流只显示未入项目的素材）。默认 false。
     #[serde(default)]
     pub hide_project_assets: bool,
+
+    #[serde(default = "default_true")]
+    pub semantic_index_automatic: bool,
+    #[serde(
+        default = "default_semantic_index_interval_minutes",
+        deserialize_with = "deserialize_semantic_index_interval_minutes"
+    )]
+    pub semantic_index_interval_minutes: u32,
+    #[serde(default = "default_true")]
+    pub semantic_index_include_generated: bool,
 
     /// 在画板图片和视频下方显示素材名称；旧设置默认隐藏。
     #[serde(default)]
@@ -151,6 +186,9 @@ impl Default for AppSettings {
             cloud_auto_understand: false,
             board_shift_pick: false,
             hide_project_assets: false,
+            semantic_index_automatic: true,
+            semantic_index_interval_minutes: default_semantic_index_interval_minutes(),
+            semantic_index_include_generated: true,
             canvas_show_asset_names: false,
             canvas_frequent_assets: Default::default(),
             generation_completion_popup: true,
@@ -214,6 +252,24 @@ impl SettingsState {
         self.settings.read().unwrap().clone()
     }
 
+    pub(crate) fn semantic_index_preferences(&self) -> SemanticIndexPreferences {
+        self.with_semantic_index_preferences(|preferences| preferences)
+    }
+
+    pub(crate) fn with_semantic_index_preferences<T>(
+        &self,
+        apply: impl FnOnce(SemanticIndexPreferences) -> T,
+    ) -> T {
+        let settings = self.settings.read().unwrap();
+        let result = apply(SemanticIndexPreferences {
+            automatic: settings.semantic_index_automatic,
+            interval_minutes: semantic_index_interval_minutes(settings.semantic_index_interval_minutes),
+            include_generated: settings.semantic_index_include_generated,
+        });
+        drop(settings);
+        result
+    }
+
     /// 覆盖普通设置并持久化；常用素材成员由专用命令维护，不能被旧快照覆盖。
     pub fn update(&self, mut new_settings: AppSettings) -> AppResult<()> {
         self.update_with(|settings| {
@@ -240,6 +296,33 @@ impl SettingsState {
 #[cfg(test)]
 mod tests {
     use super::{AppSettings, AppTheme, SettingsState};
+
+    #[test]
+    fn semantic_index_preferences_default_for_old_settings_and_survive_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        std::fs::write(&file, r#"{"hide_project_assets": true}"#).unwrap();
+        let state = SettingsState::init(file.clone()).unwrap();
+        let defaults = state.semantic_index_preferences();
+        assert_eq!(
+            (defaults.automatic, defaults.interval_minutes, defaults.include_generated),
+            (true, 15, true)
+        );
+        let selected = serde_json::from_value(serde_json::json!({
+            "semantic_index_automatic": false,
+            "semantic_index_interval_minutes": 60,
+            "semantic_index_include_generated": false,
+        })).unwrap();
+        state.update(selected).unwrap();
+        let stored = SettingsState::init(file).unwrap().semantic_index_preferences();
+        assert_eq!(
+            (stored.automatic, stored.interval_minutes, stored.include_generated),
+            (false, 60, false)
+        );
+        let invalid: AppSettings =
+            serde_json::from_str(r#"{"semantic_index_interval_minutes":45}"#).unwrap();
+        assert_eq!(invalid.semantic_index_interval_minutes, 15);
+    }
 
     #[test]
     fn screenshots_default_to_library_and_keep_opt_out() {

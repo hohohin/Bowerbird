@@ -403,6 +403,7 @@ pub fn run() {
             let orphan_scan_db = db.clone();
 
             let semantic = Arc::new(core::semantic_search::runtime::SemanticSearch::new(file_config_root));
+            app.manage(settings_state);
             semantic.clone().watch(app.handle().clone(), db.clone());
             app.manage(semantic);
 
@@ -426,7 +427,6 @@ pub fn run() {
             app.manage(quick_transfer::QuickTransfer::default());
             app.manage(commands::file_tasks::FileTasks::default());
             app.manage(active_project);
-            app.manage(settings_state);
             let screenshot_paths = paths.clone();
             let screenshot_db = db.clone();
             let screenshot_app = app.handle().clone();
@@ -703,6 +703,8 @@ pub fn run() {
             commands::video_trim::trim_video,
             commands::video_audio::extract_video_audio,
             commands::video_transcript::video_transcript_get,
+            commands::video_analysis::video_analysis_get,
+            commands::video_transcript::video_transcript_refresh_timing,
             commands::video_transcript::video_transcript_capabilities,
             commands::video_transcript::video_transcript_quote,
             commands::video_transcript::video_transcript_start,

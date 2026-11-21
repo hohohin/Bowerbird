@@ -170,7 +170,7 @@ export async function runDshChat(input: ChatInput, identity: Identity, control: 
           new DeepSeekBackendError(code === "deepseek_transport_unknown" ? "deepseek_network_error" : "deepseek_invalid_response"));
       },
     });
-    port = await NodeDshAcpPort.create({ profileTemplateDir: options.profileTemplateDir, runtimeRoot: options.runtimeRoot, profileMode: "chat", chatOptions: input.dsh_options, imageCardProvider: input.image_card_provider, videoCardOptions: input.video_card_options,
+    port = await NodeDshAcpPort.create({ profileTemplateDir: options.profileTemplateDir, runtimeRoot: options.runtimeRoot, profileMode: "chat", chatOptions: input.dsh_options, imageCardProvider: input.image_card_provider, videoCardOptions: input.video_card_options, h3R2v: input.h3_r2v,
       childEnvironment: bridge.childEnvironment(), providerEnvironment: proxy.childEnvironment(), promptTimeoutMs: 0, nativeSession: snapshot });
     await Promise.race([port.initialize(), stopped.promise]);
     sessionId = (await Promise.race([snapshot && previous

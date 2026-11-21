@@ -43,7 +43,7 @@ pub(crate) use dsh::stop_owned as stop_dsh_host;
 mod dsh_local;
 #[path = "local_chat_dsh_vps.rs"]
 mod dsh_vps;
-const CARD_TOOL_VERSION: i64 = 7;
+const CARD_TOOL_VERSION: i64 = 8;
 const CHAT_INSTRUCTIONS: &str =
     include_str!("../../../../cloud/supabase/functions/_shared/chat-instructions.txt");
 
@@ -146,6 +146,10 @@ fn chat_video_path(path: &str) -> bool {
     std::path::Path::new(path).extension().and_then(|ext| ext.to_str()).is_some_and(crate::media::probe::is_video)
 }
 
+fn chat_audio_path(path: &str) -> bool {
+    std::path::Path::new(path).extension().and_then(|ext| ext.to_str()).is_some_and(crate::media::audio::is_audio)
+}
+
 /// Resolve explicit library assets in selection order, which also defines the card tool aliases.
 fn reference_paths(db: &Database, ids: &[String]) -> AppResult<Vec<String>> {
     if ids.len() > 8 {
@@ -165,12 +169,13 @@ fn reference_paths(db: &Database, ids: &[String]) -> AppResult<Vec<String>> {
             .store_path
             .ok_or_else(|| error("引用素材缺少原文件，请重新选择"))?;
         let video = chat_video_path(&original);
-        let resolved = if video { db.resolve_external_paths(&[original])? } else { db.resolve_external_image_paths(&[original])? };
+        let audio = chat_audio_path(&original);
+        let resolved = if video || audio { db.resolve_external_paths(&[original])? } else { db.resolve_external_image_paths(&[original])? };
         let path = PathBuf::from(&resolved[0]);
         let metadata = std::fs::metadata(&path)
             .map_err(|_| error("引用素材无法读取，请检查文件位置后重试"))?;
         if !metadata.is_file() { return Err(error("引用素材缺少原文件，请重新选择")); }
-        if video && chat_video_path(&resolved[0]) {
+        if video && chat_video_path(&resolved[0]) || audio && chat_audio_path(&resolved[0]) {
             paths.push(resolved[0].clone());
             continue;
         }
@@ -205,6 +210,8 @@ fn append_chat_references(input: &mut Vec<Value>, paths: &[String]) {
         let alias = format!("image{}", index + 1);
         if chat_video_path(path) {
             input.push(json!({"type":"text","text":format!("素材 {alias} 是本轮引用的本地视频，可供建卡及视频制作工具使用。对话只收到了视频引用。"),"text_elements":[]}));
+        } else if chat_audio_path(path) {
+            input.push(json!({"type":"text","text":format!("素材 {alias} 是本轮引用的本地音频，可供 H3 R2V 建卡使用。"),"text_elements":[]}));
         } else {
             input.push(json!({"type":"text","text":format!("以下图片对应建卡素材 {alias}"),"text_elements":[]}));
             input.push(json!({"type":"localImage","path":path}));
@@ -383,7 +390,7 @@ pub async fn local_chat_send(
     if paid_authorization.is_some() && provider != ChatProvider::DshCloud {
         return Err(error("本轮 Bcoin 授权仅适用于云端 DSH 对话。"));
     }
-    enum Runtime { Codex(String), DshLocal(dsh::LocalConnection), DshCloud(String, bool, bool) }
+    enum Runtime { Codex(String), DshLocal(dsh::LocalConnection), DshCloud(String, Value) }
     let runtime = match provider {
         ChatProvider::CodexLocal => {
             super::codex::require_byo(&entitlement, &auth).await?;
@@ -418,7 +425,7 @@ pub async fn local_chat_send(
             };
             cloud_chat::ensure_account(&auth,&account)?;
             if input.dsh_skill.is_some() && quote["dsh_vps_skills_available"] != true { return Err(error("云端 DSH 技能暂未开放")); }
-            Runtime::DshCloud(account, quote["image_card_provider"] == true, quote["video_card_options"] == true)
+            Runtime::DshCloud(account, quote)
         }
         ChatProvider::DshLocal => {
             super::codex::require_byo(&entitlement, &auth).await?;
@@ -468,12 +475,15 @@ pub async fn local_chat_send(
                 cancel_rx,
             )
             .await,
-            Runtime::DshCloud(account, image_card_provider, video_card_options) => {
+            Runtime::DshCloud(account, quote) => {
                 let mut pending = dsh_vps::Pending::new(&turn,account);
                 match dsh_vps::create_body(&db, &id, &turn, &pending.key, input.dsh_skill.as_ref()) {
                     Ok(mut body) => {
-                        if image_card_provider && input.dsh_skill.is_none() { body["image_card_provider"] = json!(true); }
-                        if video_card_options && input.dsh_skill.is_none() { body["video_card_options"] = json!(true); }
+                        if input.dsh_skill.is_none() {
+                            for capability in ["image_card_provider", "video_card_options", "h3_r2v"] {
+                                if quote[capability] == true { body[capability] = json!(true); }
+                            }
+                        }
                         if let Some(authorization) = &paid_authorization {
                             authorization.apply(&mut body);
                             pending.paid = true;

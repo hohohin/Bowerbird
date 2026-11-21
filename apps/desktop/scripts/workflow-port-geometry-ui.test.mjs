@@ -3,7 +3,7 @@ import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 const cache = '.tmp/workflow-port-geometry-vite';
-const server = await createServer({ configFile: false, cacheDir: cache, optimizeDeps: { include: ['react', 'react-dom/client', 'react-dom'] },
+const server = await createServer({ configFile: false, cacheDir: cache, optimizeDeps: { noDiscovery: true, include: ['react', 'react-dom/client', 'react-dom'] },
   server: { host: '127.0.0.1', port: 17936, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 let browser;
@@ -19,10 +19,21 @@ try {
       import(`/${cache}/deps/react.js`), import(`/${cache}/deps/react-dom_client.js`), import(`/${cache}/deps/react-dom.js`), import('/src/lib/useWorkflowPortGeometry.ts'),
     ]);
     const original = HTMLElement.prototype.getBoundingClientRect;
+    const originalTransform = SVGGraphicsElement.prototype.getScreenCTM;
     window.reads = 0;
+    window.tableReads = 0;
+    window.transformReads = 0;
+    window.geometryZoom = 0.625;
     HTMLElement.prototype.getBoundingClientRect = function () {
-      if (this.matches('[data-canvas-node-id],[data-workflow-cell],[data-workflow-text-input],[data-canvas-cell]')) window.reads++;
+      if (this.matches('[data-canvas-node-id],[data-workflow-cell],[data-workflow-text-input],[data-canvas-cell]')) {
+        window.reads++;
+        if (this.closest('[data-canvas-node-id="table"]')) window.tableReads++;
+      }
       return original.call(this);
+    };
+    SVGGraphicsElement.prototype.getScreenCTM = function () {
+      window.transformReads++;
+      return originalTransform.call(this);
     };
     window.geometry = null;
     function Cells() {
@@ -34,17 +45,28 @@ try {
           React.createElement('button', { key: revision, 'data-workflow-cell': 'cell', style: { position: 'absolute', left: 200 + revision * 10, top: 10, padding: 0, border: 0, width: 10, height: 10 } }),
           React.createElement('button', { 'data-workflow-text-input': 'cell', 'data-content-input-type': 'image', style: { position: 'absolute', left: 0, top: 20, padding: 0, border: 0, width: 10, height: 10 } })));
     }
+    const late = { id: 'late', x: 500, y: 400, width: 100, height: 60 };
+    function LateCard() {
+      const [mounted, setMounted] = React.useState(false);
+      window.mountLateCard = () => flushSync(() => setMounted(true));
+      return mounted ? React.createElement('div', { 'data-canvas-node-id': late.id,
+        style: { position: 'absolute', left: late.x, top: late.y, width: late.width, height: late.height } },
+        React.createElement('div', { 'data-canvas-cell': 'result', style: { width: 100, height: 60 } })) : null;
+    }
+    const getZoom = () => window.geometryZoom;
     function Fixture({ x = 20, y = 30, width = 300, height = 200, payloadJson = 'a', connected = true, second = false }) {
       const svg = React.useRef(null);
       const node = { id: 'table', x, y, width, height, payloadJson };
       const targets = connected ? [{ node, kind: 'output', port: 'cell' }, { node, kind: 'output', port: 'cell' },
-        { node, kind: 'cell', port: 'second' }, ...(second ? [{ node, kind: 'input', port: 'cell', image: true }] : [])] : [];
-      const rect = useWorkflowPortGeometry(svg, targets);
-      window.geometry = { output: rect(node, 'output', 'cell'), embedded: rect(node, 'cell', 'second'), input: rect(node, 'input', 'cell', true) };
-      return React.createElement('div', { className: 'canvas-plane', style: { position: 'relative', transform: 'scale(0.625)', transformOrigin: '0 0' } },
+        { node, kind: 'cell', port: 'second' }, { node: late, kind: 'cell', port: 'result' },
+        ...(second ? [{ node, kind: 'input', port: 'cell', image: true }] : [])] : [];
+      const rect = useWorkflowPortGeometry(svg, targets, getZoom);
+      window.geometry = { output: rect(node, 'output', 'cell'), embedded: rect(node, 'cell', 'second'),
+        input: rect(node, 'input', 'cell', true), late: rect(late, 'cell', 'result') };
+      return React.createElement('div', { className: 'canvas-plane', style: { position: 'relative', transform: `scale(${getZoom()})`, transformOrigin: '0 0' } },
         React.createElement('svg', { ref: svg, style: { position: 'absolute', width: 1, height: 1, overflow: 'visible' } }),
         React.createElement('div', { 'data-canvas-node-id': 'table', style: { position: 'absolute', left: x, top: y, width, height } },
-          React.createElement(Cells)));
+          React.createElement(Cells)), React.createElement(LateCard));
     }
     const root = createRoot(document.getElementById('root'));
     window.renderGeometry = props => flushSync(() => root.render(React.createElement(React.StrictMode, {}, React.createElement(Fixture, props))));
@@ -60,7 +82,7 @@ try {
   await page.evaluate(() => { window.reads = 0; for (let i = 0; i < 20; i++) window.renderGeometry({ x: 100 + i, y: 200 + i }); });
   assert.equal(await page.evaluate(() => window.reads), 0, 'translation must use cached local coordinates');
   assert.deepEqual(await page.evaluate(() => window.geometry.output), { x: 319, y: 269, width: 10, height: 10 });
-  await page.evaluate(() => { window.reads = 0; document.querySelector('.canvas-plane').style.transform = 'translate(70px, 40px) scale(1.75)'; });
+  await page.evaluate(() => { window.reads = 0; window.geometryZoom = 1.75; document.querySelector('.canvas-plane').style.transform = 'translate(70px, 40px) scale(1.75)'; });
   await page.waitForTimeout(100);
   assert.equal(await page.evaluate(() => window.reads), 0, 'camera transform must not remeasure sockets');
 
@@ -78,6 +100,12 @@ try {
   await page.waitForFunction(() => window.geometry.output?.x === 329);
   assert.equal(await page.locator('[data-workflow-cell="cell"]').count(), 1,
     'child-local replacement refreshes cached elements without a parent prop change');
+  await page.waitForTimeout(100);
+  await page.evaluate(() => { window.tableReads = 0; window.mountLateCard(); });
+  await page.waitForFunction(() => window.geometry.late?.width === 100);
+  assert.deepEqual(await page.evaluate(() => window.geometry.late), { x: 500, y: 400, width: 100, height: 60 },
+    'a connected source can mount after the geometry observer');
+  assert.equal(await page.evaluate(() => window.tableReads), 0, 'late mount does not remeasure already mounted cards');
   await page.evaluate(() => window.renderGeometry({ connected: false }));
   await page.waitForFunction(() => !window.geometry.output && !window.geometry.embedded);
   await page.evaluate(() => { window.unmountGeometry(); window.reads = 0; });
@@ -85,6 +113,7 @@ try {
   assert.equal(await page.evaluate(() => window.reads), 0, 'unmount releases observers and queued frames');
   await page.evaluate(() => window.renderGeometry({}));
   await page.waitForFunction(() => window.geometry.output?.x === 220);
+  assert.equal(await page.evaluate(() => window.transformReads), 0, 'use the live zoom without forcing SVG layout');
   assert.deepEqual(errors, []);
-  console.log('PASS: connected port deduplication, cached drag coordinates, camera independence, row resize tracking without parent updates, fractional column width, socket replacement, disconnect and StrictMode cleanup');
+  console.log('PASS: connected port deduplication, cached drag coordinates, camera independence, row resize tracking without parent updates, fractional column width, socket replacement, late mount, disconnect and StrictMode cleanup');
 } finally { await browser?.close(); await server.close(); }

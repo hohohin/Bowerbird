@@ -20,7 +20,7 @@ try {
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     const { DEFAULT_COMFY_VIDEO, comfyVideoOptionsForMode } = await import('/src/lib/comfyVideo.ts');
     const check = (ok, message) => { if (!ok) throw Error(message); };
-    const { cleanH3OptimizedPrompt, restoreH3VideoAudioReference } = await import('/src/lib/h3PromptOptimization.ts');
+    const { cleanH3OptimizedPrompt, restoreH3VideoAudioReference, restoreH3R2VReferences, h3R2VPromptReferences, h3OptimizationInstruction } = await import('/src/lib/h3PromptOptimization.ts');
     check(cleanH3OptimizedPrompt('integrated_multimodal_description: 正文') === '正文', 'field label removed');
     check(cleanH3OptimizedPrompt('参考 <Picture 1>\n  integrated_multimodal_description：正文\n下一行') === '参考 <Picture 1>\n正文\n下一行', 'reference and line breaks preserved');
     check(cleanH3OptimizedPrompt('她说：<d>[Chinese] integrated_multimodal_description: </d>') === '她说：<d>[Chinese] integrated_multimodal_description: </d>', 'spoken literal preserved');
@@ -29,6 +29,15 @@ try {
     check(restoreH3VideoAudioReference('使用 <Audio 1>', audioOutput) === audioOutput, 'the same tag may appear in multiple sections');
     check(restoreH3VideoAudioReference('使用 <Audio 1>', '你好。') === '使用 <Audio 1>', 'existing audio references survive a rewrite');
     check(restoreH3VideoAudioReference('你好。', '使用 <Audio 2>') === '你好。', 'unknown audio refs are never accepted');
+    const counts = h3R2VPromptReferences({ referenceImages: ['image-a', 'image-b'], referenceVideos: ['clip-private'], referenceAudios: ['sound-private'] });
+    const r2vSource = '<Picture 2> 主体沿 <Video 1> 的运镜出现。';
+    const r2vResult = '<Picture 2> 的主体沿 <Video 1> 的运镜出现，声场跟随 <Audio 1>。';
+    check(restoreH3R2VReferences(r2vSource, r2vResult, counts) === r2vResult, 'valid mixed media tags can be retained and used');
+    check(restoreH3R2VReferences(r2vSource, r2vResult.replace('<Picture 2>', '<Picture 1>'), counts) === r2vSource, 'role changes preserve the original');
+    check(restoreH3R2VReferences(r2vSource, r2vResult.replace('<Video 1>', '<Video 2>'), counts) === r2vSource, 'unavailable references preserve the original');
+    const r2vInstruction = h3OptimizationInstruction({ prompt: r2vSource, mode: 'r2v', seconds: 5, ratio: 'auto', firstFrameCount: 0, lastFrameCount: 0, ...counts });
+    check(!r2vInstruction.includes('private') && JSON.parse(r2vInstruction.split('\n')[1]).parameters.referenceVideoCount === 1,
+      'R2V optimization exposes media counts, never local asset identities');
     const original = '她先看向画面左下，再抬眼看向右上。镜头先固定，最后快速拉远到半身，伴随子弹时间感。';
     const optimized = '单一连续镜头。开场固定低机位锁骨以上特写，她先看向画面左下。随后优雅地抬眼看向画面右上，镜头在最后快速后拉至半身，人物动作极慢，保持视线方向。';
     const entitlement = { user_id: 'tester', is_test_account: true, tier: 'pro', offline_state: 'fresh', balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true, can_use_agent_runs: true, max_parallel_agent_runs: 3, allowed_agent_skills: ['bowerbird-unified-agent'], agent_budget_options: ['unified-standard'] }, generation_services: [] };

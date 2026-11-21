@@ -4,7 +4,9 @@ import { createLibraryPane, LibraryPaneContext, registerLibraryPane } from "../l
 import type { LibrarySource } from "../lib/localFileMode";
 import type { CatalogKind } from "../lib/materialCatalog";
 import type { Asset } from "../lib/types";
+import { notifyError } from "../lib/notify";
 import { documentMedia } from "../lib/textDocuments";
+import { isVideoAsset } from "../lib/videoGeneration";
 import { useStore } from "../store";
 import { AssetDetail } from "./AssetDetail";
 import { AssetContextMenu } from "./AssetContextMenu";
@@ -87,7 +89,11 @@ export function TextWorkspaceLibrary({ open, projectId, onInsert, onClose, onNav
   const [menu, setMenu] = useState<ReturnType<typeof useStore.getState>["contextMenu"]>(null);
   const openContextMenu: ReturnType<typeof useStore.getState>["openContextMenu"] = (x, y, assetId, context) => setMenu({ x, y, assetId, workspaceProjectId: scopeId, ...context });
   function changeSource(value: string) { pane.mode.getState().openSource(value as LibrarySource); }
-  function insert(asset: Asset) { if (documentMedia(asset)) onInsert(asset); else setDetail(asset.id); }
+  function insert(asset: Asset) {
+    if (documentMedia(asset)) onInsert(asset);
+    else if (isVideoAsset(asset)) notifyError(new Error("素材原文件不可用"), "无法插入视频素材");
+    else setDetail(asset.id);
+  }
   const closeLibrary = () => { if (picking) setPicking(false); else onClose(); };
   const navigation = <header className="library-browser-heading"><div className="library-floating-navigation">
     <LibrarySourceTabs project={!!projectId} value={source} onChange={changeSource} tabShortcut={false}/>

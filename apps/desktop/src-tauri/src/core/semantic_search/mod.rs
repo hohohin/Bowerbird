@@ -5,6 +5,8 @@ pub(crate) mod index;
 pub(crate) mod model;
 pub(crate) mod query;
 pub(crate) mod runtime;
+mod schedule;
+mod scope;
 mod source;
 
 #[cfg(test)]

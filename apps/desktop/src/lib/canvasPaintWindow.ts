@@ -1,11 +1,36 @@
 import type { CanvasPoint } from "./canvasLogic";
 
+type WireBounds = Pick<DOMRect, "x" | "y" | "width" | "height">;
+
+// Our absolute wire paths use M/C for curves and H/V for obstacle routing.
+// The control points bound a Bézier curve without forcing SVG layout.
+function wireBounds(path: SVGPathElement): WireBounds | undefined {
+  const segments = path.getAttribute("d")?.trim().split(/(?=[MCHV])/);
+  if (!segments?.[0]?.startsWith("M")) return;
+  let x = 0, y = 0;
+  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+  for (const segment of segments) {
+    const command = segment[0];
+    const values = segment.slice(1).trim().split(/[ ,]+/).map(Number);
+    const size = command === "C" ? 6 : command === "M" ? 2 : 1;
+    if (values.length !== size || values.some(value => !Number.isFinite(value))) return;
+    if (command === "H") x = values[0];
+    if (command === "V") y = values[0];
+    for (let i = 0; i < values.length; i += 2) {
+      if (size !== 1) { x = values[i]; y = values[i + 1]; }
+      left = Math.min(left, x); right = Math.max(right, x);
+      top = Math.min(top, y); bottom = Math.max(bottom, y);
+    }
+  }
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
 // Keep DOM geometry, focus order, media and wire endpoints intact. Only skip
 // painting cards well outside the stage; the real editor is always used in view.
 export function canvasPaintWindow(plane: HTMLElement, stage: HTMLElement) {
   type Card = { parts: Set<HTMLElement>; x: number; y: number; w: number; h: number; clipped: boolean };
   const cards = new Map<string, Card>(), owners = new Map<HTMLElement, Card>();
-  const wires = new Map<SVGPathElement, DOMRect>(), changedWires = new Set<SVGPathElement>();
+  const wires = new Map<SVGPathElement, WireBounds>(), changedWires = new Set<SVGPathElement>();
   let width = stage.clientWidth, height = stage.clientHeight;
   let pan: CanvasPoint = { x: 0, y: 0 }, zoom = 1, pending = 0;
   const flag = "data-canvas-offscreen";
@@ -15,14 +40,17 @@ export function canvasPaintWindow(plane: HTMLElement, stage: HTMLElement) {
     // Include protruding labels/ports and enough runway for quick camera moves.
     const pad = 120 + 80 * zoom, left = (-pan.x - pad) / zoom, top = (-pan.y - pad) / zoom;
     const right = (width - pan.x + pad) / zoom, bottom = (height - pan.y + pad) / zoom;
-    // The curve may enter the viewport with both endpoints offscreen. Its true
+    // The curve may enter the viewport with both endpoints offscreen. Its
     // board-space bounds change on a new path, never on a camera move.
-    // WebView2 reports a zero box for display:none paths. Enable all dirty
-    // paths together before the geometry read, then reapply the new window.
-    for (const path of changedWires) path.removeAttribute(flag);
+    const fallback: SVGPathElement[] = [];
     for (const path of changedWires) {
-      if (path.isConnected) wires.set(path, path.getBBox());
+      if (!path.isConnected) continue;
+      const box = wireBounds(path);
+      if (box) wires.set(path, box);
+      else { path.removeAttribute(flag); fallback.push(path); }
     }
+    // WebView2 returns a zero box for a hidden path.
+    for (const path of fallback) wires.set(path, path.getBBox());
     changedWires.clear();
     for (const [path, box] of wires) {
       const outside = box.x + box.width < left || box.x > right || box.y + box.height < top || box.y > bottom;

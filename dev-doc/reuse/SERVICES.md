@@ -22,6 +22,8 @@ Cloud 图片新增模型复用 [modelForService／arkImageRequestBody](../../app
 
 云端 DSH 要求在画板建卡时，复用 [桌面聊天桥](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_vps.rs) 与原生建卡事务，VPS 不直写本地数据库。需要在云端执行受保护的聊天技能时，复用 [Worker 的 DSH 聊天入口](../../apps/agent-worker/src/cloud-chat/dsh.ts) 和既有技能加载器；聊天协议及服务端权限见 [Cloud 对话](../../apps/cloud/CHAT.md)。
 
+H3 多素材建卡复用[共享工具定义](../../apps/cloud/supabase/functions/_shared/chat-card-tool.json)和[原生编译与持久化](../../apps/desktop/src-tauri/src/core/local_chat_cards.rs)。`referenceAliases` 仍按当轮附件位置解析，桌面按本地素材类型接到 R2V 的图片、视频与独立音频端口。Cloud 通过报价宣告和请求回传 `h3_r2v` 后提供新模式及连接选项。
+
 本机 DSH 的 Agent 卡片复用[本机聊天 preset](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_local.rs)，由官方 Skill 插件发现和加载用户技能，建卡仍走同一轮的 `create_canvas_cards`。[调用方式与工具范围](../CHAT-PROVIDERS.md#2026-11-15-本机-dsh-在卡片第一轮使用-skill)
 
 - 桌面批量文件操作从 [startFileTask](../../apps/desktop/src/lib/fileTasks.ts) 提交已确认的原件或目录条目与目标。当前会话的受理、取消、状态和失败项重试由 [原生文件任务](../../apps/desktop/src-tauri/src/commands/file_tasks.rs) 管理。进度显示复用 [FileTaskStatusPanel](../../apps/desktop/src/components/FileTaskStatus.tsx)。[文件操作契约](../FOLDER-MODE.md#2026-11-12-文件操作后台执行与新建位置源码待发布)
@@ -104,9 +106,13 @@ H3 视频三模式共用可选录音素材 ID 与既有媒体连线，`comfy_vid
 
 ## 以文搜图
 
-- [语义搜索命令](../../apps/desktop/src-tauri/src/commands/semantic_search.rs) 供 [semanticSearch.ts](../../apps/desktop/src/lib/semanticSearch.ts) 和 [LibrarySemanticSearch](../../apps/desktop/src/components/LibrarySemanticSearch.tsx) 使用。模型按需安装，索引由用户启用、暂停或恢复。已提交的结果页和选择 ID 使用同一会话，每页最多 60 项。并发、取消和会话过期由本机处理。
-- [索引](../../apps/desktop/src-tauri/src/core/semantic_search/index.rs) 通过 [0060](../../apps/desktop/src-tauri/sql/0060_semantic_image_embeddings.sql) 接收入库和内容版本变更，后台读取原件并校验 SHA-256。连接目录的内容变更通知和显式刷新可绕过大小与修改时间快路。索引仅写入当前素材库的 SQLite，推理和文件读取在主库锁之外进行。
-- [查询](../../apps/desktop/src-tauri/src/core/semantic_search/query.rs) 复用 `CatalogFilter::sql`、目录可见性和生成来源，先确定范围，再逐张精确评分。使用当前 SigLIP2 FP32 模型的余弦分数门槛，只将达标图片纳入最多 240 项的结果会话。已索引数统计参与评分的向量，结果数统计保留匹配。读取分页或选区前复核结果内素材的范围和内容，外接原件离线时按目录可见性保留有效的已索引结果。分类权重、文件夹条目选择及关键词搜索沿原入口。Windows 26.11.2001 已发布首版，相关性筛选源码待发布。
+- 桌面搜索使用现有 Tauri 命令。模型按需安装，已提交的结果页和选择 ID 使用同一会话，每页最多 60 项。并发、取消和会话过期由本机处理。普通重新查询保留旧会话供当前界面使用，直到界面释放、超出会话数量上限或到期。 [语义搜索命令](../../apps/desktop/src-tauri/src/commands/semantic_search.rs) · [调用](../../apps/desktop/src/lib/semanticSearch.ts) · [搜索入口](../../apps/desktop/src/components/LibrarySemanticSearch.tsx)
+- 索引通过 0060 接收入库和内容版本变更，后台读取原件并校验 SHA-256。连接目录的内容变更通知和显式刷新可绕过大小与修改时间快路。索引仅写入当前素材库的 SQLite，推理和文件读取在主库锁之外进行。 [索引](../../apps/desktop/src-tauri/src/core/semantic_search/index.rs) · [0060](../../apps/desktop/src-tauri/sql/0060_semantic_image_embeddings.sql)
+- 定时更新候选复用单个索引工作器，应用设置保存开关和 15／60 分钟间隔，0061 推进每库的轮次和上次／下次时间。默认开启、间隔 15 分钟，模型已安装时可自动开始首轮。本轮按持久化的开始时间判断重试是否到期，离线原件产生的新重试延至后续轮次，新入库待办仍可本轮处理。队列耗尽后沿现有游标最多复核 32 项。关闭自动更新时撤销自动轮次的任务租约，手动轮次继续完成。可用 `update` 手动运行一轮，重复更新共用当前操作 ID。持久暂停优先，继续需调用 `resume`。 [调度](../../apps/desktop/src-tauri/src/core/semantic_search/schedule.rs) · [0061](../../apps/desktop/src-tauri/sql/0061_semantic_index_preferences.sql)
+- 全局设置已保存、SQLite 设置仍待应用时，保存回执报告可重试状态并保留全局设置。工作器暂停领取任务、撤销旧向量和提交推理结果，直到索引范围与已保存设置一致。原手动轮次在同步后可继续。 [设置命令](../../apps/desktop/src-tauri/src/commands/settings.rs) · [索引](../../apps/desktop/src-tauri/src/core/semantic_search/index.rs)
+- 查询复用 `CatalogFilter::sql`、目录可见性和生成来源，先确定范围，再逐张精确评分。使用当前 SigLIP2 FP32 模型的余弦分数门槛，只将达标图片纳入最多 240 项的结果会话。已索引数统计参与评分的向量，结果数统计保留匹配。读取分页或选区前复核结果内素材的范围和内容，外接原件离线时按目录可见性保留有效的已索引结果。默认纳入生成图片，关闭后索引进度、工作器和查询应用同一生成来源判定，原向量保留，旧结果会话失效。分类权重、文件夹条目选择及关键词搜索沿原入口。 [查询](../../apps/desktop/src-tauri/src/core/semantic_search/query.rs) · [范围](../../apps/desktop/src-tauri/src/core/semantic_search/scope.rs)
+- Windows 原生隔离回归覆盖语义搜索、应用设置、目录筛选、生成画廊和库视图，合计 65 项通过、4 项显式忽略。语义搜索 31 项通过，包括带 71 张离线原件的跨重启轮次、设置同步故障时阻止过期提交并恢复原手动轮次。设置保存队列 6 项通过，包括待应用回执保留已写入设置。界面预览待确认，定时索引候选源码尚未发布。 [轮次用例](../../apps/desktop/src-tauri/src/core/semantic_search/index/round_tests.rs) · [搜索用例](../../apps/desktop/src-tauri/src/core/semantic_search/tests.rs)
+- Windows 隔离 WebView2 使用实际 FP32 模型和独立测试图片完成三次启动。缺模型时保持等待，已有模型自动完成首轮并排定 900 秒后的下次更新。关闭自动更新后手动入索引，暂停在重启后保留。排除生成图片后旧会话失效，重新纳入时仍使用原向量记录，内容哈希与写入时间一致。全程使用隔离库和应用配置。 [本机证据](../../.tmp/semantic-scheduler-smoke/run-1795220997420/evidence.json)
 - 当前固定模型的门槛为 **0.085**，含等于。Windows x64 校准使用 35 张随应用分发的样图、6 张 USFWS 公共领域鸟类照片和 46 条中文短查询，按图像场景拆分开发组与留出组。0.085 是保留开发组全部 12 个正例查询场景的最高 0.005 步长候选。已查看的留出组结果为 12/12 个正例查询有命中，21/22 对正例保留，2/815 对负例误收，29 个无目标场景中 28 个返回空结果。开发组有 6/29 个无目标场景误收。两组无鸟场景的「小鸟」均返回零条，最高干扰分为 0.08008，留出小鸟分数为 0.09340 和 0.09118。样本覆盖海报等难负例，留出组仍有「红雀」误匹配红胸旅鸫。原始样本来源、分组及分数保存在 `apps/desktop/src-tauri/.tmp/semantic-search-probe/bird-calibration/`。
 - 固定 0.085 后复跑此前的 26 条长描述和 35 张样图。这批描述独立于门槛拟合，沿用已有的非穷尽标注。37 对已标注匹配全部保留，另返回 50 对未标注候选，按已有标注计算的宏平均精确率为 53.08%。逐条移除已标注匹配后，7/26 条返回空结果，19/26 条仍有候选。门槛解决用弱匹配填满结果的问题，物种近邻和多条件描述的精确度仍需进一步验证。
 - Windows x64 较早冻结源码完成隔离 WebView2、真实 IPC 和 FP32 模型验收，3 张 PNG 的中文查询均命中首位，建索引 12.37 秒，首查 18.65 秒，后两次 120 和 107 毫秒。本次相关性修正的 Ryzen 7 9700X debug SQLite 探针读取 1 万条合成向量并保留 240 条，热搜索中位数 600 毫秒，启用生成来源筛选时为 633 毫秒，60 项分页和选择 ID 请求中位数为 6.5–11.0 毫秒。探针计时范围为本机 SQLite 读取和排序。模型产物、预处理和样本记录见[模型说明](../../apps/desktop/src-tauri/src/core/semantic_search/model/README.md)。Apple Silicon 实机和更大资料库的验收待补。

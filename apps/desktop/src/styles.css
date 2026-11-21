@@ -455,6 +455,19 @@ html[data-theme="light"] [role="button"]:focus-visible {
 .library-project-folder { position: relative; width: 100%; margin-bottom: 8px; border: 1px solid rgb(var(--bb-blue-rgb) / 32%); border-radius: 8px; text-align: left; background: linear-gradient(145deg, rgb(var(--bb-blue-rgb) / 9%), rgb(var(--bb-ink-rgb) / 3%)); }
 .library-project-enter { display: block; width: 100%; padding: 12px; border-radius: inherit; text-align: left; }
 .library-project-enter:disabled { opacity: .65; cursor: wait; }
+.project-folder-opening {
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  top: 12px;
+  padding: 4px 8px;
+  color: var(--bb-ink);
+  background: var(--bb-surface);
+  border: 1px solid var(--bb-line);
+  border-radius: 2px;
+  font-size: 12px;
+  pointer-events: none;
+}
 .library-project-expand { position: absolute; top: 17px; right: 17px; display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--bb-line); border-radius: 4px; background: var(--bb-surface); color: var(--bb-muted); box-shadow: 0 1px 4px rgb(0 0 0 / 8%); }
 .library-project-expand:hover { color: var(--bb-blue); border-color: var(--bb-blue); }
 .library-project-folder:hover { border-color: var(--bb-blue); background: rgb(var(--bb-blue-rgb) / 12%); }
@@ -2929,6 +2942,21 @@ html[data-theme="light"] .app-form-input:focus {
   pointer-events: none;
   opacity: 0.72;
 }
+
+.canvas-opening {
+  position: absolute;
+  inset: 0;
+  z-index: 48;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--bb-bg);
+  color: var(--bb-ink);
+  font-size: 13px;
+}
+.canvas-opening svg { animation: spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .canvas-opening svg { animation: none; } }
 
 .canvas-load-failure {
   display: grid;

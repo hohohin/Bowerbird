@@ -157,21 +157,29 @@ async function replicationCapabilities(admin: SupabaseClient) {
   });
 }
 
-async function fileSpeechCapabilities(admin: SupabaseClient) {
+// true = an individually authorized pilot, false = public, null = recover only.
+function fileSpeechPilotMode(userId: string): boolean | null {
+  const pilotUserId = Deno.env.get("FILE_SPEECH_PILOT_USER_ID")?.trim();
+  if (pilotUserId) return pilotUserId === userId ? true : null;
+  return Deno.env.get("FILE_SPEECH_ENABLED") === "true" ? false : null;
+}
+
+async function fileSpeechCapabilities(admin: SupabaseClient, userId: string) {
   const result = { available: false, credits: null as number | null, max_duration_ms: FILE_SPEECH_MAX_DURATION_MS };
-  if (Deno.env.get("FILE_SPEECH_ENABLED") !== "true") return result;
+  const pilot = fileSpeechPilotMode(userId);
+  if (pilot === null) return result;
   const { data, error } = await admin.from("service_costs").select("active,unit_cost,parameters")
     .eq("service", FILE_SPEECH_SERVICE).maybeSingle();
   if (error) throw new ApiError("internal_error", "读取视频转录报价失败", true);
-  if (replicationPriceAvailable(data ?? undefined)) {
+  if (data && replicationPriceAvailable(data) && Number.isSafeInteger(data.unit_cost) &&
+      (data.parameters?.pilot_only === true) === pilot) {
     result.available = true;
-    result.credits = Number(data!.unit_cost);
+    result.credits = Number(data.unit_cost);
   }
   return result;
 }
 
 async function prepareFileSpeech(admin: SupabaseClient, userId: string, raw: Record<string, unknown>, cors: HeadersInit) {
-  if (Deno.env.get("FILE_SPEECH_ENABLED") !== "true") throw new ApiError("not_configured", "整段转录暂未开放", false, 503);
   const key = raw.idempotency_key;
   const credits = raw.expected_credits;
   if (typeof key !== "string" || !key.startsWith(FILE_SPEECH_KEY_PREFIX) || key.length > 200 ||
@@ -187,10 +195,13 @@ async function prepareFileSpeech(admin: SupabaseClient, userId: string, raw: Rec
   const manifest = JSON.stringify({ schema_version: 1, operation: FILE_SPEECH_OPERATION, audio });
   const { data, error } = await admin.rpc("begin_file_speech_upload", {
     p_user_id: userId, p_key: key, p_hash: await sha256Hex(manifest), p_expected_credits: credits,
-    p_source_duration_ms: audio.source_duration_ms,
+    p_source_duration_ms: audio.source_duration_ms, p_pilot: fileSpeechPilotMode(userId),
     ...usageParameters(),
   });
   if (error?.details === "stale_quote") throw new ApiError("invalid_request", "视频转录价格已变化，请重新核对报价", false, 409);
+  if (error?.details === "file_speech_closed") throw new ApiError("not_configured", "整段转录暂未开放", false, 503);
+  if (error?.details === "file_speech_pilot_used") throw new ApiError("invalid_request", "本次试转录名额已使用。已提交的任务可在原视频预览中恢复。", false, 409);
+  if (error?.details === "price_unavailable") throw new ApiError("not_configured", "视频转录暂无可用报价");
   checkTextAcceptance(error);
   if (!data) throw new ApiError("internal_error", "视频转录任务状态未知，请按原任务恢复", true);
   const job = data as UnderstandJob;
@@ -238,7 +249,7 @@ Deno.serve(async (request) => {
     userId = user.id;
     const raw = await readJsonBody(request, 50 * 1024 * 1024);
     if (raw.action === "replication-capabilities") return jsonResponse({ services: await replicationCapabilities(admin) }, 200, cors);
-    if (raw.action === "file-speech-capabilities") return jsonResponse(await fileSpeechCapabilities(admin), 200, cors);
+    if (raw.action === "file-speech-capabilities") return jsonResponse(await fileSpeechCapabilities(admin, user.id), 200, cors);
     if (raw.action === "file-speech-prepare") return await prepareFileSpeech(admin, user.id, raw, cors);
     if (raw.action === "file-speech-commit") return await commitFileSpeech(admin, user.id, raw.job_id, cors);
     if (raw.action === "get-by-key") {

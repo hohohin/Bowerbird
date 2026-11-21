@@ -8,7 +8,7 @@ const server = await createServer({ configFile: false, cacheDir: '.tmp/h3-modes/
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {
-  for (const [mode, audioEnabled] of ['text', 'reference', 'frames'].flatMap(mode => [[mode, false], [mode, true]])) {
+  for (const [mode, audioEnabled] of [...['text', 'reference', 'frames'].flatMap(mode => [[mode, false], [mode, true]]), ['r2v', true]]) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     page.setDefaultTimeout(15000);
     console.log(`Checking composer ${mode}${audioEnabled ? ' with audio' : ''}`);
@@ -21,6 +21,7 @@ try {
       const assets = [
         ...originals.map(asset => ({ ...asset, ext: 'png', store_path: `/mock/${asset.id}.png` })),
         { ...originals[0], id: 'speech', name: '测试参考录音', ext: 'wav', duration: 3.9, thumb_path: null, store_path: '/mock/speech.wav' },
+        { ...originals[0], id: 'clip', name: '测试参考视频', ext: 'mp4', duration: 3, thumb_path: null, store_path: '/mock/clip.mp4' },
       ];
       const sources = Object.fromEntries(originals.map(asset => [`/mock/${asset.id}.png`, asset.store_path]));
       const convert = window.__TAURI_INTERNALS__.convertFileSrc;
@@ -45,6 +46,7 @@ try {
     await editor.fill(mode === 'reference' ? '<Picture 1> 沿着海岸行走' : '海边日落，镜头缓慢推进');
     await editor.press('End');
     const references = mode === 'text' ? [] : ['a', 'b'];
+    if (mode === 'r2v') references.push('clip');
     if (audioEnabled) references.push('speech');
     for (const assetId of references) {
       await page.evaluate(assetId => window.dispatchEvent(new CustomEvent('bowerbird://board-asset-picked', { detail: { assetId } })), assetId);
@@ -54,7 +56,7 @@ try {
     await page.locator('[data-model-key="local:h3"]').click();
     if (mode !== 'frames') {
       await dock.getByLabel('本地视频模式', { exact: true }).click();
-      await page.getByRole('option', { name: mode === 'text' ? '文生视频' : '单图', exact: true }).click();
+      await page.getByRole('option', { name: mode === 'text' ? '文生视频' : mode === 'r2v' ? '多素材参考（R2V）' : '单图', exact: true }).click();
       assert.equal(await dock.getByLabel('本地视频时长（秒）').inputValue(), '5');
       assert.equal(await dock.getByLabel('本地视频分辨率', { exact: true }).innerText(), '高');
     }
@@ -70,7 +72,10 @@ try {
       assert.ok((await preview.innerText()).includes('<Picture 1>'));
       assert.ok((await preview.getByRole('status').innerText()).includes('其余 1 个参考素材'));
     }
-    if (audioEnabled) {
+    if (mode === 'r2v') {
+      const preview = page.getByRole('dialog', { name: '参考素材预览', exact: true });
+      assert.match(await preview.innerText(), /<Picture 1>[\s\S]*<Picture 2>[\s\S]*<Video 1>[\s\S]*独立录音 1[\s\S]*先编视频原声/);
+    } else if (audioEnabled) {
       const previewName = mode === 'text' ? '录音引导预览' : mode === 'reference' ? '参考图预览' : '首尾帧预览';
       const preview = page.getByRole('dialog', { name: previewName, exact: true });
       const audio = preview.locator('.composer-h3-audio');
@@ -99,14 +104,21 @@ try {
     assert.equal(result.calls.length, 1);
     assert.equal(result.calls[0].input.mode || 'frames', mode);
     assert.equal(result.calls[0].input.ratio, mode === 'text' ? '9:16' : 'auto');
-    assert.equal(result.calls[0].input.firstFrame, mode === 'text' ? '' : 'a');
+    assert.equal(result.calls[0].input.firstFrame, mode === 'text' || mode === 'r2v' ? '' : 'a');
     assert.equal(result.calls[0].input.lastFrame, mode === 'frames' ? 'b' : undefined);
-    assert.equal(result.calls[0].input.audioAssetId, audioEnabled ? 'speech' : undefined);
+    assert.equal(result.calls[0].input.audioAssetId, audioEnabled && mode !== 'r2v' ? 'speech' : undefined);
+    if (mode === 'r2v') {
+      assert.deepEqual(result.calls[0].input.referenceImages, ['a', 'b']);
+      assert.deepEqual(result.calls[0].input.referenceVideos, ['clip']);
+      assert.deepEqual(result.calls[0].input.referenceAudios, ['speech']);
+      assert.match(result.calls[0].input.prompt, /<Picture 1>[\s\S]*<Picture 2>[\s\S]*<Video 1>/);
+      assert.doesNotMatch(result.calls[0].input.prompt, /测试参考视频|测试参考录音/);
+    }
     assert.ok(!result.calls[0].input.prompt.includes('测试参考录音'));
     assert.equal(result.calls[0].input.prompt.includes('<Audio 1>'), audioEnabled && mode === 'reference');
     assert.ok(result.environment.some(call => (call.mode || 'frames') === mode));
     assert.deepEqual(errors, []);
     await page.close();
   }
-  console.log('PASS composer H3 three modes: controls, preview, defaults, mode-aware checks, exact input submission and narrow layout');
+  console.log('PASS composer H3 four modes: controls, preview, defaults, mode-aware checks, exact input submission and narrow layout');
 } finally { await browser.close(); await server.close(); }

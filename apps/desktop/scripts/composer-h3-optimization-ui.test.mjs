@@ -3,14 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } }, cacheDir: '.tmp/composer-h3-optimization/vite', server: { host: '127.0.0.1', port: 1711, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } }, optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html', 'scripts/fixtures/composer-h3-optimization.tsx'] }, cacheDir: '.tmp/composer-h3-optimization/vite', server: { host: '127.0.0.1', port: 1711, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
 page.setDefaultTimeout(10000);
 const errors = []; page.on('pageerror', error => errors.push(error.message));
 try {
-  await page.goto('http://127.0.0.1:1711/scripts/fixtures/canvas-reference/preview.html');
+  await page.goto('http://127.0.0.1:1711/scripts/fixtures/canvas-reference/preview.html', { timeout: 60000 });
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(async () => {
     const { React, createRoot } = await import('/scripts/fixtures/composer-h3-optimization.tsx');
@@ -104,7 +104,7 @@ try {
     await page.getByRole('option', { name: '文生视频', exact: true }).click();
     await actual.locator('.ProseMirror').fill('镜头先固定，然后后拉');
     await actual.getByRole('button', { name: '优化提示词', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('.composer-glass .ProseMirror')?.textContent.includes('先固定镜头')); 
+    await page.waitForFunction(() => document.querySelector('.composer-glass .ProseMirror')?.textContent.includes('先固定镜头'));
     assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p') ?? '{"document":{"nodes":[]}}').document.nodes.length), 0, 'optimizing a draft must not add H3/workflow cards');
     assert.equal(await page.evaluate(() => window.cloudCalls.length), 1);
     assert.equal(await page.evaluate(() => window.localCalls.length), 0);

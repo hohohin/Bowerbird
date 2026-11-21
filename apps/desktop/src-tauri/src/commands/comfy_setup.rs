@@ -16,10 +16,10 @@ const MANAGED_ENDPOINT: &str = "http://127.0.0.1:18188";
 const VERSION: &str = "h3-v1-comfy-0.42.1";
 #[derive(Clone, Copy, Debug, serde::Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum Mode { #[default] Frames, Reference, Text, Image, Edit }
+pub enum Mode { #[default] Frames, Reference, Text, R2v, Image, Edit }
 impl Mode {
     fn video(self) -> Option<VideoMode> {
-        match self { Self::Frames => Some(VideoMode::Frames), Self::Reference => Some(VideoMode::Reference), Self::Text => Some(VideoMode::Text), _ => None }
+        match self { Self::Frames => Some(VideoMode::Frames), Self::Reference => Some(VideoMode::Reference), Self::Text => Some(VideoMode::Text), Self::R2v => Some(VideoMode::R2v), _ => None }
     }
     fn image(self) -> bool { self.video().is_none() }
     fn names(self) -> &'static [&'static str] {
@@ -999,11 +999,12 @@ mod tests {
         assert_eq!(reference.download_bytes, 42_092_286_273);
         assert_eq!(reference.models_required, 4);
         assert_eq!(text.models_required, 5);
-        for mode in [Mode::Frames, Mode::Text, Mode::Reference] {
+        for mode in [Mode::Frames, Mode::Text, Mode::Reference, Mode::R2v] {
             let items = downloads(mode);
             assert_eq!(items.len(), mode.names().len() + 1);
-            assert_eq!(items.iter().any(|item| item.file.contains("ref2va")), mode == Mode::Reference);
-            assert_eq!(items.iter().any(|item| item.file.contains("loras/")), mode != Mode::Reference);
+            let reference = matches!(mode, Mode::Reference | Mode::R2v);
+            assert_eq!(items.iter().any(|item| item.file.contains("ref2va")), reference);
+            assert_eq!(items.iter().any(|item| item.file.contains("loras/")), !reference);
         }
         let mut previous = frames;
         previous.phase = "failed".into(); previous.message = "首尾帧环境准备失败".into();

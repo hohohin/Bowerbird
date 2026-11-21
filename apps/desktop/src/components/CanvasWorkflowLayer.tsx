@@ -42,12 +42,13 @@ import { generationProgressLabel } from "../lib/generationProgress";
 import { useStore } from "../store";
 import { canvasWirePath as path, dragWire, type DragOffset } from "../lib/canvasDragPreview";
 import { useWorkflowPortGeometry, type WorkflowPortTarget } from "../lib/useWorkflowPortGeometry";
+import { renderCanvasCards, useCanvasEntryCardContext } from "./CanvasEntryCard";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { workflowDiagnosticReport } from "../lib/workflowDiagnostics";
 import { removeWorkflowNodes, retryWorkflowSave } from "../lib/workflowRemoval";
-import { H3_VIDEO_AUDIO_PORT, WORKFLOW_CARD_DRAG_TYPE, workflowDisconnectId, workflowBindingKey, compileGenerationPrompt, selectWorkflowVideoProvider, generationInputNode, generationReferencePreviewOrder, h3RunReferences, lastGenerationRunInput, disconnectGenerationReference, reorderGenerationReferences, isWorkflowGenerationResult, workflowInputValues, workflowOrder } from "../lib/canvasWorkflow";
+import { H3_R2V_INPUT_LIMITS, H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, WORKFLOW_CARD_DRAG_TYPE, workflowDisconnectId, workflowBindingKey, compileGenerationPrompt, selectWorkflowVideoProvider, generationInputNode, generationReferencePreviewOrder, h3RunReferences, lastGenerationRunInput, disconnectGenerationReference, reorderGenerationReferences, isWorkflowGenerationResult, workflowInputValues, workflowOrder } from "../lib/canvasWorkflow";
 import { assertWorkflowAcyclic, invalidateWorkflow, newWorkflowNode, normalizeWorkflowInputSlots, workflowNodeRun, workflowRuns, workflowInputProducers, workflowConnectionError, workflowInputs, workflowOutputs,
   workflowPortY, workflowTitle, workflowCardWidth, WORKFLOW_SKILLS, type CanvasWorkflow, type WorkflowInput, type WorkflowKind, type WorkflowLoopItem, type WorkflowNode, type WorkflowPort } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode, VisualProfileSummary } from "../lib/types";
@@ -153,6 +154,10 @@ export interface MaterialAnchor { id: string; assetId?: string; video?: boolean;
 interface Props {
   provisional?: boolean;
   diagnosticTarget?: HTMLElement | null;
+  getZoom: () => number;
+  opening: boolean;
+  entryCardIds: ReadonlySet<string> | null;
+  deferredCandidateIds: ReadonlySet<string> | null;
   graphNodes: CanvasNode[];
   visibleGraphNodeIds?: ReadonlySet<string>;
   conversationCards?: ReturnType<typeof canvasConversationCards>;
@@ -213,7 +218,7 @@ function connectionForType(source: Connection, type?: WorkflowPort["type"]): Con
   return ["*latest", "*latest-image"].includes(source.cellId ?? "") && (type === "text" || type === "image")
     ? { ...source, cellId: type === "image" ? "*latest-image" : "*latest", type } : source;
 }
-export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, materials, graphNodes, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, imageCardAnchors, expandedImageCards, onCollapseImageCard, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
+export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, opening, entryCardIds, deferredCandidateIds, materials, graphNodes, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, imageCardAnchors, expandedImageCards, onCollapseImageCard, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
   const pendingCards = useRef(new Map<string, PendingConnectionCard>());
@@ -227,6 +232,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   const draftElement = useRef<SVGPathElement>(null);
   const ghostElement = useRef<HTMLDivElement>(null);
   const cardElements = useRef(new Map<string, HTMLElement>());
+  const cardRefs = useRef(new Map<string, (element: HTMLElement | null) => void>());
+  const cardObserver = useRef<ResizeObserver>();
   const agentDetailPress = useRef<{ nodeId: string; x: number; y: number } | null>(null);
   const cardHeights = useRef(new Map<string, number>());
   const nodesChanged = useRef(onNodesChanged); nodesChanged.current = onNodesChanged;
@@ -301,6 +308,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   const pending = [...pendingCards.current.values()].filter(card => card.projectId === projectId && !nodeById.has(card.node.id));
   const renderedNodes = pending.length ? [...document.nodes, ...pending.map(({ node, inputs }) => ({ ...node, inputs }))] : document.nodes;
   const collapsedAnchor = (id: string) => expandedImageCards?.has(id) ? undefined : imageCardAnchors?.get(id);
+  const cardMounted = (id: string) => entryCardIds === null || entryCardIds.has(id) || (!!deferredCandidateIds && !deferredCandidateIds.has(id));
+  const workflowNodeMounted = (node: WorkflowNode) => cardMounted(node.textTarget?.nodeId ?? node.textSource ?? collapsedAnchor(node.id)?.id ?? node.id);
   const collapsedAnchorIds = new Set([...(imageCardAnchors ?? [])].filter(([id]) => !expandedImageCards?.has(id)).map(([, anchor]) => anchor.id));
   const displayPoint = (node: WorkflowNode) => {
     const offset = expandedImageCards?.get(node.id);
@@ -350,14 +359,12 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   if (connection) sourcePort(connection);
   if (automatic?.scope) addPort(automatic.id, "cell", automatic.scope);
   if (automatic) addPort(automatic.id, automatic.side === "output" ? "output" : "input", "*auto");
-  const videoCardIds = new Set(materials.filter(item => item.video).map(item => item.id));
-  const audioCardIds = new Set(materials.filter(item => item.audio).map(item => item.id));
-  const nameCards = [
+  const nameCards = useMemo(() => [
     ...document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) })),
-    ...graphNodes.map(node => ({ id: node.id, title: node.kind === "note" ? (readCanvasNote(node).artboard ? "画板" : { text: "内容卡片", images: "内容卡片", document: "文本卡片", bubble: "气泡", section: "分区" }[readCanvasNote(node).note_type] ?? "内容卡片") : node.kind === "asset" ? audioCardIds.has(node.id) ? "音频卡片" : videoCardIds.has(node.id) ? "视频卡片" : "图片卡片" : "会话卡片" })),
+    ...graphNodes.map(node => ({ id: node.id, title: node.kind === "note" ? (readCanvasNote(node).artboard ? "画板" : { text: "内容卡片", images: "内容卡片", document: "文本卡片", bubble: "气泡", section: "分区" }[readCanvasNote(node).note_type] ?? "内容卡片") : node.kind === "asset" ? materialById.get(node.id)?.audio ? "音频卡片" : materialById.get(node.id)?.video ? "视频卡片" : "图片卡片" : "会话卡片" })),
     ...materials.filter(item => item.groupId).map(item => ({ id: item.groupId!, title: "素材组" })),
-  ];
-  const cardNames = assignCanvasCardNames(document.cardNames, nameCards);
+  ], [document.nodes, graphNodes, materialById, materials]);
+  const cardNames = useMemo(() => assignCanvasCardNames(document.cardNames, nameCards), [document.cardNames, nameCards]);
   const renderedNames = pending.length ? assignCanvasCardNames(cardNames, pending.map(({ node }) => ({ id: node.id, title: workflowTitle(node) }))) : cardNames;
   const activeNameIds = new Set([
     ...document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => node.id),
@@ -414,13 +421,22 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     else if (workflow) { onSelect(workflow.id); onPlaced({ ...workflow, width: workflowCardWidth(workflow), height: cardElements.current.get(id)?.offsetHeight ?? 400 }); }
   };
   const sourceImages = useCallback((input: WorkflowInput): string[] => {
-    if (input.groupId) { const group = groupById.get(input.groupId); return (input.autoConnect || input.mediaFilter?.includes("audio") ? group?.mediaAssetIds : group?.assetIds) ?? group?.assetIds ?? []; }
+    if (input.groupId) { const group = groupById.get(input.groupId); return (input.autoConnect || input.mediaFilter?.some(media => media === "audio" || media === "video") ? group?.mediaAssetIds : group?.assetIds) ?? group?.assetIds ?? []; }
     return workflowBindingAssetIds(input, nodeById.get(input.nodeId ?? ""), graphById.get(input.canvasNodeId ?? ""), graphNodes);
   }, [groupById, graphById, graphNodes, nodeById]);
   const inputImages = useCallback((input: WorkflowInput) => {
     const ids = sourceImages(input);
     return input.excludedAssetIds?.length ? ids.filter(id => !input.excludedAssetIds!.includes(id)) : ids;
   }, [sourceImages]);
+  function h3ReferenceAssets(input: WorkflowInput, media?: keyof typeof H3_R2V_INPUT_PORTS) {
+    const source = media ? { ...input, mediaFilter: [media] } : input;
+    return inputImages(source).filter(id => {
+      if (!media && !source.mediaFilter) return true;
+      const material = materialByAsset.get(id);
+      const type = material?.audio ? "audio" : material?.video ? "video" : workflowAssetMedia(assets.find(asset => asset.id === id));
+      return !type || (media ? media === type : source.mediaFilter?.includes(type));
+    });
+  }
   function inputMediaLabel(binding: WorkflowInput) {
     return workflowSourceMediaLabel(inputImages(binding), assets, nodeById.get(binding.nodeId ?? ""));
   }
@@ -517,7 +533,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       }
     } catch (error) { loopPreviews.set(node.id, { notice: userErrorMessage(error, "暂时无法预览循环内容，请检查输入后重试。") }); }
   }
-  const portRect = useWorkflowPortGeometry(wireElement, portTargets);
+  const portRect = useWorkflowPortGeometry(wireElement, portTargets, getZoom);
   const frames = new Map<string, { x: number; y: number; width: number; height: number; index: number; total: number }>();
   for (const [id, row] of currentRows) {
     const first = portRect(row.source, "cell", row.first);
@@ -651,16 +667,37 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     const observer = new ResizeObserver(entries => {
       let changed = false;
       for (const entry of entries) {
-        const id = (entry.target as HTMLElement).dataset.workflowCard!;
-        const height = entry.borderBoxSize[0]?.blockSize ?? (entry.target as HTMLElement).offsetHeight;
-        controller.measureCard(id, (entry.target as HTMLElement).offsetWidth, height);
+        const card = entry.target as HTMLElement;
+        const id = card.dataset.workflowCard!;
+        const box = entry.borderBoxSize[0];
+        const height = box?.blockSize ?? card.offsetHeight;
+        controller.measureCard(id, box ? Math.round(box.inlineSize) : card.offsetWidth, height);
         if (cardHeights.current.get(id) !== height) { cardHeights.current.set(id, height); changed = true; }
       }
       if (changed) redraw(value => value + 1);
     });
+    cardObserver.current = observer;
     for (const card of cardElements.current.values()) observer.observe(card);
-    return () => observer.disconnect();
-  }, [document.nodes]);
+    return () => { observer.disconnect(); cardObserver.current = undefined; };
+  }, [controller]);
+  function workflowCardRef(id: string) {
+    let callback = cardRefs.current.get(id);
+    if (!callback) {
+      callback = (element: HTMLElement | null) => {
+        const previous = cardElements.current.get(id);
+        if (previous) cardObserver.current?.unobserve(previous);
+        if (element) {
+          cardElements.current.set(id, element);
+          cardObserver.current?.observe(element);
+        } else {
+          cardElements.current.delete(id);
+          cardRefs.current.delete(id);
+        }
+      };
+      cardRefs.current.set(id, callback);
+    }
+    return callback;
+  }
   useEffect(() => {
     if (!keyHover) return;
     const close = () => setKeyHover(null);
@@ -1108,16 +1145,24 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     if (error) { notifyError(null, error); return; }
     if (node.kind === "visual-profile" && node.profileId) { notifyError(null, "请先切换到从输入提炼"); return; }
     const { type: _type, ...binding } = source;
+    const r2vLimit = node.kind === "comfy-video" && comfyVideoMode(node.comfyVideo) === "r2v" ? H3_R2V_INPUT_LIMITS[inputId] : undefined;
+    const r2vMedia = r2vLimit ? (Object.keys(H3_R2V_INPUT_PORTS) as (keyof typeof H3_R2V_INPUT_PORTS)[])
+      .find(media => H3_R2V_INPUT_PORTS[media] === inputId) : undefined;
     if (node.kind === "comfy-video" && port?.type === "image") {
       const audioPort = inputId === H3_VIDEO_AUDIO_PORT;
-      const ids = inputImages(audioPort ? { ...binding, mediaFilter: ["audio"] } : binding);
+      const ids = inputImages(r2vMedia || audioPort ? { ...binding, mediaFilter: [r2vMedia ?? "audio"] } : binding);
       const media = ids.map(id => {
         const material = materialByAsset.get(id);
         return material?.audio ? "audio" : material?.video ? "video" : workflowAssetMedia(assets.find(asset => asset.id === id));
       });
       const producerMedia = source.nodeId && automaticOutputs(source.nodeId).find(output => output.binding.portId === source.portId)?.media;
       const knownMedia = media.length && media.every(Boolean) ? media : !media.length && producerMedia ? [producerMedia].flat() : [];
-      if (audioPort) {
+      if (r2vMedia) {
+        if (binding.videoFrame && r2vMedia !== "image" || knownMedia.length && !knownMedia.includes(r2vMedia)) {
+          notifyError(null, `请选择可用的${port.label}`); return;
+        }
+        binding.mediaFilter = [r2vMedia];
+      } else if (audioPort) {
         if (binding.videoFrame || (knownMedia.length && !knownMedia.includes("audio")) || media.filter(type => type === "audio").length > 1) {
           notifyError(null, "请选择一段音频作为参考录音"); return;
         }
@@ -1138,6 +1183,9 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     const missing = (node.kind === "generation" || node.kind === "agent")
       ? current.filter(input => canvasWorkflowInputState(input, graphNodes, nodes) === "missing").sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))[0] : undefined;
     const connected = missing ? current.map(input => input === missing ? { ...binding, slot: missing.slot } : input) : [...current, binding];
+    if (r2vLimit && (connected.length > r2vLimit || connected.flatMap(input => h3ReferenceAssets(input, r2vMedia)).length > r2vLimit)) {
+      notifyError(null, `${port?.label ?? "此输入"}最多接入 ${r2vLimit} 个素材`); return;
+    }
     const documentSource = source.canvasNodeId && graphNodes.find(card => card.id === source.canvasNodeId && card.kind === "note" && readCanvasNote(card).note_type === "document");
     const reference = !missing && documentSource && node.kind === "generation" && (source.type === "text" || source.type === "image")
       ? { id: crypto.randomUUID(), type: source.type, input: binding, label: source.type === "text" ? "文档文本" : "文档图片" } : null;
@@ -1146,7 +1194,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       catch (error) { notifyError(error, "这条连接会形成循环"); return; }
     }
     patch(toId, { ...(reference ? { prompt: `${node.prompt}${node.prompt ? "\n" : ""}@[${reference.id}]`, promptReferences: [...(node.promptReferences ?? []), reference] } : {}),
-      inputs: { ...node.inputs, [inputId]: (node.kind === "voice" && inputId === "image") || (node.kind === "comfy-video" && inputId !== "text") || (node.kind === "instruction" && node.action !== "describe") || (inputId === "visual-profile" || node.kind === "loop" && node.loopMode === "rows") ? [binding] : connected } });
+      inputs: { ...node.inputs, [inputId]: (node.kind === "voice" && inputId === "image") || (node.kind === "comfy-video" && inputId !== "text" && !r2vLimit) || (node.kind === "instruction" && node.action !== "describe") || (inputId === "visual-profile" || node.kind === "loop" && node.loopMode === "rows") ? [binding] : connected } });
     setConnection(null); connectionRef.current = null;
   }
   function connectSignal(targetId: string, native = false) {
@@ -1624,9 +1672,11 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     </button>;
   }
   const statusLabels = { pending: "等待上游", running: "执行中", waiting: "等待继续", done: "已完成", failed: "失败" };
+  const entryContext = useMemo(() => ({}), [document, graphNodes, materials, assets, selectedIds, providerIssues]);
+  const stagedCardContext = useCanvasEntryCardContext(entryContext, opening);
   const automaticWires = new Set<string>();
   return <>
-    {visibleGraphNodes.filter(node => node.hiddenAt == null && (node.kind !== "asset" || materials.some(item => item.id === node.id)) && !sessionIds.has(node.id) && !conversationCards?.hiddenIds.has(node.id)).map(node => {
+    {visibleGraphNodes.filter(node => cardMounted(node.id) && node.hiddenAt == null && (node.kind !== "asset" || materialById.has(node.id)) && !sessionIds.has(node.id) && !conversationCards?.hiddenIds.has(node.id)).map(node => {
       if (node.kind === "prompt" && collapsedAnchorIds.has(node.id)) return null;
       const note = node.kind === "note" ? readCanvasNote(node) : null;
       if (note?.note_type === "section" && !note.artboard && !note.workflow_container) {
@@ -1635,49 +1685,49 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       }
       return nameEditor(node.id, { left: node.x + (note?.note_type === "section" ? 24 : 0), top: node.y - 28, maxWidth: node.width });
     })}
-    {materials.filter(item => item.groupId).map(item => nameEditor(item.groupId!, { left: item.x, top: item.y - 28, maxWidth: item.width }))}
+    {materials.filter(item => item.groupId && cardMounted(item.id)).map(item => nameEditor(item.groupId!, { left: item.x, top: item.y - 28, maxWidth: item.width }))}
     {disconnectMenu && <WorkflowDisconnectMenu {...disconnectMenu} choices={disconnectChoices(disconnectMenu)} assets={assets} onClose={() => setDisconnectMenu(null)} />}
     {Array.from(frames, ([id, frame]) => <WorkflowLoopFrame key={id} {...frame} />)}
     <svg ref={wireElement} className="workflow-wires">
-      {document.nodes.filter(node => !collapsedAnchor(node.id) && (node.kind === "agent" || node.kind === "generation" && node.generation?.media !== "video")).flatMap(node => (node.sessionNodeIds ?? []).map(id => {
+      {document.nodes.filter(node => workflowNodeMounted(node) && !collapsedAnchor(node.id) && (node.kind === "agent" || node.kind === "generation" && node.generation?.media !== "video")).flatMap(node => (node.sessionNodeIds ?? []).map(id => {
         const current = node.kind === "generation" && node.outputs.image?.nodeIds?.includes(id)
           ? generationResultAnchors.get(node.id) : undefined;
         const anchorId = current?.nodeId ?? conversationCards?.aliases.get(id) ?? id;
         const session = graphById.get(anchorId);
         const embedded = embeddedPoint(id, true);
         if (!embedded && (conversationCards?.routedIds.has(id) || visibleGraphNodeIds && !visibleGraphNodeIds.has(anchorId) && !materialById.has(anchorId))) return null;
-        return session && <path key={`agent-session-${node.id}-${id}`} className={`is-image${wireSelected(node.id) || wireSelected(anchorId) ? " is-selected" : ""}`} data-workflow-session-link={id}
+        return session && cardMounted(anchorId) && <path key={`agent-session-${node.id}-${id}`} className={`is-image${wireSelected(node.id) || wireSelected(anchorId) ? " is-selected" : ""}`} data-workflow-session-link={id}
           data-workflow-generator={node.id} {...dragWire(cardPoint(node.id, "output")!, embedded ?? cardPoint(anchorId, "input")!)} />;
       }))}
-      {document.nodes.filter(node => node.kind === "generation" || node.kind === "comfy-video").flatMap(node => {
+      {document.nodes.filter(node => workflowNodeMounted(node) && (node.kind === "generation" || node.kind === "comfy-video")).flatMap(node => {
         const hiddenSessions = hiddenWorkflowSessionIds([node]);
         if (!hiddenSessions.size) return [];
         return graphNodes.filter(session => hiddenSessions.has(session.id)).flatMap(session =>
           canvasSessionImages(session, graphNodes).flatMap(output => {
             const anchorId = conversationCards?.aliases.get(output.id) ?? output.id;
             const visible = materialById.get(anchorId) ?? conversationCards?.cards.get(anchorId)?.anchor;
-            if (!visible || output.hiddenAt != null || conversationCards?.hiddenIds.has(anchorId)) return [];
+            if (!visible || !cardMounted(visible.id) || output.hiddenAt != null || conversationCards?.hiddenIds.has(anchorId)) return [];
             return <path key={`generated-${node.id}-${output.id}`} className={`is-image${wireSelected(node.id) || wireSelected(visible.id) ? " is-selected" : ""}`} data-workflow-generated-link={output.id}
               data-workflow-generator={node.id} {...dragWire(cardPoint(node.id, "output")!, cardPoint(anchorId, "input")!, outputPath, true)} />;
           }));
       })}
-      {document.nodes.map(node => {
+      {document.nodes.filter(workflowNodeMounted).map(node => {
         const group = node.resultGroupId && groupById.get(node.resultGroupId);
-        return group && <path key={`group-${node.id}`} className={`is-image${wireSelected(node.id) || wireSelected(group.id) ? " is-selected" : ""}`} data-workflow-product-link={group.id} {...dragWire(cardPoint(node.id, "output")!, { x: group.x, y: group.y + group.height / 2, owner: group.id })} />;
+        return group && cardMounted(group.id) && <path key={`group-${node.id}`} className={`is-image${wireSelected(node.id) || wireSelected(group.id) ? " is-selected" : ""}`} data-workflow-product-link={group.id} {...dragWire(cardPoint(node.id, "output")!, { x: group.x, y: group.y + group.height / 2, owner: group.id })} />;
       })}
-      {document.nodes.filter(node => !collapsedAnchor(node.id)).flatMap(node => (node.resultNodeIds ?? []).map(id => {
+      {document.nodes.filter(node => workflowNodeMounted(node) && !collapsedAnchor(node.id)).flatMap(node => (node.resultNodeIds ?? []).map(id => {
         const result = graphById.get(id);
         const type = node.kind === "voice" || node.kind === "comfy-video" || node.kind === "generation" || node.action === "layers" ? "image" : "text";
-        return result && <path key={id} className={`is-${type}${wireSelected(node.id) || wireSelected(id) ? " is-selected" : ""}`} data-workflow-result-link={id} {...dragWire(cardPoint(node.id, "output")!, cardPoint(result.id, "input")!, outputPath, true)} />;
+        return result && cardMounted(id) && <path key={id} className={`is-${type}${wireSelected(node.id) || wireSelected(id) ? " is-selected" : ""}`} data-workflow-result-link={id} {...dragWire(cardPoint(node.id, "output")!, cardPoint(result.id, "input")!, outputPath, true)} />;
       }))}
-      {renderedNodes.flatMap(node => Object.entries(node.kind === "comfy-video" ? generationInputNode(node).inputs : node.inputs).flatMap(([port, inputs]) => inputs.map((binding, index) => {
+      {renderedNodes.filter(workflowNodeMounted).flatMap(node => Object.entries(node.kind === "comfy-video" ? generationInputNode(node).inputs : node.inputs).flatMap(([port, inputs]) => inputs.map((binding, index) => {
         if (node.kind === "trigger" && port === "completion" && workflowTriggerMode(node) !== "completion") return null;
         const automaticKey = binding.autoConnect && `${binding.autoConnect}:${node.textTarget?.nodeId ?? node.id}`;
         if (automaticKey && automaticWires.has(automaticKey)) return null;
         if (automaticKey) automaticWires.add(automaticKey);
         const frame = port === "text" ? frames.get(node.id) : undefined;
         const from = frame ? { x: frame.x + frame.width, y: frame.y + frame.height / 2, selected: wireSelected(binding.canvasNodeId) } : sourcePoint(binding, node);
-        if (!from) return null;
+        if (!from || ("owner" in from && from.owner && !cardMounted(from.owner))) return null;
         let to = node.kind === "trigger" ? { x: node.x, y: workflowPortY(node, "input", port) } : cardPoint(node.id, "input") ?? { x: node.x, y: node.y };
         if (port === "signal") {
           const card = node.textSource && graphById.get(node.textSource);
@@ -1711,18 +1761,18 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       {connection && (() => { const from = sourcePoint(connection); return from && <path ref={draftElement} className="is-draft" d={path(from, toBoardPoint(cursor.current.x, cursor.current.y))} />; })()}
       {automatic?.dragged && !connectionMenu && (() => { const anchor = scopedPoint(automatic.id, automatic.side, automatic.scope) ?? toBoardPoint(automatic.start.x, automatic.start.y), point = toBoardPoint(cursor.current.x, cursor.current.y); return anchor && <path ref={draftElement} className="is-draft" d={automatic.side === "output" ? path(anchor, point) : path(point, anchor)} />; })()}
     </svg>
-    {document.nodes.filter(node => node.textSource && (node.trigger || node.inputs.signal?.length)).map(node => {
+    {document.nodes.filter(node => node.textSource && cardMounted(node.textSource) && (node.trigger || node.inputs.signal?.length)).map(node => {
       const card = graphNodes.find(card => card.id === node.textSource && card.hiddenAt == null);
       return card && <div key={node.id} className="workflow-material-hotspot workflow-text-key" data-workflow-text-key={card.id} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>{node.inputs.signal?.length ? gearButton(node) : keyButton(node)}</div>;
     })}
-    {visibleGraphNodes.filter(card => card.kind === "prompt" && card.hiddenAt == null && !sessionIds.has(card.id) && !conversationCards?.hiddenIds.has(card.id)).map(card =>
+    {visibleGraphNodes.filter(card => cardMounted(card.id) && card.kind === "prompt" && card.hiddenAt == null && !sessionIds.has(card.id) && !conversationCards?.hiddenIds.has(card.id)).map(card =>
       <div key={`session-${card.id}`} data-workflow-material={card.id} className={`workflow-material-hotspot ${imageOnlyConversationIds?.has(card.id) ? "is-image-session" : ""} ${hoveredMaterial === card.id ? "is-hovered" : ""} ${selectedIds.has(card.id) ? "is-selected" : ""}`} style={{ left: card.x, top: card.y, width: card.width, height: sessionHeights?.get(card.id) ?? card.height }}>
         {automaticButton(card.id, "output")}
       </div>)}
-    {materials.map(material => <div key={material.id} data-workflow-material={material.id} className={`workflow-material-hotspot ${hoveredMaterial === material.id ? "is-hovered" : ""} ${selectedIds.has(material.id) ? "is-selected" : ""}`} style={{ left: material.x, top: material.y, width: material.width, height: material.height }}>
+    {materials.filter(material => cardMounted(material.id)).map(material => <div key={material.id} data-workflow-material={material.id} className={`workflow-material-hotspot ${hoveredMaterial === material.id ? "is-hovered" : ""} ${selectedIds.has(material.id) ? "is-selected" : ""}`} style={{ left: material.x, top: material.y, width: material.width, height: material.height }}>
       {automaticButton(material.id, "output")}
     </div>)}
-    {renderedNodes.filter(node => node.kind !== "text" && !collapsedAnchor(node.id)).map(node => {
+    {renderCanvasCards(renderedNodes.filter(node => cardMounted(node.id) && node.kind !== "text" && !collapsedAnchor(node.id)), stagedCardContext, node => {
       const creating = !nodeById.has(node.id);
       const run = workflowNodeRun(document, node.id);
       const step = run?.steps[node.id];
@@ -1792,12 +1842,18 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const referenceIds = referenceCard ? generationReferencePreviewOrder(node, referencePreviewValues(node), document.nodes) : [];
       const generationCard = node.kind === "generation" || localVideo;
       const lastGenerationInput = generationCard ? lastGenerationRunInput(document, node.id) : undefined;
+      const localMode = localVideo ? comfyVideoMode(node.comfyVideo) : undefined;
+      const r2vCounts = localMode === "r2v" ? {
+        referenceImageCount: (node.inputs[H3_R2V_INPUT_PORTS.image] ?? []).flatMap(input => h3ReferenceAssets(input, "image")).length,
+        referenceVideoCount: (node.inputs[H3_R2V_INPUT_PORTS.video] ?? []).flatMap(input => h3ReferenceAssets(input, "video")).length,
+        referenceAudioCount: (node.inputs[H3_R2V_INPUT_PORTS.audio] ?? []).flatMap(input => h3ReferenceAssets(input, "audio")).length,
+      } : undefined;
       let generationAction = "运行";
       if (lastGenerationInput?.prompt === node.prompt) {
         const current = generationInputNode(node, document.nodes);
         const currentReferences = localVideo
           ? h3RunReferences(Object.fromEntries(Object.entries(current.inputs).map(([port, inputs]) =>
-            [port, inputs.map(input => ({ type: "image" as const, assetIds: inputImages(input) }))])))
+            [port, inputs.map(input => ({ type: "image" as const, assetIds: localMode === "r2v" ? h3ReferenceAssets(input) : inputImages(input) }))])), localMode)
           : [generationReferencePreviewOrder(current, referencePreviewValues(current), document.nodes)];
         if (JSON.stringify(lastGenerationInput.references) === JSON.stringify(currentReferences)) generationAction = "重试";
       }
@@ -1830,7 +1886,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const thumbnailIds = new Set(references.map(asset => asset.id));
       const thumbnailWireIds = new Set<string>();
       const labelledInputs = Object.entries(visibleInputs).map(([port, inputs]) => [port, inputs.filter(input => {
-        if (localVideo && (port === "first-frame" || port === "last-frame" || port === H3_VIDEO_AUDIO_PORT)) return false;
+        if (localVideo && (port === "first-frame" || port === "last-frame" || port === H3_VIDEO_AUDIO_PORT || H3_R2V_INPUT_LIMITS[port])) return false;
         if (!referenceCard || (port !== "image" && port !== "text")) return true;
         const ids = inputImages(input);
         if (!ids.length || !ids.every(id => thumbnailIds.has(id))) return true;
@@ -1883,7 +1939,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const optimizationActions = <H3OptimizationActions nodeId={node.id} runs={workflowRuns(document)} disabled={busy || !node.prompt.trim()}
         busy={optimizing}
         retryDisabled={busy && !(run?.status === "waiting" && !!optimization && !step?.comfyAutoGeneration)}
-        onOptimize={() => handle(controller.optimizeComfyPrompt(node.id, referenceIds.length))} onRetry={() => handle(controller.retryComfyPrompt(node.id))}
+        onOptimize={() => handle(controller.optimizeComfyPrompt(node.id, r2vCounts ?? referenceIds.length))} onRetry={() => handle(controller.retryComfyPrompt(node.id))}
         restoreDisabled={busy} onRestore={async (runId, source) => {
           try {
             await controller.restoreComfyPrompt(node.id, runId, source);
@@ -1908,7 +1964,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             patch(node.id, selectWorkflowVideoProvider(node, "h3"), false);
           } }}
         ratio={node.generation?.ratio ?? "16:9"} onRatioChange={ratio => patch(node.id, { generation: { ...node.generation, ratio } })} />;
-      return <article key={node.id} data-canvas-node data-workflow-card={node.id} ref={element => { if (element) cardElements.current.set(node.id, element); else cardElements.current.delete(node.id); }} aria-busy={running} className={`workflow-card ${running ? "canvas-card-running" : imageFailure || failure && !failure.dismissed ? "canvas-card-error" : ""} is-${node.kind} ${localVideo ? "is-generation" : ""} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
+      return <article key={node.id} data-canvas-node data-workflow-card={node.id} ref={workflowCardRef(node.id)} aria-busy={running} className={`workflow-card ${running ? "canvas-card-running" : imageFailure || failure && !failure.dismissed ? "canvas-card-error" : ""} is-${node.kind} ${localVideo ? "is-generation" : ""} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
         style={{ left: displayed.x, top: displayed.y, width: workflowCardWidth(node), minHeight: height, zIndex: `var(--workflow-card-z, ${selectedIds.has(node.id) ? 11000 : 9000})` }}
         onPointerDownCapture={event => {
           const target = event.target as Element;
@@ -2079,7 +2135,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           </div>}
           {localVideo && <ComfyVideoCard node={node} modelControl={videoControls}
                 disabled={busy} readCurrentPrompt={readCurrentPrompt}
-                assets={assets} inputImages={inputImages} onChange={changes => patch(node.id, changes)} optimizationActions={optimizationActions} />}
+                assets={assets} inputImages={localMode === "r2v" ? h3ReferenceAssets : inputImages} onChange={changes => patch(node.id, changes)} optimizationActions={optimizationActions} />}
           {(node.kind === "generation" || node.kind === "agent" && !hasAgentMessages) && <WorkflowPromptEditor fitContent={videoCard} cardNames={cardNames} node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} disabled={busy && !creating} readCurrentPrompt={readCurrentPrompt} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} />}
           {localImage && optimizationActions}
           {node.kind !== "director3d" && node.kind !== "planner" && node.kind !== "trigger" && node.kind !== "loop" && node.kind !== "generation" && node.kind !== "agent" && node.kind !== "comfy-video" && node.kind !== "voice" && !(node.kind === "instruction" && node.action !== "describe") && !(node.kind === "visual-profile" && node.profileId) && <CanvasTextarea aria-label={node.kind === "instruction" ? "反推要求" : node.kind === "visual-profile" ? "视觉要求" : "卡片指令"}

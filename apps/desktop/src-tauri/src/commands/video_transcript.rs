@@ -1,6 +1,6 @@
 use crate::{
     cloud::{AuthClient, CloudClient},
-    core::{external_files::fingerprint, paths::LibraryPaths},
+    core::{library::Analysis, paths::LibraryPaths},
     db::Database,
     error::{AppError, AppResult},
     media::probe,
@@ -13,11 +13,13 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex},
-    time::SystemTime,
 };
 use tauri::{AppHandle, Emitter, State};
 
-use super::video_replication::{speech, stage_for_owner, stage_recovery, StageRecovery};
+use super::{
+    video_asset_revision::{registration, save_revision, snapshot_source, source, FileStamp, Registration},
+    video_replication::{speech, stage_for_owner, stage_recovery, StageRecovery},
+};
 
 mod file_speech;
 
@@ -44,10 +46,60 @@ enum Status {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct TranscriptWord {
+    start_ms: u64,
+    end_ms: u64,
+    text: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Utterance {
     start_ms: f64,
     end_ms: f64,
     text: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_transcript_words",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    words: Vec<TranscriptWord>,
+}
+
+fn deserialize_transcript_words<'de, D>(deserializer: D) -> Result<Vec<TranscriptWord>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut value = serde_json::Value::deserialize(deserializer)?;
+    if let Some(words) = value.as_array_mut() {
+        // Older speech responses can have untimed blank separators.
+        words.retain(|word| {
+            !word["text"]
+                .as_str()
+                .is_some_and(|text| text.trim().is_empty())
+        });
+    }
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+impl Utterance {
+    fn constrain_words(&mut self, duration_ms: u64) {
+        let mut previous_end = self.start_ms;
+        for word in &self.words {
+            if (word.start_ms as f64) < previous_end
+                || word.end_ms < word.start_ms
+                || (word.end_ms as f64) > self.end_ms
+            {
+                self.words.clear();
+                return;
+            }
+            previous_end = word.end_ms as f64;
+        }
+        self.words.retain_mut(|word| {
+            word.end_ms = word.end_ms.min(duration_ms);
+            word.start_ms <= word.end_ms
+        });
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -68,6 +120,8 @@ pub struct VideoTranscript {
     quote_required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     price_changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    can_refresh_timing: Option<bool>,
 }
 
 impl VideoTranscript {
@@ -82,6 +136,7 @@ impl VideoTranscript {
             completed_segments: None,
             quote_required: None,
             price_changed: None,
+            can_refresh_timing: None,
         }
     }
 
@@ -105,38 +160,6 @@ impl VideoTranscript {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct FileStamp {
-    size: u64,
-    modified_nanos: String,
-}
-
-impl FileStamp {
-    fn read(path: &Path) -> AppResult<Self> {
-        let metadata = fs::metadata(path)?;
-        let modified = metadata
-            .modified()?
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_or_else(
-                |before| format!("-{}", before.duration().as_nanos()),
-                |after| after.as_nanos().to_string(),
-            );
-        Ok(Self {
-            size: metadata.len(),
-            modified_nanos: modified,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct Registration {
-    asset_size: Option<i64>,
-    asset_modified: Option<i64>,
-    indexed_hash: Option<String>,
-}
-
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Record {
@@ -154,6 +177,35 @@ struct Record {
     segmentation: Option<Segmentation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     full_attempts: Vec<file_speech::Attempt>,
+}
+
+impl Record {
+    fn matches_registration(&self, current: &Registration) -> bool {
+        self.registration.matches(current, &self.source_hash)
+    }
+
+    fn timing_attempt(&self, owner: &str) -> Option<&file_speech::Attempt> {
+        if !self.current
+            || self.view.status != Status::Completed
+            || self.view.utterances.is_empty()
+            || self
+                .view
+                .utterances
+                .iter()
+                .any(|line| !line.words.is_empty())
+        {
+            return None;
+        }
+        self.full_attempts.last().filter(|attempt| {
+            attempt.terminal
+                && attempt.owner == owner
+                && attempt.key.starts_with("file-speech:")
+                && attempt
+                    .job_id
+                    .as_deref()
+                    .is_some_and(|job| uuid::Uuid::parse_str(job).is_ok())
+        })
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -185,16 +237,6 @@ fn invalid(message: &str) -> AppError {
     AppError::Other(message.into())
 }
 
-fn registration(db: &Database, asset_id: &str) -> AppResult<Registration> {
-    db.conn.lock().unwrap().query_row(
-        "SELECT a.size,a.file_mtime,COALESCE(e.fingerprint,f.sha256) FROM assets a \
-         LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id \
-         WHERE a.id=?1 AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id) \
-         AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id)",
-        [asset_id], |row| Ok(Registration { asset_size: row.get(0)?, asset_modified: row.get(1)?, indexed_hash: row.get(2)? }),
-    ).optional()?.ok_or_else(|| invalid("视频原件已移除，请刷新素材库后重试"))
-}
-
 fn record_id(asset_id: &str, source_hash: &str) -> String {
     format!("video-transcript:{asset_id}:{source_hash}")
 }
@@ -213,22 +255,14 @@ fn load(db: &Database, asset_id: &str, source_hash: Option<&str>) -> AppResult<O
 }
 
 fn save(db: &Database, asset_id: &str, record: &Record, select_revision: bool) -> AppResult<()> {
-    let id = record_id(asset_id, &record.source_hash);
-    let mut conn = db.conn.lock().unwrap();
-    let transaction = conn.transaction()?;
-    if select_revision {
-        transaction.execute("UPDATE analyses SET payload=json_set(payload,'$.current',json('false')) \
-            WHERE asset_id=?1 AND kind='video_transcript' AND id<>?2 AND json_extract(payload,'$.current')=1",
-            params![asset_id, id])?;
-    }
-    transaction.execute(
-        "INSERT INTO analyses(id,asset_id,kind,payload,provider,created_at) \
-         VALUES(?1,?2,'video_transcript',?3,'doubao-speech',strftime('%s','now')) \
-         ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-        params![id, asset_id, serde_json::to_string(record)?],
-    )?;
-    transaction.commit()?;
-    Ok(())
+    save_revision(db, &Analysis {
+        id: record_id(asset_id, &record.source_hash),
+        asset_id: asset_id.to_owned(),
+        kind: "video_transcript".into(),
+        payload: serde_json::to_string(record)?,
+        provider: Some("doubao-speech".into()),
+        created_at: None,
+    }, select_revision)
 }
 
 fn save_final(db: &Database, root: &Path, asset_id: &str, record: &Record) -> AppResult<()> {
@@ -243,28 +277,19 @@ fn save_final(db: &Database, root: &Path, asset_id: &str, record: &Record) -> Ap
     Ok(())
 }
 
-fn source(db: &Database, asset_id: &str) -> AppResult<PathBuf> {
-    let asset = db
-        .get_asset(asset_id)?
-        .ok_or_else(|| invalid("视频素材已不存在，请刷新素材库"))?;
-    if !probe::is_video(asset.ext.as_deref().unwrap_or_default()) {
-        return Err(invalid("请选择视频素材进行转录"));
-    }
-    db.resolve_asset_original(asset_id)
-}
-
-fn current_view(db: &Database, root: &Path, asset_id: &str) -> AppResult<Option<VideoTranscript>> {
+fn current_view(
+    db: &Database,
+    root: &Path,
+    asset_id: &str,
+    owner: Option<&str>,
+) -> AppResult<Option<VideoTranscript>> {
     let Some(mut record) = load(db, asset_id, None)? else {
         return Ok(None);
     };
     let Ok(current) = registration(db, asset_id) else {
         return Ok(None);
     };
-    if current.asset_size != record.registration.asset_size
-        || current.asset_modified != record.registration.asset_modified
-        || (current.indexed_hash != record.registration.indexed_hash
-            && current.indexed_hash.as_deref() != Some(&record.source_hash))
-    {
+    if !record.matches_registration(&current) {
         return Ok(None);
     }
     if let Some(path) = db.get_asset(asset_id)?.and_then(|asset| asset.store_path) {
@@ -272,26 +297,17 @@ fn current_view(db: &Database, root: &Path, asset_id: &str) -> AppResult<Option<
             return Ok(None);
         }
     }
-    if record.view.status == Status::Running
-        && !ACTIVE
-            .lock()
-            .unwrap()
-            .contains(&(root.into(), asset_id.into()))
-    {
+    let active = ACTIVE
+        .lock()
+        .unwrap()
+        .contains(&(root.into(), asset_id.into()));
+    if record.view.status == Status::Running && !active {
         let pending = cloud_pending(root, asset_id, &record);
         record.view.interrupt("转录已中断，可恢复原任务", pending);
     }
+    record.view.can_refresh_timing =
+        (!active && owner.is_some_and(|id| record.timing_attempt(id).is_some())).then_some(true);
     Ok(Some(record.view))
-}
-
-fn snapshot_source(db: &Database, asset_id: &str) -> AppResult<(PathBuf, String, FileStamp)> {
-    let path = source(db, asset_id)?;
-    let before = FileStamp::read(&path)?;
-    let hash = fingerprint(&path)?;
-    if FileStamp::read(&path)? != before {
-        return Err(invalid("读取期间视频已变化，请重新转录"));
-    }
-    Ok((path, hash, before))
 }
 
 struct CheckedSource {
@@ -362,13 +378,13 @@ fn parse_result(result: serde_json::Value) -> AppResult<VideoTranscript> {
 }
 
 fn parse_timed_result(result: serde_json::Value, duration_ms: f64) -> AppResult<VideoTranscript> {
-    let speech: SpeechResult = serde_json::from_value(result)
+    let mut speech: SpeechResult = serde_json::from_value(result)
         .map_err(|_| invalid("语音服务结果无法读取，请取回原任务"))?;
     if speech.text.trim().is_empty() && speech.utterances.is_empty() {
         return Ok(VideoTranscript::new(Status::NoSpeech));
     }
     let mut previous_end = 0.0;
-    for utterance in &speech.utterances {
+    for utterance in &mut speech.utterances {
         if utterance.start_ms < previous_end
             || utterance.end_ms <= utterance.start_ms
             || utterance.end_ms > duration_ms + 250.0
@@ -376,6 +392,7 @@ fn parse_timed_result(result: serde_json::Value, duration_ms: f64) -> AppResult<
             return Err(invalid("语音服务返回的时间信息无效，请取回原任务"));
         }
         previous_end = utterance.end_ms;
+        utterance.constrain_words(duration_ms.floor() as u64);
     }
     if speech.text.trim().is_empty() || speech.utterances.is_empty() {
         return Err(invalid("语音服务结果不完整，请取回原任务"));
@@ -385,6 +402,19 @@ fn parse_timed_result(result: serde_json::Value, duration_ms: f64) -> AppResult<
         utterances: speech.utterances,
         ..VideoTranscript::new(Status::Completed)
     })
+}
+
+fn parse_full_result(text: &str, source_duration_ms: f64) -> AppResult<VideoTranscript> {
+    let result =
+        serde_json::from_str(text).map_err(|_| invalid("语音服务结果无法读取，请按原任务恢复"))?;
+    let mut view = parse_timed_result(result, source_duration_ms)?;
+    for utterance in &mut view.utterances {
+        if utterance.start_ms >= source_duration_ms {
+            return Err(invalid("转录句段超出原片范围，请按原任务恢复"));
+        }
+        utterance.end_ms = utterance.end_ms.min(source_duration_ms);
+    }
+    Ok(view)
 }
 
 fn stage_location(root: &Path, asset_id: &str, record: &Record) -> (PathBuf, String) {
@@ -489,7 +519,12 @@ fn merge_segment(
     segment: speech::Segment,
     result: serde_json::Value,
 ) -> AppResult<()> {
-    let duration_ms = (segment.end_ms - segment.start_ms) as f64;
+    let duration_ms = segment
+        .end_ms
+        .checked_sub(segment.start_ms)
+        .filter(|duration| *duration > 0)
+        .ok_or_else(|| invalid("语音服务返回的分段时间无效，请取回原任务"))?
+        as f64;
     let mut parsed = parse_timed_result(result, duration_ms)?;
     let offset = segment.start_ms as f64;
     for utterance in &mut parsed.utterances {
@@ -498,6 +533,10 @@ fn merge_segment(
         }
         utterance.start_ms += offset;
         utterance.end_ms = utterance.end_ms.min(duration_ms) + offset;
+        for word in &mut utterance.words {
+            word.start_ms += segment.start_ms;
+            word.end_ms += segment.start_ms;
+        }
     }
     if !parsed.text.is_empty() {
         if !view.text.is_empty() {
@@ -719,16 +758,7 @@ async fn run_file_speech(
                         .terminal = true;
                     return Err(job.message("原转录结果已过期"));
                 };
-                let result = serde_json::from_str(text)
-                    .map_err(|_| invalid("语音服务结果无法读取，请按原任务恢复"))?;
-                let mut view = parse_timed_result(result, source_duration_ms)?;
-                for utterance in &mut view.utterances {
-                    if utterance.start_ms >= source_duration_ms {
-                        return Err(invalid("转录句段超出原片范围，请按原任务恢复"));
-                    }
-                    utterance.end_ms = utterance.end_ms.min(source_duration_ms);
-                }
-                return Ok(view);
+                return parse_full_result(text, source_duration_ms);
             }
             "failed" | "cancelled" => {
                 record
@@ -799,13 +829,152 @@ async fn complete_file_upload(
 pub async fn video_transcript_get(
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
+    auth: State<'_, AuthClient>,
     asset_id: String,
 ) -> AppResult<Option<VideoTranscript>> {
     let db = db.inner().clone();
     let root = paths.root.clone();
-    tokio::task::spawn_blocking(move || current_view(&db, &root, &asset_id))
+    let owner = auth.snapshot().user_id;
+    tokio::task::spawn_blocking(move || current_view(&db, &root, &asset_id, owner.as_deref()))
         .await
         .map_err(|_| invalid("无法读取视频转录"))?
+}
+
+async fn refresh_completed_timing(
+    db: Arc<Database>,
+    root: &Path,
+    asset_id: &str,
+    service: file_speech::Service<'_>,
+) -> AppResult<VideoTranscript> {
+    let _activity = {
+        let _start = STARTS.lock().await;
+        let key = (root.to_owned(), asset_id.to_owned());
+        if !ACTIVE.lock().unwrap().insert(key.clone()) {
+            return Err(invalid("视频转录正在处理，请稍后补齐字词时间"));
+        }
+        Activity(key)
+    };
+    let record =
+        load(&db, asset_id, None)?.ok_or_else(|| invalid("当前原件没有可补齐的转录文稿"))?;
+    let attempt = record
+        .timing_attempt(service.owner)
+        .ok_or_else(|| invalid("请使用转录原账号和原件补齐字词时间"))?;
+    let input = source(&db, asset_id)?;
+    let (stamp, registered) =
+        verify_source(db.clone(), asset_id, &input, &record.source_hash).await?;
+    if stamp != record.stamp || !record.matches_registration(&registered) {
+        return Err(invalid("视频原件已变化，请保留现有转录文稿"));
+    }
+    let job = service
+        .lookup(attempt)
+        .await?
+        .filter(|job| job.status == "succeeded")
+        .ok_or_else(|| invalid("原转录结果暂不可用，请稍后再试"))?;
+    let text = job
+        .text
+        .as_deref()
+        .ok_or_else(|| invalid("原转录结果已过期，已保留本机文稿"))?;
+    let timings = parse_full_result(text, attempt.audio.source_duration_ms as f64)?;
+    let (after_stamp, after_registration) =
+        verify_source(db.clone(), asset_id, &input, &record.source_hash).await?;
+    if after_stamp != stamp || after_registration != registered {
+        return Err(invalid("视频原件已变化，请保留现有转录文稿"));
+    }
+    if service.auth.snapshot().user_id.as_deref() != Some(service.owner) {
+        return Err(invalid("账号已切换，请使用转录原账号补齐字词时间"));
+    }
+
+    let mut conn = db.conn.lock().unwrap();
+    let transaction = conn.transaction()?;
+    let id = record_id(asset_id, &record.source_hash);
+    let raw = transaction
+        .query_row(
+            "SELECT payload FROM analyses WHERE id=?1 AND json_extract(payload,'$.current')=1",
+            [&id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| invalid("视频文稿已变化，请刷新预览后再试"))?;
+    let mut local: Record = serde_json::from_str(&raw)?;
+    if local.stamp != stamp
+        || !local.matches_registration(&registered)
+        || !local
+            .timing_attempt(service.owner)
+            .is_some_and(|latest| latest.key == attempt.key && latest.job_id == attempt.job_id)
+    {
+        return Err(invalid("视频文稿已变化，请刷新预览后再试"));
+    }
+    if timings.status != Status::Completed
+        || local.view.text != timings.text
+        || local.view.utterances.len() != timings.utterances.len()
+        || local
+            .view
+            .utterances
+            .iter()
+            .zip(&timings.utterances)
+            .any(|(old, new)| {
+                old.text != new.text || old.start_ms != new.start_ms || old.end_ms != new.end_ms
+            })
+    {
+        return Err(invalid("原转录正文或句段时间与本机不一致，已保留现有文稿"));
+    }
+    if timings.utterances.iter().all(|line| line.words.is_empty()) {
+        return Err(invalid("原转录目前没有可补齐的字词时间，已保留现有文稿"));
+    }
+    let mut payload: serde_json::Value = serde_json::from_str(&raw)?;
+    for (index, (old, new)) in local
+        .view
+        .utterances
+        .iter_mut()
+        .zip(timings.utterances)
+        .enumerate()
+    {
+        if !new.words.is_empty() {
+            old.words = new.words;
+            payload["utterances"][index]["words"] = serde_json::to_value(&old.words)?;
+        }
+    }
+    transaction.execute(
+        "UPDATE analyses SET payload=?1 WHERE id=?2",
+        params![serde_json::to_string(&payload)?, id],
+    )?;
+    transaction.commit()?;
+    local.view.can_refresh_timing = None;
+    Ok(local.view)
+}
+
+#[tauri::command]
+pub async fn video_transcript_refresh_timing(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<LibraryPaths>>,
+    cloud: State<'_, CloudClient>,
+    auth: State<'_, AuthClient>,
+    asset_id: String,
+    expected_user_id: Option<String>,
+) -> AppResult<VideoTranscript> {
+    let owner = auth
+        .snapshot()
+        .user_id
+        .filter(|owner| {
+            expected_user_id
+                .as_ref()
+                .is_none_or(|expected| expected == owner)
+        })
+        .ok_or_else(|| invalid("请登录转录原账号后补齐字词时间"))?;
+    let view = refresh_completed_timing(
+        db.inner().clone(),
+        &paths.root,
+        &asset_id,
+        file_speech::Service {
+            cloud: &cloud,
+            auth: &auth,
+            owner: &owner,
+        },
+    )
+    .await?;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(view)
 }
 
 #[tauri::command]
@@ -818,6 +987,7 @@ pub async fn video_transcript_capabilities(
             available: false,
             credits: None,
             max_duration_ms: (speech::MAX_FULL_AUDIO_SECONDS * 1000.0) as u64,
+            reason: None,
         });
     };
     file_speech::Service {
@@ -1026,7 +1196,7 @@ pub async fn video_transcript_start(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::catalog_browser::CatalogFilter;
+    use crate::core::{catalog_browser::CatalogFilter, external_files::fingerprint};
     use serde_json::json;
 
     fn row(source_hash: &str, status: Status, db: &Database, path: &Path) -> Record {
@@ -1056,7 +1226,14 @@ mod tests {
             [path.to_str().unwrap()],
         ).unwrap();
         let mut first = row("hash-a", Status::Completed, &db, &path);
-        first.view.text = "窗边风景 100%_中文".into();
+        first.view = parse_result(json!({
+            "text": "窗边风景 100%_中文",
+            "utterances": [{
+                "text":"窗边风景 100%_中文","startMs":30,"endMs":225,
+                "words":[{"text":"窗边","startMs":50,"endMs":85}]
+            }]
+        }))
+        .unwrap();
         save(&db, "vid", &first, true).unwrap();
         let ids = |query: &str, project: Option<&str>| {
             db.search_assets(query, project, 10)
@@ -1076,7 +1253,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(db.catalog_ids(&filter, 0, 10).unwrap(), ["vid"]);
-        assert!(current_view(&db, dir.path(), "vid").unwrap().is_some());
+        let loaded = current_view(&db, dir.path(), "vid", None).unwrap().unwrap();
+        assert_eq!(loaded.utterances[0].words[0].text, "窗边");
+        assert_eq!(loaded.utterances[0].words[0].start_ms, 50);
 
         db.conn
             .lock()
@@ -1085,15 +1264,18 @@ mod tests {
             .unwrap();
         assert!(ids("窗边", None).is_empty());
         assert!(db.catalog_ids(&filter, 0, 10).unwrap().is_empty());
-        assert!(current_view(&db, dir.path(), "vid").unwrap().is_none());
+        assert!(current_view(&db, dir.path(), "vid", None)
+            .unwrap()
+            .is_none());
 
         let second = row("hash-b", Status::Running, &db, &path);
         save(&db, "vid", &second, true).unwrap();
-        let reopened = current_view(&db, dir.path(), "vid").unwrap().unwrap();
+        let reopened = current_view(&db, dir.path(), "vid", None).unwrap().unwrap();
         assert_eq!(reopened.status, Status::Interrupted);
         assert_eq!(reopened.cloud_pending, Some(false));
         let mut reused = load(&db, "vid", Some("hash-a")).unwrap().unwrap();
         assert_eq!(reused.view.status, Status::Completed);
+        assert_eq!(reused.view.utterances[0].words[0].end_ms, 85);
         reused.registration = registration(&db, "vid").unwrap();
         reused.current = true;
         save(&db, "vid", &reused, true).unwrap();
@@ -1105,13 +1287,87 @@ mod tests {
         let empty = parse_result(json!({"text":"","utterances":[]})).unwrap();
         assert_eq!(empty.status, Status::NoSpeech);
         let row = parse_result(json!({"text":"实际对白","utterances":[{
-            "text":"实际对白","startMs":24,"endMs":2324,"words":[]
+            "text":"实际对白","startMs":24,"endMs":2324
         }]}))
         .unwrap();
         assert_eq!(row.status, Status::Completed);
         assert_eq!(row.utterances[0].end_ms, 2324.0);
+        assert!(row.utterances[0].words.is_empty());
+        assert!(serde_json::to_value(&row).unwrap()["utterances"][0]
+            .get("words")
+            .is_none());
         assert!(parse_result(json!({"text":"缺时间","utterances":[]})).is_err());
         assert!(parse_result(json!({"text":"重叠","utterances":[{"text":"重","startMs":1,"endMs":12},{"text":"叠","startMs":11,"endMs":14}]})).is_err());
+    }
+
+    #[test]
+    fn video_transcript_words_keep_zero_points_and_fail_soft_on_invalid_arrays() {
+        let make = |words| {
+            parse_timed_result(
+                json!({
+                    "text":"片尾。",
+                    "utterances":[{"text":"片尾。","startMs":100,"endMs":1120,"words":words}]
+                }),
+                1000.0,
+            )
+            .unwrap()
+        };
+        let current = make(json!([
+            {"text":"片","startMs":120,"endMs":120},
+            {"text":" ","startMs":-1,"endMs":-1},
+            {"text":"尾","startMs":970,"endMs":1060},
+            {"text":"。","startMs":1070,"endMs":1080}
+        ]));
+        let words = &current.utterances[0].words;
+        assert_eq!(words.len(), 2);
+        assert_eq!((words[0].start_ms, words[0].end_ms), (120, 120));
+        assert_eq!((words[1].start_ms, words[1].end_ms), (970, 1000));
+        for bad in [
+            serde_json::Value::Null,
+            json!([{"text":"片","startMs":99,"endMs":120}]),
+            json!([{"text":"片","startMs":120.5,"endMs":140}]),
+            json!([{"text":"片","startMs":120,"endMs":1121}]),
+            json!([{"text":"片","startMs":120,"endMs":140},{"text":"尾","startMs":130,"endMs":200}]),
+        ] {
+            let degraded = make(bad);
+            assert_eq!(degraded.text, "片尾。");
+            assert!(degraded.utterances[0].words.is_empty());
+        }
+    }
+
+    #[test]
+    fn video_transcript_legacy_words_clip_before_adding_the_saved_offset() {
+        let segment = speech::Segment {
+            start_ms: 115_000,
+            end_ms: 115_100,
+        };
+        let result = json!({
+            "text":"结束。",
+            "utterances":[{"text":"结束。","startMs":75,"endMs":130,"words":[
+                {"text":"结","startMs":80,"endMs":80},
+                {"text":"束","startMs":85,"endMs":110},
+                {"text":"。","startMs":111,"endMs":125}
+            ]}]
+        });
+        let mut view = VideoTranscript::new(Status::Running);
+        merge_segment(&mut view, segment, result.clone()).unwrap();
+        let line = &view.utterances[0];
+        assert_eq!(line.end_ms, 115_100.0);
+        assert_eq!(line.words.len(), 2);
+        assert_eq!(
+            (line.words[0].start_ms, line.words[0].end_ms),
+            (115_080, 115_080)
+        );
+        assert_eq!(
+            (line.words[1].start_ms, line.words[1].end_ms),
+            (115_085, 115_100)
+        );
+        let reversed = speech::Segment {
+            start_ms: segment.end_ms,
+            end_ms: segment.start_ms,
+        };
+        assert!(merge_segment(&mut view, reversed, result).is_err());
+        assert_eq!(view.text, "结束。");
     }
 
     #[test]
@@ -1167,7 +1423,10 @@ mod tests {
             let local_result = |text: &str| {
                 json!({
                     "status":"succeeded","job_id":"local-mock",
-                    "text":json!({"text":text,"utterances":[{"text":text,"startMs":25,"endMs":225}]}).to_string(),
+                    "text":json!({"text":text,"utterances":[{
+                        "text":text,"startMs":25,"endMs":225,
+                        "words":[{"text":"段","startMs":75,"endMs":125}]
+                    }]}).to_string(),
                 })
             };
             match request["action"].as_str() {
@@ -1265,7 +1524,7 @@ mod tests {
         .is_err());
         save(&db, "vid", &initial, true).unwrap();
 
-        let reopened = current_view(&db, dir.path(), "vid").unwrap().unwrap();
+        let reopened = current_view(&db, dir.path(), "vid", None).unwrap().unwrap();
         assert_eq!(reopened.status, Status::Interrupted);
         assert_eq!(reopened.completed_segments, Some(1));
         assert_eq!(reopened.cloud_pending, Some(true));
@@ -1299,6 +1558,13 @@ mod tests {
         assert_eq!(record.view.text, "第一段\n第二段");
         assert_eq!(record.view.utterances[1].start_ms, 115_025.0);
         assert_eq!(
+            (
+                record.view.utterances[1].words[0].start_ms,
+                record.view.utterances[1].words[0].end_ms
+            ),
+            (115_075, 115_125)
+        );
+        assert_eq!(
             load(&db, "vid", Some("source"))
                 .unwrap()
                 .unwrap()
@@ -1312,6 +1578,127 @@ mod tests {
             json!({"action":"get-by-key","idempotency_key":second.key})
         );
         assert!(!cloud_pending(dir.path(), "vid", &record));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn video_transcript_refresh_reads_the_original_job_and_writes_only_verified_word_times() {
+        use axum::{extract::State, routing::post, Json, Router};
+        use serde_json::Value;
+        const JOB: &str = "12345678-1234-4123-8123-123456789abc";
+        const KEY: &str = "file-speech:12345678-1234-4123-8123-123456789def";
+        type Replies = Arc<Mutex<(Vec<Value>, Value)>>;
+        async fn mock(State(replies): State<Replies>, Json(request): Json<Value>) -> Json<Value> {
+            let mut replies = replies.lock().unwrap();
+            replies.0.push(request);
+            Json(replies.1.clone())
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.mp4");
+        fs::write(&path, b"synthetic fixture").unwrap();
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO assets(id,name,ext,store_path) VALUES('vid','fixture','mp4',?1)",
+                [path.to_str().unwrap()],
+            )
+            .unwrap();
+        let hash = fingerprint(&path).unwrap();
+        let mut saved = row(&hash, Status::Completed, &db, &path);
+        saved.view = parse_full_result(
+            r#"{"text":"乙。","utterances":[{"text":"乙。","startMs":1,"endMs":500}]}"#,
+            1000.0,
+        )
+        .unwrap();
+        saved.full_attempts.push(file_speech::Attempt {
+            key: KEY.into(),
+            owner: "test-user".into(),
+            credits: 1,
+            audio: file_speech::Manifest {
+                sha256: "0".repeat(64),
+                bytes: 42,
+                duration_ms: 1000,
+                source_duration_ms: 1000,
+            },
+            job_id: Some(JOB.into()),
+            terminal: true,
+        });
+        save(&db, "vid", &saved, true).unwrap();
+        let id = record_id("vid", &hash);
+        db.conn.lock().unwrap().execute(
+            "UPDATE analyses SET payload=json_set(payload,'$.utterances[0].futureField','retained') WHERE id=?1",
+            [&id],
+        ).unwrap();
+        let eligible = |owner| {
+            current_view(&db, dir.path(), "vid", owner)
+                .unwrap()
+                .unwrap()
+                .can_refresh_timing
+        };
+        assert_eq!(eligible(None), None);
+        assert_eq!(eligible(Some("another-user")), None);
+        assert_eq!(eligible(Some("test-user")), Some(true));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let result = |job, sentence_start| {
+            json!({"job_id":job,"status":"succeeded","text":json!({
+            "text":"乙。","utterances":[{"text":"乙。","startMs":sentence_start,"endMs":500,
+                "words":[{"text":"乙","startMs":92,"endMs":150}]}]
+        }).to_string()})
+        };
+        let replies = Arc::new(Mutex::new((vec![], result(JOB, 2))));
+        let router = Router::new()
+            .route("/functions/v1/understand-proxy", post(mock))
+            .with_state(replies.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let cloud = CloudClient::new(crate::cloud::config::CloudConfig {
+            supabase_url: Some(url),
+            supabase_publishable_key: Some("local-test".into()),
+            account_api_url: None,
+        })
+        .unwrap();
+        let auth = AuthClient::with_test_session(cloud.clone());
+        let refresh = |owner| {
+            refresh_completed_timing(
+                db.clone(),
+                dir.path(),
+                "vid",
+                file_speech::Service {
+                    cloud: &cloud,
+                    auth: &auth,
+                    owner,
+                },
+            )
+        };
+        let active = (dir.path().to_owned(), "vid".to_owned());
+        ACTIVE.lock().unwrap().insert(active.clone());
+        let activity = Activity(active);
+        assert!(refresh("test-user").await.is_err());
+        drop(activity);
+        assert!(refresh("another-user").await.is_err());
+        assert!(replies.lock().unwrap().0.is_empty());
+        assert!(refresh("test-user").await.is_err()); // Sentence clock differs.
+        replies.lock().unwrap().1 = result("12345678-1234-4123-8123-123456789fff", 1);
+        assert!(refresh("test-user").await.is_err()); // The returned UUID differs.
+        assert_eq!(eligible(Some("test-user")), Some(true));
+        replies.lock().unwrap().1 = result(JOB, 1);
+        let repaired = refresh("test-user").await.unwrap();
+        assert_eq!(repaired.text, "乙。");
+        assert_eq!(repaired.utterances[0].words[0].start_ms, 92);
+        assert_eq!(eligible(Some("test-user")), None);
+        let persisted: Value =
+            serde_json::from_str(&db.get_analysis(&id).unwrap().unwrap().payload).unwrap();
+        assert_eq!(persisted["utterances"][0]["futureField"], "retained");
+        assert_eq!(persisted["utterances"][0]["words"][0]["endMs"], 150);
+        assert_eq!(
+            replies.lock().unwrap().0,
+            vec![json!({"action":"get-by-key","idempotency_key":KEY}); 3]
+        );
         server.abort();
     }
 
@@ -1349,7 +1736,13 @@ mod tests {
                     StatusCode::OK,
                     Json(json!({"job_id": JOB, "status":"succeeded", "text":json!({
                         "text": "片尾对白",
-                        "utterances": [{"text":"片尾对白", "startMs": 7198000, "endMs": 7200120}],
+                        "utterances": [{
+                            "text":"片尾对白", "startMs": 7198000, "endMs": 7200120,
+                            "words":[
+                                {"text":"片尾","startMs":7198000,"endMs":7199220},
+                                {"text":"对白","startMs":7199800,"endMs":7200060}
+                            ]
+                        }],
                     }).to_string()})),
                 ),
                 _ => (StatusCode::BAD_REQUEST, Json(json!({}))),
@@ -1427,6 +1820,7 @@ mod tests {
         assert_eq!(result.status, Status::Completed);
         assert_eq!(result.utterances[0].start_ms, 7_198_000.0);
         assert_eq!(result.utterances[0].end_ms, 7_200_000.0);
+        assert_eq!(result.utterances[0].words[1].end_ms, 7_200_000);
         let persisted = load(&db, "vid", Some(&hash)).unwrap().unwrap();
         assert_eq!(persisted.full_attempts.len(), 1);
         assert_eq!(persisted.full_attempts[0].job_id.as_deref(), Some(JOB));

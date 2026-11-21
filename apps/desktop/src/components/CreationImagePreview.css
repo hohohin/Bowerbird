@@ -168,14 +168,7 @@ html[data-theme="light"] .creation-image-preview-backdrop { background: linear-g
 .creation-image-preview-conversation-head h2 { margin: 0; font-size: 19px; letter-spacing: .08em; font-weight: 500; }
 .creation-image-preview-conversation-head > span { font-size: 11px; color: var(--bb-muted); padding-top: 3px; }
 .creation-image-preview-conversation-head > button { margin-left: auto; }
-.creation-image-preview-video-views { display: flex; gap: 8px; min-width: 0; }
-.creation-image-preview .creation-image-preview-video-views button { width: auto; padding: 0 8px; white-space: nowrap; font-size: 13px; }
-.creation-image-preview-video-views button[aria-pressed="true"] { color: var(--bb-blue); }
-.creation-image-preview-video-views button[aria-pressed="true"]::after {
-  content: ""; position: absolute; bottom: 0; left: 8px; right: 8px; height: 1px; background: currentColor;
-}
 .creation-image-preview-history { display: flex; flex: 1; min-height: 0; padding: 0 4px 18px; }
-.creation-image-preview-history[hidden] { display: none; }
 .creation-image-preview-record-source, .creation-image-preview-action-note {
   display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px 12px;
   margin: 0 20px; padding: 10px 0; border-bottom: 1px solid var(--bb-line); color: var(--bb-muted); font-size: 12px;
@@ -190,29 +183,6 @@ html[data-theme="light"] .creation-image-preview-backdrop { background: linear-g
 .creation-image-preview-parameters p { margin: 0 0 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .creation-image-preview-parameters ul { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; list-style: none; }
 .creation-image-preview-parameters img { width: 54px; height: 54px; border: 1px solid var(--bb-line); object-fit: cover; }
-.video-transcript-panel {
-  flex: 1; min-height: 0; padding: 18px clamp(14px, 1.7vw, 26px) 24px; overflow: auto;
-  scrollbar-width: thin; scrollbar-color: var(--bb-line) transparent; font-size: 13px; line-height: 1.65;
-}
-.video-transcript-panel p { margin: 0 0 12px; overflow-wrap: anywhere; }
-.video-transcript-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
-.video-transcript-toolbar input {
-  flex: 1; min-width: 0; min-height: 32px; padding: 0 8px; border: 1px solid var(--bb-line);
-  border-radius: 0; color: var(--bb-ink); background: var(--preview-glass-header);
-}
-.video-transcript-toolbar input::placeholder { color: var(--bb-muted); }
-.video-transcript-toolbar input:focus { outline: 1px solid var(--bb-blue); outline-offset: -1px; }
-.video-transcript-panel button:not(.app-button-primary) { min-height: 32px; color: var(--bb-blue); }
-.video-transcript-toolbar button { display: grid; min-width: 32px; place-items: center; }
-.video-transcript-lines { margin: 0; padding: 0; list-style: none; }
-.video-transcript-lines li {
-  display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: start; gap: 10px;
-  padding: 6px 0; border-bottom: 1px solid var(--bb-line);
-}
-.video-transcript-lines button { padding: 0 4px; font-variant-numeric: tabular-nums; }
-.video-transcript-lines li span { padding-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.video-transcript-text { white-space: pre-wrap; }
-.video-transcript-feedback { color: var(--bb-muted); }
 .creation-image-preview-history .generation-session-surface { background: transparent; min-width: 0; }
 .creation-image-preview-history .gen-view-in { animation: none; }
 .creation-image-preview-history .generation-session-surface > div > .overflow-y-auto { padding: 24px 22px 8px; scrollbar-width: thin; scrollbar-color: var(--bb-line) transparent; }
@@ -285,6 +255,69 @@ html[data-theme="light"] .creation-image-preview-image-viewport {
 }
 @media (max-width: 540px) {
   .creation-image-preview-layout { grid-template-columns: minmax(0, 1fr); }
+}
+.creation-image-preview.is-video-analysis { display: grid; place-items: center; }
+.creation-image-preview.is-video-analysis .creation-image-preview-layout {
+  width: min(1480px, calc(100% - 72px)); height: min(850px, calc(100dvh - 72px)); margin: 0; padding: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.06fr); grid-template-rows: auto minmax(0, 1fr);
+  align-items: stretch; gap: 0; overflow: hidden; pointer-events: auto;
+  border: 1px solid var(--bb-line-strong); background: var(--bb-surface-modal);
+  box-shadow: 8px 8px 0 rgb(var(--industrial-muted-rgb) / .16), 0 22px 70px #0004;
+}
+.is-video-analysis :is(.creation-image-preview-conversation[hidden], .creation-image-preview-hud[hidden]) { display: none; }
+.is-video-analysis .creation-image-preview-image {
+  grid-column: 1; grid-row: 2; min-height: 0; padding: 18px;
+  border-right: 1px solid var(--bb-line); background: var(--bb-surface-2);
+}
+.is-video-analysis .creation-image-preview-figure { margin: 0; padding: 0; min-height: 0; height: 100%; animation: none; }
+.creation-image-preview.is-video-analysis .creation-image-preview-image-anchor { height: 100%; }
+.is-video-analysis :is(.creation-image-preview-image-depth, .creation-image-preview-image-mark) { display: none; }
+.video-analysis-header {
+  position: relative; grid-column: 1 / -1; grid-row: 1;
+  display: flex; align-items: center; gap: 16px; min-height: 72px; padding: 10px 22px;
+  border-bottom: 1px solid var(--bb-line); background: var(--bb-surface-modal);
+}
+.video-analysis-header::before {
+  content: ""; position: absolute; top: 0; left: 22px; width: 44px; height: 2px; background: var(--bb-blue);
+}
+.video-analysis-heading { min-width: 0; flex: 1; }
+.video-analysis-heading h2 { margin: 0; color: var(--bb-ink); font-size: 19px; font-weight: 600; }
+.video-analysis-heading h2:focus { outline: none; }
+.video-analysis-heading p {
+  margin: 4px 0 0; color: var(--bb-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px;
+}
+.video-analysis-tabs { display: flex; flex: none; }
+.video-analysis-tabs button, .video-analysis-icon-button {
+  padding: 0 12px; min-height: 38px; color: var(--bb-ink); font-size: 13px; white-space: nowrap;
+}
+.video-analysis-icon-button { display: grid; flex: none; place-items: center; width: 36px; padding: 0; }
+.video-analysis-tabs button[aria-pressed="true"] {
+  color: var(--bb-blue); background: rgb(var(--industrial-accent-rgb) / .08); box-shadow: inset 0 -2px var(--bb-blue);
+}
+.video-analysis-header button:hover { background: rgb(var(--industrial-accent-rgb) / .1); }
+.video-analysis-content { grid-column: 2; grid-row: 2; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
+.video-transcript-panel {
+  flex: 1; min-height: 0; min-width: 0; padding: 22px clamp(16px, 2.3vw, 34px) 20px; overflow: auto;
+  scrollbar-width: thin; scrollbar-color: var(--bb-line) transparent; font-size: 14px; line-height: 1.65;
+}
+.video-transcript-panel > p { margin: 0 0 12px; overflow-wrap: anywhere; }
+.video-transcript-panel > button:not(.app-button-primary) { min-height: 32px; color: var(--bb-blue); }
+.video-transcript-panel .video-analysis-reader-note {
+  padding-top: 10px; margin: 10px 0 0; border-top: 1px solid var(--bb-line); color: var(--bb-muted); font-size: 12px;
+}
+.video-analysis-reader-note p { margin: 0; }
+.video-analysis-repair { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.video-analysis-empty-title { color: var(--bb-ink); font-size: 16px; font-weight: 600; }
+.video-analysis-content .video-transcript-reader-body { font-size: 15px; }
+@media (max-width: 860px) {
+  .creation-image-preview.is-video-analysis .creation-image-preview-layout {
+    width: calc(100% - 24px); height: calc(100dvh - 24px);
+    grid-template-columns: minmax(0, 1fr); grid-template-rows: auto min(40dvh, 300px) minmax(0, 1fr);
+  }
+  .is-video-analysis .creation-image-preview-image { padding: 8px; border-right: 0; border-bottom: 1px solid var(--bb-line); }
+  .video-analysis-content { grid-column: 1; grid-row: 3; }
+  .video-analysis-header { min-height: 58px; gap: 8px; padding: 8px 10px; }
+  .video-analysis-tabs button { padding: 0 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .creation-image-preview *, .creation-image-preview *::after, .creation-image-preview *::before { animation: none !important; transition: none !important; }

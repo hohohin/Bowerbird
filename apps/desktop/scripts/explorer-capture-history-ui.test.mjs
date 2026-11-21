@@ -2,12 +2,17 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({ cacheDir: '.tmp/explorer-capture-history/vite', server: { host: '127.0.0.1', port: 1874, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({
+  cacheDir: '.tmp/explorer-capture-history/vite',
+  optimizeDeps: { entries: ['scripts/fixtures/explorer-capture-history/preview.html'] },
+  server: { host: '127.0.0.1', port: 1874, strictPort: true, hmr: false, watch: null },
+});
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
 page.setDefaultTimeout(6000);
-const errors = []; page.on('pageerror', error => errors.push(error.message));
+await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+const errors = []; page.on('pageerror', error => errors.push(error.stack ?? error.message));
 const calls = command => page.evaluate(command => window.calls.filter(c => c.command === command), command);
 const history = () => page.getByRole('dialog', { name: '采集记录', exact: true });
 async function drop(index, mediaKind = 'image') {
@@ -87,9 +92,28 @@ try {
   await page.evaluate(() => { window.failCancel = false; window.remoteAssetMetadata = true; });
   await page.evaluate(() => { const captureId = window.calls.filter(c => c.command === 'capture_source_browser_image').at(-1).args.captureId; window.emitProgress({captureId,phase:'saving',receivedBytes:16}); });
   assert.equal(await history().getByRole('button', { name: '取消', exact: true }).count(), 0, 'atomic saving is not presented as cancellable');
-  await completeLast(); await page.waitForFunction(() => !document.querySelector('.explore-capture-status'));
+  const imageCapture = await completeLast();
+  await page.waitForFunction(() => !document.querySelector('.explore-capture-status'));
+  const recordedVideo = history().getByRole('listitem').filter({ hasText: '海边短片.mp4' });
+  await recordedVideo.getByRole('button', { name: '查看素材', exact: true }).click();
+  const videoPreview = page.getByRole('dialog', { name: '视频与会话预览', exact: true });
+  await videoPreview.getByRole('button', { name: '打开转录文稿', exact: true }).waitFor();
+  assert.equal(await history().count(), 0);
+  assert.equal(await page.evaluate(() => window.store.getState().detailAssetId), null);
+  assert.deepEqual((await calls('get_assets_by_ids')).at(-1).args.assetIds, [`asset-${first}`]);
+  assert.equal((await calls('external_files_media')).at(-1).args.path, '/captured-video.mp4');
+  const source = await videoPreview.locator('video').getAttribute('src');
+  assert.equal(new URL(source, page.url()).pathname, '/src-tauri/tests/fixtures/media/fragmented.mp4');
+  await page.waitForFunction(() => document.querySelector('[aria-label="视频与会话预览"] video')?.readyState >= HTMLMediaElement.HAVE_METADATA);
+  await videoPreview.getByRole('button', { name: '关闭预览', exact: true }).click();
+  await videoPreview.waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => window.calls.filter(c => c.command === 'resize_source_browser').at(-1)?.args.visible === true);
+  const captureButton = page.getByRole('button', { name: '采集记录', exact: true });
+  assert.equal(await captureButton.evaluate(element => element === document.activeElement), true);
+  await captureButton.click();
   await history().getByRole('button', { name: '查看素材', exact: true }).first().click();
-  await page.waitForFunction(() => !!window.store.getState().detailAssetId);
+  await page.waitForFunction(assetId => window.store.getState().detailAssetId === assetId, `asset-${imageCapture}`);
+  assert.equal(await videoPreview.count(), 0);
   await page.getByRole('button', { name: '切换探索', exact: true }).click();
   await page.getByRole('button', { name: '切换探索', exact: true }).click();
   await drop(7); await waitCaptures(7);
@@ -107,5 +131,9 @@ try {
   assert.equal(await history().locator('.explorer-capture-row').count(),1,'corrupt history entries are ignored without losing a valid interrupted record');
   await history().getByText('已中断', { exact: true }).waitFor();
   assert.deepEqual(errors, []);
-  console.log('PASS capture history: real component queue, true progress, frozen destination, delivery-only retry, cancellation, persistence, interrupted restart, native occlusion, keyboard and themes');
+  console.log('PASS capture history: real queue, progress, retry, cancellation, persistence, video shared preview, original image detail, native occlusion, keyboard and themes');
+} catch (error) {
+  console.error('UI errors', errors);
+  console.error((await page.locator('body').innerText()).slice(-1000));
+  throw error;
 } finally { await browser.close(); await server.close(); }

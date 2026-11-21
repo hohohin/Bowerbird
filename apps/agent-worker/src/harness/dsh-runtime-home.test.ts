@@ -50,8 +50,8 @@ test("DSH runtime home keeps dependencies immutable and cleans only its fresh ch
       assert.match(profile, /id: deepseek-flash/);
       assert.equal(readFileSync(join(template, planningFile), "utf8"), templateProfile);
     } finally { optimizer.dispose(); }
-    for (const imageCardProvider of [false, true]) for (const videoCardOptions of [undefined, false, true]) {
-      const chat = createDshRuntimeHome({ templateDir: template, runtimeRoot: runtime, chat: true, imageCardProvider, videoCardOptions, chatOptions: { model: "deepseek-v4-pro", reasoningEffort: "max" } });
+    for (const imageCardProvider of [false, true]) for (const videoCardOptions of [undefined, false, true]) for (const h3R2v of [false, true]) {
+      const chat = createDshRuntimeHome({ templateDir: template, runtimeRoot: runtime, chat: true, imageCardProvider, videoCardOptions, h3R2v, chatOptions: { model: "deepseek-v4-pro", reasoningEffort: "max" } });
       try {
         const schema = JSON.parse(readFileSync(join(chat.home, "profiles", chat.profileName, "plugins", "chat-card-tool.json"), "utf8"));
         const profile = readFileSync(join(chat.home, "profiles", chat.profileName, "cordis.chat.patch.yml"), "utf8");
@@ -63,6 +63,10 @@ test("DSH runtime home keeps dependencies immutable and cleans only its fresh ch
         assert.equal(!!fields.videoChannel, videoCardOptions === true);
         assert.equal(fields.mode.enum.includes("reference"), videoCardOptions === true);
         assert.equal(fields.resolution.enum.includes(0.98), videoCardOptions === true);
+        const supportsR2v = h3R2v && videoCardOptions === true;
+        assert.equal(fields.mode.enum.includes("r2v"), supportsR2v);
+        assert.equal(schema.inputSchema.properties.connections.items.properties.input.enum.includes("reference-video"), supportsR2v);
+        assert.equal(schema.description.includes("H3 R2V"), supportsR2v);
         const field = fields.provider;
         if (imageCardProvider) assert.ok(field.enum.includes("dreamina-web55"));
         else assert.equal(field, undefined);

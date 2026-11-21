@@ -25,6 +25,14 @@ Deno.test("video options are opt-in for card-capable v2 clients", () => {
     assertThrows(() => validateChatInput({ ...input, video_card_options: true, ...patch }), ChatInputError);
   }
 });
+Deno.test("H3 R2V requires an explicit card-capable v2 request opt-in", () => {
+  const input = { messages, conversation_id: "c-fixture", engine: DSH_CHAT_ENGINE_V2 };
+  assert(!("h3_r2v" in validateChatInput({ ...input, video_card_options: true })));
+  assertEquals(validateChatInput({ ...input, video_card_options: true, h3_r2v: true }).h3_r2v, true);
+  for (const patch of [{ video_card_options: undefined }, { h3_r2v: "yes" }, { tools_enabled: false }]) {
+    assertThrows(() => validateChatInput({ ...input, video_card_options: true, h3_r2v: true, ...patch }), ChatInputError);
+  }
+});
 Deno.test("DSH accepts public history, structured skill IDs and minimal card receipts", () => {
   const base = { messages, engine: DSH_CHAT_ENGINE } as const;
   const skill = { id: "text-editor" } as const;
@@ -188,7 +196,7 @@ Deno.test("public chat capability, private skill admission and temporary pending
     userMarked = true;
     marked = "true";
     const restricted = await run({action:"quote"});
-    for (const capability of ["available","dsh_vps_v2_available","image_card_provider","video_card_options","dsh_vps_skills_available"]) {
+    for (const capability of ["available","dsh_vps_v2_available","image_card_provider","video_card_options","h3_r2v","dsh_vps_skills_available"]) {
       assertEquals(restricted.body[capability],false);
     }
     const creditsBeforeRestriction = credits;
@@ -243,7 +251,7 @@ Deno.test("public chat capability, private skill admission and temporary pending
     assertEquals(legacyPaidMode.paid_available,true);
     assertEquals((await run({...session,idempotency_key:"no-free-fallback"})).status,426);
     assertEquals(begins,beforePaid);
-    assertEquals((await run(quoteRequest)).body,{ ...paidQuote,image_card_provider:true,video_card_options:true,dsh_vps_skills_available:false });
+    assertEquals((await run(quoteRequest)).body,{ ...paidQuote,image_card_provider:true,video_card_options:true,h3_r2v:true,dsh_vps_skills_available:false });
     assertEquals((await run({...paid,max_credits:0})).status,400);
     assertEquals((await run({...paid,max_output_tokens:393217})).status,400);
     assertEquals((await run({...paid,dsh_options:undefined})).status,400);

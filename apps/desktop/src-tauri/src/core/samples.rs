@@ -419,10 +419,10 @@ pub fn seed_if_first_launch(app: AppHandle, db: Arc<Database>, paths: Arc<Librar
 
         // 任一成功才写旗标（避免每次启动重跑已注入的）；全失败保持 false 下次重试。
         if ok > 0 {
-            // 重读最新设置再合并，最小化 TOCTOU 覆盖用户并发改动。
-            let mut latest = settings_state.inner().get();
-            latest.samples_seeded = true;
-            if let Err(e) = settings_state.inner().update(latest) {
+            if let Err(e) = settings_state
+                .inner()
+                .update_with(|settings| settings.samples_seeded = true)
+            {
                 tracing::warn!("samples_seeded flag persist failed: {e}");
             }
             let _ = app.emit("library://assets-changed", ());

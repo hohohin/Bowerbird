@@ -62,6 +62,10 @@ H3 优化按钮共用 `H3OptimizeButton`，画板图片卡和视频卡均在提�
 
 素材菜单的单选双列、多选和残缺选区由 [assetContextMenu.ts](../../apps/desktop/src/lib/assetContextMenu.ts) 生成，继续复用声明式渲染器和素材操作插槽。[useAssetMenuHost.ts](../../apps/desktop/src/components/useAssetMenuHost.ts) 处理全局与嵌入式宿主的选择和导航，[assetMenuCommands.ts](../../apps/desktop/src/lib/assetMenuCommands.ts) 执行文件、素材归属及生成相关命令。需要变更素材菜单时由这三个入口核对规则与动作，勿另建宿主专用菜单。
 
+单条视频的「转录文稿」由共用 [AssetContextMenu.tsx](../../apps/desktop/src/components/AssetContextMenu.tsx) 打开 [LibraryVideoPreview.tsx](../../apps/desktop/src/components/LibraryVideoPreview.tsx) 的文稿工作区。用户打开视频预览即可看到当前报价，点击带报价的按钮后才核对原件并提交。
+
+视频浏览由共用预览承载，`AssetDetail` 的嵌入模式提供属性和「视频分析」入口。预览把素材及来源版本传给 [VideoTranscriptPanel.tsx](../../apps/desktop/src/components/VideoTranscriptPanel.tsx)，复用已读报价和任务状态。[VideoTranscriptReader.tsx](../../apps/desktop/src/components/VideoTranscriptReader.tsx) 使用共用滚动条和可见段渲染，负责文稿全文搜索、复制和原生字词时间跳转。
+
 [openCatalogMenu.ts](../../apps/desktop/src/lib/openCatalogMenu.ts) 复用虚拟视图已加载的素材或目录条目。只有缺项才读取索引，后一次菜单请求、离开工作区或 Esc 可取消迟到结果。连接目录按条目 ID 解析，分类素材按 Asset ID 解析。[CanvasLayerMenuItem.tsx](../../apps/desktop/src/components/CanvasLayerMenuItem.tsx) 的显式单步操作与原按住滑动及键盘操作共享画布层级命令。
 
 视频导出使用 `VideoExportMenu`，复用 `ContextMenu` 的动作语义和焦点。通过 `anchor` 跟随按钮，底部空间不足时向上展开。浮层挂在预览对话框内、动画容器外，全屏时挂在播放器内。画板音轨卡及展开素材组直接复用 `AudioWaveform`。

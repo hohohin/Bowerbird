@@ -43,27 +43,29 @@ import { readDismissedNotices, dismissNotices } from "./dismissedNotices";
 import { ConfirmedDshTurnFailure, WorkflowInputError, WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import { describeBrandImage } from "./describeBrandImage";
-import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoElapsed, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, type ComfyVideoInput, type ComfyVideoStatus } from "./comfyVideo";
+import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoElapsed, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, h3R2VInputError, type ComfyVideoInput, type ComfyVideoStatus } from "./comfyVideo";
 import { H3_IMAGE } from "./genProviders";
-import { imageOptimizationText, restoreImageOptimization, restoreH3VideoAudioReference, cleanH3OptimizedPrompt, h3OptimizationInstruction } from "./h3PromptOptimization";
-import { compileAgentPrompt, compileGenerationPrompt, renderGenerationDraft, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowNodeRun, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, H3_VIDEO_AUDIO_PORT, WORKFLOW_SKILLS,
+import { imageOptimizationText, restoreImageOptimization, restoreH3VideoAudioReference, restoreH3R2VReferences, h3R2VPromptReferences, cleanH3OptimizedPrompt, h3OptimizationInstruction, type H3R2VPromptReferences } from "./h3PromptOptimization";
+import { compileAgentPrompt, compileGenerationPrompt, renderGenerationDraft, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowExecutionInputs, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowNodeRun, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, H3_VIDEO_AUDIO_PORT, H3_R2V_INPUT_PORTS, WORKFLOW_SKILLS,
   type CanvasWorkflow, type H3ImageGenerationInput, type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
 
 const controllers = new Map<string, CanvasWorkflowController>();
+const r2vPorts = Object.values(H3_R2V_INPUT_PORTS);
 
 /** Filter new automatic bindings using actual asset metadata, before legacy frame conversion. */
 export async function filterAutomaticMediaValues(node: WorkflowNode, values: Record<string, WorkflowValue[]>, nodes: readonly WorkflowNode[] = []) {
   const inputs = generationInputNode(node, nodes).inputs;
   const isAudioPort = (port: string) => node.kind === "comfy-video" && port === H3_VIDEO_AUDIO_PORT;
+  const isR2VPort = (port: string) => node.kind === "comfy-video" && r2vPorts.some(id => id === port);
   const ids = [...new Set(Object.entries(values).flatMap(([port, items]) => items.flatMap((value, index) =>
-    isAudioPort(port) || inputs[port]?.[index]?.mediaFilter ? value.assetIds ?? [] : [])))];
+    isAudioPort(port) || isR2VPort(port) || inputs[port]?.[index]?.mediaFilter ? value.assetIds ?? [] : [])))];
   if (!ids.length) return;
   const assets = new Map((await api.getAssetsByIds(ids)).map(asset => [asset.id, asset]));
   for (const [port, items] of Object.entries(values)) for (const [index, source] of items.entries()) {
     const binding = inputs[port]?.[index];
     const filter = binding?.mediaFilter;
     const audioPort = isAudioPort(port);
-    if (!binding || !filter && !audioPort) continue;
+    if (!binding || !filter && !audioPort && !isR2VPort(port)) continue;
     const value = items[index] = structuredClone(source);
     const supported = automaticInputMedia(node, port);
     const accepted = filter?.filter(media => supported.includes(media)) ?? supported;
@@ -89,7 +91,7 @@ export async function filterAutomaticMediaValues(node: WorkflowNode, values: Rec
       if (value.text !== undefined) value.text = removeExcluded(value.text);
       if (value.table) value.table = { ...value.table, rows: value.table.rows.map(row => row.map(removeExcluded)), ...(value.table.columns ? { columns: value.table.columns.map(removeExcluded) } : {}) };
     }
-    if (value.type === "image" && !value.assetIds?.length && !value.nodeIds?.length) {
+    if (value.type === "image" && !value.assetIds?.length && !value.nodeIds?.length && !isR2VPort(port)) {
       throw new WorkflowNodeError("来源卡片没有当前任务可用的素材，请检查来源或任务模式", node);
     }
   }
@@ -549,23 +551,23 @@ export class CanvasWorkflowController {
     }) && before.every(node => after.some(candidate => candidate.id === node.id) || node.kind === "agent" && !!node.chatConversationId);
     const authorizeEdit = !projectionOnly && (before.length > 0 || after.length > 0);
     const nodeIds = new Set(nodes.map(node => node.id));
-    const previousH3Ids = new Set(before.filter(node => node.kind === "comfy-video").map(node => node.id));
+    const previousH3 = new Map(before.filter(node => node.kind === "comfy-video").map(node => [node.id, comfyVideoMode(node.comfyVideo)]));
     nodes = nodes.map(node => {
       if (this.isLocked(node.id)) return node;
       const normalized = normalizeWorkflowLocalVideo(normalizeWorkflowInputSlots(node));
-      if (normalized.kind !== "comfy-video" || previousH3Ids.has(node.id)) return normalized;
-      const audio = normalized.inputs[H3_VIDEO_AUDIO_PORT];
-      if (!audio?.some(binding => binding.nodeId && !nodeIds.has(binding.nodeId))) return normalized;
-      // The source can be removed while its H3 audio connection is inactive.
-      return { ...normalized, inputs: { ...normalized.inputs,
-        [H3_VIDEO_AUDIO_PORT]: audio.filter(binding => !binding.nodeId || nodeIds.has(binding.nodeId)) } };
+      if (normalized.kind !== "comfy-video" || previousH3.get(node.id) === comfyVideoMode(normalized.comfyVideo)) return normalized;
+      const active = workflowExecutionInputs(normalized);
+      const ports = comfyVideoMode(normalized.comfyVideo) === "r2v" ? r2vPorts : [H3_VIDEO_AUDIO_PORT, "first-frame", "last-frame"];
+      // A parked connection's source may have been removed since it was last active.
+      return { ...normalized, inputs: { ...normalized.inputs, ...Object.fromEntries(ports.flatMap(port => active[port]
+        ? [[port, active[port].filter(binding => !binding.nodeId || nodeIds.has(binding.nodeId))]] : [])) } };
     });
     for (const node of nodes) {
-      if (node.kind !== "comfy-video" || previousH3Ids.has(node.id)
-        || !node.inputs[H3_VIDEO_AUDIO_PORT]?.some(input => input.nodeId || input.canvasNodeId)) continue;
+      if (node.kind !== "comfy-video" || previousH3.get(node.id) === comfyVideoMode(node.comfyVideo)
+        || !Object.values(workflowExecutionInputs(node)).some(bindings => bindings.some(input => input.nodeId || input.canvasNodeId))) continue;
       // A parked wire can become cyclic while the card uses a different provider.
       try { assertWorkflowAcyclic(nodes, node.id, true); }
-      catch { throw new WorkflowNodeError("录音连线会形成循环，请断开回路上的连线后再切换到 H3", node); }
+      catch { throw new WorkflowNodeError("参考素材连线会形成循环，请断开回路上的连线后再切换 H3 模式", node); }
     }
     for (const node of this.document.nodes) if (this.isLocked(node.id)) {
       const next = nodes.find(next => next.id === node.id);
@@ -1107,7 +1109,7 @@ export class CanvasWorkflowController {
         loop.items = validateLoopStart(workflowLoopRows(owner, this.document.nodes, (await readCanvas()).nodes), loop.index, owner);
       }
     }
-    const freezeInputs = (node: WorkflowNode): WorkflowNode["inputs"] => Object.fromEntries(Object.entries(node.inputs).map(([port, bindings]) => [port, bindings.map(input => input.groupId && groupAssets.has(input.groupId) ? { ...input, assetIds: groupAssets.get(input.groupId)![input.autoConnect || port === H3_VIDEO_AUDIO_PORT ? "media" : "image"] } : input)]));
+    const freezeInputs = (node: WorkflowNode): WorkflowNode["inputs"] => Object.fromEntries(Object.entries(node.inputs).map(([port, bindings]) => [port, bindings.map(input => input.groupId && groupAssets.has(input.groupId) ? { ...input, assetIds: groupAssets.get(input.groupId)![input.autoConnect || port === H3_VIDEO_AUDIO_PORT || r2vPorts.some(id => id === port) ? "media" : "image"] } : input)]));
     return { cellTexts, cellValues, freezeInputs };
   }
   private async startRun(startId: string, single = false, completionSessionId?: string, background = false, scheduleId?: string, start?: CardStart) {
@@ -1944,7 +1946,7 @@ export class CanvasWorkflowController {
   }
 
   /** Explicit paid text action. It never invalidates outputs or executes connected cards. */
-  async optimizeComfyPrompt(nodeId: string, referenceCount?: number, retryInput?: NonNullable<WorkflowStep["comfyOptimization"]>["input"]) {
+  async optimizeComfyPrompt(nodeId: string, references?: number | H3R2VPromptReferences, retryInput?: NonNullable<WorkflowStep["comfyOptimization"]>["input"]) {
     if (!this.ready) throw new Error("工作流尚未载入");
     if (this.startingCards.has(nodeId)) return;
     const node = this.document.nodes.find(node => node.id === nodeId);
@@ -1953,11 +1955,19 @@ export class CanvasWorkflowController {
     if (this.encapsulating || this.isLocked(nodeId)) throw new Error("卡片正在使用，请等待当前任务结束");
     if (retryInput && image !== ("referenceCount" in retryInput)) throw new Error("卡片类型已改变，请使用当前提示词重新优化。");
     const prompt = retryInput?.prompt ?? node.prompt.trim(), options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO, mode = comfyVideoMode(options);
+    if (retryInput && "mode" in retryInput && retryInput.mode !== mode) throw new Error("H3 工作流已切换，请使用当前提示词重新优化。");
     if (!prompt || prompt.length > 16000) throw new Error("请在卡片中填写 1–16000 字提示词后再优化");
-    const input = retryInput ?? (image ? { prompt, referenceCount: referenceCount ?? node.inputs.image?.length ?? 0, ratio: node.ratio ?? "auto" } : { prompt, mode, seconds: options.seconds, ratio: options.ratio,
-      firstFrameCount: mode !== "text" && node.inputs["first-frame"]?.length ? 1 : 0,
+    const r2vCounts = mode === "r2v" ? typeof references === "object" ? references : {
+      referenceImageCount: node.inputs[H3_R2V_INPUT_PORTS.image]?.length ?? 0,
+      referenceVideoCount: node.inputs[H3_R2V_INPUT_PORTS.video]?.length ?? 0,
+      referenceAudioCount: node.inputs[H3_R2V_INPUT_PORTS.audio]?.length ?? 0,
+    } : undefined;
+    const inputError = r2vCounts && h3R2VInputError(r2vCounts.referenceImageCount, r2vCounts.referenceVideoCount, r2vCounts.referenceAudioCount, false);
+    if (!retryInput && inputError) throw new WorkflowNodeError(inputError, node);
+    const input = retryInput ?? (image ? { prompt, referenceCount: (typeof references === "number" ? references : node.inputs.image?.length) ?? 0, ratio: node.ratio ?? "auto" } : { prompt, mode, seconds: options.seconds, ratio: options.ratio,
+      firstFrameCount: (mode === "frames" || mode === "reference") && node.inputs["first-frame"]?.length ? 1 : 0,
       lastFrameCount: mode === "frames" && node.inputs["last-frame"]?.length ? 1 : 0,
-      audioReference: node.inputs[H3_VIDEO_AUDIO_PORT]?.length === 1 || undefined });
+      ...(r2vCounts ?? { audioReference: node.inputs[H3_VIDEO_AUDIO_PORT]?.length === 1 || undefined }) });
     const runId = crypto.randomUUID(), threadId = crypto.randomUUID(), accountId = useStore.getState().cloudAuth?.user_id ?? null;
     this.reservations.set(runId, { access: [nodeId], writes: [nodeId] });
     const start = this.beginStart(nodeId, "optimize");
@@ -2026,8 +2036,10 @@ export class CanvasWorkflowController {
             const cleaned = restored?.text ?? cleanH3OptimizedPrompt(payload.text);
             const autoInput = originalStep.comfyAutoGeneration?.input;
             const hasAudio = autoInput ? !!autoInput.audioAssetId : !!node.inputs[H3_VIDEO_AUDIO_PORT]?.length;
-            const prompt = hasAudio && "mode" in snapshot.input && snapshot.input.mode === "reference"
-              ? restoreH3VideoAudioReference(snapshot.input.prompt, cleaned) : cleaned;
+            const prompt = "mode" in snapshot.input && snapshot.input.mode === "r2v"
+              ? restoreH3R2VReferences(snapshot.input.prompt, cleaned, snapshot.input)
+              : hasAudio && "mode" in snapshot.input && snapshot.input.mode === "reference"
+                ? restoreH3VideoAudioReference(snapshot.input.prompt, cleaned) : cleaned;
             if (!prompt) throw new Error("Cloud DSH 未返回有效的优化提示词，请检查任务结果");
             snapshot = { ...snapshot, result: prompt, keptOriginal: restored?.keptOriginal ?? (prompt !== cleaned ? true : undefined),
               ...(payload.dshContinuation === true ? { dshContinuation: true } : {}) };
@@ -2078,7 +2090,7 @@ export class CanvasWorkflowController {
       const draft = node.prompt.trim();
       const input = { prompt: draft || linkedText || video.prompt, mode, seconds: video.seconds, ratio: video.ratio,
         firstFrameCount: video.firstFrame ? 1 : 0, lastFrameCount: video.lastFrame ? 1 : 0,
-        audioReference: video.audioAssetId ? true as const : undefined };
+        ...(mode === "r2v" ? h3R2VPromptReferences(video) : { audioReference: video.audioAssetId ? true as const : undefined }) };
       await this.step(runId, node.id, { generationRunInput, comfyAutoGeneration: { input: video, videoText: draft ? linkedText : "" },
         comfyOptimization: { input, instruction: h3OptimizationInstruction(input), createdAt: Date.now(),
           inputBindings: JSON.stringify([node.inputs, node.promptReferences]) } });
@@ -2389,14 +2401,16 @@ export class CanvasWorkflowController {
         if (pending.length && accountId !== undefined && accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
       }
       // Compare the editor's references, before media conversion replaces sources with frame assets.
-      const generationRunInput = node.kind === "generation" ? { prompt: node.prompt, references: [generationReferencePreviewOrder(connectedNode, values, this.document.nodes)] }
-        : node.kind === "comfy-video" ? { prompt: node.prompt, references: h3RunReferences(filterDisconnectedReferences(connectedNode.inputs, values)) }
+      const localVideoMode = node.kind === "comfy-video" ? comfyVideoMode(node.comfyVideo) : undefined;
+      let generationRunInput = node.kind === "generation" ? { prompt: node.prompt, references: [generationReferencePreviewOrder(connectedNode, values, this.document.nodes)] }
+        : localVideoMode ? { prompt: node.prompt, references: h3RunReferences(filterDisconnectedReferences(connectedNode.inputs, values), localVideoMode) }
         : undefined;
       const inputNode: WorkflowNode = step.localAgentSkill === "hyperframes" ? { ...node, skill: "hyperframes", agentTransport: "codex-cli" } : node;
       await filterAutomaticMediaValues(inputNode, values, this.document.nodes);
       if ((node.kind === "generation" || node.kind === "comfy-video") && Object.values(connectedNode.inputs).some(port => port.some(input => input.excludedAssetIds?.length))) {
         Object.assign(values, filterDisconnectedReferences(connectedNode.inputs, values));
       }
+      if (localVideoMode === "r2v") generationRunInput = { prompt: node.prompt, references: h3RunReferences(values, localVideoMode) };
       if (node.kind === "voice") { await this.runVoice(runId, node, halted, values); return; }
       if (node.kind === "instruction") {
         const count = (values.image ?? []).flatMap(value => value.assetIds ?? []).length;
@@ -2407,7 +2421,8 @@ export class CanvasWorkflowController {
       const generated = node.kind === "generation" ? compileGenerationPrompt(node, values, this.document.nodes, !!step.comfyAutoGeneration) : null;
       const outputTargets = node.kind === "agent" ? step.agentOutputTargets ?? agentOutputTargets(node, this.document.nodes) : [];
       const agentInput = node.kind === "agent" ? frozenChat ?? compileAgentPrompt(node, values, outputTargets) : null;
-      const assetIds = generated?.assetIds ?? step.agentInput?.assetIds ?? agentInput?.assetIds ?? [...new Set([...(values.image ?? []), ...(values.text ?? []), ...(values["first-frame"] ?? []), ...(values["last-frame"] ?? [])].flatMap(value => value.assetIds ?? []))];
+      const referenceImages = localVideoMode === "r2v" ? (values[H3_R2V_INPUT_PORTS.image] ?? []).flatMap(value => value.assetIds ?? []) : undefined;
+      const assetIds = generated?.assetIds ?? step.agentInput?.assetIds ?? agentInput?.assetIds ?? [...new Set(referenceImages ?? [...(values.image ?? []), ...(values.text ?? []), ...(values["first-frame"] ?? []), ...(values["last-frame"] ?? [])].flatMap(value => value.assetIds ?? []))];
       const assets = assetIds.length ? await api.getAssetsByIds(assetIds) : [];
       const video = node.kind === "generation" && node.generation?.media === "video";
       const acceptsVideo = video || node.kind === "agent" || node.kind === "text" && node.textTarget?.image;
@@ -2416,8 +2431,8 @@ export class CanvasWorkflowController {
       const orderedAssets = assetIds.map(id => assets.find(asset => asset.id === id)!);
       const linkedText = generated ? "" : (values.text ?? []).map(value => value.text?.replace(/@图片\d+/g, token => {
         const ref = value.imageRefs?.find(ref => ref.token === token);
-        const index = ref ? assetIds.indexOf(ref.asset_id) : -1;
-        return index < 0 ? token : `@图片${index + 1}`;
+        const index = ref ? (referenceImages ?? assetIds).indexOf(ref.asset_id) : -1;
+        return index < 0 ? token : referenceImages ? `<Picture ${index + 1}>` : `@图片${index + 1}`;
       })).filter(Boolean).join("\n\n");
       const prompt = generated?.prompt ?? [linkedText, node.prompt].filter(Boolean).join("\n\n").trim();
       const visualProfileId = values["visual-profile"]?.[0]?.profileId ?? null;
@@ -2678,20 +2693,24 @@ export class CanvasWorkflowController {
         if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("本地 H3 视频需要有效的 Pro／Studio 权益或测试账号资格");
         const first = (values["first-frame"] ?? []).flatMap(value => value.assetIds ?? []);
         const last = (values["last-frame"] ?? []).flatMap(value => value.assetIds ?? []);
-        const audioBindings = node.inputs[H3_VIDEO_AUDIO_PORT] ?? [];
+        const audioBindings = localVideoMode === "r2v" ? [] : node.inputs[H3_VIDEO_AUDIO_PORT] ?? [];
         const audio = (values[H3_VIDEO_AUDIO_PORT] ?? []).flatMap(value => value.assetIds ?? []);
         if (audioBindings.length && (audioBindings.length !== 1 || audio.length !== 1)) {
           throw new WorkflowInputError("请连接一段可用的本地录音", node, audioBindings[0]);
         }
         const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
         const mode = comfyVideoMode(options);
+        const referenceVideos = mode === "r2v" ? (values[H3_R2V_INPUT_PORTS.video] ?? []).flatMap(value => value.assetIds ?? []) : undefined;
+        const referenceAudios = mode === "r2v" ? (values[H3_R2V_INPUT_PORTS.audio] ?? []).flatMap(value => value.assetIds ?? []) : undefined;
+        const referenceError = mode === "r2v" && h3R2VInputError(referenceImages?.length ?? 0, referenceVideos?.length ?? 0, referenceAudios?.length ?? 0);
+        if (referenceError) throw new WorkflowNodeError(referenceError, node);
         if (mode === "frames" && (first.length !== 1 || last.length > 1)) throw new Error("请连接一张首帧，尾帧最多一张");
         if (mode === "reference" && first.length !== 1) throw new Error("单图模式需要连接一张参考图");
         const localPrompt = mode === "reference" && audio.length && !prompt.includes("<Audio 1>") ? `${prompt}\n<Audio 1>` : prompt;
         if (!prompt || localPrompt.length > 16000) throw new Error("请填写 1–16000 字提示词");
         if (!Number.isFinite(options.seconds) || options.seconds < 1 || options.seconds > 15) throw new Error("视频时长需为 1–15 秒");
-        const input: ComfyVideoInput = { ...options, firstFrame: mode === "text" ? "" : first[0], lastFrame: mode === "frames" ? last[0] : undefined, prompt: localPrompt,
-          ...(audio.length ? { audioAssetId: audio[0] } : {}) };
+        const input: ComfyVideoInput = { ...options, firstFrame: mode === "text" || mode === "r2v" ? "" : first[0], lastFrame: mode === "frames" ? last[0] : undefined, prompt: localPrompt,
+          ...(mode === "r2v" ? { referenceImages, referenceVideos, referenceAudios } : audio.length ? { audioAssetId: audio[0] } : {}) };
         if (step.comfyAutoGeneration) await this.runComfyAutoGeneration(runId, node, halted, input, start, linkedText, generationRunInput);
         else await this.runComfyVideo(runId, node, halted, input, start, generationRunInput);
       } else if (node.kind === "generation") {

@@ -111,6 +111,15 @@ fn control_binding_fields(binding: &Value, fields: &[&str]) -> bool {
         value.keys().all(|key| key == "autoConnect" || fields.contains(&key.as_str())))
 }
 
+fn h3_r2v_port(port: &str) -> Option<(&'static str, usize)> {
+    match port {
+        "reference-image" => Some(("image", 9)),
+        "reference-video" => Some(("video", 3)),
+        "r2v-audio" => Some(("audio", 3)),
+        _ => None,
+    }
+}
+
 fn validate_image_output(value: &Value, assets: &mut HashSet<String>) -> AppResult<()> {
     // An asynchronous image output may contain only exact generation-session references.
     if value.get("assetIds").is_none() && value.get("nodeIds").is_none() { return Err(invalid()); }
@@ -255,8 +264,13 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 }
             }
         }
+        let parked_r2v = node.get("savedComfyR2V").map(|parked| {
+            if node["kind"] != "generation" || node["generation"]["media"] != "video" { return Err(invalid()); }
+            parked.as_object().filter(|inputs| inputs.keys().all(|port| h3_r2v_port(port).is_some())).ok_or_else(invalid)
+        }).transpose()?;
         let mut deps = Vec::new();
-        for (port, bindings) in inputs {
+        for (port, bindings, parked) in inputs.iter().map(|(port, value)| (port, value, false))
+            .chain(parked_r2v.into_iter().flatten().map(|(port, value)| (port, value, true))) {
             if port == "completion" {
                 if node["kind"] != "trigger" { return Err(invalid()); }
                 for binding in bindings.as_array().ok_or_else(invalid)? {
@@ -276,15 +290,21 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 }
                 continue; // Completion events do not participate in the data dependency DAG.
             }
-            let audio_port = node["kind"] == "comfy-video" && port == "reference-audio";
-            let image_port = port == "image" || audio_port || node["kind"] == "comfy-video" && matches!(port.as_str(), "first-frame" | "last-frame");
+            let local_video = node["kind"] == "comfy-video";
+            let r2v = local_video && node["comfyVideo"]["mode"] == "r2v";
+            let legacy_frames = local_video && matches!(port.as_str(), "first-frame" | "last-frame");
+            let legacy_audio = local_video && port == "reference-audio";
+            let r2v_port = (local_video || parked).then(|| h3_r2v_port(port)).flatten();
+            let typed_port = r2v_port.or_else(|| legacy_audio.then_some(("audio", 1)));
+            let image_port = port == "image" || typed_port.is_some() || legacy_frames;
+            let inactive = parked || r2v_port.is_some() && !r2v || r2v && (legacy_audio || legacy_frames);
             if !image_port && !matches!(port.as_str(), "text" | "visual-profile" | "signal") { return Err(invalid()); }
             let bindings = bindings.as_array().ok_or_else(invalid)?;
-            if audio_port && bindings.len() > 1 { return Err(invalid()); }
+            if typed_port.is_some_and(|(_, limit)| bindings.len() > limit) { return Err(invalid()); }
             for binding in bindings {
                 validate_binding_metadata(binding)?;
-                if audio_port && (binding.get("videoFrame").is_some()
-                    || binding.get("mediaFilter").is_some_and(|filter| filter.as_array().is_none_or(|types| types.len() != 1 || types[0] != "audio"))
+                if typed_port.is_some_and(|(media, _)| media != "image" && binding.get("videoFrame").is_some()
+                    || binding.get("mediaFilter").is_some_and(|filter| filter.as_array().is_none_or(|types| types.len() != 1 || types[0] != media))
                     || binding.get("portId").is_some_and(|port| port != "image")) { return Err(invalid()); }
                 if port == "signal" {
                     let producer = nodes.iter().find(|node| node["id"] == binding["nodeId"]).ok_or_else(invalid)?;
@@ -321,17 +341,18 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                     if matches!(binding["cellId"].as_str(), Some("*" | "*text" | "*latest" | "*latest-image")) {
                         if (matches!(binding["cellId"].as_str(), Some("*" | "*latest-image")) && !image_port)
                             || (matches!(binding["cellId"].as_str(), Some("*text" | "*latest")) && port != "text") { return Err(invalid()); }
-                        for producer in nodes.iter().filter(|node| node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"]) {
+                        for producer in nodes.iter().filter(|node| !inactive && node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"]) {
                             deps.push(producer["id"].as_str().ok_or_else(invalid)?);
                         }
                     }
-                    if let Some(producer) = nodes.iter().find(|node| node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"] && (node["textTarget"]["cellId"] == binding["cellId"] || node["textTarget"]["cellIds"].as_array().is_some_and(|ids| ids.contains(&binding["cellId"]))))
-                        .or_else(|| nodes.iter().find(|node| node["resultNodeIds"].as_array().is_some_and(|ids| ids.contains(&binding["canvasNodeId"])))) {
+                    if let Some(producer) = nodes.iter().filter(|_| !inactive).find(|node| node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"] && (node["textTarget"]["cellId"] == binding["cellId"] || node["textTarget"]["cellIds"].as_array().is_some_and(|ids| ids.contains(&binding["cellId"]))))
+                        .or_else(|| nodes.iter().find(|node| !inactive && node["resultNodeIds"].as_array().is_some_and(|ids| ids.contains(&binding["canvasNodeId"])))) {
                         deps.push(producer["id"].as_str().ok_or_else(invalid)?);
                     }
                 } else {
                     if nodes.iter().any(|node| node["id"] == binding["nodeId"] && node["kind"] == "planner") { return Err(invalid()); }
-                    deps.push(binding["nodeId"].as_str().ok_or_else(invalid)?);
+                    let producer = binding["nodeId"].as_str().ok_or_else(invalid)?;
+                    if !inactive { deps.push(producer); }
                     if !binding["portId"].is_string() { return Err(invalid()); }
                 }
             }
@@ -973,6 +994,42 @@ mod tests {
         let mut invalid = doc;
         invalid["nodes"][0]["inputs"]["reference-audio"] = json!([{"assetId":"sample"},{"assetId":"extra"}]);
         assert!(validate(&invalid).is_err());
+    }
+    #[test]
+    fn saves_and_reopens_typed_h3_r2v_bindings_without_reactivating_parked_wires() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut h3 = node("h3", json!({
+            "reference-image": [{"assetId":"still", "mediaFilter":["image"]}],
+            "reference-video": [{"assetId":"clip", "mediaFilter":["video"]}],
+            "r2v-audio": [{"assetId":"voice-a"}, {"assetId":"voice-b"}, {"assetId":"voice-c"}],
+            "first-frame": [{"nodeId":"other", "portId":"image"}]
+        }));
+        h3["kind"] = json!("comfy-video");
+        h3["comfyVideo"]["mode"] = json!("r2v");
+        let other = node("other", json!({"image":[{"nodeId":"h3", "portId":"image"}]}));
+        let doc = json!({"schema_version":1,"nodes":[h3,other],"run":null});
+        assert_eq!(validate(&doc).unwrap(), HashSet::from(["still", "clip", "voice-a", "voice-b", "voice-c"].map(str::to_owned)));
+        assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+
+        let mut wrong_media = doc.clone();
+        wrong_media["nodes"][0]["inputs"]["reference-video"][0]["mediaFilter"] = json!(["image"]);
+        assert!(validate(&wrong_media).is_err());
+        let mut overflow = doc.clone();
+        overflow["nodes"][0]["inputs"]["r2v-audio"].as_array_mut().unwrap().push(json!({"assetId":"voice-d"}));
+        assert!(validate(&overflow).is_err());
+        let mut active_cycle = doc.clone();
+        active_cycle["nodes"][0]["comfyVideo"]["mode"] = json!("frames");
+        assert!(validate(&active_cycle).is_err());
+
+        let mut remote = doc;
+        remote["nodes"][0]["kind"] = json!("generation");
+        remote["nodes"][0]["generation"] = json!({"media":"video"});
+        remote["nodes"][0]["inputs"] = json!({});
+        remote["nodes"][0]["savedComfyR2V"] = json!({"reference-video":[{"nodeId":"other","portId":"image"}]});
+        assert_eq!(db.workflow_save("p", 1, remote.clone()).unwrap(), 2);
+        assert_eq!(db.workflow_get("p").unwrap().document, remote);
     }
     #[test]
     fn completion_trigger_allows_bounded_feedback_but_not_data_cycles() {

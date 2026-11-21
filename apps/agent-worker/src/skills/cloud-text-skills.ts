@@ -22,12 +22,19 @@ function record(value: unknown): Record<string, unknown> {
 
 function h3Parameters(value: unknown): Record<string, unknown> {
   const p = record(value);
-  if (Object.keys(p).some(key => !["mode", "seconds", "ratio", "firstFrameCount", "lastFrameCount", "audioReference"].includes(key)) ||
-      !["text", "reference", "frames"].includes(String(p.mode)) ||
+  const r2v = p.mode === "r2v";
+  const counts = { referenceImageCount: 9, referenceVideoCount: 3, referenceAudioCount: 3 };
+  const mediaKeys = r2v ? Object.keys(counts) : ["audioReference"];
+  if (Object.keys(p).some(key => !["mode", "seconds", "ratio", "firstFrameCount", "lastFrameCount", ...mediaKeys].includes(key)) ||
+      !["text", "reference", "frames", "r2v"].includes(String(p.mode)) ||
       typeof p.seconds !== "number" || !Number.isFinite(p.seconds) || p.seconds <= 0 || p.seconds > 120 ||
       !["9:16", "16:9", "4:3", "3:4", "1:1", "auto"].includes(String(p.ratio)) ||
       ![0, 1].includes(p.firstFrameCount as number) || ![0, 1].includes(p.lastFrameCount as number) ||
       (p.audioReference !== undefined && p.audioReference !== true) ||
+      (r2v && (p.firstFrameCount !== 0 || p.lastFrameCount !== 0 || Object.entries(counts).some(([key, limit]) => {
+        const count = p[key];
+        return typeof count !== "number" || !Number.isSafeInteger(count) || count < 0 || count > limit;
+      }))) ||
       (p.mode === "text" && (p.firstFrameCount !== 0 || p.lastFrameCount !== 0)) ||
       (p.mode === "reference" && (p.firstFrameCount !== 1 || p.lastFrameCount !== 0)) ||
       (p.mode === "frames" && p.firstFrameCount !== 1)) throw new Error("cloud_text_skill_parameters_invalid");

@@ -8,6 +8,8 @@
 
 [canvasPaintWindow](../../apps/desktop/src/lib/canvasPaintWindow.ts) 为同一张大画布裁剪屏外卡片及 SVG 曲线的绘制；不卸载编辑器，不改变坐标模型，不代理指针。新增分离的卡片装饰需核对它的所有者 ID，未知元素保留原显示。[验证夹具](../../apps/desktop/scripts/fixtures/canvas-interaction-performance/README.md) 同时支持 Chrome 和 Windows WebView2。
 
+打开项目时，[CanvasWorkspace](../../apps/desktop/src/components/CanvasWorkspace.tsx) 按已恢复的相机和路由版本分批挂载卡片，[CanvasWorkflowLayer](../../apps/desktop/src/components/CanvasWorkflowLayer.tsx) 沿用同一挂载范围。新画布展示仍应读取完整画板数据，遇到未挂载的卡片时用已有数据几何。[useWorkflowPortGeometry](../../apps/desktop/src/lib/useWorkflowPortGeometry.ts) 通过画布实时缩放计算卡片内端口位置，按受影响卡片测量，能接收随后挂载的卡片。[打开项目专项](../PROJECT-CANVAS-PLAN.md#2026-11-21项目打开与首屏响应)。
+
 ## 3D 导演预演
 
 画板工具箱放置「3D 导演台」卡片后，从卡片打开工作台。场景、人偶与运镜沿用同目录的 scene、mannequin、motion。对象清单、视口与属性共用对象 ID，编辑与撤销以完整导演文档为单位。多个运镜方案共用布景并随该节点的 directorDocument 保存。图片输入来自画板绑定的素材，本机 Codex 通过 TextAgentTask 提交受限 JSON 编辑，可携带图片及视频截帧。[导演台入口](../../apps/desktop/src/director3d/DirectorStudio.tsx) · [对象编辑](../../apps/desktop/src/director3d/objectEditing.ts)
@@ -175,6 +177,7 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 - 用途／关键词：Seedance、自动识别、首尾帧、多参考、时长、比例、音频参考。
 - 入口：[videoGeneration.ts](../../apps/desktop/src/lib/videoGeneration.ts) 的 `GenerationSettings`、`VideoOptions`、`resolveVideoOptions`、`videoInputError`、`videoRatio`；实际调用：[CreationBoard.tsx](../../apps/desktop/src/components/CreationBoard.tsx)、[GenerationPanel.tsx](../../apps/desktop/src/components/GenerationPanel.tsx) 和 [CanvasWorkflowLayer.tsx](../../apps/desktop/src/components/CanvasWorkflowLayer.tsx) 解析本次引用。
 - 工作流视频卡切换供应商使用 [selectWorkflowVideoProvider](../../apps/desktop/src/lib/canvasWorkflow.ts)，由卡面的视频模型选择器调用，负责普通引用与 H3 帧输入的往返转换。
+- H3 多素材参考（R2V）的图片、视频和独立音频端口由 [canvasWorkflow.ts](../../apps/desktop/src/lib/canvasWorkflow.ts) 的 `H3_R2V_INPUT_PORTS` 定义。`workflowExecutionInputs` 只读取当前模式的端口，`selectWorkflowVideoProvider` 保存切换时暂时停用的连线。混合素材自动连线复用 [planAutomaticConnection](../../apps/desktop/src/lib/workflowAutoConnect.ts)，按媒体类型分别绑定端口。
 - 边界：仅首尾帧为显式模式，其余按提交引用推导；不能把只是连接到工作流的素材全部当成引用。历史恢复保留冻结参数，不用当前自动识别重写；本机 H3 用自身固定工作流。前端校验不替代 Rust／服务端能力与权益校验。
 - 状态：**可跨模块复用**；模型／模式契约见 [Seedance](../SEEDANCE-2.5-INTEGRATION.md) 与 [Cloud 视频](../VIDEO-API-INTEGRATION.md)。
 

@@ -2,18 +2,19 @@
 import { CanvasTextarea } from "./CanvasTextarea";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState } from "react";
-import { ArrowLeftRight, AudioLines, Check, CircleAlert, Ellipsis, Film, Gauge, Timer, X } from "lucide-react";
+import { ArrowLeftRight, AudioLines, Check, CircleAlert, Ellipsis, Film, Gauge, Images, Timer, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { comfyAudioHint, comfyAudioLabel, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, H3_VIDEO_RESOLUTIONS, type ComfyEnvironment, type ComfyVideoOptions, type ComfyVideoMode, type ComfyVideoProgress } from "../lib/comfyVideo";
+import { comfyAudioHint, comfyAudioLabel, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, H3_R2V_LIMITS, H3_R2V_REFERENCE_HINT, H3_VIDEO_MODES, H3_VIDEO_RESOLUTIONS, type ComfyEnvironment, type ComfyVideoOptions, type ComfyVideoMode, type ComfyVideoProgress } from "../lib/comfyVideo";
 import { isAudioAsset } from "../lib/audioMedia";
 import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError } from "../lib/notify";
 import type { Asset } from "../lib/types";
-import { H3_VIDEO_AUDIO_PORT, type WorkflowNode } from "../lib/canvasWorkflow";
+import { H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, type WorkflowNode } from "../lib/canvasWorkflow";
+import { workflowAssetMedia } from "../lib/workflowCanvasCapabilities";
 import "./ComfyVideoCard.css";
 import { TacticalSelect } from "./TacticalSelect";
 import { RatioSelect } from "./creation/RatioSelect";
@@ -22,6 +23,11 @@ import imageLicense from "../assets/comfy-licenses/MiniMax-H3-Image-LICENSE.txt?
 import h3License from "../assets/comfy-licenses/MiniMax-H3-LICENSE.txt?raw";
 
 const H3_RATIOS = RATIOS.filter(ratio => ["9:16", "16:9", "4:3", "3:4", "1:1"].includes(ratio.key));
+const R2V_GROUPS = [
+  { media: "image", label: "参考图片", Icon: Images, tag: "Picture" },
+  { media: "video", label: "参考视频", Icon: Film, tag: "Video" },
+  { media: "audio", label: "独立录音", Icon: AudioLines, tag: "Audio" },
+] as const;
 
 function EnvironmentAction({ label, disabled, hint, onClick }: {
   label: string; disabled: boolean; hint: string; onClick: () => void;
@@ -232,15 +238,15 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
 
 export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImages, readCurrentPrompt, onChange, optimizationActions }: {
   optimizationActions?: React.ReactNode; modelControl: React.ReactNode; node: WorkflowNode; disabled: boolean; assets: Asset[];
-  inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput) => string[];
+  inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput, media?: keyof typeof H3_R2V_INPUT_PORTS) => string[];
   onChange: (patch: Partial<WorkflowNode>) => void;
   readCurrentPrompt: () => string;
 }) {
   const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
   const mode = comfyVideoMode(options);
-  const ports = mode === "text" ? [] : mode === "reference" ? ["first-frame"] : ["first-frame", "last-frame"];
+  const ports = mode === "frames" ? ["first-frame", "last-frame"] : mode === "reference" ? ["first-frame"] : [];
   const audioBindings = node.inputs[H3_VIDEO_AUDIO_PORT] ?? [];
-  const audioIds = audioBindings.flatMap(inputImages);
+  const audioIds = audioBindings.flatMap(input => inputImages(input));
   const audio = assets.find(asset => audioIds.includes(asset.id) && isAudioAsset(asset));
   const audioLabel = comfyAudioLabel(mode);
   const latestCard = useRef({ node, disabled, onChange });
@@ -252,7 +258,8 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
     const drop = ++audioDrop.current;
     if (ids?.length !== 1) { notifyError(null, "请拖入一段音频"); return; }
     const previous = node.inputs[H3_VIDEO_AUDIO_PORT];
-    const current = () => drop === audioDrop.current && !latestCard.current.disabled && latestCard.current.node.inputs[H3_VIDEO_AUDIO_PORT] === previous;
+    const current = () => drop === audioDrop.current && !latestCard.current.disabled && comfyVideoMode(latestCard.current.node.comfyVideo) !== "r2v"
+      && latestCard.current.node.inputs[H3_VIDEO_AUDIO_PORT] === previous;
     try {
       const asset = assets.find(item => item.id === ids[0]) ?? (await api.getAssetsByIds(ids))[0];
       if (!current()) return;
@@ -263,18 +270,40 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
     }
   }
 
+  async function bindR2V(media: keyof typeof H3_R2V_INPUT_PORTS, label: string, ids: string[]) {
+    const port = H3_R2V_INPUT_PORTS[media], previous = node.inputs[port];
+    const limit = H3_R2V_LIMITS[media], drop = ++audioDrop.current;
+    const current = () => drop === audioDrop.current && !latestCard.current.disabled && comfyVideoMode(latestCard.current.node.comfyVideo) === "r2v"
+      && latestCard.current.node.inputs[port] === previous;
+    const bound = (previous ?? []).flatMap(input => inputImages(input, media));
+    const additions = [...new Set(ids)].filter(id => !bound.includes(id));
+    if (!additions.length) return;
+    if (bound.length + additions.length > limit || (previous?.length ?? 0) + additions.length > limit) {
+      notifyError(null, `${label}最多接入 ${limit} 个素材`); return;
+    }
+    try {
+      const incoming = await api.getAssetsByIds(additions);
+      if (!current()) return;
+      if (incoming.length !== additions.length || incoming.some(asset => !asset.store_path || workflowAssetMedia(asset) !== media)) {
+        notifyError(null, `请拖入可用的${label}素材`); return;
+      }
+      latestCard.current.onChange({ inputs: { ...latestCard.current.node.inputs,
+        [port]: [...(previous ?? []), ...additions.map(assetId => ({ assetId, mediaFilter: [media] }))] } });
+    } catch (error) { if (current()) notifyError(error, `无法读取${label}`); }
+  }
+
   function update(patch: Partial<ComfyVideoOptions>) { onChange({ comfyVideo: { ...options, ...patch } }); }
   return <section className="comfy-video-card" aria-label="本地 H3 视频设置">
     <fieldset disabled={disabled} className="workflow-video-parameters comfy-video-options" aria-label="视频参数">
       {modelControl}
       <TacticalSelect aria-label="H3 模式" title="生成模式" icon={<Film size={14} />} value={mode} onValueChange={value => onChange({ comfyVideo: comfyVideoOptionsForMode(options, value as ComfyVideoMode) })}>
-        <option value="frames">首尾帧</option><option value="reference">单图</option><option value="text">文生视频</option>
+        {H3_VIDEO_MODES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
       </TacticalSelect>
       <TacticalSelect aria-label="H3 时长" title="视频时长" icon={<Timer size={14} />} value={options.seconds} onValueChange={value => update({ seconds: Number(value) })}>
         {Array.from({ length: 15 }, (_, i) => <option value={i + 1} key={i}>{i + 1} 秒</option>)}
       </TacticalSelect>
       <RatioSelect ariaLabel="H3 比例" value={options.ratio === "auto" ? null : options.ratio} ratios={H3_RATIOS}
-        allowAuto={mode !== "text"} autoTitle="按运行时输入图片的实际宽高比生成，尺寸按模型要求对齐"
+        allowAuto={mode !== "text"} autoTitle={mode === "r2v" ? "优先沿用第一张参考图的画幅，其次是第一段参考视频。只有录音时使用 16:9" : "按运行时输入图片的实际宽高比生成，尺寸按模型要求对齐"}
         onChange={ratio => update({ ratio: (ratio ?? "auto") as ComfyVideoOptions["ratio"] })} />
       <TacticalSelect aria-label="H3 分辨率" title="生成分辨率" icon={<Gauge size={14} />} value={options.resolution === 1 ? 0.98 : options.resolution}
         onValueChange={value => update({ resolution: Number(value) as ComfyVideoOptions["resolution"] })}>
@@ -284,7 +313,7 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
     {ports.length > 0 && <div className="comfy-frame-slots">{ports.map((port, index) => {
       const label = mode === "reference" ? "参考图" : index ? "尾帧" : "首帧";
       const bindings = node.inputs[port] ?? [];
-      const ids = bindings.flatMap(inputImages);
+      const ids = bindings.flatMap(input => inputImages(input));
       const asset = assets.find(asset => asset.id === ids[0]);
       const path = asset?.thumb_path ?? asset?.store_path;
       return <div key={port} className="comfy-frame-slot" aria-label={`${label}输入`}
@@ -310,12 +339,42 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
           onClick={() => onChange({ inputs: { ...node.inputs, "first-frame": node.inputs["last-frame"], "last-frame": node.inputs["first-frame"] } })}>
           <ArrowLeftRight size={14} /></button>}
     </div>}
+    {mode === "r2v" && <div className="comfy-r2v-groups">
+      {R2V_GROUPS.map(({ media, label, Icon, tag }) => {
+        const port = H3_R2V_INPUT_PORTS[media], bindings = node.inputs[port] ?? [];
+        const resolved = bindings.map(input => inputImages(input, media)), count = resolved.flat().length;
+        const showTags = media !== "audio" || !node.inputs[H3_R2V_INPUT_PORTS.video]?.length;
+        let nextIndex = 1;
+        return <div key={port} className="comfy-audio-input" role="group" aria-label={`${label}输入`}
+          onDragOver={event => { if (!disabled && getDragAssets()) { event.preventDefault(); event.stopPropagation(); } }}
+          onDrop={event => {
+            event.preventDefault(); event.stopPropagation();
+            const ids = getDragAssets();
+            if (!disabled && ids?.length) void bindR2V(media, label, ids);
+          }}>
+          <div className="comfy-audio-row"><Icon size={14} aria-hidden="true" /><span>{label}</span>
+            <span className="comfy-audio-source">{bindings.length ? `${count} / ${H3_R2V_LIMITS[media]}` : `拖入或连接 · 最多 ${H3_R2V_LIMITS[media]} 个`}</span></div>
+          {bindings.map((binding, index) => {
+            const ids = resolved[index];
+            const name = ids.map(id => assets.find(asset => asset.id === id)?.name ?? "素材").join("、") || "等待上游素材";
+            const tags = ids.map(() => `<${tag} ${nextIndex++}>`).join(" ");
+            return <div className="comfy-audio-row comfy-r2v-source" key={index}>
+              {showTags && tags && <small title={tags}>{tags}</small>}
+              <span className="comfy-audio-source" title={name}>{name}</span>
+              <button type="button" aria-label={`断开${label}来源 ${index + 1}`} disabled={disabled} onPointerDown={event => event.stopPropagation()}
+                onClick={() => onChange({ inputs: { ...node.inputs, [port]: bindings.filter(item => item !== binding) } })}><X size={14} /></button>
+            </div>;
+          })}
+        </div>;
+      })}
+      <small>{H3_R2V_REFERENCE_HINT}</small>
+    </div>}
     <div className="comfy-prompt-field">
     <CanvasTextarea fitContent className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
       placeholder={mode === "reference" ? "用 <Picture 1> 指代参考图主体，不固定首尾画面…" : "输入视频提示词，也可从文本端口接入…"} value={node.prompt}
       readCurrentValue={readCurrentPrompt} onValueChange={prompt => onChange({ prompt })} />
     </div>
-    <div className="comfy-audio-input" role="group" aria-label={audioLabel}
+    {mode !== "r2v" && <div className="comfy-audio-input" role="group" aria-label={audioLabel}
       onDragOver={event => {
         if (!disabled && getDragAssets()) { event.preventDefault(); event.stopPropagation(); }
       }}
@@ -335,7 +394,7 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
           onClick={() => onChange({ inputs: { ...node.inputs, [H3_VIDEO_AUDIO_PORT]: [] } })}><X size={14} /></button>}
       </div>
       {audioBindings.length > 0 && <small>{comfyAudioHint(mode)}</small>}
-    </div>
+    </div>}
     <div className="comfy-prompt-actions">{optimizationActions}</div>
   </section>;
 }

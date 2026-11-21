@@ -40,7 +40,8 @@ const NO_SPEECH = {
 } as const;
 
 type HttpResponse = Awaited<ReturnType<WorkerFetch>>;
-type TranscriptSegment = { text: string; startMs: number; endMs: number };
+type TimedWord = { text: string; startMs: number; endMs: number };
+type TranscriptSegment = TimedWord & { words?: TimedWord[] };
 const INVALID_AUDIO_CODES = new Set(["45000002", "45000006", "45000130", "45000132", "45000151"]);
 const TERMINAL_TASK_CODES = new Set(["55001010", "55001011"]);
 const QUEUED_CODES = new Set(["20000001", "20000002"]);
@@ -142,6 +143,29 @@ async function readResultBody(response: HttpResponse): Promise<string | null> {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
+function timedWords(raw: unknown, sentenceStart: number, sentenceEnd: number, durationMs: number): TimedWord[] {
+  if (!Array.isArray(raw)) return [];
+  const words: TimedWord[] = [];
+  let previousEnd = sentenceStart;
+  for (const value of raw) {
+    const word = value as { text: string; start_time: number; end_time: number } | null;
+    if (!word || typeof word.text !== "string") return [];
+    if (!word.text.trim()) continue;
+    const hasTimes = Number.isSafeInteger(word.start_time) && Number.isSafeInteger(word.end_time)
+      && word.start_time >= 0 && word.end_time >= 0;
+    if (!hasTimes && /^[\s\p{P}]+$/u.test(word.text)) continue;
+    if (!hasTimes || word.start_time < previousEnd || word.end_time < word.start_time || word.end_time > sentenceEnd) {
+      return [];
+    }
+    previousEnd = word.end_time;
+    // The encoder may pad the end of the input. Store only the portion on the original timeline.
+    if (word.start_time <= durationMs) {
+      words.push({ text: word.text, startMs: word.start_time, endMs: Math.min(word.end_time, durationMs) });
+    }
+  }
+  return words;
+}
+
 function normalizeResult(raw: unknown, durationMs: number): FileSpeechQueryResult {
   const result = (raw as { result?: { text?: unknown; utterances?: unknown } } | null)?.result;
   if (!result || typeof result.text !== "string" || !Array.isArray(result.utterances)) return INVALID_RESPONSE;
@@ -151,17 +175,27 @@ function normalizeResult(raw: unknown, durationMs: number): FileSpeechQueryResul
   const utterances: TranscriptSegment[] = [];
   let previousEnd = 0;
   for (const value of result.utterances) {
-    const segment = value as { text: string; start_time: number; end_time: number } | null;
+    const segment = value as { text: string; start_time: number; end_time: number; words?: unknown } | null;
     if (!segment || typeof segment.text !== "string" || !Number.isSafeInteger(segment.start_time) ||
         !Number.isSafeInteger(segment.end_time) || segment.start_time < previousEnd ||
         segment.end_time <= segment.start_time || segment.end_time > durationMs + FILE_SPEECH_AUDIO_TOLERANCE_MS) {
       return INVALID_RESPONSE;
     }
     previousEnd = segment.end_time;
-    utterances.push({ text: segment.text, startMs: segment.start_time, endMs: segment.end_time });
+    const words = timedWords(segment.words, segment.start_time, segment.end_time, durationMs);
+    const utterance: TranscriptSegment = { text: segment.text, startMs: segment.start_time, endMs: segment.end_time };
+    if (words.length) utterance.words = words;
+    utterances.push(utterance);
   }
-  const resultText = JSON.stringify({ text: result.text, utterances, timingSource: "doubao-speech" });
-  if (new TextEncoder().encode(resultText).byteLength > FILE_SPEECH_MAX_RESULT_BYTES) return INVALID_RESPONSE;
+  const transcript = { text: result.text, utterances, timingSource: "doubao-speech" };
+  const encoder = new TextEncoder();
+  let resultText = JSON.stringify(transcript);
+  if (encoder.encode(resultText).byteLength > FILE_SPEECH_MAX_RESULT_BYTES) {
+    if (!utterances.some(utterance => utterance.words)) return INVALID_RESPONSE;
+    for (const utterance of utterances) delete utterance.words;
+    resultText = JSON.stringify(transcript);
+    if (encoder.encode(resultText).byteLength > FILE_SPEECH_MAX_RESULT_BYTES) return INVALID_RESPONSE;
+  }
   return { status: "completed", resultText };
 }
 

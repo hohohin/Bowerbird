@@ -53,7 +53,7 @@ export type DshChatOptionsSelection = { model: "deepseek-flash" | "deepseek-v4-p
 export function isDshChatModel(value: unknown): value is DshChatOptionsSelection["model"] {
   return value === "deepseek-flash" || value === "deepseek-v4-pro";
 }
-export type ChatInput = { dsh_options?: DshChatOptionsSelection; messages: ChatMessage[]; tools_enabled: boolean; image_card_provider?: true; video_card_options?: true; engine?: DshChatEngine; conversation_id?: string; skill?: ChatSkill };
+export type ChatInput = { dsh_options?: DshChatOptionsSelection; messages: ChatMessage[]; tools_enabled: boolean; image_card_provider?: true; video_card_options?: true; h3_r2v?: true; engine?: DshChatEngine; conversation_id?: string; skill?: ChatSkill };
 export class ChatInputError extends Error {}
 const invalid = () => new ChatInputError("对话内容格式无效，请重新发送");
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -109,7 +109,7 @@ function parseMessage(value: unknown): ChatMessage {
 
 export function validateChatInput(value: unknown): ChatInput {
   if (
-    !record(value) || !keys(value, ["messages", "tools_enabled", "engine", "skill", "conversation_id", "image_card_provider", "video_card_options", "dsh_options"]) ||
+    !record(value) || !keys(value, ["messages", "tools_enabled", "engine", "skill", "conversation_id", "image_card_provider", "video_card_options", "h3_r2v", "dsh_options"]) ||
     (value.engine !== undefined && !isDshChatEngine(value.engine)) ||
     (value.skill !== undefined && !isDshChatEngine(value.engine)) ||
     (value.engine !== DSH_CHAT_ENGINE_V2 && value.conversation_id !== undefined) ||
@@ -117,6 +117,7 @@ export function validateChatInput(value: unknown): ChatInput {
     value.messages.length < 1 || value.messages.length > 128 ||
     (value.image_card_provider !== undefined && (value.image_card_provider !== true || value.engine !== DSH_CHAT_ENGINE_V2 || value.skill !== undefined || value.tools_enabled === false)) ||
     (value.video_card_options !== undefined && (value.video_card_options !== true || value.engine !== DSH_CHAT_ENGINE_V2 || value.skill !== undefined || value.tools_enabled === false)) ||
+    (value.h3_r2v !== undefined && (value.h3_r2v !== true || value.video_card_options !== true)) ||
     (value.tools_enabled !== undefined &&
       typeof value.tools_enabled !== "boolean")
   ) throw invalid();
@@ -151,6 +152,7 @@ export function validateChatInput(value: unknown): ChatInput {
       ...(options === undefined ? {} : { dsh_options: options as DshChatOptionsSelection }),
       ...(value.image_card_provider === true ? { image_card_provider: true as const } : {}),
       ...(value.video_card_options === true ? { video_card_options: true as const } : {}),
+      ...(value.h3_r2v === true ? { h3_r2v: true as const } : {}),
       ...(value.skill === undefined ? {} : { skill: parseChatSkill(value.skill) }) };
   }
   return { messages, tools_enabled: value.tools_enabled !== false };

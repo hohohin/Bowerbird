@@ -33,6 +33,7 @@ import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { VideoTranscriptBatchButton } from "./VideoTranscriptBatch";
 import { videoSourceKey } from "../lib/videoSourceKey";
+import { isVideoAsset } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset } from "../lib/textMedia";
 import { LocalClassificationDialog } from "./LocalClassificationDialog";
@@ -317,18 +318,22 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   }
   function openAsset(asset: Asset) {
     if (working) return;
-    if (onInsertAsset) onInsertAsset(asset); else openDetail(asset);
+    if (onInsertAsset) onInsertAsset(asset);
+    else if (isVideoAsset(asset)) activate(asset);
+    else openDetail(asset);
   }
   function canShowOverlay() {
     return alive.current && !!root.current?.isConnected && !root.current.closest('[inert], [aria-hidden="true"]');
   }
   async function openPreview(asset: Asset) {
     const version = ++previewVersion.current;
+    const routeRevision = useStore.getState().projectRouteRevision;
+    const isCurrent = () => canShowOverlay() && version === previewVersion.current && useStore.getState().projectRouteRevision === routeRevision;
     try {
       if (!asset.store_path) throw new Error("素材原文件不可用");
       const path = await externalFiles.media(asset.store_path);
-      if (canShowOverlay() && version === previewVersion.current) setPreview({ asset, path, sourceKey: videoSourceKey(asset)! });
-    } catch (error) { if (canShowOverlay() && version === previewVersion.current) notifyError(error, "无法预览素材"); }
+      if (isCurrent()) setPreview({ asset, path, sourceKey: videoSourceKey(asset)! });
+    } catch (error) { if (isCurrent()) notifyError(error, "无法预览素材"); }
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
     const ids = selected.has(asset.id) ? [...selected] : [asset.id];

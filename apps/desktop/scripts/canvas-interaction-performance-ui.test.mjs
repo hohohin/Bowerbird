@@ -47,6 +47,12 @@ const workflow = page.locator('[data-workflow-card="workflow-0"]');
 const frame = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 const snapshot = () => page.evaluate(() => ({ canvas: window.snapshot(), workflow: JSON.parse(sessionStorage.getItem('workflow-p')).document }));
 const samples = [];
+async function waitForMountedBoard(count) {
+  await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
+  await page.waitForFunction(count => document.querySelectorAll('.canvas-plane [data-canvas-node]').length === count
+    && document.querySelectorAll('[data-workflow-target]').length === count / 3 * 2, count);
+  await frame();
+}
 async function resetStats() { await frame(); await page.evaluate(() => window.resetInteractionStats()); }
 async function collect(label, events) {
   await frame();
@@ -134,7 +140,7 @@ async function checkTyping() {
 }
 async function checkGeometry() {
   await page.goto('http://127.0.0.1:1628/scripts/fixtures/canvas-interaction-performance/preview.html');
-  await material.waitFor(); await workflow.waitFor(); await page.waitForTimeout(1200);
+  await material.waitFor(); await workflow.waitFor(); await waitForMountedBoard(300);
   assert.equal(await page.locator('.canvas-plane [data-canvas-node]').count(), 300);
   assert.equal(await page.locator('[data-workflow-target]').count(), 200);
   const initial = await snapshot();
@@ -268,7 +274,7 @@ async function checkMotion() {
   const large = process.argv.includes('--large'), groups = large ? 334 : 100;
   await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html' + (large ? '?large' : ''));
   await workflow.waitFor();
-  await page.waitForTimeout(1200);
+  await waitForMountedBoard(groups * 3);
   assert.equal(await page.locator('.canvas-plane [data-canvas-node]').count(), groups * 3);
   assert.equal(await page.locator('[data-workflow-target]').count(), groups * 2);
   const stage = page.locator('.canvas-stage'), bounds = await stage.boundingBox();
@@ -319,7 +325,7 @@ async function checkMotion() {
   }
   if (large) {
     await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html?large&overview');
-    await workflow.waitFor(); await page.waitForTimeout(1200);
+    await workflow.waitFor(); await waitForMountedBoard(groups * 3);
     const inView = await stage.evaluate(stage => {
       const view = stage.getBoundingClientRect();
       return [...stage.querySelectorAll('[data-canvas-node]')].filter(el => {

@@ -10,9 +10,11 @@ import { notifyError } from "../lib/notify";
 import { terminalDshTurnFailure } from "../lib/workflowAgentChat";
 import { cloudChatEndedMessage, userErrorMessage } from "../lib/userError";
 import { isVideoPath } from "../lib/videoGeneration";
+import { isAudioPath } from "../lib/audioMedia";
 import type { Asset } from "../lib/types";
 import { ModalShell } from "./ModalShell";
 import { VideoPlayer } from "./VideoPlayer";
+import { MediaPreview } from "./MediaPreview";
 import { BOARD_ASSET_PICK_EVENT } from "./creation/useCreationEditor";
 import { QUOTA_SOURCES } from "./creation/ProviderQuota";
 import { useChatProviderAccess } from "./creation/ChatProviderSelect";
@@ -229,10 +231,11 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
   const references = (ids: string[], removable = false) => ids.length ? <div className={`local-chat-references${removable ? " is-draft" : ""}`}>{ids.map((id, index) => {
     const asset = assets[id];
     const video = isVideoPath(asset?.store_path);
-    const label = `${video ? "参考视频" : "参考图"} ${index + 1}`;
+    const audio = isAudioPath(asset?.store_path);
+    const label = `${video ? "参考视频" : audio ? "参考音频" : "参考图"} ${index + 1}`;
     return <div className="local-chat-reference" key={id}>
       <button type="button" disabled={!asset?.store_path} onClick={() => asset && setPreview(asset)} aria-label={`查看${label}${asset ? `：${asset.name}` : ""}`}>
-        {asset?.store_path && (!video || asset.thumb_path) ? <img src={convertFileSrc(asset.thumb_path || asset.store_path)} alt={asset.name || label} /> : <span>{label}</span>}
+        {audio ? <span>{label}</span> : asset?.store_path && (!video || asset.thumb_path) ? <img src={convertFileSrc(asset.thumb_path || asset.store_path)} alt={asset.name || label} /> : <span>{label}</span>}
       </button>
       {removable && <button type="button" className="local-chat-reference-remove" onClick={() => useLocalChatStore.getState().setDraft(conversationId, { ...draft, referenceAssetIds: draft.referenceAssetIds.filter(value => value !== id) })} aria-label={`移除${label}`}><X size={11} /></button>}
     </div>;
@@ -338,7 +341,7 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
       </div>
     </>}
     {preview && <ModalShell title={preview.name || "对话参考素材"} width="lg" onClose={() => setPreview(null)}>
-      {isVideoPath(preview.store_path) ? <VideoPlayer path={preview.store_path!} /> : <img className="local-chat-image-preview" src={convertFileSrc(preview.store_path!)} alt={preview.name || "对话参考图"} />}
+      {isVideoPath(preview.store_path) ? <VideoPlayer path={preview.store_path!} /> : isAudioPath(preview.store_path) ? <MediaPreview playback asset={preview} /> : <img className="local-chat-image-preview" src={convertFileSrc(preview.store_path!)} alt={preview.name || "对话参考图"} />}
     </ModalShell>}
   </section>;
 }
