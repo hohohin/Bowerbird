@@ -29,6 +29,8 @@ try {
     check(restoreH3VideoAudioReference('使用 <Audio 1>', audioOutput) === audioOutput, 'the same tag may appear in multiple sections');
     check(restoreH3VideoAudioReference('使用 <Audio 1>', '你好。') === '使用 <Audio 1>', 'existing audio references survive a rewrite');
     check(restoreH3VideoAudioReference('你好。', '使用 <Audio 2>') === '你好。', 'unknown audio refs are never accepted');
+    const structured = 'integrated_multimodal_description: [Shot 1] 雨中的骑行者\n\noverall_soundscape: 雨声持续。\n\nnon_diegetic_music: N/A';
+    check(cleanH3OptimizedPrompt(structured) === structured, 'a complete H3 structure keeps its field labels');
     const counts = h3R2VPromptReferences({ referenceImages: ['image-a', 'image-b'], referenceVideos: ['clip-private'], referenceAudios: ['sound-private'] });
     const r2vSource = '<Picture 2> 主体沿 <Video 1> 的运镜出现。';
     const r2vResult = '<Picture 2> 的主体沿 <Video 1> 的运镜出现，声场跟随 <Audio 1>。';

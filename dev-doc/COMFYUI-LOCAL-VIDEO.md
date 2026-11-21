@@ -1,5 +1,17 @@
 # 本机 ComfyUI H3 视频卡片
 
+## 2026-11-21 H3 优化方法切换为官方结构版（云端已部署）
+
+按用户确认的范围，VPS 上的 `h3-video-prompt` 改为 MiniMax 官方 `h3-prompt-writing` 的结构：基础模式输出 `integrated_multimodal_description`、`overall_soundscape`、`non_diegetic_music` 三字段，`reference` 与 `r2v` 输出 `subject_definitions`、`summary`、`retention_analysis`、`detailed_description` 及后两个声音字段；I2VA 和 FL2VA 在字段前写官方对齐句，`S.SS` 用实际总时长。技术字段名、镜头标记、素材和说话人标签保持英文，字段值正文跟随用户输入语言。
+
+桌面 `cleanH3OptimizedPrompt` 只处理旧版无结构正文的行首字段名：结果中出现 `overall_soundscape` 等结构字段时原样回填，不再剥掉开头的 `integrated_multimodal_description:`。已开始的任务仍按冻结的方法快照返回，行为不变。
+
+卡片参数、录音挂载、时长与台词容量、口播默认和禁止项分层的约定保留，继续由宿主参数决定模式，不读文件、不调用生产工具。
+
+验证：Worker 8 项通过；桌面 TypeScript 与 [h3-prompt-optimization-ui.test.mjs](../apps/desktop/scripts/h3-prompt-optimization-ui.test.mjs) 通过，新增“完整结构保留字段名”用例。VPS 于 17:38:52（北京时间）原子替换，原件备份 `/opt/bowerbird/deploy-backups/h3-official-structure-20261121/SKILL.md`，哈希由 `45e895c7…` 变为 `5fc39208…`，13,769 字节；宿主与容器内挂载一致，容器内现役 loader 能加载 text、reference、frames 首帧、frames 首尾帧和 r2v 五种组合，均命中同一哈希与高思考。未重启 Worker，未发起付费模型请求。[部署回执](../apps/cloud/DEPLOY.md#2026-11-21-h3-视频-skill-切换为官方结构版已部署)
+
+文件替换只改变后续新任务的规则加载，不代表改写质量验收；官方结构的实际遵循度仍需一次真实优化任务核对，旧任务不重提。
+
 ## 2026-11-21 H3 多素材参考 R2V（云端已部署，桌面源码）
 
 视频卡和创作框增加「多素材参考（R2V）」。单次至少接入一个参考，最多 9 张图片、3 段视频和 3 段独立录音。参考图和视频分别用 `<Picture N>`、`<Video N>` 按各自顺序引用。`<Audio N>` 先编号有声视频的音轨，再编号独立录音。卡片保留不同模式各自的素材连线，重新启用时检查循环。[官方 R2V 模板](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/video_minimax_h3_r2v.json) · [ComfyUI 参考素材指南](https://docs.comfy.org/tutorials/video/minimax/minimax-h3-native#minimax-h3-reference-to-video-r2v)

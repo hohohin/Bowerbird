@@ -137,7 +137,7 @@ mod tests {
         let first = description_fixture(&db, "video", "暖色城市 100%_构图");
         let original_id = save_fixture(&db, "video", &first);
         save_fixture(&db, "image", &first);
-        assert_search(&db, "100%_ 暖色", &["video"]);
+        assert_search(&db, "暖色城市 100%_构图", &["video"]);
         assert_search(&db, "暖色 -城市", &[]);
         assert!(current_description(&db, "image").unwrap().is_none());
         assert_eq!(

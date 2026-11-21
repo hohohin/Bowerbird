@@ -80,8 +80,9 @@ export function h3OptimizationInstruction(input: H3PromptInput | H3ImagePromptIn
   return `bowerbird:cloud-text-skill:v1\n${JSON.stringify({ id: "referenceCount" in input ? "h3-image-prompt" : "h3-video-prompt", parameters })}`;
 }
 
-/** Strip the model's field label, never labels mentioned within dialogue or prose. */
+/** Legacy body-only results carried the field label; a complete H3 structure keeps both label and sound fields. */
 export function cleanH3OptimizedPrompt(text: string): string {
+  if (/(?:^|\n)[\t ]*(?:subject_definitions|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music)[\t ]*[:：]/i.test(text)) return text.trim();
   return text.replace(/^[\t ]*integrated_multimodal_description[\t ]*[:：][\t ]*/gim, "").trim();
 }
 
