@@ -88,6 +88,10 @@ impl CatalogFilter {
     }
 
     pub(super) fn sql(&self) -> AppResult<(String, Vec<Value>)> {
+        self.sql_with_entry_name(false)
+    }
+
+    pub(super) fn sql_with_entry_name(&self, entry_name: bool) -> AppResult<(String, Vec<Value>)> {
         let mut clauses = vec![
             if self.kind == "connections" { super::material_catalog::CONNECTION_ENTRY_VISIBLE.into() } else { catalog_visibility(self.project_id.is_some()) },
             match self.media.as_str() {
@@ -106,7 +110,8 @@ impl CatalogFilter {
         }
         if let Some(query) = self.query.as_deref().filter(|q| !q.is_empty()) {
             let transcript = video_understanding_keyword_match("?");
-            clauses.push(format!("(a.name LIKE ? ESCAPE '\\' OR {transcript})"));
+            let entry = if entry_name { " OR e.name LIKE ? ESCAPE '\\'" } else { "" };
+            clauses.push(format!("(a.name LIKE ? ESCAPE '\\' OR {transcript}{entry})"));
             let pattern = format!(
                 "%{}%",
                 query
@@ -115,6 +120,7 @@ impl CatalogFilter {
                     .replace('_', "\\_")
             );
             values.push(Value::Text(pattern.clone()));
+            if entry_name { values.push(Value::Text(pattern.clone())); }
             values.push(Value::Text(pattern));
         }
         if let Some(generated) = self.generated {

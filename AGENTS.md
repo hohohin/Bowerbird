@@ -1,104 +1,82 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
-
 ## 文档索引
 
-开工前先读对应文档，避免重复推导。
+### 开工必读
 
-| 文档 | 内容 | 何时读 |
-|---|---|---|
-| `dev-doc/VIDEO-API-PROVENANCE.json` | 视频增量原始快照/补丁哈希与冲突归因（历史证据） | 追溯原始视频增量时；不用于当前部署 |
-| `dev-doc/VIDEO-API-INTEGRATION.md` | 国内方舟视频 Cloud 实现、恢复/结算、离线验收与 CLI 前置归因 | 接续视频 API 接入、核验 2.5 模型与异步任务/计费边界时必读 |
-| `dev-doc/VIDEO-API-INTEGRATION-V3.md`、`dev-doc/VIDEO-API-INTEGRATION-V3.json` | 视频与 FFmpeg 历史集成、0058 迁移归属及阶段哈希 | 追溯 9 月 6 日集成；当前部署/回滚读 VIDEO-API-INTEGRATION.md |
-| `dev-doc/FOLDER-MODE.md` | 文件优先工作区、独立分类、随图资料恢复、BowerbirdLibrary/历史素材迁移及共享文件转存 | 本机目录、文件夹分类、随图资料、资料迁移或项目删除文件归属相关工作前必读 |
-| `dev-doc/QUICK-TRANSFER.md` | LocalSend 局域网扫码接收、原件持久化、入库恢复、权限边界与验证 | 手机／其他设备快传、LocalSend 接入或局域网接收相关工作前必读 |
-| `dev-doc/EXTERNAL-DRAG.md` | 素材库／画布拖出、原件解析、Windows OLE 与 Mac AppKit 适配及验收边界 | 跨应用文件拖动、菜单抓起或内部拖动兼容相关工作前必读 |
-| `dev-doc/LOCAL-CLASSIFICATION.md` | 自动分类、Jev 图片匹配与 Cloud 补标签、本地模型包、人工保护与验证记录 | 自动/本地分类、Jev 图片判断、自动标签、分类模型下载与运行时相关工作前必读 |
-| `dev-doc/EMBEDDED-BROWSER.md` | 探索内置浏览器、登录资料持久化、网页拖图入库/画板落点、素材栏折叠与隔离 WebView2 验证 | 内置浏览器、探索工作区、网页拖图、探索联动画板素材栏与登录状态相关工作前必读 |
-| `apps/extension/README.md` | 浏览器插件安装／更新、探索页配置入口、浏览器取图与本机入库协议、独立副本及隔离测试 | 浏览器插件采集、配置教程、扩展打包或 Windows 独立加载副本相关工作前必读 |
-| `dev-doc/ONBOARDING.md` | 身份实操引导、三条真实操作路线、独立项目与进度恢复、跳步及隔离验证 | 入门引导、首启/升级介绍、引导素材导入或学习提示相关工作前必读 |
-| `dev-doc/DESKTOP-UPDATES.md` | 双端自动更新协议、密钥与发布流程、部署/回滚证据、验收边界及 Mac 协作共识 | 自动更新、更新包签名/清单发布、更新失败或双端上线状态核验前必读 |
-| `dev-doc/USER-FACING-ERRORS.md` | 全应用错误提示展示边界、中文转换、诊断保留与故障注入验证 | 新增或修改错误提示、任务失败展示、通知、安装授权及生产错误排查前必读 |
-| `dev-doc/CLOUD-TRANSPORT.md` | Cloud 统一网关、共同路由契约、签名文件、原请求身份与断线恢复及发布检查 | 新增 Cloud 请求／文件传输、修改重试恢复或排查连接故障前必读 |
-| `PROJECT.md` | **活文档（项目内容唯一权威）**：项目说明 / 目前进展 / 关键约定 / 踩坑记录 | 每次开工前先读「目前进展」与「关键约定」 |
-| `PROJECT.md#关键约定`（云端修改交付规范） | 云端相关修改须在修改与验证后取得部署确认，确认后立即部署，部署与线上核验完成才算任务完成 | 所有云端相关修改开始前及交付前必读 |
-| `project_logs/README.md` | PROJECT 详细历史的日期日志、2026-10-31 整理前原件、行号与哈希索引及审计处理记录 | 追溯被替代约定、完整故障过程或本次文档整理时；现行结论仍读 PROJECT.md |
-| `dev-doc/UI-DESIGN-SPEC.md` | 当前工业制图视觉与交互规范、深浅色 tokens、卡片／控件／菜单／动效及验收规则 | 设计、修改或审查任何桌面界面前读；产品决策与实装状态仍以 PROJECT.md 为准 |
-| `apps/code-reader-mcp/README.md` | ChatGPT／Gemini 只读代码 MCP、脱敏快照、依赖覆盖、授权与隧道验证 | 代码只读分享、快照更新、MCP 接入或撤销权限前必读 |
-| `GLOSSARY.md` | 素材、画板、任务、订阅和 Bcoin 等术语 | 修改跨模块术语、用户提示或项目文档时 |
-| `apps/cloud/ALIPAY.md` | 支付宝个人 Pro 订阅的申请与本地配置准备 | 支付宝订阅申请、沙箱配置或权限核验前读 |
-| `dev-doc/Bowerbird开发计划.md` | 当前架构与代码入口（技术栈 / 数据身份 / 生成与理解 provider），已合并旧 provider 草案 | 任何实现工作之前必读；产品决策以 PROJECT.md 为准 |
-| `dev-doc/Bowerbird开发计划.md#复用地图` | 按用途查找 UI、桌面逻辑与服务接口；分类页记录源码、调用、依赖边界及覆盖缺口 | 新增功能或 UI 前先查，再核实当前源码与调用方式 |
-| `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | Bcoin 当前定价、Pro 功能订阅、价格快照、迁移／回退与验证边界；末尾保留历史 v2 草案 | 商业化、定价、积分、功能门控相关工作前必读 |
-| `dev-doc/ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 阶段任务卡 + 验收标准；agent 执行用） | 收费化 / 账号 / 积分 / 云端任何实现工作前必读 |
-| `dev-doc/ARCH-ADJUST-PROGRESS.md` | 收费化当前进度、最近部署证据入口与剩余验收 | 接续收费化任务或核对已记录线上基线时必读 |
-| `apps/cloud/PRO-REDEMPTION.md` | Pro 兑换码、可视化管理员后台、加密发码与导出、权限配置、迁移及隔离验证 | 兑换码、发码管理、管理员授权或后台部署相关工作前必读 |
-| `apps/cloud/WECHATPAY.md` | 普通商户 Native 支付、公钥验签、私有配置、桌面扫码、原单恢复、退款／对账与部署边界 | 微信支付、真实收款、支付回调、退款或维护定时器相关工作前必读 |
-| `dev-doc/AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（Agent Kernel / 有限澄清 / 独立视觉规范 / VPS Worker / Supabase / 方舟，A0–A8 + V0–V4） | Agent loop / 内置 Skill / 独立视觉规范 / VPS Worker / Agent 临时云工作区实现前必读 |
-| `apps/agent-worker/src/prompts/brand-visual/README.md` | 品牌图片观察/文本提炼提示词、VPS 维护目录及标注保留格式 | 修改品牌视觉提示词、色号提取或维护 VPS 提示词文件前必读 |
-| `dev-doc/CREATIVE-MEMORY-PLAN.md` | 创作记忆与常用提示词库开发计划（复用记录、候选提炼、用户确认、只读注入，CM0–CM7） | 提示词复用统计、常用库、个人偏好学习、记忆设置或生成偏好注入工作前必读 |
-| `dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md` | **通用云端 Agent Harness 新专项**（一个 Agent + 多种受控工具；DSH + DeepSeek API Spike；Tool Gateway；HTML/小红书复用边界，U0–U6；含桌面 Agent DS → 本机 DSH 队列投递契约） | 新 Agent 能力、DSH/ACP、通用 Tool Gateway、HTML 智能编排、小红书、桌面 Agent DS 投递（`.agent-z/ds-inbox/`）或任何可能新增 Agent Runner 的工作前必读 |
-| `dev-doc/HTML-RENDER-PLAN.md` | 受限 HTML 离线排版、整页/切片截图、独立 renderer 容器与内置 Skill 接入开发计划（H0–H6） | HTML 排版/截图、Chromium/Playwright renderer、`render_html` 工具或第二个官方 Skill 实现前必读 |
-| `dev-doc/PROJECT-CANVAS-PLAN.md` | **项目即画板当前专项**（一项目一块无限画板 / 项目内多创作线程 / 普通生成与 Agent Run 归属 / 历史合并，PB0–PB7） | 画板、项目、创作入口、生成时间线、版本分支、历史迁移或相关 SQLite 模型实现前必读；当前执行权威 |
-| `dev-doc/CANVAS-WORKFLOW.md` | 画板工作流卡片、发条起点、端口、持久化与执行恢复契约及验收边界 | 指令/生成/技能卡片、工作流编排或运行恢复相关工作前必读 |
-| `dev-doc/CHAT-PROVIDERS.md` | 对话 provider、本机 Codex／DeepSeek Cloud、零价 Bcoin 测试、恢复与验证记录 | 对话模型选择、Cloud 聊天、原请求取回或相关计费工作前必读 |
-| `dev-doc/进展归档.md` | PROJECT.md「目前进展」历史里程碑全量归档（append-only 只进不改；PROJECT.md 只留最近 3 条） | 追溯旧里程碑 / 查历史实现细节时 |
-| `dev-doc/研究报告-服务器化CLI与API化改造可行性.md` | 服务器套壳 CLI vs 官方 API 可行性结论（推荐火山方舟官方 API） | 托管算力 / 远程化方向决策前必读 |
-| `dev-doc/LAYER-EDITING.md` | Seedream 5.0 Pro 分层编辑、独立面板、本地工程、Cloud 图层包与隔离验证 | 分层拆分、透明图层修改、图层工程保存或分层服务启价前必读 |
-| `dev-doc/SEEDANCE-2.5-INTEGRATION.md` | 即梦 Seedance 2.5 视频接入、官方 CLI 四模式契约与验收证据 | 视频生成、参数、任务恢复、视频入库与播放相关工作前必读 |
-| `dev-doc/VIDEO-MEDIA.md` | 统一播放器、悬停预览、截帧来源、独立抖音／直链采集及验证 | 视频浏览、播放、截帧或独立采集相关工作前必读 |
-| `dev-doc/VIDEO-SKILL.md` | 本机 Codex／HyperFrames Skill、受控渲染工具、工程续改、独立 Studio 面板与验证边界 | Skill 视频制作、HyperFrames、Studio 编辑或相关 Cloud 扩展前必读 |
-| `dev-doc/VIDEO-REPLICATION.md` | 画板工具箱、视频分析与改写、插入画板生成、抖音获取、Cloud 独立计费与验证 | 视频复刻、抖音参考视频获取或分析/改写启价相关工作前必读 |
-| `spikes/video-replication-demo/README.md` | 应用外复刻 Demo 的启动、豆包语音、Codex 分镜、本机即梦订阅、零视频输入与字幕合成恢复 | 接续抖音→转写及视觉分析→替换分镜文本／图片→生成合成的独立路径验证前必读 |
-| `dev-doc/FILMCRAFT-RESEARCH.md` | FilmCraft 剪辑交互、时间线、变速、音频波形源码调研及 Bowerbird 轻剪辑建议（未定案） | 轻量视频剪辑方案、时间模型、波形缓存或 FilmCraft 复用评估前读 |
-| `dev-doc/AUDIO-LIBRARY.md` | 音频素材原位连接、流式波形缓存、共享播放器、正式组件与隔离验证 | 音频收集、波形、试听交互或音频格式支持相关工作前必读 |
-| `dev-doc/VOICE-STUDIO.md` | 本机 VoxCPM2 录音克隆首版、角色参考、任务恢复及环境验证 | 角色声音、语音生成、声音克隆或 VoxCPM 本机接入前必读 |
-| `dev-doc/TEXT-LIBRARY.md` | 文本／办公文档连接、Plate 正文／源码、DOCX 编辑、XLSX／CSV 内容卡片、冲突保存及验证边界 | 文本或办公文件支持、文档编辑、表格读取、Markdown 转换或原件保存相关工作前必读 |
-| `dev-doc/COMFYUI-LOCAL-VIDEO.md` | 本机 ComfyUI H3 视频卡片、环境检测与一键安装、固定工作流参数、账号门控、任务恢复与隔离验证 | 本机 H3 视频、首尾帧或 ComfyUI 接入/安装相关工作前必读 |
-| `dev-doc/Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |
-| `reference/theory.md` | 早期素材分类（A–F 类）草稿 | 仅在追溯原始意图时 |
-| `dev-doc/桌面端UI设计.html` | 早期三区外壳与创作板设计稿 | 仅作设计背景；当前 UI 契约读 PROJECT.md 与对应专项 |
-| `dev-doc/ui-studies/library-tactical-2026-10-26/README.md` | 素材库实装前样式、Tactical 确认稿、独立冻结预览及增量撤回补丁 | 恢复素材库旧样式、复现确认稿或核对本次接入范围时 |
-| `dev-doc/ui-studies/library-selection-2026-10-26/README.md` | 素材多选动效确认稿、独立预览、共用组件接入及验证记录 | 调整素材多选标记、核对图片边界／动效或恢复确认稿时 |
-| `dev-doc/ui-studies/library-connections-2026-10-31/README.md` | 建立连接与真实文件夹集合的确认稿、正式组件隔离预览和验证入口 | 接续连接式素材库、目录集合和 `.bowerbird` 分身改造时 |
-| `dev-doc/ui-studies/industrial-hud-2026-10-29/README.md` | 工业制图主题实装、旧版源码与冻结预览、可逆恢复补丁 | 恢复实装前样式、核对工业制图主题接入范围与深浅色验证时 |
-| `Windows/README.md` | Windows x64 开发、构建 NSIS 安装包与环境要求 | Windows 运行 / 打包前 |
-| `Windows/MAC-SYNC-2026-10-16.md` | Windows 接收 mac@300124d 的差异、0034/分类/工作流/截图同步与验证 | 接续本轮 Mac 同步、核对 Windows 平台保留项及未发版边界时 |
-| `Windows/Windows端更新内容-26.10.1001.md` | 相对 Mac d6027fb 的 Windows 按版本更新清单，含 1001 后二维表格、Agent 会话生图、视频截帧及诊断源码 | Mac 接收截至 2026-10-15 的 dev、区分已发布 1001 与后续未发版源码、核对同步及原生验收时 |
-| `Windows/MAC-SYNC-AUDIT-2026-10-09.md` | Mac 遗漏增量逐项审计、Windows 合并与正式构建限制 | 接续 10 月 9 日 Mac 同步或核对 Agent 卡片正式包行为时 |
-| `Windows/Windows-edited.md` | Windows 适配修改清单、交付产物与升级注意事项 | 维护 Windows override / 排查平台差异时 |
-| `macOS/WINDOWS-SYNC-2026-10-07.md` | 自上次 mac 推送以来的增量、Windows 同步步骤、平台边界与本轮验证 | 接收本轮 Mac 源码到 Windows、核对迁移与原生验收时 |
-| `macOS/DEV-SYNC-2026-10-10.md` | Windows dev 相对 Mac d6027fb 的更新、存档推送状态、共享功能及 Mac 接收验收 | Mac 接收 Windows 26.10.901–26.10.1001 源码、核对正式 Agent/视频卡/v3 布局与发布边界时 |
-| `macOS/DEV-SYNC-2026-10-13.md` | Windows 1001 后续二维表格/Agent 会话生图增量、Mac 本机改动组合与验证 | 接续 10 月 13 日 Mac 接收、核对比例/分类输出兼容与发布边界时 |
-| `macOS/CROSS-PLATFORM-SYNC-2026-10-15.md` | 10 月 15 日分叉合并、工作流/Agent 增量与跨端接收验证 | 其他端接收本次 mac 存档或核对 Intel 包与后续源码边界时 |
-| `macOS/README.md` | Intel / Apple Silicon 开发运行、DMG 固定拖动安装规范、重打包脚本与交付检查 | macOS 开发 / 构建 / 重打包 / 交付 / 排障前必读 |
-| `macOS/RELEASE-READINESS.md` | 两种架构的候选构建、签名公证、旧版升级和原生功能验收回执 | Mac 全量发布准备、收集门禁证据或交接发布团队前读 |
+| 任务 | 入口 |
+|---|---|
+| 所有任务 | 先读 [PROJECT.md「目前进展」](PROJECT.md#目前进展) 和 [「关键约定」](PROJECT.md#关键约定)。项目状态与产品决策统一在 PROJECT.md。 |
+| 设计讨论、新增跨模块概念、重命名界面或领域术语 | 先读 [GLOSSARY.md](GLOSSARY.md) 对齐用词。发现口径冲突时，立即向用户确认。 |
+| 实现工作 | 读 [开发计划与架构入口](dev-doc/Bowerbird开发计划.md)。新增功能或界面先查 [复用地图](dev-doc/Bowerbird开发计划.md#复用地图)，再核对源码、导出和调用。 |
+| 对话、Agent 或执行器 | 先读 [Agent 与对话架构](dev-doc/Bowerbird开发计划.md#agent-与对话)，再按通路查下表。 |
+| 桌面界面设计、修改或审查 | 读 [UI 设计与验收](dev-doc/UI-DESIGN-SPEC.md)。 |
+| 云端实现与交付 | 开始和交付前读 [PROJECT.md「关键约定」中的云端修改交付规范](PROJECT.md#bcoin权益与云端边界)，并读 [部署手册](apps/cloud/DEPLOY.md)。 |
 
-## 文档维护规则
+### 按领域查阅
 
-> **单一权威源**：项目内容（说明 / 进展 / 约定 / 踩坑）只落在 `PROJECT.md`。本文件除「文档索引」表外不存放任何项目内容；项目内容变更一律改 `PROJECT.md`，不要写入本文件。
+| 任务 | 入口 |
+|---|---|
+| 桌面对话、Agent 卡片、模型选择、原生会话、待答与恢复 | [CHAT-PROVIDERS.md](dev-doc/CHAT-PROVIDERS.md) |
+| DSH · Cloud v2、试用准入、用量、报价、付费候选 | [Cloud CHAT.md](apps/cloud/CHAT.md) |
+| 异步 Agent Run、DSH/ACP、Tool Gateway、扩围与退役恢复 | [统一 Harness](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) · [Worker README](apps/agent-worker/README.md) · [运维与回退](apps/agent-worker/UNIFIED-HARNESS-RUNBOOK.md) |
+| Agent Kernel、内置 Skill、独立视觉规范与临时工作区 | [Agent Runtime](dev-doc/AGENT-RUNTIME-PLAN.md) · [品牌提示词维护](apps/agent-worker/src/prompts/brand-visual/README.md) |
+| 受限 HTML 排版、离线 renderer、整页和切片 | [HTML Render](dev-doc/HTML-RENDER-PLAN.md) |
+| 源码只读分享、GPT 隧道、Gemini OAuth、快照脱敏及刷新 | [代码 MCP](apps/code-reader-mcp/README.md) |
+| 画板、项目、线程、历史迁移及 SQLite 模型 | [项目画板](dev-doc/PROJECT-CANVAS-PLAN.md) |
+| 工作流卡片、端口、发条、循环及运行恢复 | [画板工作流](dev-doc/CANVAS-WORKFLOW.md) |
+| 本机目录、连接、分身、随图资料、共享原件与删除 | [文件工作区](dev-doc/FOLDER-MODE.md) |
+| 快传、跨应用拖动和原件交付 | [LocalSend](dev-doc/QUICK-TRANSFER.md) · [外部拖动](dev-doc/EXTERNAL-DRAG.md) |
+| 本机模型包、Jev 判断、自动分类及补标签 | [分类](dev-doc/LOCAL-CLASSIFICATION.md) |
+| 探索、网页登录、网页采集或浏览器扩展配置与打包 | [内置浏览器](dev-doc/EMBEDDED-BROWSER.md) · [扩展](apps/extension/README.md) |
+| 入门引导、任务失败提示 | [入门](dev-doc/ONBOARDING.md) · [错误展示](dev-doc/USER-FACING-ERRORS.md) |
+| Cloud 路由、签名文件、网络恢复或新 Edge 请求 | [Cloud 传输](dev-doc/CLOUD-TRANSPORT.md) · [Cloud 开发](apps/cloud/README.md) · [Cloud 部署](apps/cloud/DEPLOY.md) |
+| 账号、Bcoin、门控、商业化与托管架构 | [收费化计划](dev-doc/ARCH-ADJUST-PLAN.md) · [收费化进度](dev-doc/ARCH-ADJUST-PROGRESS.md) · [定价](dev-doc/Bowerbird定价方案v2-订阅积分制.md) |
+| 支付、发码、退款、回调、对账 | [微信支付](apps/cloud/WECHATPAY.md) · [支付宝订阅](apps/cloud/ALIPAY.md) · [Pro 兑换](apps/cloud/PRO-REDEMPTION.md) |
+| 托管算力与远程执行选型 | [服务器化可行性研究](dev-doc/研究报告-服务器化CLI与API化改造可行性.md) |
+| 视频生成、即梦与方舟参数、恢复及计费 | [方舟视频 Cloud](dev-doc/VIDEO-API-INTEGRATION.md) · [即梦 Seedance 2.5](dev-doc/SEEDANCE-2.5-INTEGRATION.md) · [本机 ComfyUI H3](dev-doc/COMFYUI-LOCAL-VIDEO.md) |
+| 视频播放、转录、截帧、复刻与轻剪辑 | [视频素材](dev-doc/VIDEO-MEDIA.md) · [视频复刻](dev-doc/VIDEO-REPLICATION.md) · [独立复刻 Demo](spikes/video-replication-demo/README.md) · [轻剪辑调研](dev-doc/FILMCRAFT-RESEARCH.md) |
+| HyperFrames、可续改视频工程与 Studio | [Skill 视频](dev-doc/VIDEO-SKILL.md) |
+| 透明图层、音频波形、声音克隆或办公文档 | [分层](dev-doc/LAYER-EDITING.md) · [音频](dev-doc/AUDIO-LIBRARY.md) · [声音](dev-doc/VOICE-STUDIO.md) · [文本和办公](dev-doc/TEXT-LIBRARY.md) |
+| 提示词复用、常用库、偏好与记忆 | [创作记忆](dev-doc/CREATIVE-MEMORY-PLAN.md) |
+| Windows 或 macOS 本地运行、构建、打包和排障 | [Windows](Windows/README.md) · [Windows 平台适配](Windows/Windows-edited.md) · [macOS](macOS/README.md) |
+| 双端更新、签名、通道、回滚与正式验收 | [桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 发布验收](macOS/RELEASE-READINESS.md) |
 
-> 当用户说**存档**时，在同一次存档流程中按下面顺序完成
+### 历史归档
 
-### 1. 更新 `PROJECT.md`（不更新即信息遗漏）
+| 追溯目标 | 入口 |
+|---|---|
+| 项目变更、复审流水、被替代的约定与验收 | [项目日期日志](project_logs/README.md) · [里程碑归档](dev-doc/进展归档.md) |
+| 跨端同步和旧版本交接 | [Windows 历史交接](Windows/) · [Mac 历史交接](macOS/) · [发布证据](dev-doc/DESKTOP-UPDATES.md) |
+| 视觉确认稿、早期调研与视频原始增量 | [UI 研究与恢复点](dev-doc/ui-studies/) · [素材分类草稿](reference/theory.md) · [早期桌面稿](dev-doc/桌面端UI设计.html) · [竞品调研](dev-doc/Eagle类创意收集工具调查报告.html) · [视频 provenance](dev-doc/VIDEO-API-PROVENANCE.json) · [历史 0058 集成](dev-doc/VIDEO-API-INTEGRATION-V3.md) · [阶段哈希](dev-doc/VIDEO-API-INTEGRATION-V3.json) |
 
-- **关键约定/决策变化**（技术栈、范围、优先级、架构、是否做某模块）→ 改 `# 关键约定`。
-- **阶段或里程碑变化**（开工、进入新 Phase、完成里程碑、发布版本、关键 spike 出结论）→ 改 `# 目前进展`：新条目插「近期里程碑」顶部，**只保留最近 3 条**；被挤出前 3 的旧条目整条移入 `dev-doc/进展归档.md`「归档条目」区顶部（原样搬运，不改文字、不删内容）。
-- **踩坑并已定位根因/绕过方案** → 写入 `# 踩坑记录`。
-- **项目定位/说明变化** → 改 `# 项目说明`。
+## 常用验证命令速查
 
-### 2. 在本文档更新索引（若有）
+从仓库根执行，依赖与工具版本见各包配置。按变更选择定向用例。
 
-- 新增或删除重要文档 / 板块 → 加行或删行。
-- 文档改名、移动，或其「何时读」定位变化 → 改对应行。
+| 范围 | 命令 |
+|---|---|
+| Desktop TypeScript／Vite | `pnpm --filter @bowerbird/desktop exec tsc --noEmit` · `pnpm --filter @bowerbird/desktop build`（含 Cloud 路由契约） |
+| Desktop Rust | `cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` · `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib`（命令末尾可加用例过滤） |
+| Agent Worker | `pnpm --filter @bowerbird/agent-worker typecheck` · `pnpm --filter @bowerbird/agent-worker test`（运行包内 Node 测试） |
+| Cloud Edge | `deno check apps/cloud/supabase/functions/chat-proxy/index.ts apps/cloud/supabase/functions/chat-worker/index.ts` · `deno test --allow-env apps/cloud/supabase/functions/_shared/wechatpay_test.ts` |
+| Cloud 本地账务夹具 | `node apps/cloud/scripts/chat-db.test.mjs "<PGlite dist/index.js 的本地路径>"`。按专项用独立 PostgreSQL 核验事务、并发与租约。 |
+| 只读 MCP | `pnpm --filter @bowerbird/code-reader-mcp test`。PowerShell 启动与浏览器授权用例见 [MCP 验证](apps/code-reader-mcp/README.md#本轮验证与限制)。 |
 
-### 3. 复核并提交
+源码检查、隔离回归、正式构建、实机及线上核验分别报告。涉及真实账号、供应商调用、生产数据或发布时，从对应专项选择验收入口。
 
-- 先检查与本次任务相关的测试结果和最终 diff，确认没有夹带无关修改。
-- 将代码与上述文档更新放进同一个 `git commit`，避免先提交代码、再把文档留在工作区。
+## 文档维护
 
----
+- PROJECT.md 保留现行状态、有效约定、活跃缺口和最近 3 条里程碑。规则变化覆盖更新，在对应历史记录保留原文及替代关系。
+- 测试计数、镜像 SHA-256、逐轮复审和临时证据路径进入项目日志或专项的历史区。专项开头先给当前协议和入口。新增、迁移或废弃公共能力时同步维护复用地图。
+- [GLOSSARY.md](GLOSSARY.md) 只维护纯领域定义与 `_Avoid:_` 排除词。概念边界敲定或术语更名时立即更新。实现细节、技术规格与过程日志分别维护在专项文档和历史记录。
+- 索引维护阅读入口、触发条件和验证命令。项目内容在 PROJECT.md 更新，技术细节沿链接维护。
+
+### 用户要求存档时
+
+1. 更新 PROJECT.md 对应章节。新里程碑插入顶部，仅保留最近 3 条，被挤出的整条原样移入 [进展归档](dev-doc/进展归档.md#归档条目) 顶部。已定位故障写根因、处理和剩余缺口。
+2. 新增、删除、改名或移动重要文档时同步索引。
+3. 核对本次测试和最终 diff 后，把相关代码和文档放进同一个 Git commit。
 
 ## Working principles
 

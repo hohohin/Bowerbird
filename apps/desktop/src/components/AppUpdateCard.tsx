@@ -1,5 +1,5 @@
 import { userErrorMessage } from "../lib/userError";
-import { useAppUpdater } from "../lib/appUpdater";
+import { updateDownloadPercent, useAppUpdater } from "../lib/appUpdater";
 import { useStore } from "../store";
 import { isAgentTaskActive } from "../lib/projectActivity";
 
@@ -12,17 +12,17 @@ function busyReason() {
   return null;
 }
 
-export function AppUpdateCard({ version, migrating, downloadLabel = "下载更新" }: {
-  version: string | null; migrating: boolean; downloadLabel?: string;
+export function AppUpdateCard({ version, migrating }: {
+  version: string | null; migrating: boolean;
 }) {
   const updater = useAppUpdater();
-  const { phase, update, downloaded, total, error } = updater;
-  const percent = total && total > 0 ? Math.min(100, Math.floor(downloaded / total * 100)) : null;
+  const { phase, update, downloaded, error } = updater;
+  const percent = updateDownloadPercent(updater);
   const busy = ["checking", "downloading", "installing"].includes(phase);
   const label = phase === "checking" ? "正在检查…"
     : phase === "downloading" ? "正在下载…"
     : phase === "installing" ? "正在安装…"
-    : phase === "available" ? downloadLabel
+    : phase === "available" ? (error ? "重新下载" : "下载更新")
     : phase === "ready" ? "安装并重启"
     : phase === "installed" ? "重启应用" : "检查更新";
 
@@ -59,7 +59,7 @@ export function AppUpdateCard({ version, migrating, downloadLabel = "下载更�
           <p className="mt-1">已下载 {(downloaded / 1024 / 1024).toFixed(1)} MB{percent !== null ? ` · ${percent}%` : ""}</p>
           <progress className="mt-2 h-1.5 w-full" aria-label="更新下载进度" max={100} value={percent ?? undefined} />
         </>}
-        {phase === "ready" && <p className="mt-1">下载和校验完成。安装将关闭并重启应用，请先保存当前编辑；素材和项目会保留，升级后需重新登录。</p>}
+        {phase === "ready" && <p className="mt-1">下载和校验完成。安装将关闭并重启应用，请先保存当前编辑。</p>}
         {phase === "installing" && <p className="mt-1">正在保存画板并启动安装，请稍候…</p>}
         {update?.body && <p className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap">{update.body}</p>}
       </div>

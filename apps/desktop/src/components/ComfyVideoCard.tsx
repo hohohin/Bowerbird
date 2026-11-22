@@ -236,7 +236,8 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   </>;
 }
 
-export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImages, readCurrentPrompt, onChange, optimizationActions }: {
+export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, disabled, assets, inputImages, readCurrentPrompt, onChange, optimizationActions }: {
+  prompt: string; onPromptChange: (prompt: string) => void;
   optimizationActions?: React.ReactNode; modelControl: React.ReactNode; node: WorkflowNode; disabled: boolean; assets: Asset[];
   inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput, media?: keyof typeof H3_R2V_INPUT_PORTS) => string[];
   onChange: (patch: Partial<WorkflowNode>) => void;
@@ -316,7 +317,7 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
       const ids = bindings.flatMap(input => inputImages(input));
       const asset = assets.find(asset => asset.id === ids[0]);
       const path = asset?.thumb_path ?? asset?.store_path;
-      return <div key={port} className="comfy-frame-slot" aria-label={`${label}输入`}
+      return <div key={port} className="h3-frame-group"><div className="comfy-frame-slot" aria-label={`${label}输入`}
         onDragOver={event => { if (getDragAssets()) { event.preventDefault(); event.stopPropagation(); } }}
         onDrop={event => {
           event.preventDefault(); event.stopPropagation(); if (disabled) return;
@@ -324,14 +325,13 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
           if (ids?.length !== 1) { notifyError(null, "每个帧输入只接收一张图片"); return; }
           onChange({ inputs: { ...node.inputs, [port]: [{ assetId: ids[0] }] } });
         }}>
-        <strong className="comfy-frame-badge" title={index ? "尾帧 · 可选" : undefined}>{label}</strong>
         {bindings.length > 0 && <button type="button" className="comfy-frame-action comfy-frame-disconnect"
           aria-label={`断开${label}`} title={`断开${label}`} disabled={disabled}
           onPointerDown={event => event.stopPropagation()}
           onClick={() => onChange({ inputs: { ...node.inputs, [port]: [] } })}><X size={14} /></button>}
         {path ? <ComfyFrameThumbnail label={label} path={path} previewPath={asset?.store_path ?? path} />
           : <span className="comfy-frame-placeholder" title={bindings.length ? "已连接，等待上游结果" : "拖入图片或连接端口"}>{bindings.length ? "待输入" : "拖入图片"}</span>}
-      </div>;
+      </div><div className="h3-frame-meta"><strong>{label}</strong><small>{mode === "reference" ? "Picture 1" : `P${index + 1} · ${(index ? options.seconds : 0).toFixed(2)}s`}</small></div></div>;
     })}
       {mode === "frames" && !!node.inputs["first-frame"]?.length && !!node.inputs["last-frame"]?.length &&
         <button type="button" className="comfy-frame-action comfy-frame-swap" aria-label="交换首尾帧" title="交换首尾帧"
@@ -371,9 +371,10 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
     </div>}
     <div className="comfy-prompt-field">
     <CanvasTextarea fitContent className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
-      placeholder={mode === "reference" ? "用 <Picture 1> 指代参考图主体，不固定首尾画面…" : "输入视频提示词，也可从文本端口接入…"} value={node.prompt}
-      readCurrentValue={readCurrentPrompt} onValueChange={prompt => onChange({ prompt })} />
+      placeholder={mode === "reference" ? "用 <Picture 1> 指代参考图主体，不固定首尾画面…" : "输入画面动作、镜头调度与对白原文…"} value={prompt}
+      readCurrentValue={readCurrentPrompt} onValueChange={onPromptChange} />
     </div>
+    <div className="comfy-prompt-actions">{optimizationActions}</div>
     {mode !== "r2v" && <div className="comfy-audio-input" role="group" aria-label={audioLabel}
       onDragOver={event => {
         if (!disabled && getDragAssets()) { event.preventDefault(); event.stopPropagation(); }
@@ -395,7 +396,6 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
       </div>
       {audioBindings.length > 0 && <small>{comfyAudioHint(mode)}</small>}
     </div>}
-    <div className="comfy-prompt-actions">{optimizationActions}</div>
   </section>;
 }
 

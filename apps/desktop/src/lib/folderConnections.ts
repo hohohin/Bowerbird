@@ -10,7 +10,7 @@ export interface ConnectionEntry {
   id: string; folder_id: string; asset_id: string; name: string; path: string;
   is_reference: boolean; available: boolean; version?: string | null; asset: Asset; group?: ConnectionEntry[];
 }
-export interface ConnectionFilter { generated?: boolean | null; color?: string | null; grouped?: boolean }
+export interface ConnectionFilter { generated?: boolean | null; color?: string | null; grouped?: boolean; query?: string }
 export type ConnectionMedia = "all" | "images" | "videos" | "audios" | "texts" | null;
 async function entryBatches(command: string, ids: string[], key: string, args: Record<string, unknown> = {}) {
   for (let offset = 0; offset < ids.length; offset += 2000) await invoke<void>(command, { ...args, [key]: ids.slice(offset, offset + 2000) });
@@ -19,7 +19,7 @@ export const folderConnections = {
   list: (projectId: string | null = null, media: ConnectionMedia = null, filter: ConnectionFilter = {}) => invoke<FolderConnection[]>("folder_connections", { projectId, filter, media: media === "all" ? null : media }),
   connect: (path: string, projectId: string | null = null) => invoke<string>("connect_folder", { path, projectId }),
   refresh: (folderId: string | null = null, force = true) => invoke<void>("refresh_folder_connections", { folderId, force }),
-  page: (folderId: string, offset: number, limit: number, media: ConnectionMedia = null, projectId: string | null = null, filter: ConnectionFilter = {}) => invoke<ConnectionEntry[]>("connection_entries", { folderId, offset, limit, filter, media: media === "all" ? null : media, projectId }),
+  page: (folderId: string | null, offset: number, limit: number, media: ConnectionMedia = null, projectId: string | null = null, filter: ConnectionFilter = {}) => invoke<ConnectionEntry[]>("connection_entries", { folderId, offset, limit, filter, media: media === "all" ? null : media, projectId }),
   ids: async (folderId: string | null = null, media: ConnectionMedia = null, projectId: string | null = null, start = 0, count = Infinity, filter: ConnectionFilter = {}) => {
     const result: string[] = [];
     for (let offset = start; offset < start + count; offset += 2000) {

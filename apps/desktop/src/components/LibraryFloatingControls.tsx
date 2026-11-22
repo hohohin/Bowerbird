@@ -16,7 +16,7 @@ export function LibraryFloatingControls({ children, controlsRef }: { children: R
   }, [open]);
   useLayoutEffect(() => {
     const host = root.current!, row = controls.current!, heading = host.closest<HTMLElement>(".file-view-heading")!;
-    const navigation = heading.querySelector<HTMLElement>(".library-view-switch");
+    const navigation = heading.querySelector<HTMLElement>(".library-source-navigation, .library-view-switch");
     if (!navigation) return;
     let wasCompact = false;
     const fit = () => {
@@ -28,10 +28,11 @@ export function LibraryFloatingControls({ children, controlsRef }: { children: R
       const types = row.querySelector<HTMLElement>('[aria-label="素材类型"]');
       const expandedTypes = parseFloat(headingStyle.getPropertyValue('--lp-media-width')) || 0;
       const expandedWidth = width + (types ? Math.max(0, expandedTypes - types.offsetWidth) : 0);
-      const expandedAssembly = Math.max(navigation.getBoundingClientRect().width, expandedNavigation) + expandedWidth + 12;
+      const preceding = host.offsetLeft;
+      const expandedAssembly = Math.max(navigation.getBoundingClientRect().width, expandedNavigation) + preceding + expandedWidth + 12;
       const next = projected
-        ? expandedAssembly > heading.clientWidth
-          || (heading.dataset.hoverAnchored === 'true' && navigation.getBoundingClientRect().right + expandedWidth + 12 > heading.getBoundingClientRect().right)
+        ? heading.clientWidth <= 400 || expandedAssembly > heading.clientWidth
+          || (heading.dataset.hoverAnchored === 'true' && host.getBoundingClientRect().left + expandedWidth > heading.getBoundingClientRect().right)
         : host.getBoundingClientRect().left + width > heading.getBoundingClientRect().right;
       if (!wasCompact && next && row.contains(document.activeElement)) setOpen(true);
       if (!next) setOpen(false);

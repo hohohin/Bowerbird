@@ -1,57 +1,76 @@
 # 桌面业务与状态复用
 
-[返回复用地图](../Bowerbird开发计划.md#复用地图)。以下入口按 2026-11-03 当前工作区源码及生产调用核对，包含未提交实现；不代表已发布。公共入口均指桌面应用内部，不是供 Cloud、扩展或官网直接导入的包。API 与原生边界见 [服务与接口](SERVICES.md)，外观入口见 [UI](UI.md)。
+[返回复用地图](../Bowerbird开发计划.md#复用地图)。以下为桌面应用内部复用入口。调用和依赖按当前源码核对，API 与原生边界见 [服务与接口](SERVICES.md)，外观入口见 [UI](UI.md)。
 
 ## 无限画布的交互性能
 
-平移、缩放、拖动的最后一个输入样本复用 [useCanvasFrame](../../apps/desktop/src/lib/useCanvasFrame.ts)。[canvasDragPreview](../../apps/desktop/src/lib/canvasDragPreview.ts) 负责把拖动位移投射到选中卡、独立标题、端口和受影响的线；新增可拖连线要用 `dragWire` 登记**实际显示端口**的归属。未知连线、循环框或手势中拓扑变化回到原几何计算。最终位置、取消、撤销及持久化仍归 CanvasWorkspace。
-
-[canvasPaintWindow](../../apps/desktop/src/lib/canvasPaintWindow.ts) 为同一张大画布裁剪屏外卡片及 SVG 曲线的绘制；不卸载编辑器，不改变坐标模型，不代理指针。新增分离的卡片装饰需核对它的所有者 ID，未知元素保留原显示。[验证夹具](../../apps/desktop/scripts/fixtures/canvas-interaction-performance/README.md) 同时支持 Chrome 和 Windows WebView2。
-
-打开项目时，[CanvasWorkspace](../../apps/desktop/src/components/CanvasWorkspace.tsx) 按已恢复的相机和路由版本分批挂载卡片，[CanvasWorkflowLayer](../../apps/desktop/src/components/CanvasWorkflowLayer.tsx) 沿用同一挂载范围。新画布展示仍应读取完整画板数据，遇到未挂载的卡片时用已有数据几何。[useWorkflowPortGeometry](../../apps/desktop/src/lib/useWorkflowPortGeometry.ts) 通过画布实时缩放计算卡片内端口位置，按受影响卡片测量，能接收随后挂载的卡片。[打开项目专项](../PROJECT-CANVAS-PLAN.md#2026-11-21项目打开与首屏响应)。
+- **用途／关键词**：平移、缩放、拖动、分批挂载、可见范围。
+- **入口**：[useCanvasFrame](../../apps/desktop/src/lib/useCanvasFrame.ts) 调度输入；[canvasDragPreview](../../apps/desktop/src/lib/canvasDragPreview.ts) 投射拖动位移；[canvasPaintWindow](../../apps/desktop/src/lib/canvasPaintWindow.ts) 裁剪屏外绘制。
+- **调用**：CanvasWorkspace 和 CanvasWorkflowLayer 按已恢复相机共用挂载范围；useWorkflowPortGeometry 随缩放测量受影响卡片。新连线通过 dragWire 登记实际显示端口。
+- **边界／状态**：未挂载卡片用数据几何，未知拓扑回原计算；最终位置、撤销与持久化由 CanvasWorkspace 执行。[首屏响应](../PROJECT-CANVAS-PLAN.md#2026-11-21项目打开与首屏响应) · [Chrome／WebView2 夹具](../../apps/desktop/scripts/fixtures/canvas-interaction-performance/README.md)。
 
 ## 3D 导演预演
 
-画板工具箱放置「3D 导演台」卡片后，从卡片打开工作台。场景、人偶与运镜沿用同目录的 scene、mannequin、motion。对象清单、视口与属性共用对象 ID，编辑与撤销以完整导演文档为单位。多个运镜方案共用布景并随该节点的 directorDocument 保存。图片输入来自画板绑定的素材，本机 Codex 通过 TextAgentTask 提交受限 JSON 编辑，可携带图片及视频截帧。[导演台入口](../../apps/desktop/src/director3d/DirectorStudio.tsx) · [对象编辑](../../apps/desktop/src/director3d/objectEditing.ts)
-
-布景视图拥有独立浏览相机。拍摄预览、起终点缩略图、当前帧 PNG 和预演 MP4 共用镜头与动作采样。加入画板复用 importDroppedMedia 分块入库与画板避障放置，结果位于导演台附近。成功交付的 MP4 通过 directorVideoId 供下游使用，其 directorVideoRenderKey 用于核对当前画面。旧项目缺少版本记录时可继续使用既有输出。[拍摄预览](../../apps/desktop/src/director3d/ShotPreview.tsx) · [镜头采样与版本核对](../../apps/desktop/src/director3d/shot.ts) · [媒体导出](../../apps/desktop/src/director3d/renderMedia.ts)
+- **用途／关键词**：布景、人偶、镜头、导演文档、PNG 与 MP4。
+- **入口**：[DirectorStudio](../../apps/desktop/src/director3d/DirectorStudio.tsx)、[对象编辑](../../apps/desktop/src/director3d/objectEditing.ts) 和 [镜头采样](../../apps/desktop/src/director3d/shot.ts)。
+- **调用**：工具箱的导演台卡片持有 directorDocument。拍摄预览与媒体导出共用镜头动作采样，插入画板沿 importDroppedMedia 和避障放置。
+- **边界／状态**：导演台模块内部复用。场景、视口与属性以对象 ID 联动。导出用 directorVideoId／directorVideoRenderKey 识别，兼容无版本记录的旧节点。
 
 ## 切换项目、读取任务和共用身份
 
-- 生成会话标题共用 [projectActivity.ts](../../apps/desktop/src/lib/projectActivity.ts) 的 `generationSessionTitle`，取首轮原文的第一行非空文字。`loadGenJobs(jobId)` 可按 ID 恢复超出近期列表的会话，`openGenerationJob(jobId)` 打开对应会话并定位到所属项目。创作框的「并入上个生成」气泡使用同一合组目标 ID。
+- **用途／关键词**：项目路由、scope、离开前保存、任务定位、素材与画板身份。
+- **入口**：[store.ts](../../apps/desktop/src/store.ts) 的 `useStore` 提供 `enterProject`／`exitProject`、`startGeneration`／`loadGenJobs`／`openGenerationJob`。领域类型见 [types.ts](../../apps/desktop/src/lib/types.ts)。
+- **调用**：[App.tsx](../../apps/desktop/src/App.tsx) 通过 action 进出项目，[GenerationPanel](../../apps/desktop/src/components/GenerationPanel.tsx) 消费 `genJobs` 并发起生成。超出近期列表时用 `loadGenJobs(jobId)` 取回会话，`openGenerationJob(jobId)` 定位所属项目。标题复用 [generationSessionTitle](../../apps/desktop/src/lib/projectActivity.ts)，取首轮原文第一行非空文字。
+- **边界／状态**：**可跨模块复用（桌面）**。经 action 排队、保存并在原生 scope 成功后更新路由。素材、目录条目、画板实例和任务各有独立 ID，页面局部草稿留在所属模块。[项目画板](../PROJECT-CANVAS-PLAN.md)。
 
-- [generationGallery.ts](../../apps/desktop/src/lib/generationGallery.ts) 的 `reportGalleryMerge` 统一发出当前项目的合组撤销回执及通知，供 `CreationBoard`、合组菜单和 `CanvasWorkspace` 共用；只恢复展示关系，不回滚生成任务或原文件。画板组图计算继续使用 `canvasConversationCards`，显式选择的引用节点可归组，未选复制引用保持独立。[边界与验证](../CANVAS-WORKFLOW.md#2026-11-11显式抽卡与手动合组源码待发布)。
+## 合组与撤销生成组图
 
-- 画布撤销复用 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 的 `pushCanvasUndo`／`undoCanvasAction` 与现有有序写入队列，业务编辑显式记账，自动布局／任务进度不另造用户历史。[canvasNoteUndo.ts](../../apps/desktop/src/lib/canvasNoteUndo.ts) 的 `restoreCanvasNoteEdit` 按格 ID 和字段恢复内容，保留后到的其他格结果；`CanvasTextCard.onChange` 的第三参数区分普通编辑／连续输入／自动撑高。当前画布会话专用，不用它回滚原文件或服务端任务；覆盖与验证见 [画布撤销](../CANVAS-WORKFLOW.md#2026-11-10画布编辑撤销源码待发布)。
+- **用途／关键词**：手动合组、撤销合组、上个生成、画板组图。
+- **入口**：[generationGallery.ts](../../apps/desktop/src/lib/generationGallery.ts) 的 `reportGalleryMerge` 发出原项目的合组撤销回执和通知，`canvasConversationCards` 负责画板组图计算。
+- **调用**：`CreationBoard`、合组菜单和 `CanvasWorkspace` 共用回执。创作框「并入上个生成」气泡沿同一合组目标 ID。
+- **边界／状态**：撤销仅恢复展示关系，生成任务和原件仍沿原身份。显式选择的引用节点可归组，未选中的复制引用独立显示。[手动合组契约](../CANVAS-WORKFLOW.md#2026-11-11显式抽卡与手动合组源码待发布)。
 
-- 产物落点复用 [canvasReferencePlacement.ts](../../apps/desktop/src/lib/canvasReferencePlacement.ts) 的 `placeCanvasCardNearSource`（输出可指定最小横坐标）及 `canvasOutputGrid`；[canvasOutputPlacement.ts](../../apps/desktop/src/lib/canvasOutputPlacement.ts) 提供可见占位、工作流缓存尺寸、输出落点与整理连线关系，实际调用为 `canvasWorkflowRuntime`、`CanvasWorkspace`。`canvasArrangement` 继续承担用户显式整理；生成自动落点只创建新位置，不调用全分支整理。原生对应入口在 `core/project_canvas/placement.rs`，不能跨运行时导入 TS 或将 DOM 测量作为后台唯一依赖。[契约与验证](../CANVAS-WORKFLOW.md#2026-11-09产物卡片紧凑布局源码待发布)。
+## 撤销画板编辑
 
-- 生成阶段复用 [generationProgress.ts](../../apps/desktop/src/lib/generationProgress.ts) 的 `applyGenerationProgress`／`generationProgressLabel`：store 按运行中 job＋turn 接收，GenerationPanel、CanvasWorkspace 与 `libraryGenerationActivity` 共用文案。只呈现后端观察到的阶段和有效队列数字；不从耗时或调用次数推算百分比。恢复／终态及协议证据见 [生成阶段反馈](../CANVAS-WORKFLOW.md#2026-11-08生成阶段反馈与-cli-进度核查源码待发布)。
+- **用途／关键词**：画板撤销、文字连续输入、内容格、保存队列。
+- **入口**：[CanvasWorkspace](../../apps/desktop/src/components/CanvasWorkspace.tsx) 的 `pushCanvasUndo`／`undoCanvasAction` 复用有序写入队列。[canvasNoteUndo.ts](../../apps/desktop/src/lib/canvasNoteUndo.ts) 的 `restoreCanvasNoteEdit` 按格 ID 和字段恢复。
+- **调用**：业务编辑显式记账，`CanvasTextCard.onChange` 的第三参数区分普通编辑、连续输入和自动撑高。恢复时保留其他格随后到达的结果。
+- **边界／状态**：**当前画布会话专用**。手动编辑进入撤销历史，自动布局和任务进度由各自路径更新。原件与服务端任务沿原操作处理。[撤销契约](../CANVAS-WORKFLOW.md#2026-11-10画布编辑撤销源码待发布)。
 
-- 用途／关键词：路由、scope、flush、任务状态、Asset、Project、GenJob、CanvasNode。
-- 入口：[store.ts](../../apps/desktop/src/store.ts) 的 `useStore`，通过 action（如 `enterProject`、`exitProject`、`startGeneration`）操作；领域数据类型从 [types.ts](../../apps/desktop/src/lib/types.ts) 导入。实际调用：[App.tsx](../../apps/desktop/src/App.tsx) 调用 `enterProject`／`exitProject`；[GenerationPanel.tsx](../../apps/desktop/src/components/GenerationPanel.tsx) 订阅 `genJobs` 并调用生成 action。
-- 边界：action 包含离开前保存、路由排队、原生 scope 成功后提交状态等规则，不用 `setState({ activeProjectId })` 绕过。Asset ID、目录条目 ID、画板实例 ID、任务 ID 不可互换；文档专用类型另见下文。页面局部草稿不应全部塞进全局 store。
-- 状态：**可跨模块复用**。项目持久化契约见 [项目画板](../PROJECT-CANVAS-PLAN.md)。
+## 计算画板产物落点
+
+- **用途／关键词**：工作流输出、自动落点、可见占位、尺寸缓存、显式整理。
+- **入口**：[canvasReferencePlacement.ts](../../apps/desktop/src/lib/canvasReferencePlacement.ts) 提供 `placeCanvasCardNearSource` 和 `canvasOutputGrid`，[canvasOutputPlacement.ts](../../apps/desktop/src/lib/canvasOutputPlacement.ts) 提供 `placeWorkflowOutput`。
+- **调用**：`canvasWorkflowRuntime` 和 `CanvasWorkspace` 复用可见占位、缓存尺寸、落点及连线关系。源卡附近落点可给定最小横坐标，内容表等工作流产物复用 `placeWorkflowOutput`。普通生图首次交付的实际落点由 [project_canvas.rs](../../apps/desktop/src-tauri/src/core/project_canvas.rs) 和 [placement.rs](../../apps/desktop/src-tauri/src/core/project_canvas/placement.rs) 确定。
+- **边界／状态**：自动交付只新增产物位置，用户显式整理仍走 `canvasArrangement`。原生执行使用自身几何输入，前端 DOM 测量只用于界面。[布局与验收](../CANVAS-WORKFLOW.md#2026-11-09产物卡片紧凑布局源码待发布)。
+
+## 展示生成阶段
+
+- **用途／关键词**：生成进度、任务阶段、排队数字、job／turn。
+- **入口**：[generationProgress.ts](../../apps/desktop/src/lib/generationProgress.ts) 的 `applyGenerationProgress`／`generationProgressLabel`。
+- **调用**：store 按运行中的 job＋turn 接收事件，`GenerationPanel`、`CanvasWorkspace` 和 `libraryGenerationActivity` 共用文案。
+- **边界／状态**：显示后端观察到的阶段及有效排队数字。耗时和调用次数不用于推算百分比。[阶段与恢复契约](../CANVAS-WORKFLOW.md#2026-11-08生成阶段反馈与-cli-进度核查源码待发布)。
 
 ## 启动工作流或恢复定时预约
 
-- 展示当前工作流输入时，[workflowBindingAssetIds](../../apps/desktop/src/lib/canvasSessionOutputs.ts) 读取素材、内容格或上游本轮产物；[workflowSourceMediaLabel](../../apps/desktop/src/lib/workflowCanvasCapabilities.ts) 根据素材元数据或已知生成类型标注来源。卡片、输入引用和断开菜单使用同一套显示名称，输入绑定仍由原端口和编号定位。
+- **用途／关键词**：触发器、定时、跨画板、执行锁、运行恢复、删除项目后的调度收尾。
+- **入口**：[canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `canvasWorkflowController(projectId)` 提供项目控制器。[WorkflowScheduleCoordinator](../../apps/desktop/src/components/WorkflowScheduleCoordinator.tsx) 由 `App` 挂载，通过 `setTriggerTimersEnabled` 管理非归档项目计时。
+- **调用**：手动和定时运行复用 `start`。Agent 用 `create_canvas_cards` 配置触发卡，用 `runCard` 指定本批运行入口，协调器领取保存的动作，断线后读取原回执。[workflowTriggerSchedule.ts](../../apps/desktop/src/lib/workflowTriggerSchedule.ts) 提供 `workflowTriggerMode` 及 `activeTriggerSchedule`，供表单和运行时兼容旧卡、筛选有效预约。`nextDailyTrigger`／`triggerScheduleOccurrence`／`advanceTriggerSchedule` 计算本机时刻、运行身份及下次预约。
+- **边界／状态**：**工作流内部专用**。应用运行时调度，原生 SQLite 事务保护到点消费，复制清除 `triggerSchedule`。删除沿 `useProjectDeletion` → `ProjectDeleteDialog` → `deleteProjectCanvas`，原生成功后 store 调用 `discardProjectWorkflow`，只停止该项目的本地调度、计时器和后续保存。远端任务沿原身份处理。[工作流预约](../CANVAS-WORKFLOW.md#2026-11-05触发器定时执行源码未发布) · [项目删除](../PROJECT-CANVAS-PLAN.md#2026-11-10确认删除项目后不再由任务状态否决源码待发布)。
 
-- 生成结果直连下游时，[canvasSessionOutputs.ts](../../apps/desktop/src/lib/canvasSessionOutputs.ts) 的 `workflowGenerationResultAnchor` 供画板绘线和整理共用，返回本轮产物所在的可见卡片或单元格。`workflowGenerationPreviewIds` 用于素材预览；调度、重跑和提示词引用继续通过生成卡的输出身份取值。[生成结果接入下游](../CANVAS-WORKFLOW.md#2026-11-13生成结果接入下游桌面源码待发布)。
-- 普通生图卡提交后，由 `workflowImageGenerationActivity` 结合精确会话和生成任务判断运行状态。`workflowImageCardProjection` 为画布呈现、连线和整理提供媒体锚点及节点来源，循环、触发器和定向内容写入保留生成卡。首次生成的实际落点由 [project_canvas.rs](../../apps/desktop/src-tauri/src/core/project_canvas.rs) 和 [placement.rs](../../apps/desktop/src-tauri/src/core/project_canvas/placement.rs) 共同确定，TS 的 `placeWorkflowOutput` 继续供内容表及其他工作流交付使用。
+## 读取工作流输入和生成产物
 
-- 项目删除后的收尾复用 `canvasWorkflowRuntime.ts` 导出的 `discardProjectWorkflow(projectId)`：store 在原生删除成功后调用，只停止该项目本地调度、计时器和后续保存，不等待 provider 终态、不宣称远端已取消。删除入口复用 `useProjectDeletion` → `ProjectDeleteDialog` → `deleteProjectCanvas`，不另建任务状态确认。详见 [项目删除](../PROJECT-CANVAS-PLAN.md#2026-11-10确认删除项目后不再由任务状态否决源码待发布)。
-
-- 用途／关键词：触发器、定时、跨画板、执行锁、运行恢复。
-- 入口：[canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `canvasWorkflowController(projectId)` 持有项目控制器；手动启动复用 `start`，定时在同一控制器复用启动路径，不另建任务提交器。[WorkflowScheduleCoordinator.tsx](../../apps/desktop/src/components/WorkflowScheduleCoordinator.tsx) 由 `App` 挂载，以 `setTriggerTimersEnabled` 维护非归档项目的计时生命周期。
-- Agent 会话通过 `create_canvas_cards` 配置本批触发卡，用 `runCard` 指定本批单个运行入口。主窗口的 `WorkflowScheduleCoordinator` 领取已保存的动作并通过项目控制器 `start` 启动，断线取回读取原回执。
-- 四种模式共用 [workflowTriggerSchedule.ts](../../apps/desktop/src/lib/workflowTriggerSchedule.ts) 的 `workflowTriggerMode`，兼容旧卡配置；定时入口使用 `activeTriggerSchedule` 排除其他模式的停用预约。一次性与每日模式使用同文件的 `nextDailyTrigger`、`triggerScheduleOccurrence`、`advanceTriggerSchedule`，供卡片表单和运行时计算本机日历时刻、每次运行身份及下一次预约，不供其他模块创建独立调度器。
-- 边界／状态：**工作流模块内部专用**。只在桌面应用运行期间调度；不承担系统唤醒、关闭后执行或云端 cron。到点消费检查点由原生 SQLite 事务保护；复制入口清除 `triggerSchedule`。当前契约和验证见 [画板工作流](../CANVAS-WORKFLOW.md#2026-11-05触发器定时执行源码未发布)。
+- **用途／关键词**：当前输入、上游结果、预览、自动连线、生成卡投影。
+- **入口**：[canvasSessionOutputs.ts](../../apps/desktop/src/lib/canvasSessionOutputs.ts) 提供 `workflowBindingAssetIds`、`workflowGenerationResultAnchor` 和 `workflowGenerationPreviewIds`。[workflowCanvasCapabilities.ts](../../apps/desktop/src/lib/workflowCanvasCapabilities.ts) 提供 `workflowSourceMediaLabel`。
+- **调用**：从素材、内容格或上游本轮结果解析输入。卡片、引用和断开菜单共用来源名称。绘线和整理取当前可见卡片或单元格的锚点，预览读取当前产物。`workflowImageGenerationActivity` 根据会话和生成任务识别运行状态，`workflowImageCardProjection` 提供媒体锚点和节点来源。
+- **边界／状态**：精确输入由原端口及编号定位，调度、重跑和提示词引用沿生成卡的输出身份取值。循环、触发器与定向内容写入保留生成卡。[结果接入下游](../CANVAS-WORKFLOW.md#2026-11-13生成结果接入下游桌面源码待发布)。
 
 ## 读取项目对话摘要和流式正文
 
-- 项目内会话列表或画板卡面使用 [localChatStore.ts](../../apps/desktop/src/lib/localChatStore.ts) 的 `useProjectChatSummaries(projectId)`。打开正文时沿用 `LocalChatPanel` 的 `pinLocalChat` 与 `loadConversation`，读取缺口快照、处理文本增量及保留活跃会话均由 store 负责。
-- 工作流 Agent 步骤用 `CanvasWorkflowController.waitForChatTurn` 订阅已接受会话。五秒未收到目标更新时通过 `localChat.revision(id)` 读取单个版本号，发现差异才读取正文。工作流停止携带提交轮次，避免中断后来发起的独立回复。
+- **用途／关键词**：项目对话列表、Agent 卡片、正文增量、工作流等待。
+- **入口**：项目内会话列表或画板卡面使用 [localChatStore.ts](../../apps/desktop/src/lib/localChatStore.ts) 的 `useProjectChatSummaries(projectId)`。打开正文时沿用 `LocalChatPanel` 的 `pinLocalChat` 与 `loadConversation`，读取缺口快照、处理文本增量及保留活跃会话均由 store 负责。
+- **调用**：工作流 Agent 步骤用 `CanvasWorkflowController.waitForChatTurn` 订阅已接受会话。五秒未收到目标更新时通过 `localChat.revision(id)` 读取单个版本号，发现差异才读取正文。
+- **边界／状态**：工作流停止按提交轮次执行，其他续聊继续运行。
 
 ## 在新面板里嵌入独立素材浏览状态
 
@@ -59,9 +78,9 @@
 - 入口：[libraryPane.tsx](../../apps/desktop/src/lib/libraryPane.tsx) 的 `createLibraryPane`、`LibraryPaneContext`、`useLibraryModeStore`、`useLibraryThumbnail`；实际调用：[LibraryHome.tsx](../../apps/desktop/src/components/LibraryHome.tsx) 创建首页 pane，[TextWorkspaceLibrary.tsx](../../apps/desktop/src/components/TextWorkspaceLibrary.tsx) 创建文本工作区独立 pane 并挂 Provider。
 - 边界：`id` 决定尺寸／固定项的持久化键，复用浏览组件时应明确状态归属；未挂 Provider 会回退全局 `useLocalFileMode`。共享 Asset 与项目身份，独立持有浏览模式、位置和偏好，不另建素材数据源。
 - 会话数据缓存：[catalogCache.ts](../../apps/desktop/src/lib/catalogCache.ts) 的 `catalogCache` 提供有上限的快照、读取合并与版本失效；[useCatalogRevision.ts](../../apps/desktop/src/lib/useCatalogRevision.ts) 的 `useCatalogRevision`／`invalidateCatalog` 统一订阅和本地操作后的失效。实际调用为 `CategorizedLibrary`、`ConnectedCollections`、`VirtualCatalog`；概览键包含项目上下文，分页键包含完整过滤条件和段落／页码，不能以 pane ID 或组件内从零开始的 revision 代替。只缓存桌面浏览数据，不缓存显式选取的 ID／原件解析，不跨应用重启持久化；关闭全部面板仍接收原生变更。只有用户手动刷新调用 `folderConnections.refresh(folderId, force)`（默认 true）；打开／回焦只读索引，禁止再调用此扫描入口。后台同步复用原生 watcher 和建联队列。[契约与验证](../FOLDER-MODE.md#素材库会话缓存2026-11-10源码待发布)。
-- 导航状态：[localFileMode.ts](../../apps/desktop/src/lib/localFileMode.ts) 的 `view` 表示全部／项目／集合／标签一级入口，`source` 是实际查询范围，`tagSource` 保留标签范围；`setView`、`setTagSource` 和 `openSource` 统一切换，不再按媒体和来源各存一套隐藏分类。`contextProjectId` 是宿主项目（主页为 null），`browseProjectId` 是所选素材库项目；宿主调用 `setProjectContext` 恢复 `bowerbird.libraryProject.<项目ID或home>` 本机记忆，未记忆的项目上下文默认自身。`selectProject` 仅改变浏览项目并记忆，不调用项目导航；项目失效时由 `LibraryCatalogTransition` 展示选择器，不能以空项目范围退回全库。`copyLibraryPane` 复制视图、标签范围与项目浏览状态，分栏继续独立；切换媒体保持一级视图，导入后由 `showImportedMedia` 回到对应范围的平铺列表。
+- 导航状态：[localFileMode.ts](../../apps/desktop/src/lib/localFileMode.ts) 的 `source` 表示全部／项目／文件夹，`lens` 表示平铺／标签。共用 `openSource`、`setLens` 和 `toggleCatalog`。`contextProjectId` 是宿主项目，`browseProjectId` 是浏览项目。选择浏览项目只更新 `selectProject`，保持当前创作项目。项目缺失或失效时由 `LibraryCatalogTransition` 展示项目选择。导入后由 `showImportedMedia` 定位到对应范围的平铺列表。
 - 项目边界：[CategorizedLibrary.tsx](../../apps/desktop/src/components/CategorizedLibrary.tsx) 的 `browseProjectId` 用于项目素材查询、位置记忆、标签／分类及导入归属，`projectId` 仍表示当前创作项目，用于添加到画板、引用和截帧目标。新增嵌入宿主必须明确二者；不得为了浏览其他项目而修改 `activeProjectId`。`FileDropImport` 在完成后核对浏览项目身份，迟到结果不会切换另一个项目的素材视图。
-- 页签记忆：`createLocalFileMode(paneId)` 按 pane＋主页／项目上下文保存 `view`、`tagSource`，`setProjectContext` 恢复后推导一致的 `source`／`mode`；`createLibraryPane(id)` 自动传入 pane ID，复制分栏仍复制当前选择。普通打开只用 `setOpen(true)`，不要用 `openSource("global")` 覆盖记忆；`openSource`／`setView` 保留给用户明确切换、快捷键或显式结果定位。临时菜单不持久化，存储失败保留会话内记忆。[契约与验证](../FOLDER-MODE.md#2026-11-11素材库页签记忆源码待发布)。
+- 导航记忆：`createLocalFileMode(paneId)` 按 pane＋主页／项目保存 `source`、`lens` 和媒体类型，恢复时兼容旧 `view`、`tagSource`。浏览项目同样分栏记忆，兼容原项目键。`copyLibraryPane` 复制当前选择后独立浏览。普通打开使用 `setOpen(true)`。临时菜单与搜索词只在会话中保留。
 - 现有画板入口：[Toolbar.tsx](../../apps/desktop/src/components/Toolbar.tsx) 与 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 共用 `useStore.canvasLibraryOpen`／`setCanvasLibraryOpen` 和 `useLocalFileMode.setOpen(true)`；顶栏先恢复上次素材视图，展开后显示既有连接操作。`ConnectedCollections` 复用公共 `catalog-tree-row` 的 hover／focus／`is-menu-open` 名称避让，不给空闲目录名称无条件预留操作宽度。
 - 局部通知：`subscribeCatalogPreviews`／`subscribeConnectionProgress` 沿会话监听分发原生事件；`patchCatalogPage`／`patchConnectionProgress` 同时用于缓存、在途响应和可见页，禁止将预览／扫描进度重新转成全库失效。`useCatalogRevision(colorFiltered)`、`catalogCache.revision(colorFiltered)` 与 `read(key, loader, colorFiltered)` 必须使用一致的颜色范围；普通预览仅局部补字段，颜色筛选单独重验成员。`VirtualCatalog`、`ConnectedCollections` 是实际调用方，语义见 [性能说明](../FOLDER-MODE.md#文件夹读取与预览性能2026-11-10)。
 - 状态：**可跨模块复用**；仅适合桌面素材浏览宿主，不是通用全应用状态容器。

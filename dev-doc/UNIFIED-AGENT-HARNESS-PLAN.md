@@ -1,4 +1,19 @@
-# Bowerbird 通用云端 Agent Harness 专项计划
+# Bowerbird 通用云端 Agent Harness
+
+## 0. 一页结论
+
+- **准入。** 云端异步 Run 只新建 `bowerbird-unified-agent + dsh`，现役部署保持 **test-only**。旧受控图片、专用 HTML Skill 和 `legacy_kernel` 沿原任务协议恢复。桌面对话、Agent 卡片、本机 CLI 和 DSH · Cloud 聊天从 [对话架构](Bowerbird开发计划.md#agent-与对话) 进入。
+- **执行。** 统一 DSH/ACP 驱动模型循环与工具选择，图片、HTML 及未来内容配方复用 Tool Gateway。规划和执行按所需授权读取素材、视觉规范、Skill 和工具结果。v3 按批准的目标、能力、资源和预算动态执行，可生成多张结果；历史 Run 保持原计划与检查点语义。[Worker](../apps/agent-worker/README.md) · [HTML renderer](HTML-RENDER-PLAN.md)
+- **控制面。** Bowerbird 持有账号、权益、Run 状态、审批、预算、租约、幂等 Tool Ledger、产物、TTL 与结算。Worker 只向运行暴露明确授权的工具与输入；调用与恢复绑定同一 Run 和工具身份。采用官方模型 API。视觉规范按已确认版本冻结，只读传入。
+- **上下文。** 规划和批准执行沿统一 DSH Profile 的上游模型容量（1,048,576 上下文、393,216 最大输出 tokens）。应用的固定文本窗口和按成本触发的自动摘要已移除。鉴权、真实上游容量、租约、计量与取消仍执行。VPS 按需加载官方 Skill，恢复沿冻结版本。
+- **运维与扩围。** 采用 [test-only Runbook](../apps/agent-worker/UNIFIED-HARNESS-RUNBOOK.md) 冻结 Profile、Worker、Edge、迁移及回滚身份。扩围前补齐自然任务小名单样本及基础镜像复扫处置。生产状态查 [PROJECT.md](../PROJECT.md#目前进展) 与 [部署手册](../apps/cloud/DEPLOY.md)。
+
+## 历史专项与验收流水
+
+以下内容保留早期方案、旧本机投递方式、U0–U6 任务卡和历次验收。执行契约从「一页结论」和运维手册进入。
+
+<details>
+<summary>展开历史增量、初始设计与 U0–U6 验收</summary>
 
 ## 2026-11-09：取消 Agent 文本预算拦截（Cloud 已部署）
 
@@ -69,7 +84,7 @@ H3／文本编辑使用既有 `goal` 字符串承载版本化选择信封：`bow
 
 ### 整体改造：目标授权与结果驱动执行（2026-09-05，云端已部署，保持 test-only）
 
-本节是最新实现状态，覆盖下方前一阶段“未完成的架构迁移”记录。产品决策以 `PROJECT.md` 约定 51 为准。
+本节是最新实现状态，覆盖下方前一阶段“未完成的架构迁移”记录。产品决策以 [PROJECT.md「关键约定」](../PROJECT.md#关键约定) 为准。
 
 #### 当前收口清单（2026-09-05 18:31）
 
@@ -106,7 +121,7 @@ H3／文本编辑使用既有 `goal` 字符串承载版本化选择信封：`bow
 
 ### 追加审计：执行上下文也按需读取（前一阶段记录，本地完成，未部署）
 
-用户确认一个 Agent + Kernel 执行边界的目标，权威决策见 `PROJECT.md` 约定 51。此次继续落实上下文边界：
+用户确认一个 Agent + Kernel 执行边界的目标，权威决策见 [PROJECT.md「关键约定」](../PROJECT.md#关键约定)。此次继续落实上下文边界：
 
 - 新增 Run 内 `read_context({id})`：常驻只有 `availableContext` 的 id/description，内容通过注册的读取函数延迟提供。只接受当前 Run 已登记 id，不接受路径、URL、Run id 或额外参数。
 - 视觉规范不再在规划 prompt 全文注入；Agent 可按目标读取冻结的 capsule。原 hash 校验、checkpoint、审批关联和用户可见 profile 事件保留。
@@ -117,7 +132,7 @@ H3／文本编辑使用既有 `goal` 字符串承载版本化选择信封：`bow
 
 **未完成的架构迁移**：当前仍然是 v1/v2 步骤计划审批，图片由父流程执行，HTML 使用单独执行 session；不是结果驱动的通用工具循环。下一轮实现必须引入独立的目标/能力/消耗授权契约，在 provider 副作用前原子预留预算，持久化动态工具调用及结果，再接入同一逻辑 Agent；旧批准 hash 不能复用成更宽的授权。服务当前固定 30 积分，十张图场景需要明确的预算产品契约，不能静默提高预授权。当前修改未部署、未改变收费或已批准 Run。
 
-状态：**源码与本地验证完成，尚未部署；自然模型质量待验证。** 产品决策见 `PROJECT.md` 约定 50。本节记录实现证据，不把历史已部署版本视为包含本次修改。
+状态：**源码与本地验证完成，尚未部署；自然模型质量待验证。** 产品决策见 [PROJECT.md「关键约定」](../PROJECT.md#关键约定)。本节记录实现证据，不把历史已部署版本视为包含本次修改。
 
 用户报告的会话 `ef43070d-f1bd-4fd4-a2df-00a6eb6f8170` 对应 Run `fa1883ad-45a2-488d-b3d5-1394093c0f9e`。原始目标是模特换姿势和耳环；模型计划自行增加 HTML 展示容器，renderer 依据 `full_page_and_slices` 输出整页和两片。模型确实过度规划，但上下文结构存在明确诱因，不能只归咎于模型。先前“普通修图无需 HTML 包装”补丁已在本轮删除。
 
@@ -160,7 +175,8 @@ H3／文本编辑使用既有 `goal` 字符串承载版本化选择信封：`bow
 
 **DSH 渲染失败热修复（2026-09-05）：** 部署后 Run `df95e9fb-3d94-43cc-92d6-889844a346c4` 的 Seedream 已成功，随后 HTML 含 `img height="auto"` 被 renderer 以 `numeric_attr_invalid` / `render_html_unsafe` 拒绝；桥接插件终止后 processor 又覆盖为 `unified_agent_html_execution_incomplete`。现已在 durable compose 前接入 renderer sanitizer/limits 的同源镜像（跨包一致性测试），拒绝返回具体 correction 且不锁定 compose，DSH 修正后再提交；保留 DurableProviderError safeCode。Skill 说明普通修图直接交付图片、htmlOutput 默认参数不代表 HTML 意图，并继续兼容两个旧指令 hash。Worker 全量 304/304 + 新错误透传测试、TypeScript、DSH Profile 23/23 通过；真实钉版 DSH/ACP 5 回合测试完成无效 HTML→修正→渲染→检查→交付，仅提交1份HTML。无用户内容的云端 renderer 对照：原错误样例400、CSS auto修正200/1截图。失败 Run 用量8模型回合/6 Vision/1生成图、41,554 input/3,455 output tokens、19 credits、533,838 provider-cost micros；此次修复无新增模型调用或费用。原失败Run不改写终态，已生成图片保存本地供取回。修复已热部署：现役 Worker/Profile `sha256:c3d20526094bea2532b18dd88e565d08961931efa9e63fa69c7e65c441752e73`，断网双 processor 探针通过；截至 15:52（北京时间）容器运行约3小时、restart 0，Agent health无告警、queue/expired lease/TTL均0，renderer healthy。实际用户 Run `fa1883ad-45a2-488d-b3d5-1394093c0f9e` 15:48 批准后在本修复镜像成功执行 generate_image/compose_html/render_html/inspect_artifact，15:50 result.ready并进入awaiting_result_feedback（尚未用户接受，非succeeded）；全Run累计8模型回合、4 Vision、1生成图、36,720 input/5,294 output tokens、17 credits、475,186 provider-cost micros，无失败/unknown工具调用。这是用户审批产生的实际费用，与本次零模型费诊断分列。回退镜像 `bowerbird/generation-worker:rollback-render-fix-20260905`。Edge仍为agent-run v47/agent-worker v53、迁移0054，无需更改。understand/visual清理循环另有既存control_http_500日志，未计作Agent渲染修复通过项。自动审批未批准上传用户内容作云端复现，已改用无用户内容的合成样例完成真实renderer对照验证。
 
-## 0. 一页结论
+
+## 早期方案摘要
 
 Bowerbird 后续不再为 HTML 长图、小红书或其他内容形态分别建设一套 Agent、状态机和 Runner。产品只保留**一个云端 Bowerbird Agent**；视觉理解、图片生成、HTML 排版截图、内容结构化和未来渠道输出都是这个 Agent 可调用的受控能力。
 
@@ -261,7 +277,7 @@ DSH 的 session log 可以保存模型上下文和执行事件，但不得成为
 
 ### 2.4 视觉设定是共享上下文，不是某个输出格式的私有功能
 
-视觉规范属于本地资料库，独立于项目；从集合内的“视觉规范”按钮发起并点击“开始提炼”，保存后在创作对话框中显式选择；保存不自动选用，同一规范可跨项目、跨生成入口选择。项目不是读取许可或所有权边界，规范确认状态、用户显式选择与既有账号权益仍须校验。来源集合或项目删除不使已冻结的历史任务失效。此关系按 2026-09-10 用户决策同步，详见 [PROJECT.md](../PROJECT.md) 约定 26；历史工具标识 `project_visual_profile` 不表示项目归属，也不在本次文档同步中重命名协议。
+视觉规范属于本地资料库，独立于项目；从集合内的“视觉规范”按钮发起并点击“开始提炼”，保存后在创作对话框中显式选择；保存不自动选用，同一规范可跨项目、跨生成入口选择。项目不是读取许可或所有权边界，规范确认状态、用户显式选择与既有账号权益仍须校验。来源集合或项目删除不使已冻结的历史任务失效。此关系按 2026-09-10 用户决策同步，详见 [PROJECT.md「关键约定」](../PROJECT.md#关键约定)；历史工具标识 `project_visual_profile` 不表示项目归属，也不在本次文档同步中重命名协议。
 
 `VisualProfileCapsule` 在 Run 创建时冻结 `profile_id/version/hash`，按以下优先级进入通用 Agent：
 
@@ -816,3 +832,5 @@ conversation_id / run_id
 - [DeepSeek API Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)
 
 > 注意：DSH 官方 `master` 文档与 npm RC 包可能短期不同步。所有实现判断以 U1 钉死版本的代码、dump config 和真实 smoke 为准，本节链接只作为调研依据，不替代版本验收。
+
+</details>

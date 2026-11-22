@@ -2,6 +2,7 @@ import { contentTableRows, type ContentTable } from "./contentTable.ts";
 import { comfyAudioLabel, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_R2V_LIMITS, type ComfyVideoMode } from "./comfyVideo.ts";
 import type { VideoOptions } from "./videoGeneration";
 import { workflowTriggerMode } from "./workflowTriggerSchedule.ts";
+import { H3_IMAGE } from "./genProviders.ts";
 
 export class WorkflowNodeError extends Error {
   node: WorkflowNode;
@@ -50,6 +51,7 @@ export interface WorkflowNode {
   action: WorkflowAction; skill: string; prompt: string; ratio: string | null; provider: string;
   generation?: import("./videoGeneration").GenerationSettings;
   comfyVideo?: import("./comfyVideo").ComfyVideoOptions;
+  h3Prompt?: H3CardPrompt;
   /** A local audio connection is inactive when the card uses a remote video model. */
   savedComfyAudio?: WorkflowInput[];
   /** R2V connections have no equivalent sockets on remote video cards. */
@@ -875,8 +877,48 @@ export function workflowNodeRun(document: CanvasWorkflow, nodeId: string): Workf
 export function workflowActiveSession(node: WorkflowNode): string | null {
   return node.activeSessionNodeId !== undefined ? node.activeSessionNodeId : node.sessionNodeIds?.[node.sessionNodeIds.length - 1] ?? null;
 }
+export interface H3CardPrompt {
+  mode: ComfyVideoMode | "image";
+  seconds?: number;
+  lastFrameCount?: number;
+  source: string;
+  result: string;
+  original?: string;
+  edited?: string;
+  paused?: boolean;
+  expanded?: boolean;
+}
+
+export function isH3ImageCard(node: Pick<WorkflowNode, "kind"> & Partial<Pick<WorkflowNode, "provider" | "generation">>) {
+  return node.kind === "generation" && node.provider === H3_IMAGE && node.generation?.media !== "video";
+}
+export function h3DraftForResult(input: NonNullable<WorkflowStep["comfyOptimization"]>["input"], result: string, original = input.prompt): H3CardPrompt {
+  return { ...("mode" in input ? { mode: input.mode, seconds: input.seconds, lastFrameCount: input.lastFrameCount } : { mode: "image" as const }),
+    source: input.prompt, result, ...(original === input.prompt ? {} : { original }) };
+}
+export function h3PromptPatch(draft: H3CardPrompt) {
+  return { h3Prompt: draft, prompt: draft.paused ? draft.original ?? draft.source : draft.edited ?? draft.result };
+}
+export function h3CardDraft(node: WorkflowNode) {
+  // An external editor or an older desktop version may have replaced the effective text.
+  const draft = node.h3Prompt;
+  if (draft && (draft.mode === "image" ? isH3ImageCard(node) : node.kind === "comfy-video")
+    && h3PromptPatch(draft).prompt === node.prompt) return draft;
+}
+export function h3OriginalPrompt(node: WorkflowNode) {
+  const draft = h3CardDraft(node);
+  return draft?.original ?? draft?.source ?? node.prompt;
+}
+export function h3DraftStale(node: WorkflowNode, draft: H3CardPrompt) {
+  return draft.original !== undefined && draft.original.trim() !== draft.source.trim()
+    || node.kind === "comfy-video" && (comfyVideoMode(node.comfyVideo) !== draft.mode
+      || draft.seconds !== undefined && (node.comfyVideo ?? DEFAULT_COMFY_VIDEO).seconds !== draft.seconds
+      || draft.mode === "frames" && draft.lastFrameCount !== undefined && Number(!!node.inputs["last-frame"]?.length) !== draft.lastFrameCount);
+}
+
 export const WORKFLOW_CARD_WIDTH = 320;
-export function workflowCardWidth(node: Pick<WorkflowNode, "kind">) {
+export function workflowCardWidth(node: Pick<WorkflowNode, "kind"> & Partial<Pick<WorkflowNode, "provider" | "generation" | "h3Prompt" | "prompt">>) {
+  if (node.kind === "comfy-video" || isH3ImageCard(node)) return node.h3Prompt?.expanded && h3PromptPatch(node.h3Prompt).prompt === node.prompt ? 448 : 390;
   return node.kind === "trigger" ? 196 : node.kind === "voice" ? WORKFLOW_CARD_WIDTH * 1.3 : WORKFLOW_CARD_WIDTH;
 }
 export function workflowPortY(node: WorkflowNode, side: "input" | "output", portId: string): number {

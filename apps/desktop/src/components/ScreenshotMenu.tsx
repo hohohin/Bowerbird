@@ -16,9 +16,9 @@ export function ScreenshotMenu() {
   }
 
   return <>
-    <button ref={trigger} type="button" className="app-button-dark" title="截图工具" aria-label="截图工具"
+    <button ref={trigger} type="button" className="app-button-dark topbar-screenshot-button" title="截图工具" aria-label="截图工具"
       aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)}>
-      <Camera size={16} aria-hidden="true" />
+      <Camera size={20} aria-hidden="true" />
     </button>
     {open && trigger.current && <ContextMenu anchor={trigger.current} label="截图工具" onClose={() => setOpen(false)}>
       <button type="button" role="menuitem" className="app-context-item" onClick={() => run("screenshot_start")}>立即截图</button>

@@ -1,4 +1,20 @@
-# 对话 provider 实现记录
+# 桌面对话与 Agent 卡片
+
+## 当前契约
+
+对话面板、Agent 卡片及详情共用持久会话、发消息、停止与恢复。桌面保存会话、轮次、消息和请求身份，模型上下文由 provider 的原生会话持久化。续聊使用原会话，按当前输入重跑则开启新会话并重新读取接线。结果未知时查询原请求。
+
+| Provider | 会话与工具 | 入口 |
+|---|---|---|
+| 本机 Codex CLI | 沿本机 App Server thread 续接，型号和推理强度按安装版本能力选择。工具与原生提问绑定本轮。 | [Codex 原生待答](#2026-11-19-codex-cli-画布待答源码) |
+| 本机 DSH 0.2 | 使用原生 Session、用户本机 Skill 及当轮建卡授权。原宿主退出后按原 Session 和 callId 恢复待答。 | [本机 Skill](#2026-11-15-本机-dsh-在卡片第一轮使用-skill) · [原生待答](#2026-11-19-本机-dsh-画布待答与桌面回答源码) |
+| DSH · Cloud | 使用 VPS 的 v2 原生会话。新单按账号试用资格受理，0 Bcoin。内置 Skill 由 Worker 加载，工具字段按客户端能力协商。 | [Cloud 协议](../apps/cloud/CHAT.md) |
+
+旧 `deepseek-cloud` 与 `dsh-vps-v1` 新请求返回 426。旧卡片和草稿发新消息时映射到 DSH · Cloud，已受理原单仍用原协议、账号与键查询。Agent 卡片改动应同步验证三个 provider。独立异步 Agent Run 的入口见 [架构地图](Bowerbird开发计划.md#agent-与对话)。桌面安装包边界见 [发布记录](DESKTOP-UPDATES.md)。
+
+## 实现与验证记录
+
+日期化小节中的发布标签属于当时状态。旧协议仅用于复盘及兼容验证。
 
 ## 2026-11-19 Codex CLI 画布待答（源码）
 

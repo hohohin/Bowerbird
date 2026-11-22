@@ -1,39 +1,57 @@
 # 接口、文件接入与执行服务复用
 
+[返回复用地图](../Bowerbird开发计划.md#复用地图)。入口按运行时标明，复用前核对当前源码和调用。发布与产品约定见 [PROJECT.md](../../PROJECT.md)。
+
 ## 网页 Agent 只读代码快照
 
-- **入口**：`apps/code-reader-mcp/core.mjs` 的 `TOOLS`／`callTool`／`validateSnapshot` 是四个只读代码工具的公共实现；`export.mjs` 负责本机安全读取、脱敏、依赖补齐及覆盖门禁，`dependencies.mjs` 负责静态引用解析和相关测试识别。stdio 的 `server.mjs` 与 Gemini 的 `http-app.mjs` 共用同一套工具，传输层各自处理协议和授权。
-- **边界**：只属于私有开发工具，运行在本机受限 Node 进程；不能拿官网产品鉴权、Cloud Worker 或用户库权限替代快照限制。Gemini OAuth／SSH／Nginx 接入及部署边界见 [只读 MCP](../../apps/code-reader-mcp/README.md#gemini-网页端已部署账号连接待验收)。
-- **Gemini 授权恢复**：`run-gemini.mjs` 通过 `oauth-state-file.mjs` 读写本机固定授权状态文件，`http-app.mjs` 校验并恢复客户端注册和令牌摘要。MCP HTTP 子进程保持只读文件权限。
+- **用途／关键词**：代码分享、快照、GPT、Gemini、OAuth。
+- **入口**：[core.mjs](../../apps/code-reader-mcp/core.mjs) 提供 TOOLS、callTool、validateSnapshot。[export.mjs](../../apps/code-reader-mcp/export.mjs) 负责脱敏导出，[dependencies.mjs](../../apps/code-reader-mcp/dependencies.mjs) 负责依赖覆盖。
+- **调用**：stdio server.mjs 与 Gemini http-app.mjs 复用工具。run-gemini.mjs 通过 oauth-state-file.mjs 管理重启后可恢复的授权状态。
+- **边界／状态**：仅供私有开发，HTTP 子进程保持只读。[MCP 接入与维护](../../apps/code-reader-mcp/README.md)。
 
-自有订阅「即梦」二级菜单中的 Seedream 图片模型 复用项目生成任务、探索浏览器资料目录和生成图入库。网页表单适配在 [jimeng_web.js](../../apps/desktop/src-tauri/src/codex/jimeng_web.js)，选择、默认值、首轮和续轮均携带具体模型键。每个任务的 WebView、登录和一次性下载由 [jimeng_web.rs](../../apps/desktop/src-tauri/src/codex/jimeng_web.rs) 管理。网页作业中断后查看即梦创作记录，应用不自动重提。入口仅支持单张 2K。
+## 接入图片模型
 
-Cloud 图片新增模型复用 [modelForService／arkImageRequestBody](../../apps/agent-worker/src/cloud-generation/runtime.ts) 的独立 service 路由和 [generate-proxy](../../apps/cloud/supabase/functions/generate-proxy/index.ts) 的动态 `service_costs` 校验；报价沿用 `quote_bcoin_image`，恢复沿用原 job／hold，不能改默认环境变量来替换旧任务模型。Seedream 5.5 使用 0090 三服务与 `ARK_IMAGE_MODEL_55`，部署状态见 [部署说明](../../apps/cloud/DEPLOY.md#2026-11-13-seedream-55-已部署)。桌面模型和 Cloud 兜底统一复用 [genProviders.ts](../../apps/desktop/src/lib/genProviders.ts) 的 `cloudGenProviders`／`defaultCloudProvider`，后者只在服务端宣告 5.5 可用时返回新 key；坐标能力由 `supportsAnnotationCoordinates` 判定。
+- **用途／关键词**：即梦网页 Seedream、自有订阅、Cloud 服务目录及默认模型。
+- **入口**：[jimeng_web.rs](../../apps/desktop/src-tauri/src/codex/jimeng_web.rs) 管理网页作业，[jimeng_web.js](../../apps/desktop/src-tauri/src/codex/jimeng_web.js) 适配表单。[cloud-generation/runtime.ts](../../apps/agent-worker/src/cloud-generation/runtime.ts) 由独立 service 分派方舟模型。
+- **调用**：从 [genProviders.ts](../../apps/desktop/src/lib/genProviders.ts) 查模型、能否使用坐标与 Cloud 兜底；[generate-proxy](../../apps/cloud/supabase/functions/generate-proxy/index.ts) 通过动态 service_costs 和 quote_bcoin_image 报价。
+- **边界／状态**：即梦网页通路复用探索浏览器资料、项目任务和入库，只支持单张 2K；中断到即梦创作记录查原单。Cloud 复用原 job／hold，新增模型用独立服务，保留旧单所选档位。[Seedream 5.5 部署](../../apps/cloud/DEPLOY.md#2026-11-13-seedream-55-已部署)。
 
-[返回复用地图](../Bowerbird开发计划.md#复用地图)。2026-11-03 按当前工作区源码核验；以下“可跨模块复用”均限定所在运行时，不表示可以跨应用直接 import。发布状态与产品约定仍以 [PROJECT](../../PROJECT.md) 为准。
+## 定位、导出及批量处理原件
+
+- **用途／关键词**：原文件路径、外拖、ZIP、后台文件任务。
+- **入口**：[external_files.rs](../../apps/desktop/src-tauri/src/core/external_files.rs) 的 Database::resolve_asset_original 共用原件解析；[assetArchive.ts](../../apps/desktop/src/lib/assetArchive.ts) 提供导出。[fileTasks.ts](../../apps/desktop/src/lib/fileTasks.ts) 提供 startFileTask。
+- **调用**：菜单和画板在系统选择框前冻结素材 ID，走 [asset_archive.rs](../../apps/desktop/src-tauri/src/commands/asset_archive.rs) 校验及命名。批量操作由 [file_tasks.rs](../../apps/desktop/src-tauri/src/commands/file_tasks.rs) 管理，进度与重试复用 [FileTaskStatus](../../apps/desktop/src/components/FileTaskStatus.tsx)。
+- **边界／状态**：只解析当前登记原件或已核验哈希的同素材历史路径。已清理或已回收时阻断；删除仍走独立的 preview_asset_originals 确认协议。[文件契约](../FOLDER-MODE.md)。
+
+## 读取画板可见节点与生成组图
+
+- **用途／关键词**：画板自动接线、组图、显式合组、来源索引。
+- **入口**：[project_canvas.rs](../../apps/desktop/src-tauri/src/core/project_canvas.rs) 提供画板读取，[generation_gallery_manual.rs](../../apps/desktop/src-tauri/src/core/generation_gallery_manual.rs) 写入显式合组。
+- **调用**：用 api.projectCanvasVisibleNodes 读指定可见实例；历史和会话恢复使用 api.projectCanvasGet。调用 api.mergeGenerationGalleries／undoGenerationGalleryMerge 修改展示，读取上一生成用 previousGalleryGeneration。
+- **边界／状态**：catalog 和文件夹用 [with_gallery_cache](../../apps/desktop/src-tauri/src/core/generation_gallery.rs) 共用索引与失效条件。筛选、合组及解散按查询计算，0057 只存展示别名，生成及 provider 身份保持。[工作流](../CANVAS-WORKFLOW.md)。
+
+## 通过 DSH 受控建卡
+
+- **用途／关键词**：对话 v2、本机 Skill、create_canvas_cards、H3 R2V。
+- **入口**：[本机 DSH](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_local.rs) 与 [Cloud 桌面桥](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_vps.rs) 复用 [建卡事务](../../apps/desktop/src-tauri/src/core/local_chat_cards.rs) 和 [共享工具定义](../../apps/cloud/supabase/functions/_shared/chat-card-tool.json)。
+- **调用**：本机 preset 通过官方插件加载用户 Skill；[Worker](../../apps/agent-worker/src/cloud-chat/dsh.ts) 只加载服务端 Skill。Cloud 通过报价和请求协商 h3_r2v，referenceAliases 按本轮实际附件解析。
+- **边界／状态**：桌面按图片、视频及独立音频端口核对类型，VPS 只返回建卡回执所需参数。[本机 Skill](../CHAT-PROVIDERS.md#2026-11-15-本机-dsh-在卡片第一轮使用-skill) · [Cloud 聊天](../../apps/cloud/CHAT.md)。
+
+## 通过素材身份读取办公原件
+
+- **用途／关键词**：DOCX 正文编辑、XLSX／CSV、IPC。
+- **入口**：[text_documents.rs](../../apps/desktop/src-tauri/src/core/text_documents.rs) 统一访问原件，[office_documents.rs](../../apps/desktop/src-tauri/src/core/office_documents.rs) 负责办公格式。
+- **调用**：句柄通过 read_text_document（可选 previewOnly）、save_docx_document 或 read_spreadsheet_document 使用，预览、编辑与转换共用读写规则。
+- **边界／状态**：仅传 asset ID。DOCX 正文保存核对版本，表格只读。[文本与办公契约](../TEXT-LIBRARY.md)。
+
+## 收发局域网文件
+
+- **用途／关键词**：LocalSend、扫码、浏览器下载、原件发送。
+- **入口**：[quick_transfer.rs](../../apps/desktop/src-tauri/src/commands/quick_transfer.rs) 管理 start／stop IPC，[send.rs](../../apps/desktop/src-tauri/src/quick_transfer/send.rs) 复用固定下载协议。
+- **调用**：通过 quick_transfer_send_start(address, files)／quick_transfer_send_stop 发送，二维码及链接复用 QuickTransferConnection。
+- **边界／状态**：状态单调、收发独立，仅交付显式选择的原件。[权限与生命周期](../QUICK-TRANSFER.md)。
 
 ## 读取或修改本机业务数据
-
-素材菜单和画板导出所选原件时，复用 [assetArchive.ts](../../apps/desktop/src/lib/assetArchive.ts) 的 `exportAssetsToDirectory` 或 `exportAssetArchive`。两个入口在系统选择框打开前固定素材 ID，并共用[原生导出命令](../../apps/desktop/src-tauri/src/commands/asset_archive.rs)中的原件解析、命名和复制校验。目录中有同名项目时，副本自动加编号。
-
-按素材 ID 定位、拖出或导出原件共用 [external_files.rs](../../apps/desktop/src-tauri/src/core/external_files.rs) 的 `Database::resolve_asset_original`。它只读当前登记，阻断已回收／已清理记录；登记路径缺失时，仅尝试同素材的历史路径别名并核对已登记 SHA-256。删除仍使用 `preview_asset_originals` 的确认路径协议。
-
-画板自动接线用 `api.projectCanvasVisibleNodes(projectId, nodeIds)` 读取当前项目指定可见实例的原始节点及内容卡数据。需要恢复会话归组、判断历史完成状态时用 `api.projectCanvasGet`。[画板服务实现](../../apps/desktop/src-tauri/src/core/project_canvas.rs)
-
-云端 DSH 要求在画板建卡时，复用 [桌面聊天桥](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_vps.rs) 与原生建卡事务，VPS 不直写本地数据库。需要在云端执行受保护的聊天技能时，复用 [Worker 的 DSH 聊天入口](../../apps/agent-worker/src/cloud-chat/dsh.ts) 和既有技能加载器；聊天协议及服务端权限见 [Cloud 对话](../../apps/cloud/CHAT.md)。
-
-H3 多素材建卡复用[共享工具定义](../../apps/cloud/supabase/functions/_shared/chat-card-tool.json)和[原生编译与持久化](../../apps/desktop/src-tauri/src/core/local_chat_cards.rs)。`referenceAliases` 仍按当轮附件位置解析，桌面按本地素材类型接到 R2V 的图片、视频与独立音频端口。Cloud 通过报价宣告和请求回传 `h3_r2v` 后提供新模式及连接选项。
-
-本机 DSH 的 Agent 卡片复用[本机聊天 preset](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_local.rs)，由官方 Skill 插件发现和加载用户技能，建卡仍走同一轮的 `create_canvas_cards`。[调用方式与工具范围](../CHAT-PROVIDERS.md#2026-11-15-本机-dsh-在卡片第一轮使用-skill)
-
-- 桌面批量文件操作从 [startFileTask](../../apps/desktop/src/lib/fileTasks.ts) 提交已确认的原件或目录条目与目标。当前会话的受理、取消、状态和失败项重试由 [原生文件任务](../../apps/desktop/src-tauri/src/commands/file_tasks.rs) 管理。进度显示复用 [FileTaskStatusPanel](../../apps/desktop/src/components/FileTaskStatus.tsx)。[文件操作契约](../FOLDER-MODE.md#2026-11-12-文件操作后台执行与新建位置源码待发布)
-
-- 图片手动合组调用 `api.mergeGenerationGalleries`／`undoGenerationGalleryMerge`；创作框通过 `previousGalleryGeneration(projectId)` 读取当前项目最近普通图片任务。原生实现为 [generation_gallery_manual.rs](../../apps/desktop/src-tauri/src/core/generation_gallery_manual.rs)，SQLite 0057 只存展示别名；catalog／文件夹共用 `gallery_eligible`、`generation_resolved_group`／`generation_display_group`，画板只读补充，不修改 provider 身份或生成图属性。[显式合组契约](../CANVAS-WORKFLOW.md#2026-11-11显式抽卡与手动合组源码待发布)。
-- 素材库和文件夹的分页、计数及组成员查询通过 `with_gallery_cache` 共用同一 SQLite 连接的生成来源索引。首次读取、相关来源数据变化或其他连接提交后按原查询重建。筛选条件、合组别名和解散状态在每次读取时计算。新增生成来源时，同步维护派生查询和失效条件。[generation_gallery.rs](../../apps/desktop/src-tauri/src/core/generation_gallery.rs)
-
-文档原件统一由 [text_documents.rs](../../apps/desktop/src-tauri/src/core/text_documents.rs) 按已登记素材身份访问。其 `office` 子模块 [office_documents.rs](../../apps/desktop/src-tauri/src/core/office_documents.rs) 提供 DOCX 正文／包读取、版本保护的 `save_docx` 和 XLSX／CSV `read_spreadsheet`；对应 IPC 为 `read_text_document`（可选 `previewOnly`）、`save_docx_document`、`read_spreadsheet_document`。调用方只能传 asset ID，不能指定任意读写路径。正文预览、全量编辑与画板内容转换共用格式边界；表格只读原件，DOCX 不走 UTF-8 保存。依赖固定版本、读取限制与验收见 [办公文档支持](../TEXT-LIBRARY.md#办公文档素材2026-11-09)。
-
-局域网文件收发使用 [quick_transfer.rs](../../apps/desktop/src-tauri/src/commands/quick_transfer.rs) 的显式 start/stop IPC；发送端调用 `quick_transfer_send_start(address, files)`／`quick_transfer_send_stop`，共享单调版本状态，独立于接收。底层 [send.rs](../../apps/desktop/src-tauri/src/quick_transfer/send.rs) 复用固定 LocalSend 浏览器下载协议，仅交付显式选择的原件；不拿缩略图作交付，不开启目录浏览。二维码／复制链接共用 `QuickTransferConnection`。完整权限和生命周期见[快传协议](../QUICK-TRANSFER.md)。
 
 - **用途／关键词**：素材、项目、设置、IPC、invoke、Tauri command。
 - **入口**：[api.ts](../../apps/desktop/src/lib/api.ts) 导出的 `api`，例如 `api.listAssets`；对应 [commands/library.rs](../../apps/desktop/src-tauri/src/commands/library.rs) 的 `list_assets`，由 [lib.rs](../../apps/desktop/src-tauri/src/lib.rs) 的 `tauri::generate_handler!` 注册。前端数据形状在 [types.ts](../../apps/desktop/src/lib/types.ts)；新增接口须同时核对 TS 参数、Rust 参数及序列化形状。
@@ -42,22 +60,24 @@ H3 多素材建卡复用[共享工具定义](../../apps/cloud/supabase/functions
 
 ## 判断账号权益和可用 provider
 
-- 本机订阅提交前用 [require_generation_cli](../../apps/desktop/src-tauri/src/commands/codex.rs) 复查设置页所用的健康检测。即梦通过独立 CLI 的 `user_credit` 核验授权，[jimeng.rs](../../apps/desktop/src-tauri/src/commands/jimeng.rs) 区分登录失效和网络检测失败，并将最新状态通知桌面。
-- **用途／关键词**：FeaturePolicy、Pro、BYO、门控、并发、权益快照。
-- **入口**：桌面用 `api.cloudEntitlement` 获取快照；后端用 [entitlement.rs](../../apps/desktop/src-tauri/src/cloud/entitlement.rs) 的 `EntitlementService::current_or_sync` 和 [policy.rs](../../apps/desktop/src-tauri/src/cloud/policy.rs) 的 `FeaturePolicy::allows_generation_provider`。服务端按用户计算用 [_shared/feature-policy.ts](../../apps/cloud/supabase/functions/_shared/feature-policy.ts) 的 `policyForUser`。
-- **调用**：[commands/codex.rs](../../apps/desktop/src-tauri/src/commands/codex.rs) 的 `codex_create_image` 在执行前核验 policy；[entitlement/index.ts](../../apps/cloud/supabase/functions/entitlement/index.ts) 把 `policyForUser(tier, user)` 写入权益响应；[store.ts](../../apps/desktop/src/store.ts) 消费 `api.cloudEntitlement()`。
-- **边界／状态**：**可跨模块复用（各自运行时）**。TS `FeaturePolicy` 是响应类型，Rust policy 是本机执行门控，Edge policy 还包含测试账号规则；不能仅按 tier 在 UI 重建权限，也不能把 `policyFor` 的基础值当作用户最终授权。改字段需核对三端，禁止用 UI 禁用替代服务端校验。
+- **用途／关键词**：FeaturePolicy、Pro、BYO、门控、权益快照、本机 CLI 登录检测。
+- **入口**：桌面从 `api.cloudEntitlement` 取快照。Rust 使用 [EntitlementService::current_or_sync](../../apps/desktop/src-tauri/src/cloud/entitlement.rs) 和 [FeaturePolicy::allows_generation_provider](../../apps/desktop/src-tauri/src/cloud/policy.rs)，Edge 使用 [policyForUser](../../apps/cloud/supabase/functions/_shared/feature-policy.ts)。
+- **调用**：[entitlement Edge](../../apps/cloud/supabase/functions/entitlement/index.ts) 返回用户权限，[store.ts](../../apps/desktop/src/store.ts) 消费快照。[codex_create_image](../../apps/desktop/src-tauri/src/commands/codex.rs) 在提交前核验 policy，本机订阅通过同模块的 `require_generation_cli` 复查设置页所用的健康状态。[jimeng.rs](../../apps/desktop/src-tauri/src/commands/jimeng.rs) 用独立 CLI 的 `user_credit` 验证即梦授权，区分登录失效与网络故障，并将最新状态通知桌面。
+- **边界／状态**：**可跨模块复用（各自运行时）**。UI 按用户快照展示，Rust 与 Edge 各自在执行边界校验。Edge 的 `policyForUser` 包含测试账号规则。调整字段时核对桌面响应类型、Rust 与 Edge。
 
 ## 增加图片、视频或理解能力
 
-- 本机 Codex 新建会话的首张完整图片可通过同一 `codex://chunk` 的 `preview` 事件展示。画板与详情按 job 和 turn 读取内存缩略图。素材、引用、工作流输出和完成通知仍从正式入库结果读取。续接已有 Codex 会话等待正式交付，现用 CLI 的 `thread.started` 只能识别会话。
+- **用途／关键词**：生成、视频、反推、命名、provider、Codex、Dreamina、Cloud。
+- **入口**：[codex/mod.rs](../../apps/desktop/src-tauri/src/codex/mod.rs) 的 `GenProvider`／`resolve_gen_provider` 分派生成。[understand.rs](../../apps/desktop/src-tauri/src/codex/understand.rs) 的 `UnderstandProvider`／`resolve_entitled_understand_provider`／`resolve_understand_provider_with_choice` 分派理解。
+- **调用**：[store.ts](../../apps/desktop/src/store.ts) 的 `startGeneration` 调用 `api.codexCreateImage`，携带 provider 与图片／视频参数。[commands/codex.rs](../../apps/desktop/src-tauri/src/commands/codex.rs) 在 `codex_create_image` 中解析生成 provider，反推路径按所选 provider 解析理解。
+- **边界／状态**：**可跨模块复用（桌面 Rust provider 层）**。调用方继续校验账号、上传许可和任务门控。即梦支持生成，理解沿独立接口。`jimeng_video::response` 限桌面 provider 模块内解析 Dreamina stdout JSON。[视频模式](../SEEDANCE-2.5-INTEGRATION.md)。
 
-- 生成进度复用 [codex/progress.rs](../../apps/desktop/src-tauri/src/codex/progress.rs) 的 `GenerationProgress`／`GenerationStage` 及 `Chunk::Progress`。Codex CLI、Dreamina 图片／视频和恢复 worker 共用 `codex://chunk`，命令层补齐 job／turn 身份。`jimeng_video::response` 仅在桌面 provider 模块内复用为 Dreamina stdout JSON 解析器；它不是跨模块／跨运行时 API。不将原始工具参数、推理或诊断正文写入用户阶段标签。
+## 展示生成进度与首张预览
 
-- **用途／关键词**：生成、反推、命名、provider、Codex、Dreamina、Cloud。
-- **入口**：[codex/mod.rs](../../apps/desktop/src-tauri/src/codex/mod.rs) 的 `GenProvider`／`resolve_gen_provider` 分派生成；[understand.rs](../../apps/desktop/src-tauri/src/codex/understand.rs) 的 `UnderstandProvider`／`resolve_entitled_understand_provider`／`resolve_understand_provider_with_choice` 分派理解。UI 从 [store.ts](../../apps/desktop/src/store.ts) 的 `startGeneration` 等既有 action 进入。
-- **调用**：[commands/codex.rs](../../apps/desktop/src-tauri/src/commands/codex.rs) 的 `codex_create_image` 调用 `resolve_gen_provider`，反推路径调用 `resolve_understand_provider_with_choice`；store 的 `startGeneration` 调用 `api.codexCreateImage`。
-- **边界／状态**：**可跨模块复用（桌面 Rust provider 层）**。底层 factory 本身不代替账号、上传许可和任务门控。`api.codexCreateImage` 虽带 Codex 名称，实际传入 provider 与 image/video 参数；不要按名字再建另一套 Cloud UI 通路。理解和生成接口不等价，即梦不承担理解；视频模式另读 [视频接入](../SEEDANCE-2.5-INTEGRATION.md)。
+- **用途／关键词**：生成阶段、Codex 首图预览、恢复进度、job／turn。
+- **入口**：[codex/progress.rs](../../apps/desktop/src-tauri/src/codex/progress.rs) 的 `GenerationProgress`／`GenerationStage` 通过 `Chunk::Progress` 上报阶段，[codex_cli.rs](../../apps/desktop/src-tauri/src/codex/codex_cli.rs) 以 `Chunk::Preview` 上报完整首图。
+- **调用**：Codex CLI、Dreamina 图片／视频和恢复 worker 共用 `codex://chunk`，由命令层补齐 job／turn。画板与详情按对应轮次读取内存预览。[桌面阶段反馈](DESKTOP.md#展示生成阶段)。
+- **边界／状态**：阶段文案仅使用结构化状态。Codex 首图预览适用于新会话，续接已有会话等待正式交付，`thread.started` 提供会话身份。素材、引用、工作流输出和完成通知均读取正式入库结果。
 
 ## 保留生成任务、取消和启动恢复
 
@@ -106,16 +126,10 @@ H3 视频三模式共用可选录音素材 ID 与既有媒体连线，`comfy_vid
 
 ## 以文搜图
 
-- 桌面搜索使用现有 Tauri 命令。模型按需安装，已提交的结果页和选择 ID 使用同一会话，每页最多 60 项。并发、取消和会话过期由本机处理。普通重新查询保留旧会话供当前界面使用，直到界面释放、超出会话数量上限或到期。 [语义搜索命令](../../apps/desktop/src-tauri/src/commands/semantic_search.rs) · [调用](../../apps/desktop/src/lib/semanticSearch.ts) · [搜索入口](../../apps/desktop/src/components/LibrarySemanticSearch.tsx)
-- 索引通过 0060 接收入库和内容版本变更，后台读取原件并校验 SHA-256。连接目录的内容变更通知和显式刷新可绕过大小与修改时间快路。索引仅写入当前素材库的 SQLite，推理和文件读取在主库锁之外进行。 [索引](../../apps/desktop/src-tauri/src/core/semantic_search/index.rs) · [0060](../../apps/desktop/src-tauri/sql/0060_semantic_image_embeddings.sql)
-- 定时更新候选复用单个索引工作器，应用设置保存开关和 15／60 分钟间隔，0061 推进每库的轮次和上次／下次时间。默认开启、间隔 15 分钟，模型已安装时可自动开始首轮。本轮按持久化的开始时间判断重试是否到期，离线原件产生的新重试延至后续轮次，新入库待办仍可本轮处理。队列耗尽后沿现有游标最多复核 32 项。关闭自动更新时撤销自动轮次的任务租约，手动轮次继续完成。可用 `update` 手动运行一轮，重复更新共用当前操作 ID。持久暂停优先，继续需调用 `resume`。 [调度](../../apps/desktop/src-tauri/src/core/semantic_search/schedule.rs) · [0061](../../apps/desktop/src-tauri/sql/0061_semantic_index_preferences.sql)
-- 全局设置已保存、SQLite 设置仍待应用时，保存回执报告可重试状态并保留全局设置。工作器暂停领取任务、撤销旧向量和提交推理结果，直到索引范围与已保存设置一致。原手动轮次在同步后可继续。 [设置命令](../../apps/desktop/src-tauri/src/commands/settings.rs) · [索引](../../apps/desktop/src-tauri/src/core/semantic_search/index.rs)
-- 查询复用 `CatalogFilter::sql`、目录可见性和生成来源，先确定范围，再逐张精确评分。使用当前 SigLIP2 FP32 模型的余弦分数门槛，只将达标图片纳入最多 240 项的结果会话。已索引数统计参与评分的向量，结果数统计保留匹配。读取分页或选区前复核结果内素材的范围和内容，外接原件离线时按目录可见性保留有效的已索引结果。默认纳入生成图片，关闭后索引进度、工作器和查询应用同一生成来源判定，原向量保留，旧结果会话失效。分类权重、文件夹条目选择及关键词搜索沿原入口。 [查询](../../apps/desktop/src-tauri/src/core/semantic_search/query.rs) · [范围](../../apps/desktop/src-tauri/src/core/semantic_search/scope.rs)
-- Windows 原生隔离回归覆盖语义搜索、应用设置、目录筛选、生成画廊和库视图，合计 65 项通过、4 项显式忽略。语义搜索 31 项通过，包括带 71 张离线原件的跨重启轮次、设置同步故障时阻止过期提交并恢复原手动轮次。设置保存队列 6 项通过，包括待应用回执保留已写入设置。界面预览待确认，定时索引候选源码尚未发布。 [轮次用例](../../apps/desktop/src-tauri/src/core/semantic_search/index/round_tests.rs) · [搜索用例](../../apps/desktop/src-tauri/src/core/semantic_search/tests.rs)
-- Windows 隔离 WebView2 使用实际 FP32 模型和独立测试图片完成三次启动。缺模型时保持等待，已有模型自动完成首轮并排定 900 秒后的下次更新。关闭自动更新后手动入索引，暂停在重启后保留。排除生成图片后旧会话失效，重新纳入时仍使用原向量记录，内容哈希与写入时间一致。全程使用隔离库和应用配置。 [本机证据](../../.tmp/semantic-scheduler-smoke/run-1795220997420/evidence.json)
-- 当前固定模型的门槛为 **0.085**，含等于。Windows x64 校准使用 35 张随应用分发的样图、6 张 USFWS 公共领域鸟类照片和 46 条中文短查询，按图像场景拆分开发组与留出组。0.085 是保留开发组全部 12 个正例查询场景的最高 0.005 步长候选。已查看的留出组结果为 12/12 个正例查询有命中，21/22 对正例保留，2/815 对负例误收，29 个无目标场景中 28 个返回空结果。开发组有 6/29 个无目标场景误收。两组无鸟场景的「小鸟」均返回零条，最高干扰分为 0.08008，留出小鸟分数为 0.09340 和 0.09118。样本覆盖海报等难负例，留出组仍有「红雀」误匹配红胸旅鸫。原始样本来源、分组及分数保存在 `apps/desktop/src-tauri/.tmp/semantic-search-probe/bird-calibration/`。
-- 固定 0.085 后复跑此前的 26 条长描述和 35 张样图。这批描述独立于门槛拟合，沿用已有的非穷尽标注。37 对已标注匹配全部保留，另返回 50 对未标注候选，按已有标注计算的宏平均精确率为 53.08%。逐条移除已标注匹配后，7/26 条返回空结果，19/26 条仍有候选。门槛解决用弱匹配填满结果的问题，物种近邻和多条件描述的精确度仍需进一步验证。
-- Windows x64 较早冻结源码完成隔离 WebView2、真实 IPC 和 FP32 模型验收，3 张 PNG 的中文查询均命中首位，建索引 12.37 秒，首查 18.65 秒，后两次 120 和 107 毫秒。本次相关性修正的 Ryzen 7 9700X debug SQLite 探针读取 1 万条合成向量并保留 240 条，热搜索中位数 600 毫秒，启用生成来源筛选时为 633 毫秒，60 项分页和选择 ID 请求中位数为 6.5–11.0 毫秒。探针计时范围为本机 SQLite 读取和排序。模型产物、预处理和样本记录见[模型说明](../../apps/desktop/src-tauri/src/core/semantic_search/model/README.md)。Apple Silicon 实机和更大资料库的验收待补。
+- **用途／关键词**：SigLIP2、语义索引、目录及生成来源筛选。
+- **入口**：[Tauri 命令](../../apps/desktop/src-tauri/src/commands/semantic_search.rs) 及 [semanticSearch.ts](../../apps/desktop/src/lib/semanticSearch.ts)。[索引](../../apps/desktop/src-tauri/src/core/semantic_search/index.rs) 与 [调度](../../apps/desktop/src-tauri/src/core/semantic_search/schedule.rs) 使用 SQLite 0060／0061 持久化内容与轮次。
+- **调用**：[LibrarySemanticSearch.tsx](../../apps/desktop/src/components/LibrarySemanticSearch.tsx) 发起查询、分页和选区。用 CatalogFilter::sql 及 [scope](../../apps/desktop/src-tauri/src/core/semantic_search/scope.rs) 定范围后精确打分。自动与手动更新共享 worker；更新、暂停和继续复用原操作。
+- **边界／状态**：模型按需安装，原件校验 SHA-256，推理在主库锁外。全局设置待同步时暂停提交。模型门槛、校准样本和原生测量见 [模型专项](../../apps/desktop/src-tauri/src/core/semantic_search/model/README.md#搜索相关性校准与索引验收)。
 
 ## 回收原件或清理缺失引用
 
@@ -164,13 +178,16 @@ VPS 的 Agent、生成、理解和视觉提炼消费循环复用 [ControlTranspo
 - **用途／关键词**：Native、扫码、下单、支付通知、查单、退款、日账。
 - **入口**：Cloud [_shared/wechatpay.ts](../../apps/cloud/supabase/functions/_shared/wechatpay.ts) 提供 `WechatPayClient`、签名验签及通知解密；[_shared/wechatpay-service.ts](../../apps/cloud/supabase/functions/_shared/wechatpay-service.ts) 提供业务入口、订单绑定与恢复；[_shared/wechatpay-bill.ts](../../apps/cloud/supabase/functions/_shared/wechatpay-bill.ts) 核对日账。
 - **调用**：`create-checkout`、`checkout-status`、`payment-webhook`、`payment-admin`、`payment-reconcile`；桌面通过 `api.cloudCreateCheckout`／`cloudCheckoutStatus`／`cloudCheckoutCapability` 和原账号网关调用。
-- **边界／状态**：Cloud 共用能力，仅服务端持商户私钥。沿用原子 Bcoin 入账／退款，不能从桌面调用 service-only RPC。二维码只表达待付订单，权益以服务端为准；详见 [微信接入](../../apps/cloud/WECHATPAY.md)。源码及隔离测试完成，不代表已部署或真实收款通过。
+- **边界／状态**：**Cloud 共用能力，生产已开放购买**。仅服务端持商户私钥并调用原子入账／退款 RPC。扫码前以服务端待付状态为准。11 月 13 日隔离账号验证了真实 ¥1 扫码付款、通知入账和全额退款，11 月 17 日确认对账后开放公开购买。[微信支付及验收记录](../../apps/cloud/WECHATPAY.md#验证记录)。
+
+## 在 Agent 卡片发送、取回或新建会话
+
+- **用途／关键词**：Agent 卡片、统一对话、原轮恢复、同卡新会话、工作流结果。
+- **入口**：[localChatStore](../../apps/desktop/src/lib/localChatStore.ts) 和 [local_chat.rs](../../apps/desktop/src-tauri/src/commands/local_chat.rs) 提供发送及原请求查询。[workflowAgentChat](../../apps/desktop/src/lib/workflowAgentChat.ts) 与 `CanvasWorkflowController.chatResult` 负责适配工作流输入及轮次输出。
+- **调用**：发送走 `local_chat_send`，以 SQLite 事务绑定同 `nodeId` 的会话及 Agent 投影，取回走 `local_chat_get_by_request`。`localChat.newOnCard` 走 `local_chat_new_on_card`，校验项目、卡片、原会话与运行锁，旧会话进入项目历史，新会话沿原连线运行。全文及表格交付复用 [workflowAgentResult](../../apps/desktop/src/lib/workflowAgentResult.ts) 和 [workflowAgentOutputs](../../apps/desktop/src/lib/workflowAgentOutputs.ts)。
+- **边界／状态**：`localDsRequestId`／`agentRunId` 仅恢复旧任务。统一对话及 Agent 卡片已随 Windows 26.11.1001 公开发布，Cloud 新轮走 v2 并按试用资格受理。各平台范围和后续增量按发布记录核对。[Windows 发布回执](../DESKTOP-UPDATES.md#windows-26111001-已发布2026-11-10) · [桌面对话](../CHAT-PROVIDERS.md) · [Cloud v2](../../apps/cloud/CHAT.md)。
 
 ## 给 Agent 增加受控工具
-
-Agent 卡片与对话框的新请求统一复用 `localChatStore` → `local_chat_send`；`workflowAgentChat` / `CanvasWorkflowController.chatResult` 仅适配工作流输入和原轮次输出，不新增 runner。SQLite 原子绑定同 nodeId 的会话／Agent 投影；`local_chat_get_by_request` 只读原请求身份，既有 `localDsRequestId` / `agentRunId` 仅用于恢复。全文和表格结果复用 `workflowAgentResult` / `workflowAgentOutputs`。Cloud 共用聊天服务，0084 与聊天 Worker／Edge／网关于 2026-11-09 经用户确认后部署并核验；桌面源码尚未发布安装包，详见[当前统一契约](../CHAT-PROVIDERS.md)。
-
-同一张卡片切换到空会话复用 `localChat.newOnCard` → `local_chat_new_on_card`。原生校验项目、卡片、原会话与运行锁，将旧会话存入项目历史，并让新会话沿原卡接线运行。发送与恢复仍走上面的公共入口。
 
 - **用途／关键词**：Tool Gateway、DSH、审批、lease、durable、工具账本、TaskAuthorization。
 - **入口**：Worker [scoped-tool-gateway.ts](../../apps/agent-worker/src/harness/scoped-tool-gateway.ts) 的 `ScopedToolGateway`／`ToolGatewayDefinition` 校验工具、阶段、授权和参数；外部副作用通过 [durable-tool-dispatcher.ts](../../apps/agent-worker/src/kernel/durable-tool-dispatcher.ts) 的 `DurableToolDispatcher`。v3 能力额度与动作 journal 由 [adaptive-tool-gateway.ts](../../apps/agent-worker/src/harness/adaptive-tool-gateway.ts) 的 `AdaptiveToolGateway` 管理。

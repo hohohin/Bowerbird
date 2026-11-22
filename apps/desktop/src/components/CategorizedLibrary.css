@@ -89,3 +89,4 @@
   .catalog-index { padding-inline:2px; }
   .catalog-row { padding-inline:7px; }
 }
+.categorized-library[data-catalog-searching] .catalog-sidebar { display:none; }

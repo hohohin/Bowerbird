@@ -18,8 +18,7 @@ try {
   await bell.waitFor();
   const bellBox = await bell.boundingBox();
   const accountBox = await page.locator('.topbar-account-trigger').boundingBox();
-  const updateBox = await page.locator('.topbar-update-slot').boundingBox();
-  assert.ok(updateBox.x + updateBox.width <= bellBox.x, 'bell follows the real reserved update slot');
+  assert.equal(await page.locator('.topbar-update-slot').count(), 0, 'no update leaves no empty topbar slot');
   assert.ok(bellBox.x + bellBox.width <= accountBox.x, 'bell is immediately before Bcoin/account');
   assert.equal(await page.locator('.library-generation-activity').count(), 0, 'old library activity box is absent in the candidate');
   await mkdir('.tmp/notifications-scrollbars', { recursive: true });

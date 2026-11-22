@@ -177,6 +177,15 @@ fn gallery_counts_pages_filters_and_members_keep_folder_entry_identity() {
     f.db.connection_entry_groups(&mut page, None, Some("images"), &grouped).unwrap();
     assert_eq!(page[0].group.iter().map(|e| &e.id).collect::<Vec<_>>(), vec![&old.id, &new.id]);
     assert!(page[0].group.iter().all(|e| e.folder_id == root));
+    let search = ConnectionFilter { query: Some("a-old".into()), grouped: true, ..Default::default() };
+    let matches = f.db.connection_folders_filtered(None, Some("images"), &search).unwrap();
+    let ids = f.db.connection_entry_ids_filtered(None, None, Some("images"), 0, 20, &search).unwrap();
+    assert_eq!(matches.iter().map(|folder| folder.count).sum::<i64>(), 2);
+    assert_eq!(ids.len(), 2);
+    let mut results = f.db.resolve_connection_entries(&ids).unwrap();
+    f.db.connection_entry_groups(&mut results, None, Some("images"), &search).unwrap();
+    assert!(results.iter().all(|entry| entry.asset_id == old.asset_id && entry.group.is_empty()));
+    assert!(results.iter().any(|entry| entry.folder_id == target && entry.is_reference));
     let red = ConnectionFilter { color: Some("red".into()), grouped: true, ..Default::default() };
     assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 20, &red).unwrap(), vec![old.id.clone()]);
     assert_eq!(f.db.connection_folders_filtered(None, Some("images"), &red).unwrap().iter().find(|f| f.id == root).unwrap().count, 1);

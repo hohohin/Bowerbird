@@ -13,7 +13,7 @@ page.setDefaultTimeout(10000);
 const errors = []; page.on('pageerror', error => errors.push(error.message));
 try {
   await page.goto('http://127.0.0.1:1699/scripts/fixtures/canvas-reference/preview.html');
-  await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await page.locator('[data-canvas-node-id="old"]').waitFor({ timeout: 30000 });
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { CanvasWorkflowController, canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -464,15 +464,27 @@ try {
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
   assert.equal(await page.evaluate(() => window.dispatchTrace.filter(row => row.key === 'cloudAgentStart').length),1,'same-turn clicks submit one optimization');
   const before = await page.evaluate(() => ({ local: window.h3Calls.length, cloud: window.optimizeStarts.length }));
-  await card.getByRole('button', { name: '优化提示词', exact: true }).click();
+  await card.getByRole('button', { name: '重新优化提示词', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
   assert.deepEqual(await page.evaluate(() => ({ local: window.h3Calls.length, cloud: window.optimizeStarts.length })), { local: before.local, cloud: before.cloud + 1 });
-  assert.match(await card.getByLabel('卡片指令', { exact: true }).inputValue(), /单一连续镜头/);
+  assert.equal(await draft.inputValue(), 'new latest draft');
+  const preview = card.getByRole('button', { name: '展开编辑优化后提示词' });
+  assert.match(await preview.innerText(), /单一连续镜头/);
+  await preview.click();
+  const prose = card.getByLabel('提示词正文', { exact: true });
+  const beforeEdit = await prose.inputValue();
+  await prose.fill('微调后的画面');
+  await card.getByRole('button', { name: '原文 (Raw)' }).click();
+  assert.equal(await card.getByLabel('优化后提示词全文').inputValue(), '微调后的画面');
+  assert.equal(await card.evaluate(el => parseFloat(el.style.width)), 448);
+  await card.getByRole('button', { name: '还原', exact: true }).click();
+  assert.equal(await card.getByLabel('优化后提示词全文').inputValue(), beforeEdit);
+  await card.getByRole('button', { name: '收起', exact: true }).click();
   await videoStatus.getByText('提示词已优化', { exact: true }).waitFor();
   assert.equal(await card.getByText('提示词已优化', { exact: true }).count(), 1);
   assert.equal(await card.locator('details.comfy-optimization-result').count(), 0);
   const field = await card.locator('.comfy-video-prompt').boundingBox();
-  const action = await card.getByRole('button', { name: '优化提示词', exact: true }).boundingBox();
+  const action = await card.getByRole('button', { name: '重新优化提示词', exact: true }).boundingBox();
   assert.ok(action.y >= field.y + field.height - 1 && action.x + action.width <= field.x + field.width + 1);
   await card.getByRole('button', { name: '运行', exact: true }).waitFor();
   for (const theme of ['dark', 'light']) {
@@ -483,11 +495,15 @@ try {
     }, theme);
     await page.screenshot({ path: `.tmp/h3-optimization/${theme}.png` });
   }
-  assert.match(await card.getByLabel('卡片指令', { exact: true }).inputValue(), /单一连续镜头/);
+  assert.match(await preview.innerText(), /单一连续镜头/);
   await card.getByLabel('卡片指令', { exact: true }).fill('用户修改后的提示词');
   await page.evaluate(() => { window.dispatchTrace.length = 0; });
   const runButton = card.getByRole('button', { name: /^(运行|重试)$/ });
   await runButton.evaluate(button => { button.click(); button.click(); });
+  const guard = card.locator('.h3-run-guard');
+  await guard.waitFor();
+  assert.equal(await page.evaluate(() => window.h3Calls.length), before.local);
+  await guard.getByRole('button', { name: '用新原文直出' }).click();
   await page.waitForFunction(n => window.h3Calls.length > n, before.local);
   const directReads = await page.evaluate(() => window.dispatchTrace.slice(0,window.dispatchTrace.findIndex(row => row.key === 'localDispatch')).filter(row=>row.key==='projectCanvasGet').length);
   console.log('single text-only H3: native canvas reads before dispatch',directReads);
@@ -517,7 +533,8 @@ try {
     JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', autoBefore);
   assert.equal(await page.evaluate(() => window.optimizeStarts.at(-1).textRewrite.source), '用户修改后的提示词');
   assert.match(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), /单一连续镜头/);
-  assert.match(await card.getByLabel('卡片指令', { exact: true }).inputValue(), /单一连续镜头/);
+  assert.match(await preview.innerText(), /单一连续镜头/);
+  assert.equal(await draft.inputValue(), '用户修改后的提示词');
   await retryButton.waitFor();
   await card.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
   const videoHistory = page.getByRole('dialog', { name: '提示词优化历史', exact: true });
@@ -528,6 +545,19 @@ try {
   await draft.and(page.locator(':focus')).waitFor();
   assert.equal(await draft.inputValue(), '用户修改后的提示词');
   await autoCheckbox.uncheck();
+  await card.getByRole('button', { name: '恢复使用优化后提示词' }).click();
+  await draft.fill('沿楼梯向上运镜。');
+  const staleCounts = await page.evaluate(() => [window.h3Calls.length, window.optimizeStarts.length]);
+  await runButton.click();
+  await guard.getByRole('button', { name: '用旧优化稿' }).click();
+  await page.waitForFunction(n => window.h3Calls.length === n + 1 && JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', staleCounts[0]);
+  assert.match(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), /单一连续镜头/);
+  assert.equal(await page.evaluate(() => window.optimizeStarts.length), staleCounts[1]);
+  await runButton.click();
+  await guard.getByRole('button', { name: '先优化再运行' }).click();
+  await page.waitForFunction(n => window.h3Calls.length === n + 2 && JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', staleCounts[0]);
+  assert.equal(await page.evaluate(() => window.optimizeStarts.at(-1).textRewrite.source), '沿楼梯向上运镜。');
+  assert.equal(await autoCheckbox.isChecked(), false);
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
@@ -566,7 +596,8 @@ try {
   assert.match(await history.innerText(), /透明玻璃杯，杯沿反射窗边的柔光/);
   await page.keyboard.press('Escape');
   const prior = await page.evaluate(() => window.optimizeStarts.length);
-  await imageCard.getByRole('button', { name: '重试优化提示词', exact: true }).click();
+  await imageCard.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
+  await history.getByRole('button', { name: '重试优化提示词', exact: true }).click();
   await page.waitForFunction(n => window.optimizeStarts.length === n + 1 &&
     JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', prior);
   assert.equal(await page.evaluate(() => window.optimizeStarts.at(-1).textRewrite.source), '一只玻璃杯');
@@ -581,14 +612,14 @@ try {
   await history.getByRole('button', { name: '恢复第 2 次优化结果', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'image-h3').prompt === '透明玻璃杯，杯沿反射窗边的柔光。');
   await history.waitFor({ state: 'hidden' });
-  await imageDraft.and(page.locator(':focus')).waitFor();
+  await imageCard.getByLabel('优化后提示词全文').and(page.locator(':focus')).waitFor();
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), prior + 1, 'restoring history never submits another optimization');
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     api.cloudAgentGet = async runId => ({ runId, status: 'succeeded', snapshot: { run: {}, events: [
       { type: 'text.result', display_payload: { schemaVersion: 1, text: window.optimizeStarts.at(-1).textRewrite.source } }] } });
   });
-  await imageCard.getByRole('button', { name: '优化提示词', exact: true }).click();
+  await imageCard.getByRole('button', { name: '重新优化提示词', exact: true }).click();
   await page.waitForFunction(() => {
     const doc = JSON.parse(sessionStorage.getItem('workflow-p')).document;
     return doc.run.status === 'failed' && doc.run.steps['image-h3'].error.includes('相同的提示词')
@@ -615,10 +646,11 @@ try {
       && JSON.parse(sessionStorage.getItem('canvas-settings')).h3_auto_optimize_prompt === true;
   }, beforeImageAuto);
   assert.deepEqual(await page.evaluate(() => window.imageDispatches), [{
-    provider: 'minimax-h3-image', rawPrompt: '透明玻璃杯，杯沿反射窗边的柔光。',
+    provider: 'minimax-h3-image', rawPrompt: '一只玻璃杯',
     prompt: '透明玻璃杯，柔光在杯沿形成窄而清晰的高光。',
   }]);
-  assert.equal(await imageCard.getByLabel('卡片指令', { exact: true }).innerText(), '透明玻璃杯，柔光在杯沿形成窄而清晰的高光。');
+  assert.equal(await imageDraft.innerText(), '一只玻璃杯');
+  assert.match(await imageCard.getByRole('button', { name: '展开编辑优化后提示词' }).innerText(), /杯沿形成窄而清晰的高光/);
   await imageStatus.getByText('已提交生成', { exact: true }).waitFor();
   await imageCard.getByRole('button', { name: '重试', exact: true }).waitFor();
   await imageCard.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
@@ -626,7 +658,7 @@ try {
   assert.match(await history.innerText(), /柔光在杯沿形成窄而清晰的高光/);
   await history.getByRole('button', { name: '恢复第 4 次用户原文', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'image-h3').prompt
-    === '透明玻璃杯，杯沿反射窗边的柔光。');
+    === '一只玻璃杯');
   await history.waitFor({ state: 'hidden' });
   await imageDraft.and(page.locator(':focus')).waitFor();
   await imageCard.getByRole('button', { name: /^(运行|运行此卡片)$/ }).waitFor();
@@ -737,7 +769,47 @@ try {
   assert.equal(followUp.provider, 'dsh-cloud');
   assert.equal(followUp.text, '把柔光换成侧逆光。');
   assert.equal(followUp.dshSkill, undefined);
+  await chatPanel.getByRole('button', { name: '应用到优化后提示词' }).click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes
+    .find(node => node.id === 'image-h3').h3Prompt.edited === '优化后的柔光高光');
+  const sixFields = 'subject_definitions: <Picture 1> 指定人物。\nsummary: 雨声中，她回头。\nretention_analysis: 保留衣着。\n' +
+    'detailed_description: [Shot 1] 她说 <d>[Chinese] 等一下。</d>\noverall_soundscape: 雨落在伞面。\nnon_diegetic_music: N/A';
+  await page.evaluate(async text => {
+    const { api } = await import('/src/lib/api.ts');
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+    const { DEFAULT_COMFY_VIDEO, comfyVideoOptionsForMode } = await import('/src/lib/comfyVideo.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit([{ ...newWorkflowNode('comfy-video', 650, 50, 'codex'), id: 'h3', prompt: '雨中回头，说「等一下」。',
+      comfyVideo: comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, 'r2v'), inputs: { 'reference-image': [{ assetId: 'a' }] } }]);
+    api.cloudAgentGet = async runId => ({ runId, status: 'succeeded', snapshot: { run: {}, events: [
+      { type: 'text.result', display_payload: { schemaVersion: 1, text } }] } });
+    await c.optimizeComfyPrompt('h3', { referenceImageCount: 1, referenceVideoCount: 0, referenceAudioCount: 0 });
+  }, sixFields);
+  await preview.click();
+  await card.getByRole('button', { name: '结构化', exact: true }).click();
+  assert.equal(await card.locator('.h3-struct-field').count(), 7, 'six Ref2VA fields plus a dialogue shortcut');
+  await card.getByLabel('对白快捷编辑', { exact: true }).fill('好，$1。');
+  await card.getByRole('button', { name: '原文 (Raw)' }).click();
+  assert.equal(await card.getByLabel('优化后提示词全文').inputValue(), sixFields.replace('等一下。','好，$$1。'));
+  await card.getByRole('button', { name: '结构化', exact: true }).click();
+  await card.getByLabel('对白快捷编辑', { exact: true }).fill('我们走吧。');
+  await card.screenshot({ path: '.tmp/h3-optimization/structured.png' });
+  await card.getByRole('button', { name: '收起', exact: true }).click();
+  await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
+  const parameterCenters = await card.locator('.comfy-video-options').evaluate(row => Array.from(row.children, item => {
+    const { top, height } = item.getBoundingClientRect(); return Math.round(top + height / 2);
+  }));
+  assert.equal(parameterCenters.length, 5);
+  assert.ok(Math.max(...parameterCenters) - Math.min(...parameterCenters) < 3, `R2V parameter centers: ${parameterCenters}`);
+  await card.screenshot({ path: '.tmp/h3-optimization/card-dark.png' });
+  await preview.click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'h3')?.h3Prompt?.expanded);
+  await page.reload();
+  await card.getByLabel('对白快捷编辑', { exact: true }).waitFor();
+  assert.equal(await card.getByLabel('对白快捷编辑', { exact: true }).inputValue(), '我们走吧。');
+  assert.equal(await draft.inputValue(), '雨中回头，说「等一下」。');
   assert.deepEqual(errors, []);
   console.log('H3 explicit and opted-in optimization: manual editing, chained generation, stop, account, failure and original-job recovery passed');
-} catch (error) { console.error(error); throw error; }
+} catch (error) { console.error(error, errors); throw error; }
 finally { await browser.close(); await server.close(); }

@@ -261,7 +261,7 @@ html[data-theme] .app-topbar-view-controls::after {
 }
 html[data-theme] .app-topbar .library-icon-segments button { width: 32px; }
 html[data-theme] .topbar-update-slot { width: 36px; height: 32px; }
-html[data-theme] .app-topbar .topbar-update-button { color: var(--bb-blue); }
+html[data-theme] .app-topbar .topbar-update-button[data-install-icon] { color: var(--bb-blue); }
 html[data-theme] .app-topbar .topbar-account-trigger { gap: 12px; padding: 0 4px; }
 html[data-theme] .app-topbar .topbar-account-trigger > :is(span.bg-accent, img) {
   width: 22px; height: 22px; background: none !important; color: inherit;

@@ -14,7 +14,7 @@ import { CreationModeIndicator } from "./CreationModeIndicator";
 import { creationImageAssetId, useCreationImageInteraction } from "./useCreationImageInteraction";
 import { useImeGuard } from "../lib/useImeGuard";
 import { useLocalFileMode } from "../lib/localFileMode";
-import type { LibrarySource } from "../lib/localFileMode";
+import { libraryShortcutSource, type LibrarySource } from "../lib/localFileMode";
 import { ProjectInspectorShell } from "./ProjectInspectorShell";
 import { WorkflowAgentDetail } from "./WorkflowAgentDetail";
 import { WORKFLOW_SKILL_ENABLED, WORKFLOW_PLANNER_ENABLED, WORKFLOW_TEMPLATE_LIBRARY_ENABLED } from "../lib/featureFlags";
@@ -524,6 +524,7 @@ export function CanvasWorkspace({
   const showAssetNames = useStore((state) => state.settings?.canvas_show_asset_names ?? false);
   const [workflowAgentDetail, setWorkflowAgentDetail] = useState<{ projectId: string; nodeId: string; entryKey?: string } | null>(null);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [h3ChatEditor, setH3ChatEditor] = useState<{ projectId: string; chatId: string; apply: (text: string) => Promise<void> } | null>(null);
   const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
   const [composerDraftRevision, setComposerDraftRevision] = useState(0);
   const chatSummaries = useProjectChatSummaries(projectId);
@@ -611,10 +612,11 @@ export function CanvasWorkspace({
   const planeId = useId();
   const sourceScope = useLocalFileMode(state => state.source);
   const localFilesOpen = useLocalFileMode(state => state.open);
-  const fileMode = useLocalFileMode(state => state.mode);
+  const browseProjectId = useLocalFileMode(state => state.browseProjectId);
+  const contextProjectId = useLocalFileMode(state => state.contextProjectId);
   const libraryMedia = useLocalFileMode(state => state.media);
-  function changeSource(value: string) {
-    useLocalFileMode.getState().openSource(value as LibrarySource);
+  function changeSource(value: LibrarySource) {
+    useLocalFileMode.getState().openSource(value);
     useStore.getState().clearSelect();
   }
   function openLibrary() {
@@ -2237,7 +2239,8 @@ export function CanvasWorkspace({
 
   useEffect(() => {
     function toggleLibrary(event: KeyboardEvent) {
-      if (!["tab", "escape", "q", "e"].includes(event.key.toLowerCase()) || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.isComposing || event.keyCode === 229
+      const source = libraryShortcutSource(event.key);
+      if ((!source && event.key !== "Tab" && event.key !== "Escape") || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.isComposing || event.keyCode === 229
         || event.defaultPrevented || exploring || workspaceRef.current?.closest("[inert]")
         || loadingRef.current || useStore.getState().projectRoutePending) return;
       const target = event.target as HTMLElement | null;
@@ -2245,8 +2248,7 @@ export function CanvasWorkspace({
         && workspaceRef.current?.contains(target)
         && !!target.closest('.creation-editor .ProseMirror, [data-generation-composer] .ProseMirror');
       if (!composerTab && event.key !== "Escape" && (target?.isContentEditable || target?.closest('input, textarea, select, [role="combobox"], .app-topbar'))) return;
-      if (event.key === "Escape" && target?.closest('[data-folder-path-editor], [data-frequent-threshold]')) return;
-      if (target?.closest('.library-source-navigation[data-scope-expanded]') && (event.key === "Escape" || event.key === "Tab")) return;
+      if (event.key === "Escape" && target?.closest('[data-folder-path-editor], [data-frequent-threshold], [data-library-search]')) return;
       if (target?.closest('[role="dialog"], [role="menu"]')
         || document.querySelector('[role="dialog"], [role="menu"]') || useStore.getState().contextMenu
         || useStore.getState().projectContextMenu) return;
@@ -2257,7 +2259,8 @@ export function CanvasWorkspace({
       }
       const open = useStore.getState().canvasLibraryOpen;
       if (event.key !== "Tab" && !open) return;
-      if (["q", "e"].includes(event.key.toLowerCase()) && target && boardShellRef.current?.contains(target)) return;
+      if (source && target && boardShellRef.current?.contains(target)) return;
+      if (event.key === "Tab" && open && !composerTab && useLocalFileMode.getState().source === "folders") return;
       // Escape belongs to the canvas while it is being used alongside the drawer.
       if (event.key === "Escape" && target && boardShellRef.current?.contains(target)) return;
       event.preventDefault(); event.stopPropagation();
@@ -2269,7 +2272,7 @@ export function CanvasWorkspace({
       }
       if (!open) { openLibrary(); setCanvasLibraryOpen(true); beginOnboardingOperation("expand-source", projectId)(); return; }
       if (event.key === "Tab") useLocalFileMode.getState().toggleCatalog();
-      else changeSource(event.key.toLowerCase() === "q" ? "global" : "project");
+      else if (source) changeSource(source);
       requestAnimationFrame(() => sourcePanelRef.current?.focus({ preventScroll: true }));
     }
     window.addEventListener("keydown", toggleLibrary, true);
@@ -5759,7 +5762,8 @@ export function CanvasWorkspace({
       if (changed.length) pushCanvasUndo({ kind: "names", projectId, before: Object.fromEntries(changed.map(id => [id, before.cardNames?.[id]])) });
     }
   });
-  const workflowOnOpenAgent = useLatestCallback((nodeId: string, conversationId?: string, entryKey?: string) => {
+  const workflowOnOpenAgent = useLatestCallback((nodeId: string, conversationId?: string, entryKey?: string, applyPrompt?: (text: string) => Promise<void>) => {
+    setH3ChatEditor(projectId && conversationId && applyPrompt ? { projectId, chatId: conversationId, apply: applyPrompt } : null);
     if (conversationId) { openLocalChat(conversationId); return; }
     const chat = !entryKey && Object.values(useLocalChatStore.getState().summaries).find(chat => chat.projectId === projectId && chat.nodeId === nodeId);
     if (chat) openLocalChat(chat.id);
@@ -5841,8 +5845,15 @@ export function CanvasWorkspace({
 
   const sourceNavigation = <header className="library-browser-heading">
     <div data-tour="source-scope" className="library-floating-navigation">
-      <LibrarySourceTabs project value={sourceScope} onChange={changeSource}/>
+      <LibrarySourceTabs onSourceChange={changeSource}/>
     </div>
+    {sourceScope === "project" && contextProjectId && contextProjectId === projectId && browseProjectId !== contextProjectId && <div className="library-cross-project">
+      <span role="status">正在跨项目浏览</span>
+      <button type="button" onClick={() => {
+        useLocalFileMode.getState().selectProject(contextProjectId);
+        sourcePanelRef.current?.focus({ preventScroll: true });
+      }}>回到当前项目</button>
+    </div>}
   </header>;
 
   function frequentPickTarget(target: EventTarget | null) {
@@ -5945,8 +5956,8 @@ export function CanvasWorkspace({
           });
         }}>
         <div id={`${sourcePanelId}-content`} className="canvas-source-content">
-          {(sourceCatalogVisited || !sourceCollapsed) && <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode === "all" || fileMode === "tags" ? fileMode : "collections"} media={libraryMedia} projectId={projectId} semanticSearchEnabled={!sourceCollapsed}
-            projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>}
+          {(sourceCatalogVisited || !sourceCollapsed) && <LibraryCatalogTransition key={projectId} media={libraryMedia} projectId={projectId} semanticSearchEnabled={!sourceCollapsed}
+            navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>}
         </div>
         <CanvasFrequentAssets library={frequentLibrary} projectId={projectId} picking={frequentPicking} onPickingChange={setFrequentPicking}/>
       </aside>
@@ -6750,7 +6761,8 @@ export function CanvasWorkspace({
           />
         )}
         {selectedChatId && projectId && !loading && <LocalChatPanel key={selectedChatId} conversationId={selectedChatId} projectId={projectId}
-          onClose={() => { setSelectedChatId(null); useStore.getState().setBoardActive(false); }}
+          onApplyPrompt={h3ChatEditor?.projectId === projectId && h3ChatEditor.chatId === selectedChatId ? h3ChatEditor.apply : undefined}
+          onClose={() => { setSelectedChatId(null); setH3ChatEditor(null); useStore.getState().setBoardActive(false); }}
           onSelectConversation={openLocalChat}
           onNewConversation={newLocalChat}
           getCardDefaults={agentCardDefaults} onLocateCards={locateChatCards} onUndoCards={undoChatCards}

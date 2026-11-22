@@ -1,4 +1,65 @@
-# @bowerbird/agent-worker — Bowerbird Agent Runtime
+# @bowerbird/agent-worker
+
+VPS 组合 Worker 消费 Cloud 任务。现役范围与回退见 [项目状态](../../PROJECT.md#目前进展) 和 [Cloud 部署](../cloud/DEPLOY.md)。
+
+| 任务 | 入口与边界 |
+|---|---|
+| 桌面对话的 Cloud v2 | [cloud-chat](src/cloud-chat/) 从 `chat-worker` 领取 `dsh-vps-v2`。钉版 DSH 管理原生会话，Worker 按账号隔离的 session 和上一成功任务恢复，提交快照后才交付本轮。旧 completion／v1 保留原单恢复。报价、会话与计量见 [Cloud 对话](../cloud/CHAT.md)。 |
+| 异步 Agent Run | [cloud-agent](src/cloud-agent/) 与 [control-plane](src/control-plane/) 消费 `bowerbird-unified-agent + dsh` 新任务，保持 **test-only**。Tool Gateway 执行受控工具，Bowerbird 控制面管理授权、审批、幂等、计量、产物和恢复。旧 controlled、专用 HTML Skill 和 legacy Run 保留恢复。见 [Harness](../../dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) 与 [Runbook](UNIFIED-HARNESS-RUNBOOK.md)。 |
+| 其他消费者 | [生成和视频](src/cloud-generation/) · [理解](src/cloud-understand/) · [视觉规范](src/cloud-visual/) · [分层](src/cloud-generation/layers.ts)。上线范围和价格分别查 [部署](../cloud/DEPLOY.md) 与 [定价](../../dev-doc/Bowerbird定价方案v2-订阅积分制.md)。 |
+
+云端 Worker 只加载服务器维护的受控 Skill。客户端提交标识、任务内容和参数，恢复沿已冻结输入。工具权限限于当前任务的白名单，外部用户 Skill、任意 MCP、shell 和子 Agent 均在此边界之外。本机 DSH 可以在自己的授权范围里使用 [用户 Skill](../../dev-doc/CHAT-PROVIDERS.md#2026-11-15-本机-dsh-在卡片第一轮使用-skill)。
+
+## 如何运行
+
+Worker 使用 Node 24 原生 TypeScript 类型剥离。钉版 DSH/ACP Profile 位于 `spikes/unified-agent-harness-u1/profiles/bowerbird-u1`，是正式镜像构建输入。组合镜像还需要 ffmpeg／ffprobe。从仓库根执行：
+
+```bash
+pnpm --filter @bowerbird/agent-worker typecheck
+pnpm --filter @bowerbird/agent-worker test
+node --test spikes/unified-agent-harness-u1/profiles/bowerbird-u1/test/chat-session.e2e.test.mjs
+```
+
+最后一项用真实 ACP、回环模型桩和临时会话验证 v2 会话。放行按 [test-only Runbook](UNIFIED-HARNESS-RUNBOOK.md) 验证只读候选镜像、权限、版本与回滚，真实供应商 eval 依对应小节确认范围和费用。
+
+## 运维入口
+
+- DSH 聊天持久会话卷只存原生会话状态，进程配置和每轮模型代理能力使用临时目录。租约或原生状态缺失按原任务返回，保留账本与审计事实。[会话控制面](../cloud/CHAT.md#现行-v2-接口)
+- Seedance 规格巡检由生成消费者定期比对官方枚举，仅记录差异或不可用，失败沿现有参数。[视频专项](../../dev-doc/SEEDANCE-2.5-INTEGRATION.md) · [首发回执](../../project_logs/2026-11-10-seedance-resolution-audit.md)
+- 品牌观察和归纳提示词从部署目录只读加载，按任务开始时读取。已确认的视觉规范由用户显式用于生成。[品牌提示词维护](src/prompts/brand-visual/README.md)
+
+## 文件结构
+
+```text
+src/
+  main.ts           VPS 组合入口，按配置启动各任务消费循环
+  cloud-chat/       DSH · Cloud v2 对话消费、原生会话、建卡回执与逐次计量
+  cloud-generation/ Cloud 图片、视频、分层任务与 Seedance 规格巡检
+  cloud-understand/ Cloud 素材理解、复刻分析与录音转录
+  cloud-visual/     独立视觉规范任务消费与证据归纳
+  cloud-agent/      异步 Agent Run 的消费、租约和处理器，含旧 Run 恢复
+  harness/          DSH/ACP 适配、模型计量代理、规划与执行桥、受控 Tool Gateway
+  control-plane/    Worker 到 Edge 的控制面客户端，处理 checkpoint、产物和工具账本
+  kernel/           Run 状态机、审批策略与持久化工具调度
+  contracts/        模型、Skill、工具、事件与 Run 的共用类型
+  skills/           Worker 内置 Skill、注册与加载
+  providers/        模型、图片与 HTML renderer 等服务适配
+  prompts/          可维护的品牌视觉提示词
+  visual/           视觉证据提取、归纳和批处理函数
+  local/            本机开发与 checkpoint 调试入口
+  eval/             评测 runner、模型探针与对比报告
+  fakes/            确定性的模型和工具替身
+  fixtures/         评测样本与脱敏探针结果
+  spikes/           隔离的协议与模型验证入口
+  types/            Node 环境类型声明
+```
+
+## 历史实现与验收
+
+当前契约见本页开头。首次部署、旧协议、早期 A/U 阶段及其测试计数保存在下方；历史 eval 和容器探针从对应版本和 [Runbook](UNIFIED-HARNESS-RUNBOOK.md) 核对。
+
+<details>
+<summary>展开历史部署、实现与验收</summary>
 
 ### DSH 云端原生会话（2026-11-13，VPS Worker 已切换）
 
@@ -22,9 +83,9 @@
 
 > 状态（2026-09-17 核对）：VPS 已部署统一 Agent、视频、DSH `deepseek-flash`/漏参纠正及分层服务；DSH 保持 test-only，视频未启价，分层暂用 20/23 积分测试价。最近发布与回滚入口统一见 [收费化进度](../../dev-doc/ARCH-ADJUST-PROGRESS.md)。
 > 桌面 Agent 主路径已人工验收，A5 完成；A6 安全/Cloud 回归与 A7 VPS 运维基线完成。Codex Agent CLI 真机 E2E 已成功，但因双重思考/对话耗时过长暂时禁止新建该组合。Dreamina Agent CLI 真机 E2E 按 2026-08-25 用户决定暂时跳过：实现保留、未宣称验证通过，也不再作为当前发布或继续开发门槛。
-> 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../dev-doc/AGENT-RUNTIME-PLAN.md) §A2 / §A3。
+> 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../dev-doc/AGENT-RUNTIME-PLAN.md) `A2 / `A3。
 
-## 当前已实现
+## 早期实现记录
 
 视频容器构建还需要 `cloud-shared` named context（仓库默认为 `../cloud/supabase/functions/_shared`；VPS 通过 `BOWERBIRD_CLOUD_SHARED_BUILD_CONTEXT` 指向仅含共享源码的目录）。镜像内包含 `ffprobe` 和跨包契约，离线验收运行 `node scripts/video-readonly-probe.mjs`。具体发布顺序见 [部署说明](../cloud/DEPLOY.md)。
 
@@ -63,7 +124,7 @@
 - **运维与安全**：控制面提供不含用户内容的 queue/lease/status/cost/failure/TTL 指标；VPS 定时输出 health + 磁盘，测试账号与生产统计隔离。生产安全冒烟覆盖 JWT/Worker Token/IDOR/RLS/MIME/幂等冲突，过期 parked Run 自动取消，Worker 重启后的未知上游结果不盲重放。
 - **eval**：2026-09-17 记录的 `node --test` 297 个用例全过（历史基线，当前数量以测试输出为准）；其中 8 场景统一图片回归确认峰值并发 8、8 张均保留为 final；生产双 Worker 并发 claim 专项确认同一 Run 只有一个租约、`attempt_count=1`。
 
-## 当前范围边界
+## A 阶段验收范围
 
 - ✅ 云端 Worker consumer、checkpoint/tool-ledger、workspace/artifact 与生产组合入口已部署 VPS，并通过真实 Supabase/DeepSeek/Seedream E2E
 - ✅ Supabase Agent 控制面与 controlled-image-edit `0021`/Edge 已上线
@@ -71,11 +132,31 @@
 - ✅ 桌面 Agent Run 入口 / 审批 / 反馈 / 产物下载与会话组图入库首版，最后一轮桌面交互已人工通过 —— A4
 - ✅ Agent Run 文本 usage/ledger、服务端费率/预算复核、终态原子结算、TTL/orphan 清理、账单 marker、原子单用户/全站容量闸与每日成本预留 —— A5
 - ✅ 安全冒烟、Cloud 生图/理解真实回归、隐私文案、Worker 重启故障注入与 VPS 监控/容器约束；Codex Agent 真机已通过并按实测结论暂时与正式 Agent 互斥 —— A6/A7 当前范围完成（Dreamina Agent CLI 真机 E2E 已明确跳过）
-- ❌ OpenClaw / Claude Code / MCP / shell / 用户 Skill / 多 Agent —— 永不做（计划 §1.2 / §7.1）
+- ❌ 云端 Worker 的工具白名单排除 OpenClaw、Claude Code、任意 MCP／shell、外部用户 Skill 和子 Agent（计划 `1.2 / `7.1）。本机 DSH 的用户 Skill 沿桌面契约。
 - **品牌提示词维护（2026-09-10）**：图片观察与文本提炼指令分别为 `src/prompts/brand-visual/observation.md`、`extraction.md`，VPS 同路径可维护并只读挂载；每项任务开始时读取。原图明确标注的色号/标准独立保留，不经多数投票，冲突待核对。维护操作见 [品牌提示词 README](src/prompts/brand-visual/README.md)，本次定向部署与验证状态以 PROJECT.md 为准。
-- **视觉规范当前边界（2026-09-10）**：规范独立于项目，任意生成可显式选用已确认版本。用户在集合内点击“视觉规范”并点击“开始提炼”后，桌面沿既有理解队列补齐该集合素材的观察；保存后由用户在创作对话框中选择，不自动选用；本 Worker 的文字归纳服务仍只收脱敏证据卡，不能自行回取来源图片或改写已确认规范。V0 离线 fixture 的“不读图”不代表用户必须先手动反推。当前产品契约见 [AGENT-RUNTIME-PLAN.md §8](../../dev-doc/AGENT-RUNTIME-PLAN.md#8-独立视觉规范agent-loop-外的本地长期能力)，发布状态以 [PROJECT.md](../../PROJECT.md) 为准。
+- **视觉规范当前边界（2026-09-10）**：规范独立于项目，任意生成可显式选用已确认版本。用户在集合内点击“视觉规范”并点击“开始提炼”后，桌面沿既有理解队列补齐该集合素材的观察；保存后由用户在创作对话框中选择，不自动选用；本 Worker 的文字归纳服务仍只收脱敏证据卡，不能自行回取来源图片或改写已确认规范。V0 离线 fixture 的“不读图”不代表用户必须先手动反推。当前产品契约见 [AGENT-RUNTIME-PLAN.md `8](../../dev-doc/AGENT-RUNTIME-PLAN.md#8-独立视觉规范agent-loop-外的本地长期能力)，发布状态以 [PROJECT.md](../../PROJECT.md) 为准。
 
-## 如何运行
+## eval 覆盖对照
+
+| 计划项 | 用例 |
+|---|---|
+| A0-T6 契约 + 可替换 backend | smoke（ModelBackend 形状）+ FakeModel 驱动全流程 |
+| A0-T7 阶段约束（5 类非法动作模型外被拒） | 对抗 1/1b（跳过审批）/ 2（重复生图）/ 3（改预算）/ 4（shell）/ 5（跨 Run 读）+ 端到端 shell 注入 |
+| 智能精修四能力 | 结构化意图 / 参考图职责 / 分维度评分 / 至多精修一次（4a happy + 4b 封顶） |
+| V0-T3 caption fixture（5 场景） | 单一方向 / 多个方向 / 内容主题误判 / 反推缺失 / 超大数据集 |
+
+## 已知配置与后续项
+
+A1 前置已完成，当前能力边界：
+- DeepSeek 文本回合真实 tool-calling + usage 已通过；`deepseek-v4-flash` 默认 thinking 会拒绝 `tool_choice=required`，adapter 已显式发送 `thinking.type=disabled` 并通过真实探针、A3-T7 与 VPS 部署验证
+- Vision + Seedream 已完成 VPS 真实出站与同 Run 修订 E2E；区域/时延/并发仍需发布级压测
+- `credit_hold` 预算预授权、Agent 原子终态结算与 DeepSeek 文本回合可信 usage/ledger 已统一
+- FeaturePolicy 正式字段与首版预算选项已统一上线；对外定价归属仍待运营确认
+- VPS 单容器四类消费循环、容器资源/PID/日志约束和无内容健康监控已部署；数据库容量门槛与 Worker 重启租约恢复已验收
+
+计量已使用服务端费率与可信 usage/ledger，早期 M0 固定动作 fixture 不作为生产定价。
+
+## 早期 eval 与容器探针命令
 
 Worker 基础代码使用 Node v24 内置 TypeScript 类型剥离，tsc 取自根 workspace。完整生产镜像还依赖已锁定的 DSH/ACP Profile 包及系统 ffmpeg/ffprobe；`spikes/` 下的该 Profile 是正式构建输入，不能当作废弃实验目录删除。
 
@@ -117,42 +198,4 @@ docker compose -f compose.unified-harness-candidate.yml run --rm --no-deps unifi
 
 验证服务使用非 root `node` 用户、只读根文件系统、`network_mode: none`、`cap_drop: ALL`，并在同一容器内连续启动两次 DSH 配置探针，随后通过正式 `NodeDshAcpPort` 完成真实 ACP initialize/new-session/cancel/dispose。它还会从 Worker 的显式部署入口创建正式 processor：容器内 provider fixture 只由父进程 DeepSeek 计量代理访问，DSH 子进程仅获得每 Run capability 与 loopback endpoint；两个模型回合分别形成 durable succeeded call、私有诊断 artifact 与精确 usage，真实 provider key 不进入子进程。同时验证 checkpoint、闭集三工具、`list_run_assets → submit_plan → end_turn`、当前 Run 素材回传、父进程审批停车和所有临时 runtime home 清理；不访问公网或真实 provider。U4 受控图片 DSH 使用独立的三个结构化建议动作 `record_intent_analysis`、`request_clarification`、`submit_plan_for_approval`，只把当前 phase 允许的模型建议交回原 `ModelBackend` 契约；Policy/审批/Ledger/执行仍由既有 Kernel 掌权。当前钉版 DSH 在 Linux live boot 会自动补入 Cordis HMR，因此正式 port 固定以 Node `--expose-internals` 启动；该能力只授予镜像内钉版受信插件，不扩大模型工具面。生产 legacy 可继续使用 `DEEPSEEK_MODEL=deepseek-chat`；DSH 父代理通过独立 `BOWERBIRD_DSH_MODEL=deepseek-flash` 与 Profile 钉版保持一致，两者只共享父进程 key/base。2026-09-01 的 production test-only 部署只开启 `BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED=true`；unified/HTML DSH 保持 false，Edge runtime 选择只允许 `bowerbird_test` 账号。真实 crash/re-claim 验收可临时叠加 `compose.u4-recovery-probe.yml`，把 `BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS` 设为 10 秒以形成“lease 已可观察、provider 尚未 submitted”的确定性窗口；该变量默认 0、最大 30 秒，验收结束必须只用基础 `compose.generation.yml` 强制重建并确认恢复 0，不能把测试延迟留在常驻 Worker。
 
-## eval 覆盖对照
-
-| 计划项 | 用例 |
-|---|---|
-| A0-T6 契约 + 可替换 backend | smoke（ModelBackend 形状）+ FakeModel 驱动全流程 |
-| A0-T7 阶段约束（5 类非法动作模型外被拒） | 对抗 1/1b（跳过审批）/ 2（重复生图）/ 3（改预算）/ 4（shell）/ 5（跨 Run 读）+ 端到端 shell 注入 |
-| 智能精修四能力 | 结构化意图 / 参考图职责 / 分维度评分 / 至多精修一次（4a happy + 4b 封顶） |
-| V0-T3 caption fixture（5 场景） | 单一方向 / 多个方向 / 内容主题误判 / 反推缺失 / 超大数据集 |
-
-## 已知配置与后续项
-
-A1 前置已完成，当前能力边界：
-- DeepSeek 文本回合真实 tool-calling + usage 已通过；`deepseek-v4-flash` 默认 thinking 会拒绝 `tool_choice=required`，adapter 已显式发送 `thinking.type=disabled` 并通过真实探针、A3-T7 与 VPS 部署验证
-- Vision + Seedream 已完成 VPS 真实出站与同 Run 修订 E2E；区域/时延/并发仍需发布级压测
-- `credit_hold` 预算预授权、Agent 原子终态结算与 DeepSeek 文本回合可信 usage/ledger 已统一
-- FeaturePolicy 正式字段与首版预算选项已统一上线；对外定价归属仍待运营确认
-- VPS 单容器四类消费循环、容器资源/PID/日志约束和无内容健康监控已部署；数据库容量门槛与 Worker 重启租约恢复已验收
-
-计量已使用服务端费率与可信 usage/ledger，早期 M0 固定动作 fixture 不作为生产定价。
-
-## 文件结构
-
-```
-src/
-  contracts/      v1 契约（model/skill/snapshot/tools/events/clarification/preference/visual-profile/run）
-  kernel/         门控 + 动态 Runner + 可恢复 RunEngine + durable tool dispatcher
-  cloud-agent/    poll/claim/heartbeat consumer 与 controlled-image-edit Run processor
-  control-plane/  Worker Token 控制面、对象/checkpoint/tool ledger 客户端
-  fakes/          FakeModel / FakeTools（确定性）
-  providers/      DeepSeek ModelBackend（文本回合）+ Ark Seedream 受控步骤执行器
-  local/          开发态 checkpoint step runner + stdin/stdout CLI
-  skills/
-    smart-refinement/        M0 可运行 Skill（manifest.ts + skill.json）
-  visual/          evidence/scope/extract/batch（纯函数，不读图）
-  fixtures/        visual-captions.ts（5 场景）+ DeepSeek 脱敏 spike 结果
-  spikes/          真实 DeepSeek 两回合 tool-calling 验证（只输出安全摘要）
-  eval/            runner.ts + *.eval.test.ts（smoke/smart-refinement/adversarial/visual-fixtures）
-  types/           node-ambient.d.ts（零依赖类型声明）
-```
+</details>

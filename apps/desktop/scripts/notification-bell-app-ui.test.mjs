@@ -20,10 +20,10 @@ try {
   const bell = page.getByRole('button', { name: /^通知/ });
   await bell.waitFor();
   assert.equal(await bell.count(), 1, 'one topbar bell across the real application');
-  const slot = await page.locator('.topbar-update-slot').boundingBox();
+  assert.equal(await page.locator('.topbar-update-slot').count(), 0, 'no update leaves no empty topbar slot');
   const bellBox = await bell.boundingBox();
   const account = await page.locator('.topbar-account-trigger').boundingBox();
-  assert.ok(slot.x + slot.width <= bellBox.x + 1 && bellBox.x + bellBox.width <= account.x + 1, 'bell preserves update slot and sits before Bcoin');
+  assert.ok(bellBox.x + bellBox.width <= account.x + 1, 'bell sits before the account button');
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库' }).click();
   const composer = page.getByRole('region', { name: '素材库创作', exact: true });

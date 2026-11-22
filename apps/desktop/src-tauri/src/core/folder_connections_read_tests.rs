@@ -121,7 +121,7 @@ fn scoped_pages_and_aggregated_counts_match_legacy_with_history_filters_and_sepa
         if separated { f.db.dissolve_generation_group(Some("a-00002"), None).unwrap(); }
         for project in [None, Some("scope")] {
             for media in [None, Some("images"), Some("texts")] {
-                for filter in [ConnectionFilter::default(), ConnectionFilter { grouped:true, ..Default::default() }, ConnectionFilter { grouped:true, generated:Some(true), color:None }, ConnectionFilter { grouped:true, generated:Some(false), color:Some("red".into()) }] {
+                for filter in [ConnectionFilter::default(), ConnectionFilter { grouped:true, ..Default::default() }, ConnectionFilter { grouped:true, generated:Some(true), color:None, ..Default::default() }, ConnectionFilter { grouped:true, generated:Some(false), color:Some("red".into()), ..Default::default() }] {
                     let counts = f.db.connection_folders_filtered(project,media,&filter).unwrap().into_iter().map(|f| (f.id,f.count)).collect::<Vec<_>>();
                     assert_eq!(counts, legacy_counts(&f.db,project,media,&filter));
                     for folder in [None, Some("current"), Some("other")] {

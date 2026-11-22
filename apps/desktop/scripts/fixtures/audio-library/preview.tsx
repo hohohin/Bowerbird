@@ -131,7 +131,7 @@ function Fixture() {
   w.openMutationDialog = (kind: string) => { w.assets[0].source = kind === "delete-reference" ? "external" : "imported"; setMutationDialog(kind); };
   return <>
     {params.has("reference") && <div style={{ position: "fixed", inset: 0, display: "flex" }}>
-      {connected ? <ConnectedCollections kind="all" media="audios" projectId="p" onClose={() => {}}/> : <CategorizedLibrary kind="all" media="audios" projectId="p" onClose={() => {}}/>}
+      {connected ? <ConnectedCollections media="audios" projectId="p" onClose={() => {}}/> : <CategorizedLibrary kind="all" media="audios" projectId="p" onClose={() => {}}/>}
     </div>}
     {!params.has("guards") && !params.has("reference") && <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
       <Toolbar localFilesOpen canvasMode={false} onCanvasModeChange={() => {}} onRefresh={async () => {}} onCreateCreative={() => {}}/>

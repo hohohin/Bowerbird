@@ -51,7 +51,7 @@ const scroller = () => pane().locator(".catalog-scroller");
 const dialog = () => page.getByRole("dialog", { name: "以文搜图", exact: true });
 const entry = () => pane().getByRole("button", { name: "以文搜图", exact: true });
 const field = () => dialog().getByRole("textbox", { name: "描述想找的图片" });
-const view = name => page.getByRole("tablist", { name: "素材视图切换条", exact: true }).getByRole("tab", { name, exact: true });
+const view = key => page.getByRole("tab").and(page.locator(`[data-tab-value="${key}"]`));
 const click = name => dialog().getByRole("button", { name, exact: true }).click();
 const card = id => pane().locator(`[data-asset-id="${id}"]`);
 async function open(host = pane()) {
@@ -213,7 +213,7 @@ try {
 
   await open();
   await submit("离开范围");
-  await view("标签分类").click();
+  await view("tags").click();
   await entry().waitFor({ state: "hidden" });
   await answer("离开范围", ["old-scope"]);
   await page.waitForFunction(() => window.requests.some(request => request.command === "semantic_search_cancel" && request.args.sessionId === "离开范围"));
@@ -221,7 +221,8 @@ try {
 
   await page.setViewportSize({ width: 460, height: 720 });
   await page.goto(`${fixture}?navigation&semantic`);
-  await view("项目素材").click();
+  await view("project").click();
+  await view("flow").click();
   await pane().locator("[data-asset-id]").first().waitFor();
   await page.evaluate(() => { document.documentElement.dataset.theme = "light"; window.semanticModelState = "ready"; window.semanticIndexState = "running"; });
   await open();
@@ -246,7 +247,8 @@ try {
   await page.setViewportSize({ width: 1360, height: 760 });
   await page.goto(`${fixture}?split`);
   await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
-  await view("全部素材").click();
+  await view("global").click();
+  await view("flow").click();
   await page.getByRole("button", { name: "向右分栏" }).click();
   await page.evaluate(() => { window.semanticModelState = "ready"; window.semanticIndexState = "running"; });
   for (const [index, text] of ["左栏", "右栏"].entries()) {

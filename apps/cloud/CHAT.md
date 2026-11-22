@@ -1,10 +1,17 @@
 # DSH · Cloud 对话
 
+## 现行 v2 接口
+
+- 桌面通过统一 Cloud 网关调用 `chat-proxy`。`quote` 以用户 JWT 查询 `dsh-cloud` 及 `dsh_vps_v2_available`，并声明可用工具字段。只有标记试用账号可新开免费轮次。
+- `create` 携带 `dsh-vps-v2`、幂等键、`conversation_id`、本轮一条用户消息和当轮工具／技能配置。并行新建同一会话会被拒绝。独立工作流轮次使用新的 `t-` 会话 ID。客户端通过受控编译器完成建卡并走 `tool_result` 回执。
+- `get` 按原用户、job ID 或幂等键读取。`cancel` 停止原任务。旧 completion 与 v1 新单返回 426，已受理任务按原协议查单或结算；取消或结果未知按原任务身份处理。
+- `chat-worker` 校验专用 Worker Token 和租约。数据库派生账号隔离的会话键，Worker 按上次成功任务的原生快照续聊。持久会话卷只存原生会话状态，临时输入与输出沿私有 Storage 生命周期清理，账本与用量事实独立保存。[Worker](../agent-worker/README.md) · [Cloud 部署](DEPLOY.md)
+
 ## 测试期与正式计费
 
 DSH · Cloud 当前处于 DSH 上云测试阶段，用户暂时免费使用。现行测试价为 **0 Bcoin**，上游模型费用由 Bowerbird 承担。
 
-正式收费按实际消耗的 token 计算。一轮对话触发多次模型调用时，累计当轮各次调用的实际用量，再按适用费率结算。首版 1.60 倍系数已确认，单轮授权上限和启费时间待验收及确认。0094 提供独立对话成本桶，测试期另以账号轮次限额和预留控制准入。
+正式收费按实际消耗的 token 计算。一轮对话触发多次模型调用时，累计当轮各次调用的实际用量，再按适用费率结算。首版 1.60 倍系数已确认，单轮授权上限和启费时间待验收及确认。0094 和 0095 已上线。0096 和配套付费路径是默认关闭的工程候选。
 
 ## 实际 Token 到 Bcoin 的映射草案
 
@@ -44,7 +51,7 @@ DSH · Cloud 当前处于 DSH 上云测试阶段，用户暂时免费使用。�
 - 配套顺序为单独应用 0095、部署 `chat-worker` Edge、切换带计量的 VPS Worker。0095 依赖 0089 的 v2 会话身份，可在 0094 之前应用。旧 Edge 未宣告支持时新 Worker 继续旧协议，旧 Worker 可读取新版领取响应。混合版本期间的真实用量须按对应调用证据核对。
 - 本地验收覆盖原生 PostgreSQL 18.7 的并发、重放、权限、跨日和零额结算，Deno Edge 的 Worker 令牌和 RPC 协议，以及实际 DSH ACP 的默认 Flash、显式 Flash／Pro、压缩多次调用和观测回执重放。代理回归覆盖分片或冲突用量、取消后的零上游请求及既有 Agent 行为。模型响应用合成夹具提供。
 - 2026-11-20 经用户批准部署，北京时间 23:41 数据库读回确认 0095、强制 RLS 和 Worker RPC 权限。`chat-worker` v8 升至 v9，三份源码与定向制品一致，错误令牌返回 401，`chat-proxy` 保持 v12。沿用现役镜像的四文件覆盖件在 VPS 断网容器通过实际 DSH ACP 合成测试。五类队列均为空后，于 23:42:58 切换至镜像 `sha256:5591562270ee809b13b912b5c3821e90a9155b2680e65b81cf38b91acc4ed8df`。宿主与容器文件、配置摘要和启动状态通过核验，保留 DSH 依赖和现役语音转录版本。
-- 生产读回确认 0094 尚未应用，现行唯一启用的对话报价仍为 0 Bcoin。Worker 错误令牌返回 401，持有效令牌回报不存在的任务租约返回 409。部署后四个带启动事件的消费循环已启动，控制面错误、重启与 OOM 均为零。11 月 20 日 23:44:16、23:46:08、23:59:35 及 11 月 21 日 00:17:07、00:57:31 的只读采样均无自然对话用量及对应结算。隔离测试已验证逐次记录与零额流水，首条生产自然样本待观察。本次部署验收未主动发起模型请求。
+- 0095 当次生产读回时 0094 尚未应用，现行唯一启用的对话报价仍为 0 Bcoin。Worker 错误令牌返回 401，持有效令牌回报不存在的任务租约返回 409。部署后四个带启动事件的消费循环已启动，控制面错误、重启与 OOM 均为零。11 月 20 日 23:44:16、23:46:08、23:59:35 及 11 月 21 日 00:17:07、00:57:31 的只读采样均无自然对话用量及对应结算。隔离测试已验证逐次记录与零额流水，首条生产自然样本待观察。本次部署验收未主动发起模型请求。
 - 回退先将组合 Worker 恢复到 `bowerbird/generation-worker:rollback-chat-metering-0095-20261120`。原镜像为 `f8ac9a4bb014…`，四份宿主源文件和脚本在 `/opt/bowerbird/deploy-backups/dsh-model-metering-0095-20261120/`。检查五类队列后运行该目录下的 `worker-release.sh restore`。如需回退 Edge，使用预检包 `edge-before` 中的 v8 源码按原配置重新部署。保留 0095 用量表和已记录的观测。生产读回与断网回执在 `.tmp/dsh-model-metering-0095-preflight/`。
 
 <a id="对话日额度与成本分桶0094-候选待部署确认"></a>
@@ -68,6 +75,13 @@ DSH · Cloud 当前处于 DSH 上云测试阶段，用户暂时免费使用。�
 - 0095 上线后再次只读核对，0094 和专用对话桶仍未生效。核对现役 `reserve_managed_usage` 与 0066 一致，隔离 PostgreSQL 复跑先 0095 再 0094。基于现役 `chat-proxy` v12 准备定向候选，保留六个共享依赖，Deno 四项验证通过。临时关闭 v2 建单时，已有请求仍可按原键或任务 ID 查询、取消和完成结算。账号日轮次与平台日成本上限可独立配置。两个上线值及开启范围仍待确认。
 - 2026-11-21 补齐可选试用账号门控。`CHAT_DSH_VPS_V2_TEST_ONLY=true` 时，报价能力与新建 v2 请求均要求 Supabase Auth 的 `app_metadata.bowerbird_test` 为布尔 `true`。默认关闭，沿用现役登录账号范围。未获准账号发起或按原键重发 `create` 返回 403，现有任务可按键或 ID 查询、取消、提交已有工具回执和完成结算，结果保留期沿用原规则。仓库和基于现役 v12 的独立候选分别通过 4 项 Deno 回归，覆盖默认范围、不可由用户编辑的数据标记及原单行为。门控尚未启用。
 - 钉版 DSH 的合成请求复核了 Flash、Pro、最大思考强度、建卡与压缩，普通请求 `max_tokens` 为 393,216，压缩为 8,192。假设直接按官方峰时标价、单选项、每次总上下文不超 1,048,576、输出不超 393,216、输入全冷，公开标价的 12 次普通调用计算值为 Flash 约 ¥53.48、Pro 约 ¥198.18。此处按钉版请求规格估算，当前代理未独立强制该输出值，尚无供应商实账样本。¥500 控制的是固定预留桶，单轮按 ¥24 预留。以上支持讨论免费试用范围及新轮数，实际支出上限需单独设计和验证。[DeepSeek 官方人民币计价](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)
+
+## 历史协议与部署流水
+
+以下记录包含切换前的报价、部署顺序和已退役协议。新单按本页开头的 v2 契约执行。
+
+<details>
+<summary>展开部署记录与旧协议</summary>
 
 ## 2026-11-18 续聊恢复修复已部署
 
@@ -126,7 +140,7 @@ DSH · Cloud 当前处于 DSH 上云测试阶段，用户暂时免费使用。�
 
 18 项线上检查通过，一次真实回复记录 521 输入／5 输出 tokens、唯一 confirm(0)，重放与原键查询未增加任务，余额保持；临时 Auth 已清理。0078 后补 0077 的兼容演练与线上定义回查确认既有计费／赠币不变；18 项 Worker 回归、Deno、候选断网导入及 7 份 Edge 文件读回通过。完整记录、全量 typecheck 的既有测试声明阻断和验证边界见 [行动记录](../../project_logs/2026-11-07-cloud-chat.md)，发布／回退详情见 [部署指引](DEPLOY.md#2026-11-07-cloud-对话已部署0-bcoin)。
 
-## 接口
+## 旧 completion 接口
 
 `chat-proxy` 使用用户 JWT；仅支持 POST：
 
@@ -136,7 +150,7 @@ DSH · Cloud 当前处于 DSH 上云测试阶段，用户暂时免费使用。�
 
 任务响应包含 `job_id,status,charge`；成功额外包含原生 `message`、`usage`、`model`。状态为 `uploading/queued/running/succeeded/failed/outcome_unknown`。消息含 `tool_calls` 时由桌面现有受控编译器执行，再把工具回执作为下一次 completion 输入。`tools_enabled=false` 用于纯聊；它不授予任何本机建卡权益。
 
-## 计费、恢复和内容生命周期
+## 旧 completion 计费、恢复和内容生命周期
 
 - 0077 迁移创建测试价 **0 Bcoin** 服务。仍原子创建 `credit_holds`、预留用量、成功 `credit_confirm(0)`，零确认流水可审计。只放开 `chat_deepseek` 的零预授权，其他服务约束保留。
 - 当前客户端契约只接受零测试价。服务端目录改为非零后，quote 不可用，新 create 拒绝。正式启价需要支持实际 token 用量结算，并补齐一轮内多次模型调用的预算确认。
@@ -144,7 +158,7 @@ DSH · Cloud 当前处于 DSH 上云测试阶段，用户暂时免费使用。�
 - 生产零价仍启用账号分钟频率与全局成本限制。目录 `provider_cost_reserve_micros=2000000` 为每次保守内部成本预留。真实 tokens 与模型身份作为独立元数据保留。独立对话桶见上方 0094 候选。
 - 请求仅暂存私有 `generation-temp/chat/.../request.json`；Worker 使用 180 秒签名 URL 并核对 SHA-256。24 小时后删除请求对象与临时结果；持久保留任务身份、usage 和计费事实，本地已保存历史不受影响。未开始的过期任务退款，已提交但结果未知的任务保留待核对。
 
-## 配套上线顺序
+## 旧 completion 的初次上线顺序
 
 1. 单独审核并应用 `0077_chat_completions.sql`；不要用无筛选 `db push` 顺带应用历史未批准迁移。
 2. 部署 `chat-proxy`（JWT 校验）与 `chat-worker --no-verify-jwt`（函数内恒定时间校验专用 `CHAT_WORKER_TOKEN`）。`CHAT_ENABLED` 默认关闭。
@@ -160,3 +174,5 @@ DSH · Cloud 当前处于 DSH 上云测试阶段，用户暂时免费使用。�
 4. 离线验证入口：`node apps/cloud/scripts/chat-db.test.mjs <PGlite dist/index.js>`；`node --test src/cloud-chat/runtime.test.ts src/providers/deepseek/backend.test.ts`（agent-worker）；`npm run typecheck`；`deno check .../chat-proxy/index.ts .../chat-worker/index.ts`。
 
 以上为最初源码阶段记录；2026-11-07 已完成本文顶部记录的部署与一次真实模型验收。
+
+</details>

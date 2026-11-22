@@ -2,11 +2,14 @@
 
 Bowerbird Cloud 承载账号、积分和官方 API 托管算力。素材库、提示词库、`library.db`、原图与缩略图不做云同步，也不会形成云端资产库。
 
-用户只有在明确选择 **Bowerbird Cloud** 生成或理解时，所选参考图与提示词才会发送给官方模型 API。图片生成与理解（`UNDERSTAND_ASYNC=true` 后）都会把本次请求加密传输后暂存在私有 `generation-temp` Storage（默认 24 小时 TTL），供受限 VPS Worker 领取并在 Edge 墙钟之外等待方舟，数据库只存对象 key、哈希、状态与理解结果文本（内容过期后清空），不存提示词或图片字节。日志不得记录内容，桌面确认下载后记录接收状态并由清理任务删除临时对象。`UNDERSTAND_ASYNC=false` 时理解仍走旧的单次 Edge 同步请求（110s 上游截断），作为异步链路上线前的回退。
+用户明确提交 Cloud 任务时，所选输入才按服务契约传输；批量托管分类也按用户选定的范围发送必要图片。图片生成与理解（`UNDERSTAND_ASYNC=true` 后）都会把本次请求加密传输后暂存在私有 `generation-temp` Storage（默认 24 小时 TTL），供受限 VPS Worker 领取并在 Edge 墙钟之外等待方舟，数据库只存对象 key、哈希、状态与理解结果文本（内容过期后清空），不存提示词或图片字节。日志不得记录内容，桌面确认下载后记录接收状态并由清理任务删除临时对象。`UNDERSTAND_ASYNC=false` 时理解仍走旧的单次 Edge 同步请求（110s 上游截断），作为异步链路上线前的回退。
 
-## 当前阶段
+## 当前服务
 
-Supabase、火山方舟与桌面/官网真实 Cloud 闭环已上线并验收；算力 `BOWERBIRD_CLOUD_MOCK=false`。支付因备案/商户资质暂停，保持 `BOWERBIRD_PAYMENT_MOCK=true`。`.env.local` 永不提交；变量全集见 [.env.example](.env.example)。
+- 生成、理解、分层和视频的线上范围查 [部署手册](DEPLOY.md) 和 [PROJECT.md](../../PROJECT.md#目前进展)。生产算力使用真实 adapter。
+- 微信支付 Native v3 已开放公开购买。商户配置、回调、退款和日账见 [微信支付](WECHATPAY.md)。Mock 适配仅供隔离开发，生产购买状态由服务端配置管理。
+- [DSH · Cloud v2](CHAT.md) 是桌面对话及 Agent 卡片的云端通路。异步 Agent Run 使用 [统一 Harness](../../dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md)，保持 test-only。
+- 本机环境变量见 [.env.example](.env.example)，将实际凭据保存在 Git 忽略的配置中。
 
 桌面端 URL/publishable key 由 `apps/desktop/src-tauri/build.rs` 在构建时从构建环境或 gitignored `apps/cloud/.env(.local)` 读取并内置。用户设置不暴露或覆盖这些基础设施参数；Mock/真实 adapter 仍只由 Edge Function Secret 决定。
 
@@ -47,7 +50,7 @@ supabase functions serve --env-file .env.local
 
 ## 验证
 
-P1 数据层：
+本地账务回归：
 
 ```bash
 cd apps/cloud
@@ -56,9 +59,9 @@ psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f supabase/tests/billing.sql
 node scripts/test-billing.mjs
 ```
 
-`billing.sql` 覆盖注册首日 30 分、daily grant 幂等、FIFO、hold/confirm/rollback、余额不足、append-only 流水和客户端权限；Node 脚本让 20 个并发请求竞争同一幂等键，必须只产生一个 hold。
+`billing.sql` 覆盖旧赠币账本兼容、FIFO、hold/confirm/rollback、余额不足、append-only 流水和客户端权限；Node 脚本让 20 个并发请求竞争同一幂等键，必须只产生一个 hold。
 
-当前开发机器已可使用 Docker Desktop/WSL2 与 Supabase CLI。2026-09-01 已从空库执行 migration `0001`–`0050`，并以容器内 `psql -v ON_ERROR_STOP=1` 跑通 `supabase/tests/agent_runtime.sql` 39/39；事务型 SQL 仍必须真实执行，不能用静态检查替代。
+事务型 SQL 在隔离 PostgreSQL 中验证。PGlite 账务回归及 Edge 入口见 [验证命令速查](../../AGENTS.md#常用验证命令速查)。
 
 P2 Edge Functions（Supabase CLI/Deno 可用后）：
 
@@ -70,13 +73,7 @@ curl -H "Authorization: Bearer $TEST_ACCESS_TOKEN" \
   "$SUPABASE_URL/functions/v1/entitlement"
 ```
 
-支付 Mock 契约（P7）：
-
-```bash
-node scripts/test-payment.mjs
-```
-
-覆盖：错误签名拒绝、paid 重放幂等、paid→refunded 确定状态。真实 superun/Paddle 联调必须在商户凭据与官方 webhook 文档到位后单独进行。
+生产支付契约的定向验证见 [微信支付验证记录](WECHATPAY.md#验证记录)。
 
 已定义的契约：
 

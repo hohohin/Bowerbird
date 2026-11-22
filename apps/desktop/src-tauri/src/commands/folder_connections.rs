@@ -486,7 +486,7 @@ fn allow_entries(app: &AppHandle, entries: &[ConnectionEntry]) -> AppResult<()> 
 pub async fn connection_entries(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
-    folder_id: String,
+    folder_id: Option<String>,
     offset: i64,
     limit: i64,
     media: Option<String>,
@@ -500,7 +500,7 @@ pub async fn connection_entries(
         let started = Instant::now();
         let filter = filter.unwrap_or_default();
         let ids = db.connection_entry_ids_filtered(
-            Some(&folder_id),
+            folder_id.as_deref(),
             project_id.as_deref(),
             media.as_deref(),
             offset,

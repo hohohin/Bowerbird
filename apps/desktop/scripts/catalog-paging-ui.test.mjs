@@ -104,8 +104,6 @@ try {
   await page.locator('[data-tag-section="last"] [data-asset-id="asset-299940"]').waitFor();
   assert.ok(await cards().count()<180);
   await page.screenshot({path:'.tmp/catalog-paging/300k-tag-jump.png'});
-  await page.evaluate(()=>window.changeKind('collections')); await ready();
-  assert.ok(await page.evaluate(()=>window.requests.some(r=>r.command==='catalog_page'&&r.args.filter.kind==='collections'&&r.args.filter.id==='collection')));
   await page.evaluate(()=>window.changeProject(true)); await ready();
   assert.ok(await page.evaluate(()=>window.requests.filter(r=>r.command==='catalog_page').at(-1).args.filter.projectId==='p'));
   await page.setViewportSize({width:440,height:720}); await ready();

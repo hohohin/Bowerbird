@@ -7,7 +7,8 @@ import { useStore } from "../store";
 import type { CatalogKind } from "../lib/materialCatalog";
 import "./LibraryCatalogTransition.css";
 
-type Props = ComponentProps<typeof CategorizedLibrary>;
+type Props = Omit<ComponentProps<typeof CategorizedLibrary>, "kind" | "browseProjectId" | "projectScope">;
+type View = { kind: CatalogKind; key: string; browseProjectId: string | null; projectScope: boolean };
 const DURATION = 790;
 const EASE = "cubic-bezier(.65,0,.35,1)";
 const at = (time: number, values: Keyframe, easing = EASE): Keyframe => ({ ...values, offset: time / DURATION, easing });
@@ -16,28 +17,34 @@ export function LibraryCatalogTransition(props: Props) {
   const mode = useLibraryModeStore();
   const source = mode(s => s.source);
   const browseProjectId = mode(s => s.browseProjectId);
-  const picking = mode(s => s.projectPickerOpen);
+  const lens = mode(s => s.lens);
   const projects = useStore(s => s.projects);
-  const projectScope = source === "project" && props.kind !== "collections";
+  const projectScope = source === "project";
   const selectedProject = projects.find(project => project.id === browseProjectId && !project.archived_at && (!project.provisional || project.id === props.projectId));
-  const picker = projectScope && (picking || !selectedProject);
+  const picker = projectScope && !selectedProject;
   const root = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState({ kind: props.kind, previous: null as CatalogKind | null, sequence: 0 });
-  if (view.kind !== props.kind) {
-    const animate = view.kind !== "all" && props.kind !== "all" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
-    setView({ kind: props.kind, previous: animate ? view.kind : null, sequence: view.sequence + 1 });
+  const kind = source === "folders" ? "collections" : lens === "tags" ? "tags" : "all";
+  const key = JSON.stringify([source, kind, projectScope ? browseProjectId : null, props.media]);
+  const current: View = { kind, key, browseProjectId: projectScope ? browseProjectId : null, projectScope };
+  const [view, setView] = useState({ current, previous: null as View | null, sequence: 0 });
+  if (view.current.key !== key) {
+    const animate = !picker && view.current.kind !== kind && view.current.kind !== "all" && kind !== "all"
+      && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    setView({ current, previous: animate ? view.current : null, sequence: view.sequence + 1 });
   }
   const finish = useCallback(() => setView(value => ({ ...value, previous: null })), []);
   return <div ref={root} className="library-catalog-transition" aria-busy={view.previous !== null}>
     {picker ? <div className="library-catalog-layer"><section className="categorized-library library-tactical library-project-picker" data-file-import-project-id="">
       <div className="file-view-heading">{props.navigation}</div>
-      <div className="catalog-body"><ProjectManagerPanel active selection={{ id: selectedProject?.id ?? null, onSelect: mode.getState().selectProject,
-        onCancel: selectedProject ? () => mode.getState().setProjectPickerOpen(false) : undefined }}/></div>
-    </section></div> : (["all", "tags", "collections"] as const).filter(kind => kind === view.kind || kind === view.previous).map(kind => {
-      const outgoing = kind === view.previous;
-      return <div key={`${kind}:${projectScope ? browseProjectId : "global"}`} className="library-catalog-layer" data-outgoing={outgoing || undefined} aria-hidden={outgoing || undefined}
+      <div className="catalog-body"><ProjectManagerPanel active selection={{ id: null, onSelect: mode.getState().selectProject }}/></div>
+    </section></div> : [view.previous, view.current].map(layer => {
+      if (!layer) return null;
+      const outgoing = layer === view.previous;
+      const layerProps = { ...props, onAssetsChange: outgoing ? undefined : props.onAssetsChange };
+      return <div key={layer.key} className="library-catalog-layer" data-outgoing={outgoing || undefined} aria-hidden={outgoing || undefined}
         ref={element => { if (element) element.inert = outgoing; }}>
-        {kind === "collections" ? <ConnectedCollections {...props} projectScope={false} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/> : <CategorizedLibrary {...props} browseProjectId={browseProjectId} projectScope={projectScope} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/>}
+        {layer.kind === "collections" ? <ConnectedCollections {...layerProps}/> : <CategorizedLibrary {...layerProps}
+          browseProjectId={layer.browseProjectId} projectScope={layer.projectScope} kind={layer.kind}/>}
       </div>;
     })}
     {view.previous && <SidebarInstall key={view.sequence} root={root} onFinish={finish}/>}

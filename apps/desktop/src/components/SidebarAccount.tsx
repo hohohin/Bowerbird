@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, CircleArrowUp, Coins, LogIn, LogOut, Settings, Zap } from "lucide-react";
+import { ChevronDown, ChevronUp, CircleArrowUp, Coins, Download, LogIn, LogOut, Settings, Zap } from "lucide-react";
 import { useStore } from "../store";
 import { accountEntitlement, understandReady } from "../lib/entitlement";
 import type { SettingsRequest, SettingsSection } from "../lib/types";
-import { useAppUpdater } from "../lib/appUpdater";
+import { updateDownloadPercent, useAppUpdater } from "../lib/appUpdater";
 import { NotificationBell } from "./NotificationBell";
 import { AccountLogoutConfirmation } from "./AccountLogoutConfirmation";
 
@@ -20,8 +20,9 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const topbar = placement === "topbar";
   const compact = topbar || collapsed;
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const update = useAppUpdater(s => s.update);
-  const updatePhase = useAppUpdater(s => s.phase);
+  const updateVersion = useAppUpdater(s => topbar ? s.update?.version : undefined);
+  const updatePhase = useAppUpdater(s => topbar ? s.phase : "idle");
+  const updatePercent = useAppUpdater(s => topbar && s.phase === "downloading" ? updateDownloadPercent(s) : null);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudBusy = useStore((s) => s.cloudBusy);
@@ -46,7 +47,13 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const tier = current?.tier.toUpperCase() ?? "";
   const hasIssue = !!current && !understandReady({ cloudEntitlement, codexHealth, cloudAuth });
   const gearLabel = hasIssue ? "设置，反推模型未就绪" : "设置";
-  const updateLabel = `${updatePhase === "downloading" ? "正在下载更新" : updatePhase === "ready" ? "更新已就绪" : updatePhase === "installing" ? "正在安装更新" : updatePhase === "installed" ? "重启完成更新" : "发现新版本"} ${update?.version ?? ""}`;
+  const downloadingUpdate = updatePhase === "downloading";
+  const installIcon = updatePhase === "ready" || updatePhase === "installing" || updatePhase === "installed";
+  const updateStatus = downloadingUpdate ? "正在下载更新"
+    : updatePhase === "ready" ? "更新已就绪"
+    : updatePhase === "installing" ? "正在安装更新"
+    : updatePhase === "installed" ? "重启完成更新" : "发现新版本";
+  const updateLabel = `${updateStatus} ${updateVersion ?? ""}${updatePercent === null ? "" : ` · ${updatePercent}%`}`;
 
   const interacting = open || settingsOpen || logoutUserId !== null;
   useEffect(() => {
@@ -87,12 +94,18 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
 
   return (
     <div ref={rootRef} className={topbar ? "topbar-account" : `relative border-t border-edge px-1 pb-1 pt-2 ${collapsed ? "mt-auto w-full" : "mt-2"}`}>
-      {topbar && <span className="topbar-update-slot">
-        {update && <button type="button" className="topbar-update-button"
+      {topbar && updateVersion && <span className="topbar-update-slot">
+        <button type="button" className="topbar-update-button" data-install-icon={installIcon || undefined}
           title={updateLabel} aria-label={updateLabel} aria-haspopup="dialog" aria-expanded={settingsOpen && settingsOrigin?.trigger === "update"}
-          onClick={() => openSettings("about", "update")}>
-          <CircleArrowUp size={18} aria-hidden="true" />
-        </button>}
+          onClick={() => openSettings("system", "update")}>
+          {installIcon ? <CircleArrowUp size={18} aria-hidden="true" /> : <Download size={downloadingUpdate ? 14 : 18} aria-hidden="true" />}
+          {downloadingUpdate && <svg className={`topbar-update-ring${updatePercent === null ? " motion-safe:animate-spin" : ""}`}
+            width="24" height="24" viewBox="0 0 24 24" fill="none" strokeWidth="1.5" aria-hidden="true">
+            <circle className="topbar-update-track" cx="12" cy="12" r="10" />
+            <circle className="topbar-update-progress" cx="12" cy="12" r="10" pathLength="100"
+              strokeDasharray={`${updatePercent ?? 25} 100`} strokeLinecap="round" transform="rotate(-90 12 12)" />
+          </svg>}
+        </button>
       </span>}
       {topbar && <NotificationBell />}
       {open && (

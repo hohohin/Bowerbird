@@ -12,6 +12,7 @@ import { ModalShell } from "./ModalShell";
 import { RedeemCodeCard } from "./RedeemCodeCard";
 import { ScreenshotSettings } from "./ScreenshotSettings";
 import { AppUpdateCard } from "./AppUpdateCard";
+import { useAppUpdater } from "../lib/appUpdater";
 import { fileWorkspace } from "../lib/fileWorkspace";
 import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 import { CreditDetails } from "./CreditDetails";
@@ -243,7 +244,8 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
   const section = sections.some(item => item.key === selectedSection) ? selectedSection : "account";
   const modelIssue = !!current && !cloudUsable && !codexUsable && codex.busy !== "check";
   const cliBusy = [codex.busy, dreamina.busy].some(operation => operation === "auth" || operation === "logout") || dshBusy;
-  const preventClose = migrating || fileMoveOpen || picking || cliBusy;
+  const installingUpdate = useAppUpdater(s => s.phase === "installing");
+  const preventClose = migrating || fileMoveOpen || picking || cliBusy || installingUpdate;
   useLayoutEffect(() => { if (content.current) content.current.scrollTop = 0; }, [section]);
   useLayoutEffect(() => {
     if (section !== "models") savePrompt();
@@ -297,6 +299,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
           </p>}
           {section === "system" && (
             <>
+              <AppUpdateCard version={appVersion} migrating={preventClose} />
               {/* 外观：后端 settings.json 持久化；夜间模式沿用原有黑色 UI。 */}
               <div className="settings-card px-3 py-2.5">
                 <div className="text-ink">外观</div>
@@ -657,18 +660,15 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
           )}
 
           {section === "about" && (
-            <>
-              <AppUpdateCard version={appVersion} migrating={preventClose} />
-              <div className="settings-card flex items-center justify-between px-3 py-2.5">
-                <span className="text-ink">关于 Bowerbird</span>
-                <button
-                  onClick={() => void open(WEBSITE_URL)}
-                  className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
-                >
-                  前往官网 ↗
-                </button>
-              </div>
-            </>
+            <div className="settings-card flex items-center justify-between px-3 py-2.5">
+              <span className="text-ink">关于 Bowerbird</span>
+              <button
+                onClick={() => void open(WEBSITE_URL)}
+                className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
+              >
+                前往官网 ↗
+              </button>
+            </div>
           )}
 
           {section === "developer" && isTestAccount && (

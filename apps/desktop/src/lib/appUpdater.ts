@@ -11,8 +11,6 @@ interface AppUpdaterState {
   total: number | null;
   error: string | null;
   startupChecked: boolean;
-  startupPrompt: boolean;
-  dismissStartupPrompt: () => void;
   check: (options?: { startup?: boolean; background?: boolean }) => Promise<void>;
   download: () => Promise<void>;
   install: (beforeInstall: () => Promise<void>) => Promise<void>;
@@ -21,12 +19,15 @@ interface AppUpdaterState {
 
 let backgroundChecking = false;
 
+export function updateDownloadPercent({ downloaded, total }: Pick<AppUpdaterState, "downloaded" | "total">) {
+  return total && total > 0 ? Math.min(100, Math.floor(downloaded / total * 100)) : null;
+}
+
 // Keep the resource and progress across closing/reopening Settings. Nothing is
 // persisted: after an app restart the release must be checked and verified again.
 export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
   phase: "idle", update: null, downloaded: 0, total: null, error: null,
-  startupChecked: false, startupPrompt: false,
-  dismissStartupPrompt: () => set({ startupPrompt: false }),
+  startupChecked: false,
   check: async ({ startup = false, background = false } = {}) => {
     // Session-only guard also covers StrictMode and component remounts.
     if (startup) {
@@ -36,7 +37,7 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
     const before = get();
     if (!["idle", "current", "available"].includes(before.phase)) return;
     if (background) {
-      if (backgroundChecking || before.startupPrompt) return;
+      if (backgroundChecking) return;
       backgroundChecking = true;
     } else {
       set({ phase: "checking", error: null });
@@ -51,8 +52,8 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
         await update?.close().catch(() => {});
         return;
       }
-      set({ update, phase: update ? "available" : "current", downloaded: 0, total: null,
-        startupPrompt: startup && update !== null, error: null });
+      set({ update, phase: update ? "available" : "current", downloaded: 0, total: null, error: null });
+      if (update) void get().download();
       await before.update?.close().catch(() => {});
     } catch (error) {
       console.warn("[updater] check failed", error);

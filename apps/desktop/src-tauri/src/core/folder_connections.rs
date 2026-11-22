@@ -108,6 +108,7 @@ pub(crate) fn generated_connection_paths(paths: &LibraryPaths) -> Vec<PathBuf> {
 pub struct ConnectionFilter {
     pub generated: Option<bool>,
     pub color: Option<String>,
+    pub query: Option<String>,
     #[serde(default)]
     pub grouped: bool,
 }
@@ -124,7 +125,7 @@ impl ConnectionFilter {
     fn sql(&self, project: Option<&str>, media: Option<&str>) -> AppResult<(String, Vec<Value>)> {
         CatalogFilter { kind: "connections".into(), project_id: project.map(str::to_owned),
             media: media.unwrap_or("all").into(), generated: self.generated, color: self.color.clone(),
-            ..Default::default() }.sql()
+            query: self.query.clone(), ..Default::default() }.sql_with_entry_name(true)
     }
 }
 

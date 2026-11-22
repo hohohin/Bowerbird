@@ -14,7 +14,7 @@ registerHooks({
   },
 });
 const { mediaType, filterAssetsByMediaType } = await import("../src/lib/mediaFilter.ts");
-const { createLocalFileMode, catalogViews } = await import("../src/lib/localFileMode.ts");
+const { createLocalFileMode } = await import("../src/lib/localFileMode.ts");
 const { imageInputError, videoInputError, DEFAULT_VIDEO_OPTIONS } = await import("../src/lib/videoGeneration.ts");
 
 test("text originals never appear in image results, including uppercase and URL suffixes", () => {
@@ -31,20 +31,15 @@ test("text originals never appear in image results, including uppercase and URL 
   assert.equal(filterAssetsByMediaType(assets, null), assets);
 });
 
-test("text browsing remembers its independent view across all media and clears image filters", () => {
+test("text browsing keeps the project source and lens and clears the generated filter", () => {
   const mode = createLocalFileMode();
+  mode.getState().openSource("project");
+  mode.getState().setLens("tags");
   mode.getState().setGeneratedFilter("source:generated");
   mode.getState().setMedia("texts");
-  assert.equal(mode.getState().mode, "all");
+  assert.equal(mode.getState().source, "project");
+  assert.equal(mode.getState().lens, "tags");
   assert.equal(mode.getState().generatedFilter, null);
-  assert.deepEqual(catalogViews("texts"), ["all", "tags", "collections"]);
-  mode.getState().setCatalogView("collections");
-  mode.getState().setMedia("images");
-  assert.equal(mode.getState().mode, "tags");
-  mode.getState().setMedia("audios");
-  assert.equal(mode.getState().mode, "all");
-  mode.getState().setMedia("texts");
-  assert.equal(mode.getState().mode, "collections");
 });
 
 test("text is rejected as an image/video reference with a useful explanation", () => {

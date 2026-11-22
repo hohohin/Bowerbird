@@ -89,7 +89,7 @@ try {
           max: parseFloat(style.maxHeight), lines: (element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)) / parseFloat(style.lineHeight) };
       });
       const compact = await dimensions();
-      assert.ok(Math.abs(compact.lines - 4) < 0.15, `a short video prompt occupies four lines (legacy sizing: ${legacySizing})`);
+      assert.equal(compact.height, 64, `a short H3 prompt uses the compact prototype height (legacy sizing: ${legacySizing})`);
       const mediumText = Array.from({ length: 8 }, (_, index) => `第 ${index + 1} 行提示词`).join('\n');
       await prompt.fill(mediumText);
       const expanded = await dimensions();

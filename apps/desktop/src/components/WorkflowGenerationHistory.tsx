@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { History, Image as ImageIcon } from "lucide-react";
+import { History, Image as ImageIcon, List } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
 import { canvasSessionImages, workflowSessionIds } from "../lib/canvasSessionOutputs";
-import type { WorkflowNode } from "../lib/canvasWorkflow";
+import type { WorkflowNode, WorkflowRun } from "../lib/canvasWorkflow";
+import { notifyError, notifySuccess } from "../lib/notify";
 import type { Asset, CanvasNode } from "../lib/types";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { VideoPoster } from "./VideoPoster";
 import { isVideoPath } from "../lib/videoGeneration";
 
-export function WorkflowGenerationHistory({ node, graphNodes, onOpen }: {
-  node: WorkflowNode; graphNodes: CanvasNode[]; onOpen: (node: CanvasNode) => void;
+export function WorkflowGenerationHistory({ node, graphNodes, onOpen, h3Runs }: {
+  node: WorkflowNode; graphNodes: CanvasNode[]; onOpen: (node: CanvasNode) => void; h3Runs?: WorkflowRun[];
 }) {
   const [open, setOpen] = useState(false);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -19,6 +20,10 @@ export function WorkflowGenerationHistory({ node, graphNodes, onOpen }: {
   const button = useRef<HTMLButtonElement>(null);
   const popup = useRef<HTMLDivElement>(null);
   const ids = workflowSessionIds([node]);
+  const dispatches = h3Runs?.filter(run => {
+    const step = run.steps[node.id];
+    return step && (!step.comfyOptimization || step.comfyAutoGeneration);
+  }).reverse() ?? [];
   const rows = graphNodes.filter(card => card.kind === "prompt" && card.hiddenAt == null && ids.has(card.id))
     .sort((a, b) => b.createdAt - a.createdAt || [...ids].indexOf(b.id) - [...ids].indexOf(a.id));
   const outputs = new Map(rows.map(card => [card.id, [...new Set(canvasSessionImages(card, graphNodes).map(output => output.assetId!))]]));
@@ -62,16 +67,17 @@ export function WorkflowGenerationHistory({ node, graphNodes, onOpen }: {
   }, [open]);
   return <>
     <button ref={button} type="button" className="workflow-generation-history" aria-label="生成历史" aria-expanded={open}
+      title={h3Runs ? "生成会话与调度记录" : "生成历史"} data-has-runs={h3Runs && (rows.length || dispatches.length) ? true : undefined}
       aria-controls={`generation-history-${node.id}`} aria-haspopup="dialog"
       onPointerDown={event => event.stopPropagation()} onClick={() => setOpen(value => !value)}>
-      <History size={12} />生成历史{rows.length > 0 && <span>{rows.length}</span>}
+      {h3Runs ? <List size={14} /> : <History size={12} />}生成历史{rows.length > 0 && <span>{rows.length}</span>}
     </button>
     {open && createPortal(<div ref={popup} id={`generation-history-${node.id}`} role="dialog" aria-label="生成历史" tabIndex={-1}
       className="workflow-generation-history-popover" style={position}
       onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
       onContextMenu={event => event.stopPropagation()} onWheel={event => event.stopPropagation()}>
       <strong>生成历史 <span>{rows.length}</span></strong>
-      {!rows.length ? <p>暂无生成会话</p> : <ul>{rows.map((card, index) => {
+      {!rows.length ? !dispatches.length && <p>暂无生成会话</p> : <ul>{rows.map((card, index) => {
         let saved: { text?: string; status?: string; provider?: string } = {};
         try { saved = JSON.parse(card.payloadJson); } catch { /* The snapshot can still be opened. */ }
         const status = ({ done: "已完成", succeeded: "已完成", running: "生成中", queued: "排队中", failed: "失败", cancelled: "已取消", canceled: "已取消" } as Record<string, string>)[saved.status ?? ""] ?? "已记录";
@@ -90,6 +96,15 @@ export function WorkflowGenerationHistory({ node, graphNodes, onOpen }: {
           </span>
         </button></li>;
       })}</ul>}
+      {open && dispatches.map((run, i) => {
+        const step = run.steps[node.id];
+        const report = JSON.stringify({ runId: run.id, jobId: step.jobId, status: step.status, detail: step.detail,
+          cardInput: step.generationRunInput, error: step.error, diagnostic: step.diagnostic }, null, 2);
+        return <details key={run.id} className="h3-dispatch-record"><summary>第 {dispatches.length - i} 次调度 · {
+          run.status === "stopped" && step.status !== "done" ? "已停止" : ({ pending: "待执行", running: "执行中", waiting: "等待继续", done: "完成", failed: "失败" })[step.status]}</summary>
+          <pre>{report}</pre><button type="button" onClick={() => void navigator.clipboard.writeText(report)
+            .then(() => notifySuccess("调度记录已复制")).catch(error => notifyError(error, "未能复制调度记录"))}>复制调度记录</button></details>;
+      })}
       <BoardChipPreview hostRef={popup} extraAssets={assets} clickToFocus={false} zIndex={100000} />
     </div>, document.body)}
   </>;

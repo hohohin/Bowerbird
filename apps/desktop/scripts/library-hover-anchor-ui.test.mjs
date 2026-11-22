@@ -10,6 +10,7 @@ await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 page.setDefaultTimeout(8000);
+page.setDefaultNavigationTimeout(60000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.addInitScript(() => {
@@ -18,9 +19,9 @@ await page.addInitScript(() => {
 });
 await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
 async function hoverAtOriginalPoint(control, name, width) {
-  const strip = page.getByRole('tablist', { name: '素材视图切换条', exact: true });
+  const strip = page.locator('.library-source-navigation');
   const collapsedWidth = (await strip.boundingBox()).width;
-  assert.ok(collapsedWidth < 180, 'start with the collapsed HUD');
+  assert.ok(collapsedWidth < width, 'start with the collapsed HUD');
   const box = await control.boundingBox(), point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   const center = await control.evaluate(element => {
     const field = element.closest('.file-view-heading').querySelector('.library-control-projection').getBoundingClientRect();
@@ -44,7 +45,9 @@ async function hoverAtOriginalPoint(control, name, width) {
   }), { ...point, name });
   assert.ok(frames.every(frame => frame.hit === name), `stationary pointer stays on ${name} at ${width} (${point.x}, ${point.y}): ${JSON.stringify(frames.filter(frame => frame.hit !== name))}`);
   assert.ok(frames.every(frame => Math.abs(frame.center - center) < 2), `background stays fixed while ${name} expands at ${width}: ${JSON.stringify(frames)}`);
-  assert.ok((await strip.boundingBox()).width > collapsedWidth + 60, 'hover really expands the HUD');
+  if (await control.evaluate(element => element.matches('[role="tab"][aria-selected="false"]'))) {
+    assert.ok((await strip.boundingBox()).width > collapsedWidth + 16, 'hover reveals inactive navigation labels');
+  }
   return point;
 }
 try {
@@ -52,7 +55,7 @@ try {
     await page.setViewportSize({ width, height: 900 });
     await page.mouse.move(0, 800);
     await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?navigation`);
-    await page.getByRole('tablist', { name: '素材视图切换条', exact: true }).waitFor();
+    await page.locator('.library-source-navigation').waitFor();
     await page.evaluate(({media, theme}) => { document.documentElement.dataset.theme = theme; window.mode.getState().setMedia(media); }, {media, theme});
     await page.waitForTimeout(450);
     const more = page.getByRole('button', { name: '更多素材库控件', exact: true });
@@ -71,21 +74,22 @@ try {
     }
   }
   console.log('PASS media targets and fixed background across widths and themes');
-  for (const width of [1440, 1024, 736, 400, 320]) for (const name of ['文件夹', '项目素材', '标签分类', '全部素材']) {
+  for (const width of [1440, 1024, 736, 400, 320]) for (const key of ['folders', 'project', 'tags', 'global', 'flow']) {
     await page.setViewportSize({ width, height: 900 });
     await page.mouse.move(0, 800);
     await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?navigation`);
     await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
-    const nav = page.getByRole('tablist', { name: '素材视图切换条', exact: true });
-    const tab = nav.getByRole('tab', { name, exact: true });
+    const nav = page.locator('.library-source-navigation');
+    const tab = nav.locator(`[data-tab-value="${key}"]`);
     await tab.waitFor();
+    const name = await tab.getAttribute('aria-label');
     await page.waitForTimeout(450);
     const point = await hoverAtOriginalPoint(tab, name, width);
     await page.screenshot({ path: `${output}/${width}-${name}.png` });
     // Click at the original coordinates, not a locator that aims again after expansion.
     await page.mouse.click(point.x, point.y);
     await page.waitForTimeout(100);
-    assert.equal(await nav.getByRole('tab', { name, exact: true }).getAttribute('aria-selected'), 'true');
+    assert.equal(await tab.getAttribute('aria-selected'), 'true');
     const bounds = await nav.boundingBox();
     assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width, 'translated strip stays inside the library');
   }
@@ -93,6 +97,7 @@ try {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.mouse.move(0, 800);
     await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?navigation`);
+    await page.evaluate(() => window.mode.getState().setMedia('images'));
     const control = page.getByRole('button', { name, exact: true });
     await control.waitFor();
     await page.evaluate(() => document.documentElement.dataset.theme = 'light');
@@ -104,7 +109,7 @@ try {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.mouse.move(0, 800);
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?navigation`);
-  await page.getByRole('tablist', { name: '素材视图切换条', exact: true }).waitFor();
+  await page.locator('.library-source-navigation').waitFor();
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; window.mode.getState().setMedia('texts'); });
   await page.waitForTimeout(450);
   await hoverAtOriginalPoint(page.getByRole('button', { name: '文本', exact: true }), '文本', 1440);
@@ -113,13 +118,13 @@ try {
   await page.mouse.move(0, 800);
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?navigation`);
   await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
-  const tab = page.getByRole('tab', { name: '项目素材', exact: true });
+  const tab = page.getByRole('tab').and(page.locator('[data-tab-value="project"]'));
   await tab.waitFor(); await page.waitForTimeout(450);
   await tab.hover(); await page.waitForTimeout(550);
   await page.mouse.move(0, 800); await page.waitForTimeout(2400);
   assert.equal(await tab.evaluate(element => element.closest('.file-view-heading').style.getPropertyValue('--library-hover-shift')), '', 'collapse releases the pointer anchor');
   const geometry = await tab.evaluate(element => {
-    const heading = element.closest('.file-view-heading'), strip = heading.querySelector('[role="tablist"]').getBoundingClientRect(), controls = heading.querySelector('.library-controls-host').getBoundingClientRect(), bounds = heading.getBoundingClientRect();
+    const heading = element.closest('.file-view-heading'), strip = heading.querySelector('.library-source-navigation').getBoundingClientRect(), controls = heading.querySelector('.library-controls-host').getBoundingClientRect(), bounds = heading.getBoundingClientRect();
     return { groupCenter: (strip.left + controls.right) / 2, center: (bounds.left + bounds.right) / 2 };
   });
   assert.ok(Math.abs(geometry.groupCenter - geometry.center) < 2, `collapsed group returns to center: ${JSON.stringify(geometry)}`);

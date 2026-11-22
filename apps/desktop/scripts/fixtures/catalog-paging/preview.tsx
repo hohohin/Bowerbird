@@ -96,7 +96,7 @@ useStore.setState({activeProjectId:null,libraryThumbnailWidth:150, projects: ["p
 function Fixture() {
   const [visible, setVisible] = React.useState(true);
   w.setLibraryVisible = setVisible;
-  const [kind,setKind] = React.useState<"all"|"tags"|"collections">("all");
+  const [kind,setKind] = React.useState<"all"|"tags">("all");
   const [project,setProject] = React.useState(false);
   w.changeKind=setKind; w.changeProject=setProject;
   return <div style={{position:"fixed",inset:0}}>{visible && <CategorizedLibrary key={`${kind}:${project}`} kind={kind} projectId={project?"p":null} projectScope={project}
@@ -109,13 +109,12 @@ function SplitFixture() {
   return <div style={{position:"fixed",inset:0,display:"flex",flexDirection:"column"}}><Toolbar localFilesOpen canvasMode={false} onCanvasModeChange={() => {}} onRefresh={async () => {}} onCreateCreative={() => {}}/><FileDropImport/><ExploreWorkspace url={null} open={open} onClose={() => setOpen(false)}><LibraryHome/></ExploreWorkspace></div>;
 }
 function NavigationFixture() {
-  const { source, mode, media } = useLocalFileMode();
+  const media = useLocalFileMode(state => state.media);
   const [project, setProject] = React.useState(!new URLSearchParams(location.search).has("home"));
   w.changeProject = setProject;
   React.useEffect(() => { useLocalFileMode.getState().setProjectContext(project ? "p" : null); useStore.setState({ activeProjectId: project ? "p" : null }); }, [project]);
-  return <div style={{ position: "fixed", inset: 0 }}><LibraryCatalogTransition key={`${source}:${media}`} kind={mode === "all" || mode === "tags" ? mode : "collections"}
-    media={media} projectId={project ? "p" : null} projectScope={source === "project"} semanticSearchEnabled={new URLSearchParams(location.search).has("semantic")}
-    navigation={<header className="library-browser-heading"><div className="library-floating-navigation"><LibrarySourceTabs project={project} value={source} onChange={value => useLocalFileMode.getState().openSource(value as LibrarySource)}/></div></header>}
+  return <div style={{ position: "fixed", inset: 0 }}><LibraryCatalogTransition media={media} projectId={project ? "p" : null} semanticSearchEnabled={new URLSearchParams(location.search).has("semantic")}
+    navigation={<header className="library-browser-heading"><div className="library-floating-navigation"><LibrarySourceTabs/></div></header>}
     onClose={() => {}}/><AssetContextMenu/></div>;
 }
 const params = new URLSearchParams(location.search);

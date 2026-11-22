@@ -14,7 +14,7 @@
 
 工作流模板预览与首次运行前的 Agent 详情共用 `workflowPromptPreview` 将提示词内的引用标记显示为对应名称。[工作流提示词](../../apps/desktop/src/lib/canvasWorkflow.ts)
 
-画板视频卡的提示词框复用 `fitContent`。H3 使用 [CanvasTextarea](../../apps/desktop/src/components/CanvasTextarea.tsx)，即梦和 Cloud 使用 [WorkflowPromptEditor](../../apps/desktop/src/components/WorkflowPromptEditor.tsx)。开启后以四行起步，随正文增减，在原高度上限内使用共用悬浮滚动条。
+画板视频卡的提示词框复用 `fitContent`。H3 使用 [CanvasTextarea](../../apps/desktop/src/components/CanvasTextarea.tsx)，初始高度为 64px。即梦和 Cloud 使用 [WorkflowPromptEditor](../../apps/desktop/src/components/WorkflowPromptEditor.tsx)，初始高度为四行。输入区随正文增减，在高度上限内使用共用悬浮滚动条。
 
 手动组图复用 [GenerationGroupMenuItem.tsx](../../apps/desktop/src/components/GenerationGroupMenuItem.tsx) 的 `MergeGenerationGroupMenuItem`（图片多选）和 `GenerationGroupMenuItem`（解散）。调用为 `AssetContextMenu` 与 `CanvasWorkspace`，显示继续共用 `GenerationGroupControls`／`CanvasConversationImages`。普通图片创作框的「并入上个生成」是显式选择，不复用模型会话作为展示别名；实现见 [显式合组](../CANVAS-WORKFLOW.md#2026-11-11显式抽卡与手动合组源码待发布)。
 
@@ -28,7 +28,7 @@
 
 Cloud 文本 Skill 只传标识与参数：`h3PromptOptimization.h3OptimizationInstruction` 生成 H3 选择信封，`textAgent.startTextAgent` 的 Cloud 分支生成 text-editor 信封；原文通过 `startCloudTextRewrite` 的 source 提交。VPS 统一复用 `apps/agent-worker/src/skills/cloud-text-skills.ts` 加载只读方法并冻结到既有 processor 的 checkpoint；禁止界面另行 raw-import Skill。普通用户要求及本机 Codex 方法不受影响。H3 卡片的续聊通过既有 `LocalChatPanel` 展示原文和结果，继续发送沿用普通 DSH · Cloud 对话的原生会话读取机制。[服务端维护契约](../UNIFIED-AGENT-HARNESS-PLAN.md#2026-11-08cloud-dsh-skill-的服务端归属)。
 
-H3 优化按钮共用 `H3OptimizeButton`，画板图片卡和视频卡均在提示词框下方提供手动优化，积分说明随按钮展示。两类 H3 卡的底部开关共同读写 `AppSettings.h3_auto_optimize_prompt`，通过现有应用设置队列持久化，默认关闭。开关开启后手动运行单张 H3 卡时，由同一工作流先取回优化结果，再提交生成。底部 `CreativeComposer` 经 `CreationBoard.onOptimizeLocalVideo` 和 `composerLocalVideo` 复用 `startCloudTextRewrite`。视频优化共用 `h3PromptOptimization.cleanH3OptimizedPrompt` 清理行首字段名，保留正文和对白。[优化按钮](../../apps/desktop/src/components/creation/H3OptimizeButton.tsx) · [底部创作框](../../apps/desktop/src/lib/composerLocalVideo.ts) · [文本改写](../../apps/desktop/src/lib/textAgent.ts) · [H3 卡片与优化契约](../COMFYUI-LOCAL-VIDEO.md#工作流视频卡切换-h3)
+H3 图片卡和视频卡在原文框下复用 `H3OptimizationActions` 和 `H3PromptPreview`，负责手动优化、稿件编辑、历史恢复和续聊入口。优化按钮复用 `H3OptimizeButton`，积分说明可在悬停时查看。两类卡片通过 `AppSettings.h3_auto_optimize_prompt` 共享全局 AUTO，开启后由同一工作流先取回优化稿，再提交生成。底部创作框继续通过 `composerLocalVideo` 调用文本改写。视频优化保留官方结构化字段和旧版纯正文。[卡片工具条](../../apps/desktop/src/components/creation/H3OptimizationActions.tsx) · [优化稿编辑](../../apps/desktop/src/components/creation/H3PromptPreview.tsx) · [底部创作框](../../apps/desktop/src/lib/composerLocalVideo.ts) · [文本改写](../../apps/desktop/src/lib/textAgent.ts) · [H3 卡片](../COMFYUI-LOCAL-VIDEO.md)
 
 - **用途／关键词：** 深浅色、tokens、工程蓝、button、input、Tailwind。
 - **入口：** [styles.css](../../apps/desktop/src/styles.css) 的 `--bb-*`、`.app-button-primary`／`.app-button-secondary`、`.app-modal-button`；[IndustrialTheme.css](../../apps/desktop/src/components/IndustrialTheme.css) 覆盖当前色板与状态；[tailwind.config.js](../../apps/desktop/tailwind.config.js) 把 `canvas`／`panel`／`ink`／`muted` 映射到变量。主题切换走 [theme.ts](../../apps/desktop/src/lib/theme.ts) 的 `applyTheme`／`loadCachedTheme`。
@@ -196,19 +196,19 @@ H3 优化按钮共用 `H3OptimizeButton`，画板图片卡和视频卡均在提�
 - **自由图片舞台：** 同一预览支持普通导入图片，没有会话时只显示图片和详情。详情／会话均可独立收起，工具栏保留重开入口；详情保持挂载以保留未完成编辑和滚动位置。`CreationImagePreview.css` 仅在窗口边界裁切，图片与角标共同变换；预览私有 [useImagePreviewHud.ts](../../apps/desktop/src/components/useImagePreviewHud.ts) 按图片边界定位四组标题／控制，维持屏幕尺寸、窗口安全边距及侧面板避让，并将预览中心换算成每侧局部坐标作为共同旋转／透视原点，不作为跨模块布局接口。拖拽／滚轮只从图片开始，空白单击退出，按下／松手来源和移动距离防止拖图误关。外围投影线保留，面板及图片后层沿用 `ProjectManagerPanel.css`／`ProjectCreateCard.css` 的层叠与短闪语汇，不导入项目卡片内部逻辑；两侧正文与底板同属一个虚拟平面，选取／输入／键盘聚焦时共享姿态锁定，原图保持平面。缩放复用 [useImageZoom.ts](../../apps/desktop/src/lib/useImageZoom.ts) 的 `zoomBy`／`reset`；宿主显式允许 0.1–16 倍，原灯箱与普通详情仍默认 1–8 倍。已移除没有消费者的空白舞台滚轮参数。
 - **渐进加载与渲染：** 图片先绘制，缩略图可先于原件显示；`AssetDetail.onReady(assetId)` 在首次分析、标签、集合读取全部 settled 后通知预览宿主，不等待 CLI 健康检查；独立详情另读生成来源。宿主按请求身份及图片入场状态显现两侧，`GenerationPanel` 的只读提示词视图延后挂载，固定投影区避免资料加载后重排。后景滤镜只保留两侧玻璃阅读面，全屏背景、点阵、四角控件和详情吸顶栏不再叠加滤镜。`useCompatibleImagePath(path, onError?)` 可选回调用于转换失败时释放图片加载门控，原调用保持兼容；旧详情页仍逐项呈现初始数据。`image-preview-rendering-ui.test.mjs` 核对滤镜范围、历史读取次数、空闲停刷及独立详情兼容；不代表高 GPU 负载下的原生帧率验收。
 
-## 切换素材库一级视图
+## 切换素材库来源与视角
 
 - **控件与批量操作：** [LibraryCatalogControls.tsx](../../apps/desktop/src/components/LibraryCatalogControls.tsx) 共用素材类型、来源、颜色准备及窄栏收纳，文件夹只通过 children 增加刷新同步；颜色准备由宿主传递查询范围与刷新回调。`CatalogSelectionBar` 共用取消／全选／文件夹分配及画板或新项目动作，宿主保留素材 ID 或目录条目 ID 的解析。两者由 `CategorizedLibrary`、`ConnectedCollections` 同时调用。
 - **以文搜图：** 首页与展开的画板素材栏为全部／项目平铺图片视图启用 [LibrarySemanticSearch.tsx](../../apps/desktop/src/components/LibrarySemanticSearch.tsx)，沿用浮动控件收纳。每栏维护提交、取消、结果会话与退出焦点，目录范围和名称／来源／颜色筛选仍由 `CatalogFilter` 表达。[VirtualCatalog.tsx](../../apps/desktop/src/components/VirtualCatalog.tsx) 通过 `readPage`／`pageScope` 显示会话排序并隔离缓存，范围选择／全选同样读取会话 ID；复用素材卡、预览、拖动和上下文菜单。退出结果恢复原浏览位置，素材库变化校验当前会话，模型或索引重置立即退出对应结果。文件夹、标签及文本编辑器维持原入口。[桌面交互回归](../../apps/desktop/scripts/library-semantic-search-ui.test.mjs)。
 
 - **用途／关键词：** 目录切换、整栏转场、catalog、素材栏、减少动态效果。
-- **一级导航：** [LibrarySourceTabs.tsx](../../apps/desktop/src/components/LibrarySourceTabs.tsx) 共用 `LibraryViewSwitch`，按「文件夹／项目素材／标签分类／全部素材」显示；显示顺序与 Tab 轮换共用 [localFileMode.ts](../../apps/desktop/src/lib/localFileMode.ts) 的 `LIBRARY_VIEW_ORDER`，内部 view 值不改。项目始终可选，项目页签展开当前项目子级标签，点击子级标签打开项目选择；标签页签展开相接的横向全部／项目范围下拉，3 秒空闲或点击外部收起，指针／键盘操作续时，方向下键进入下拉、Escape 返回父页签。方向键切换并在目录重挂载后恢复焦点；`LibrarySourceTabs.css` 保持导航和下拉绝对定位、悬浮覆盖，不得改成占位行或为控件增加内容避让，具体约束见 [UI 规范 7.1](../UI-DESIGN-SPEC.md#71-素材库)。首页、画板和文本编辑器共用，无需另建导航组件。
-- **投影外观复用：** `LibraryViewSwitch` 的可选 `icon` 支持各入口独立图标；一级导航挂载 [LibraryControlProjection.tsx](../../apps/desktop/src/components/LibraryControlProjection.tsx) 与 [LibraryProjection.css](../../apps/desktop/src/components/LibraryProjection.css)，限定在含 `LibrarySourceTabs` 的浮动标题内，复用 `LibraryMediaSwitch`、`GeneratedImageFilter`、`FileColorFilter` 与 `LibraryFloatingControls` 的数据和交互。四入口共用底面、保留全部图标；`LibrarySourceTabs` 对主标签与旁侧控件统一记录鼠标目标并补偿展开横移；`LibraryControlProjection` 通过 portal 挂载到同一 `.file-view-heading`，背景固定居中，仅尺寸跟随展开；`LibraryFloatingControls` 按整组实际展开宽度判断收纳，不再额外预留两端横移空间，不作为通用定位接口。`GeneratedImageFilter` 统一为「不看生成图」单开关，清除旧的仅生成图选择。投影层是素材库内部装饰，不导入创作模块专用投影实现、不新增统一菜单或媒体数据源；使用现有库可见性状态暂停装饰，指针微动不引发 React 重渲染。`scripts/library-projection-ui.test.mjs` 覆盖分组、选中对比度、320–1440px 深浅主题、筛选、收纳、标签键盘、矩阵交互与减少动态，并截图正式 App 的隔离首页／画板；`library-hover-anchor-ui.test.mjs` 验证主标签、五种类型、筛选和更多入口的展开中原坐标命中与点击、固定背景、收起归中和短暂掠过取消。
-- **入口：** [LibraryCatalogTransition.tsx](../../apps/desktop/src/components/LibraryCatalogTransition.tsx) 的 `LibraryCatalogTransition`，按 `kind` 路由 `CategorizedLibrary`／`ConnectedCollections` 并管理退场层；项目范围未选择、项目失效或主动重新选择时，在内容区挂载项目选择面板。
+- **导航：** [LibrarySourceTabs.tsx](../../apps/desktop/src/components/LibrarySourceTabs.tsx) 通过两个 `LibraryViewSwitch` 切换全部素材／项目／文件夹，以及逻辑范围下的平铺／标签。当前入口文字常驻，点击已选项目打开锚定的 `ContextMenu`。没有有效项目时沿用内容区选择器。主页、画板和文本编辑器共用。Q／E／F 切来源，Tab 在逻辑范围内切视角。
+- **投影外观：** `LibraryControlProjection` 与 `LibraryProjection.css` 覆盖在既有 `.file-view-heading`。导航与旁侧控件保留指针锚定，窄栏由 `LibraryFloatingControls` 收纳。选中标签一直可读，较长项目名截断并保留完整可访问名称。
+- **路由和搜索：** `LibraryCatalogTransition` 按来源和视角选择 `CategorizedLibrary` 或 `ConnectedCollections`，沿用标签与文件夹侧栏转场。`LibraryCatalogControls` 提供搜索，复用 `VirtualCatalog` 的无分组标题结果布局。文件夹同时用连接条目查询和分页，保留分身和组图身份。清空搜索复原浏览位置。
 - **项目选择复用：** [ProjectManagerPanel.tsx](../../apps/desktop/src/components/ProjectManagerPanel.tsx) 与 [ProjectFolder.tsx](../../apps/desktop/src/components/ProjectFolder.tsx) 的可选 `selection` 模式复用项目读取、搜索、排序与卡片，仅回调素材库项目选择，不进入项目、不提供项目管理菜单／新建。默认最小尺寸，`ThumbnailSizeSlider` 可传 `size` 控制本面板宽度，不改项目管理页尺寸偏好；普通项目面板行为保留。选择器只在内容区呈现，顶部导航仍悬浮。
 - **实用证据：** [LibraryHome.tsx](../../apps/desktop/src/components/LibraryHome.tsx) 和 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 共用该入口。
 - **范围／状态：可跨模块复用（已有素材目录）。** 接口沿用 `CategorizedLibrary` props，DOM 与动画绑定目录侧栏及 `all/tags/collections` 语义；不能作为通用路由转场容器。内部 `floatSidebar` 等是模块内部专用，不独立导入或复制成其他板块动效。
-- **验证：** `test:library:navigation` 运行 `scripts/library-navigation-ui.test.mjs` 与 `scripts/library-project-scope-ui.test.mjs`：先断言导航显隐不移动或缩小内容视口、没有顶部占位或 padding 避让，再覆盖真实目录／标签查询范围、四媒体切换、视频导入归属、320–1000px 深浅主题、画板 Q／E／Tab、分栏及集合位置恢复，以及项目选择／刷新记忆／上下文隔离／删除恢复／最小卡片／下拉连接、空闲和键盘行为；`home-navigation-ui.test.mjs` 检查原项目面板进入、菜单和返回兼容，`library-controls-ui.test.mjs` 保留控件溢出和打开／关闭回归。
+- **验证：** `test:library:navigation` 覆盖悬浮导航几何、来源查询、视角独立切换、Q／E／F／Tab、深浅主题、分栏与项目菜单。`library-tab-memory-ui.test.mjs` 验证重启和跨项目返回。`material-catalog-ui.test.mjs` 和 `folder-view-parity-ui.test.mjs` 验证搜索覆盖、清空与位置恢复。`canvas-library-projection-ui.test.mjs` 核对 480px 抽屉和筛选收纳。
 
 ## 切页时保留浏览状态和滚动位置
 

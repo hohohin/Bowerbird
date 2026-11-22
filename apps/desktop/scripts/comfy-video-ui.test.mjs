@@ -271,7 +271,7 @@ try {
       header:rect('header'),provider:rect('.model-select-trigger'),prompt:rect('.comfy-video-prompt'),actions:rect('.comfy-prompt-actions'),frames:rect('.comfy-frame-slots'),
       title:rect('header strong'),status:rect('.comfy-environment-dot'),copy:rect('button[aria-label="复制卡片"]')};
   });
-  assert.equal(layout.cardWidth,320);
+  assert.equal(layout.cardWidth,390);
   assert.ok(layout.scroll<=layout.width+2, 'H3 settings fit the shared video card width');
   assert.ok(layout.title.right<=layout.status.left+1 && layout.status.right<=layout.copy.left+1, 'header actions fit beside the title');
   assert.ok(layout.provider.top>=layout.header.bottom && layout.frames.top>=layout.provider.bottom,'provider precedes its frame controls');

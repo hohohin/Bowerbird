@@ -22,7 +22,8 @@ try {
   await page.getByText('D:/fixture/BowerbirdLibrary', {exact:true}).waitFor();
   assert.equal(await page.getByText('资料文件夹', {exact:true}).count(), 1);
   await page.getByRole('button', { name: '管理资料文件夹…' }).waitFor();
-  assert.equal(await page.getByText('当前版本', {exact:true}).count(), 0);
+  await page.getByText('当前版本', {exact:true}).waitFor();
+  await page.getByRole('button', { name: '检查更新', exact: true }).waitFor();
   assert.equal(await page.getByText(/界面明暗，切换后立即生效/).count(), 0);
   const modalBody = page.locator('.settings-dialog .app-modal-body');
   const scrolling = await modalBody.evaluate(body => {
@@ -38,7 +39,8 @@ try {
   assert.ok(scrolling.overlay && scrolling.bodyOverflow === 0 && scrolling.contentOverflow > 0, JSON.stringify(scrolling));
   await page.setViewportSize({ width: 1100, height: 850 });
   await page.getByRole('button', { name: '关于我们', exact: true }).click();
-  await page.getByText('当前版本', {exact:true}).waitFor();
+  await page.getByRole('button', { name: '前往官网 ↗', exact: true }).waitFor();
+  assert.equal(await page.getByText('当前版本', {exact:true}).count(), 0);
   await page.getByRole('button', { name: '系统设置', exact: true }).click();
   await page.getByRole('radio', { name: /夜间模式/ }).click();
   assert.deepEqual(await page.evaluate(() => { const s = window.store.getState().settings; return [s.board_shift_pick, s.hide_project_assets, s.dreamina_model_version]; }), [true, true, '4.7']);

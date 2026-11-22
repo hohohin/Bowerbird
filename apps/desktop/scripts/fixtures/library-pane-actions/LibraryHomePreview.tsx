@@ -100,11 +100,10 @@ function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEna
 }) {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => registerLibraryPane(pane), [pane]);
-  const mode = pane.mode(s => s.mode);
   const media = pane.mode(s => s.media);
   const active = useActiveLibraryPane(s => s.pane === pane);
   const navigation = <header className="library-browser-heading"><div className="library-floating-navigation">
-    <LibrarySourceTabs value="global" onChange={() => pane.mode.getState().openSource("global")}/>
+    <LibrarySourceTabs/>
   </div></header>;
   return <div ref={root} className="library-pane-content" data-library-pane={pane.id} data-split={split || undefined} data-active={active || undefined} tabIndex={-1}
     onPointerDownCapture={() => useActiveLibraryPane.getState().activate(pane)} onFocusCapture={() => useActiveLibraryPane.getState().activate(pane)}
@@ -119,7 +118,7 @@ function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEna
       {split && <button type="button" className="library-pane-close library-filter-trigger" aria-label="关闭此栏" title="关闭此栏" onClick={onClose}><X size={15} aria-hidden="true"/></button>}
       {!split && <button type="button" className="library-filter-trigger" aria-label="向右分栏" title="分栏" onClick={onSplit}><Columns2 size={15} aria-hidden="true"/></button>}
     </div>
-    <LibraryCatalogTransition key={media} kind={mode === "all" || mode === "tags" ? mode : "collections"} media={media} positionId={pane.id} showEmptyTags={split} dropPreview={split} navigation={navigation}
+    <LibraryCatalogTransition media={media} positionId={pane.id} showEmptyTags={split} dropPreview={split} navigation={navigation}
       onClose={() => pane.mode.getState().setOpen(false)} onCreateProject={onCreateProject}/>
   </div>;
 }

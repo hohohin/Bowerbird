@@ -41,7 +41,7 @@ import { beginOnboardingOperation, useOnboarding } from "./lib/onboardingStore";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { ToastViewport } from "./components/ToastViewport";
 import { FileTaskStatusPanel } from "./components/FileTaskStatus";
-import { StartupUpdateDialog } from "./components/StartupUpdateDialog";
+import { AppUpdateMonitor } from "./components/AppUpdateMonitor";
 import { ChatPaidConfirmation } from "./components/ChatPaidConfirmation";
 import { FileDropImport } from "./components/FileDropImport";
 import { prepareGenerationSound } from "./lib/generationNotifications";
@@ -882,7 +882,7 @@ function App() {
       <WorkflowScheduleCoordinator />
       <ToastViewport />
       <FileTaskStatusPanel />
-      <StartupUpdateDialog ready={!initializing} />
+      <AppUpdateMonitor ready={!initializing} />
       <ChatPaidConfirmation />
       <FileDropImport />
       {/* 环境引导：codex/扩展/即梦由设置面板对应分区直接唤起，不再有「环境状态」总览 */}

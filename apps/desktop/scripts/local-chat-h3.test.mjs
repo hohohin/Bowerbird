@@ -103,7 +103,7 @@ test('Rust-created H3 graph loads, saves, reloads and remains unstarted', async 
     assert.deepEqual(plain(f.helpers.workflowInputs(card)).map(port => port.id), ['first-frame', 'last-frame', 'text', 'reference-audio']);
     assert.deepEqual(plain(f.helpers.workflowOutputs(card)), [{ id: 'image', label: '视频', type: 'image' }]);
     assert.equal(f.helpers.workflowTitle(card), '视频生成');
-    assert.equal(f.helpers.workflowCardWidth(card), 320);
+    assert.equal(f.helpers.workflowCardWidth(card), 390);
     for (const [port, bindings] of Object.entries(card.inputs)) for (const input of bindings) {
       if (input.nodeId) assert.equal(f.helpers.workflowConnectionError(c.document.nodes, input.nodeId, input.portId, card.id, port), null);
     }

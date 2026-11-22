@@ -19,7 +19,6 @@ try {
 
   await page.evaluate(() => { window.failures = {}; });
   await page.getByRole('button', { name: '检查更新', exact: true }).click();
-  await page.getByRole('button', { name: '下载更新', exact: true }).click();
   await page.waitForFunction(() => typeof window.finishDownload === 'function');
   await page.evaluate(() => window.finishDownload());
   await page.getByRole('button', { name: '安装并重启', exact: true }).waitFor();

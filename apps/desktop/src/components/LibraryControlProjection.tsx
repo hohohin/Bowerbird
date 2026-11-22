@@ -8,8 +8,8 @@ export function LibraryControlProjection() {
     const layer = field.current!;
     const heading = layer.parentElement!;
     const navigation = heading.querySelector<HTMLElement>('.library-source-navigation')!;
-    const strip = navigation.querySelector<HTMLElement>('.library-view-switch')!;
-    const controls = heading.querySelector<HTMLElement>('.library-controls-host');
+    const strip = navigation;
+    const controls = heading.querySelector<HTMLElement>('.video-collection-controls');
     const library = layer.closest<HTMLElement>(".library-motion-root") ?? layer.closest<HTMLElement>(".file-view-heading")?.parentElement;
     if (!library) return;
     const measure = () => {

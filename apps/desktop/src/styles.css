@@ -494,9 +494,13 @@ html[data-theme="light"] [role="button"]:focus-visible {
 .library-home .masonry-layout { padding:4px; }
 .topbar-account { position:relative; display:flex; align-items:center; gap:8px; flex-shrink:0; }
 .topbar-update-slot { display:grid; place-items:center; width:36px; height:40px; flex-shrink:0; }
-.topbar-update-button { display:grid; place-items:center; width:36px; height:36px; color:var(--bb-blue); background:transparent; }
+.topbar-update-button { position:relative; display:grid; place-items:center; width:36px; height:36px; color:var(--bb-ink-soft); background:transparent; }
+.topbar-update-button[data-install-icon] { color:var(--bb-blue); }
 .topbar-update-button:hover { background:var(--bb-surface-hover); }
 .topbar-update-button:focus-visible { outline:2px solid var(--bb-blue); outline-offset:2px; }
+.topbar-update-ring { position:absolute; inset:0; margin:auto; pointer-events:none; }
+.topbar-update-track { stroke:var(--bb-line-strong); }
+.topbar-update-progress { stroke:var(--bb-blue); }
 .topbar-account-trigger { display:flex; align-items:center; gap:8px; height:36px; padding:2px 3px 2px 10px; border-radius:999px; background:rgb(var(--bb-ink-rgb) / 4%); }
 .topbar-account-trigger .app-topbar-credits { height:auto; padding:0; }
 .topbar-account-trigger:hover { background:var(--bb-surface-hover); }
@@ -3407,6 +3411,7 @@ html[data-theme="light"] .app-form-input:focus {
 .app-topbar-import > button { flex-shrink: 0; }
 .app-topbar-actions > button,
 .app-topbar .task-center-trigger { width: var(--topbar-control-height); }
+.app-topbar-actions > .topbar-screenshot-button { padding-inline: 0; flex-shrink: 0; }
 .app-topbar .library-view-segments button { min-height: 0; }
 .app-topbar .app-search input { padding-right: 36px; }
 

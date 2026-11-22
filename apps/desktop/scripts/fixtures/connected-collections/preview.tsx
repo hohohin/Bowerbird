@@ -43,6 +43,7 @@ function entries(args: any) {
   const filtered = w.entries.filter((item: any) => (!args.folderId || item.folder_id === args.folderId)
     && (!args.media || (item.asset.ext === "mp4") === (args.media === "videos"))
     && (args.filter?.generated == null || !!item.asset.generation_session_id === args.filter.generated)
+    && (!args.filter?.query || item.name.includes(args.filter.query) || item.asset.name.includes(args.filter.query))
     && (!args.filter?.color || item.color === args.filter.color));
   if (!args.filter?.grouped) return filtered;
   const groups = new Map<string, any[]>();

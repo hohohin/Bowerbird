@@ -68,7 +68,7 @@ try {
   assert.equal(await card.getByLabel('首帧输入', { exact: true }).count(), 1);
   assert.equal(await card.getByLabel('尾帧输入', { exact: true }).count(), 1);
   assert.equal(await card.getByRole('button', { name: '添加上游', exact: true }).count(), 1);
-  assert.equal(await card.evaluate(el => parseFloat(el.style.width)), 320);
+  assert.equal(await card.evaluate(el => parseFloat(el.style.width)), 390);
   // Actual slot drop must replace the first frame, not create a generic image reference.
   await page.evaluate(async () => (await import('/src/lib/dragPayload.ts')).setDragAssets(['c']));
   await card.getByLabel('首帧输入', { exact: true }).dispatchEvent('drop');

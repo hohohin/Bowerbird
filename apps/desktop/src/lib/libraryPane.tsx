@@ -22,8 +22,9 @@ export type LibraryPaneState = ReturnType<typeof createLibraryPane>;
 export function copyLibraryPane(id: string, source: LibraryPaneState) {
   const pane = createLibraryPane(id), state = source.mode.getState(), preferences = source.preferences.getState();
   pane.mode.setState({ open: true, mode: state.mode, source: state.source, media: state.media,
-    view: state.view, tagSource: state.tagSource, contextProjectId: state.contextProjectId, browseProjectId: state.browseProjectId,
-    projectPickerOpen: state.projectPickerOpen, generatedFilter: state.generatedFilter, query: "" });
+    lens: state.lens, contextProjectId: state.contextProjectId, browseProjectId: state.browseProjectId,
+    generatedFilter: state.generatedFilter, query: "" });
+  if (state.browseProjectId) pane.mode.getState().selectProject(state.browseProjectId);
   pane.preferences.setState({ width: preferences.width, pins: [...preferences.pins] });
   source.positions.forEach((position, key) => pane.positions.set(key, { ...position }));
   for (const key of ["bowerbird.localFiles.lastDirectory", "bowerbird.catalog.tagSidebarWidth"]) {

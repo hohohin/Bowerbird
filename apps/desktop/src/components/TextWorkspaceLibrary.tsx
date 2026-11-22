@@ -1,8 +1,6 @@
 import { useEffect, useId, useRef, useState, type ComponentProps, type KeyboardEvent, type MouseEvent } from "react";
-import { Search } from "lucide-react";
-import { createLibraryPane, LibraryPaneContext, registerLibraryPane } from "../lib/libraryPane";
-import type { LibrarySource } from "../lib/localFileMode";
-import type { CatalogKind } from "../lib/materialCatalog";
+import { createLibraryPane, LibraryPaneContext, registerLibraryPane, libraryHasOverlay } from "../lib/libraryPane";
+import { libraryShortcutSource } from "../lib/localFileMode";
 import type { Asset } from "../lib/types";
 import { notifyError } from "../lib/notify";
 import { documentMedia } from "../lib/textDocuments";
@@ -58,14 +56,18 @@ function pickAsset(event: MouseEvent, pin: (id: string) => Promise<void>) {
 function isLibraryShortcutTarget(event: KeyboardEvent) {
   const target = event.target as Element;
   return !event.defaultPrevented && !event.nativeEvent.isComposing && !modified(event)
-    && !target.closest('input,textarea,[contenteditable="true"]')
+    && !target.closest('input,textarea,select,[role="combobox"],[contenteditable="true"]')
     && target.closest('[role="dialog"], [role="menu"]') === event.currentTarget.closest('[role="dialog"]');
 }
-function libraryKeyDown(event: KeyboardEvent, project: boolean, close: () => void, changeSource: (source: string) => void) {
-  if (!isLibraryShortcutTarget(event)) return;
-  if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
-  if (!project || !["q", "e"].includes(event.key.toLowerCase())) return;
-  event.preventDefault(); event.stopPropagation(); changeSource(event.key.toLowerCase() === "q" ? "global" : "project");
+function libraryKeyDown(event: KeyboardEvent<HTMLElement>, mode: ReturnType<typeof createLibraryPane>["mode"], close: () => void) {
+  if (!isLibraryShortcutTarget(event) || event.repeat || event.nativeEvent.keyCode === 229 || libraryHasOverlay(event.currentTarget)) return;
+  const source = libraryShortcutSource(event.key), state = mode.getState();
+  const toggleLens = event.key === "Tab" && state.source !== "folders";
+  if (!source && !toggleLens && event.key !== "Escape") return;
+  event.preventDefault(); event.stopPropagation();
+  if (event.key === "Escape") { close(); return; }
+  if (source) state.openSource(source); else state.toggleCatalog();
+  event.currentTarget.focus({ preventScroll: true });
 }
 
 function useWorkspaceLibraryPane(projectId?: string) {
@@ -73,22 +75,19 @@ function useWorkspaceLibraryPane(projectId?: string) {
   const [pane] = useState(() => createLibraryPane(`text-workspace:${scopeId ?? "global"}`));
   useEffect(() => registerLibraryPane(pane), [pane]);
   useEffect(() => pane.mode.getState().setProjectContext(scopeId), [pane, scopeId]);
-  const source = pane.mode(state => state.source), media = pane.mode(state => state.media), mode = pane.mode(state => state.mode);
-  const query = pane.mode(state => state.query);
-  const kind: CatalogKind = mode === "all" || mode === "tags" ? mode : "collections";
-  return { pane, source, media, kind, query, scopeId };
+  const source = pane.mode(state => state.source), media = pane.mode(state => state.media);
+  return { pane, source, media, scopeId };
 }
 
 export function TextWorkspaceLibrary({ open, projectId, onInsert, onClose, onNavigate, onReusePrompt }: {
   open: boolean; projectId?: string; onInsert(asset: Asset): void; onClose(): void; onNavigate(): void; onReusePrompt(prompt: string): void;
 }) {
-  const { pane, source, media, kind, query, scopeId } = useWorkspaceLibraryPane(projectId);
+  const { pane, source, media, scopeId } = useWorkspaceLibraryPane(projectId);
   const id = useId();
   const library = useCanvasFrequentAssets(open, scopeId);
   const [picking, setPicking] = useState(false), [detail, setDetail] = useState<string | null>(null);
   const [menu, setMenu] = useState<ReturnType<typeof useStore.getState>["contextMenu"]>(null);
   const openContextMenu: ReturnType<typeof useStore.getState>["openContextMenu"] = (x, y, assetId, context) => setMenu({ x, y, assetId, workspaceProjectId: scopeId, ...context });
-  function changeSource(value: string) { pane.mode.getState().openSource(value as LibrarySource); }
   function insert(asset: Asset) {
     if (documentMedia(asset)) onInsert(asset);
     else if (isVideoAsset(asset)) notifyError(new Error("素材原文件不可用"), "无法插入视频素材");
@@ -96,16 +95,15 @@ export function TextWorkspaceLibrary({ open, projectId, onInsert, onClose, onNav
   }
   const closeLibrary = () => { if (picking) setPicking(false); else onClose(); };
   const navigation = <header className="library-browser-heading"><div className="library-floating-navigation">
-    <LibrarySourceTabs project={!!projectId} value={source} onChange={changeSource} tabShortcut={false}/>
+    <LibrarySourceTabs/>
   </div></header>;
   return <LibraryPaneContext.Provider value={pane}>
     <aside id={id} className="canvas-source-panel library-browser text-workspace-library" aria-label="文本编辑器素材库" aria-hidden={!open}
       data-library-pane={pane.id} data-file-import-project-id={source === "project" ? projectId : ""}
-      ref={element => { if (element) element.inert = !open; }} onKeyDown={event => libraryKeyDown(event, !!projectId, closeLibrary, changeSource)} onClickCapture={event => { if (picking) pickAsset(event, library.pinAsset); }}
+      ref={element => { if (element) element.inert = !open; }} tabIndex={-1} onKeyDown={event => libraryKeyDown(event, pane.mode, closeLibrary)} onClickCapture={event => { if (picking) pickAsset(event, library.pinAsset); }}
       onDoubleClickCapture={event => { if (picking) { event.preventDefault(); event.stopPropagation(); } }}>
-      <div className="canvas-source-content"><LibraryCatalogTransition key={`${source}:${media}`} kind={kind}
-        media={media} projectId={scopeId} projectScope={source === "project"} navigation={navigation} onClose={onClose} onNavigate={onNavigate}
-        toolbarActions={kind !== "collections" && <label className="app-search text-workspace-library-search"><Search size={13}/><input type="search" aria-label="搜索素材" placeholder="搜索素材" value={query} onChange={event => pane.mode.getState().setQuery(event.target.value)}/></label>}
+      <div className="canvas-source-content"><LibraryCatalogTransition key={scopeId}
+        media={media} projectId={scopeId} navigation={navigation} onClose={onClose} onNavigate={onNavigate}
         onInsertAsset={insert} onOpenAsset={asset => setDetail(asset.id)} onAssetContextMenu={openContextMenu}/></div>
       <CanvasFrequentAssets library={library} projectId={scopeId} picking={picking} onPickingChange={setPicking} onInsertAsset={insert} onOpenAsset={asset => setDetail(asset.id)} onAssetContextMenu={openContextMenu}/>
     </aside>

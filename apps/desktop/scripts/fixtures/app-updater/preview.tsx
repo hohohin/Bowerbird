@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AppUpdateCard } from "../../../src/components/AppUpdateCard";
-import { StartupUpdateDialog } from "../../../src/components/StartupUpdateDialog";
+import { AppUpdateMonitor } from "../../../src/components/AppUpdateMonitor";
 import { ModalShell } from "../../../src/components/ModalShell";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { notify, notifyError } from "../../../src/lib/notify";
@@ -34,7 +34,9 @@ w.__TAURI_INTERNALS__ = {
       args.onEvent.onmessage({ event: "Started", data: w.unknownSize ? {} : { contentLength: 100 } });
       args.onEvent.onmessage({ event: "Progress", data: { chunkLength: 50 } });
       await new Promise<void>((resolve) => { w.finishDownload = resolve; });
+      args.onEvent.onmessage({ event: "Progress", data: { chunkLength: 50 } });
       args.onEvent.onmessage({ event: "Finished" });
+      if (w.holdVerification) await new Promise<void>(resolve => { w.finishVerification = resolve; });
       if (w.badSignature) throw "签名校验失败";
       return 2;
     }
@@ -57,7 +59,7 @@ function Fixture() {
     <button onClick={() => setStartupMounted(!startupMounted)}>切换启动组件</button>
     <button onClick={() => setReady(true)}>初始化完成</button>
     <ToastViewport />
-    {startupMounted && <StartupUpdateDialog ready={ready} />}
+    {startupMounted && <AppUpdateMonitor ready={ready} />}
     {blocked && <ModalShell title="素材库迁移" onClose={() => setBlocked(false)}>
       <button onClick={() => setBlocked(false)}>迁移完成</button>
     </ModalShell>}

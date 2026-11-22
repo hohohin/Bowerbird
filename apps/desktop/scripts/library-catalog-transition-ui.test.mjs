@@ -10,7 +10,13 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
 page.setDefaultTimeout(10000);
 const errors = []; page.on('pageerror', e => errors.push(e.message));
 await page.route('**/*', r => new URL(r.request().url()).hostname === '127.0.0.1' ? r.continue() : r.abort());
-const switchTo = name => page.getByRole('tab', { name, exact: true }).click();
+async function switchTo(name) {
+ if (name === '标签' && await page.getByRole('tablist', { name: '素材库视角' }).count() === 0) {
+  await page.getByRole('tab', { name: '全部素材', exact: true }).click();
+ }
+ const tab = page.getByRole('tab', { name, exact: true });
+ if (await tab.getAttribute('aria-selected') !== 'true') await tab.click();
+}
 async function sample(t) {
  return page.evaluate(t => {
   const read = direction => {
@@ -31,8 +37,9 @@ try {
  await mkdir(output,{recursive:true});
  await page.goto('http://127.0.0.1:17958/scripts/fixtures/connected-collections/preview.html');
  await page.getByRole('treeitem',{name:'素材目录',exact:true}).waitFor();
+ await page.evaluate(() => window.mode.getState().setLens('tags'));
  assert.equal(await page.locator('[data-sidebar-motion]').count(),0);
- for(const [theme,name] of [['dark','标签分类'],['light','文件夹']]) {
+ for(const [theme,name] of [['dark','标签'],['light','文件夹']]) {
   await page.evaluate(t => document.documentElement.dataset.theme=t,theme);
   await switchTo(name); await page.waitForTimeout(30);
   assert.equal(await page.locator('[data-sidebar-motion]').count(),2,'full sidebars replace the wipe');
@@ -56,10 +63,10 @@ try {
   assert.equal(await page.locator('[data-sidebar-slot]').count(),0);
  }
  for(const t of [150,450,650]) {
-  await switchTo('标签分类'); await sample(t); await switchTo('文件夹'); await sample(350); await finish();
+  await switchTo('标签'); await sample(t); await switchTo('文件夹'); await sample(350); await finish();
   assert.equal(await page.locator(':popover-open').count(),0);
  }
- await switchTo('标签分类'); await sample(350);
+ await switchTo('标签'); await sample(350);
  await page.setViewportSize({width:820,height:700});
  await page.waitForTimeout(60);
  const resized=await sample(350); assert.equal(resized.next.height,resized.slot.height);
@@ -69,13 +76,13 @@ try {
  await page.locator('.library-pane-content').evaluate(el => el.removeAttribute('aria-hidden'));
  await switchTo('文件夹'); await page.emulateMedia({reducedMotion:'reduce'});
  await page.waitForFunction(() => !document.querySelector('[data-sidebar-motion]'));
- await switchTo('标签分类'); await switchTo('文件夹'); assert.equal(await page.locator('[data-sidebar-motion]').count(),0);
+ await switchTo('标签'); await switchTo('文件夹'); assert.equal(await page.locator('[data-sidebar-motion]').count(),0);
  await page.getByRole('treeitem',{name:'风景',exact:true}).click();
  assert.equal(await page.getByRole('treeitem',{name:'风景',exact:true}).getAttribute('aria-selected'),'true');
- await switchTo('全部'); assert.equal(await page.locator('[data-sidebar-motion]').count(),0);
+ await switchTo('全部素材'); assert.equal(await page.locator('[data-sidebar-motion]').count(),0);
  await page.setViewportSize({width:1280,height:840});
  await page.emulateMedia({reducedMotion:'no-preference'});
- await switchTo('标签分类');
+ await switchTo('标签');
  await page.getByRole('button',{name:'向右分栏',exact:true}).click();
  const panes=page.locator('.library-pane-content');
  await panes.first().getByRole('tab',{name:'文件夹',exact:true}).click();
@@ -91,17 +98,19 @@ try {
   const mode=(await import('/src/lib/localFileMode.ts')).useLocalFileMode;
   mode.getState().setCatalogView('tags');
  });
- await page.locator('.canvas-stage').focus(); await page.keyboard.press('Tab');
+ const openDrawer = page.getByRole('button', { name: '打开素材库', exact: true });
+ if (await openDrawer.isVisible()) await openDrawer.click();
+ await switchTo('标签');
  await page.getByRole('region',{name:'按标签浏览素材',exact:true}).waitFor();
- await page.locator('.canvas-source-panel [role="tab"][aria-selected="true"]').click();
+ await switchTo('文件夹');
  const drawer=await sample(350);
  assert.ok(Math.abs(drawer.next.y-drawer.slot.y+20)<.2,'canvas drawer also floats 20px');
  await page.screenshot({path:`${output}/canvas-floating.png`});
- await page.locator('.canvas-stage').focus(); await page.keyboard.press('Tab');
+ await page.getByRole('button', { name: '收起素材库', exact: true }).click();
  await page.waitForFunction(() => !document.querySelector('[data-sidebar-motion]'));
  assert.equal(await page.locator(':popover-open').count(),0,'collapsing real drawer cleans up');
  await page.evaluate(async () => (await import('/src/lib/localFileMode.ts')).useLocalFileMode.getState().setCatalogView('tags'));
  assert.equal(await page.locator(':popover-open').count(),0,'closed drawer never opens floating panels');
  assert.deepEqual(errors,[]);
  console.log('PASS: full sidebars, 20px float, slide/fade/shadow, stationary blur, post-install flashes, interruption and reduced motion');
-} finally { await browser.close(); await server.close(); }
+} catch (error) { console.error(error); throw error; } finally { await browser.close(); await server.close(); }

@@ -14,7 +14,7 @@ registerHooks({
   },
 });
 const { filterAssetsByMediaType } = await import("../src/lib/mediaFilter.ts");
-const { createLocalFileMode, catalogViews } = await import("../src/lib/localFileMode.ts");
+const { createLocalFileMode } = await import("../src/lib/localFileMode.ts");
 const { imageInputError } = await import("../src/lib/videoGeneration.ts");
 
 test("image, video and audio filters remain disjoint even with an image thumbnail", () => {
@@ -30,18 +30,16 @@ test("image, video and audio filters remain disjoint even with an image thumbnai
   assert.equal(filterAssetsByMediaType(assets, null), assets);
 });
 
-test("audio browsing preserves its own view without changing image or video browsing", () => {
+test("changing media preserves the folders source and remembered logical lens", () => {
   const mode = createLocalFileMode();
-  mode.getState().setMedia("audios");
-  assert.deepEqual(catalogViews("audios"), ["all", "tags", "collections"]);
-  assert.equal(mode.getState().mode, "all");
-  mode.getState().setCatalogView("collections");
-  mode.getState().setMedia("videos");
-  assert.equal(mode.getState().mode, "tags");
-  mode.getState().setMedia("images");
-  assert.equal(mode.getState().mode, "tags");
-  mode.getState().setMedia("audios");
-  assert.equal(mode.getState().mode, "collections");
+  mode.getState().setLens("tags");
+  mode.getState().openSource("folders");
+  for (const media of ["audios", "videos", "images", "audios"]) {
+    mode.getState().setMedia(media);
+    assert.equal(mode.getState().source, "folders");
+    assert.equal(mode.getState().lens, "tags");
+    assert.equal(mode.getState().media, media);
+  }
 });
 
 test("audio originals cannot be sent through image generation reference inputs", () => {
