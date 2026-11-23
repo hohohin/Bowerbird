@@ -63,6 +63,12 @@ macOS 的双架构回执单独维护。[macOS 全量发布验收](../macOS/RELEA
 
 自 2026-11-21 起，Windows 官网发布按用户授权在缺少 Authenticode 时继续，保留 Tauri 更新签名和公网安装包完整回读验签。下文可信发布者签名验收用于接入该能力时。
 
+## Windows 26.11.2201 已公开发布（2026-11-23）
+
+北京时间 08:56 公网核验通过，源码 `4f682488`，SQLite 0062。H3 卡片支持对照查看原始提示词与优化稿，改进素材库导航和连接目录，顶栏可查看更新进度并进入安装。类型检查、四组界面回归和 1413 项原生测试通过，56 项跳过。
+
+官网及 Windows 自动更新清单均指向 26.11.2201。CDN 安装包完整回读并通过 Tauri 更新验签，SHA-256 为 `c344e373ba259a03f5ede60cdd78856537fa1799e41e56aed61c086369e7ff0d`。按用户授权跳过 Authenticode。官网和 Windows 清单的回滚版本为 26.11.2103。旧版应用内安装与重启尚待实机验证。发布回执见 `.tmp/release-windows-26.11.2201/` 中的 `public-report.json`、`prepared.json` 和 `cdn-verified.json`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2201_x64-setup.exe)
+
 ## Windows 26.11.2103 已公开发布（2026-11-21）
 
 北京时间 23:37:56 公网核验通过，源码 e2868795，SQLite 0062。大型项目打开、数据库锁等待、连接扫描及视频索引、采集落点反馈和设置入口更新。类型检查、三组界面回归和 1413 项原生测试通过，56 项跳过。按约定跳过 Authenticode，CDN 安装包完整回读并通过 Tauri 验签，SHA-256 为 34dc576d19b3cb20fc8cf29b65d6744cd18e065d2a2f2a4d2fa19aed907e5ae2 。官网可回退至 2102。未实测旧版升级重启。证据见 .tmp/release-windows-26.11.2103/。
