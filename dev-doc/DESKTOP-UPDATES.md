@@ -63,11 +63,11 @@ macOS 的双架构回执单独维护。[macOS 全量发布验收](../macOS/RELEA
 
 自 2026-11-21 起，Windows 官网发布按用户授权在缺少 Authenticode 时继续，保留 Tauri 更新签名和公网安装包完整回读验签。下文可信发布者签名验收用于接入该能力时。
 
-## Windows 26.11.2401 发布候选（2026-11-24）
+## Windows 26.11.2401 已公开发布（2026-11-24）
 
 写作编辑器更新写作 Agent、选区工具栏、富文本草稿和分页 PDF 导出。画板更新 H3 提示词、视频参考和生成结果恢复。候选回归发现，手动优化完成后仍按视频生成等待产物，造成卡片无法编辑。已区分仅优化的步骤和自动优化后继续生成的步骤，优化完成后立即释放卡片。H3 完整界面回归和生成结果投影用例通过。Cloud DSH 增量预览沿 11 月 23 日独立发布记录。[云端回执](../apps/cloud/DEPLOY.md#2026-11-23-文本编辑器-cloud-dsh-增量预览已部署)
 
-冻结产品源码 `ac64360df` 通过 TypeScript、Vite 生产构建、7 组界面回归与 1439 项 Windows 原生测试，62 项按配置跳过。CDN 安装包已完整回读并通过 Tauri 更新签名校验，SHA-256 为 `c82f63878ca490fbddc0a363a8f5653cf946d6295a9be8956cd57e81b41813ae`。按既有授权跳过 Authenticode。官网与自动更新切换待生产服务器操作授权。回执见 `.tmp/release-windows-26.11.2401/`。[Windows 版本化安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2401_x64-setup.exe)
+冻结产品源码 `ac64360df` 通过 TypeScript、Vite 生产构建、7 组界面回归与 1439 项 Windows 原生测试，62 项按配置跳过。CDN 安装包已完整回读并通过 Tauri 更新签名校验，SHA-256 为 `c82f63878ca490fbddc0a363a8f5653cf946d6295a9be8956cd57e81b41813ae`。按既有授权跳过 Authenticode。北京时间 01:39:04，官网和 Windows 自动更新清单的公网核验通过，回滚目标为 26.11.2304。旧版应用内安装及重启尚待实机验证。回执见 `.tmp/release-windows-26.11.2401/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2401_x64-setup.exe)
 
 ## Windows 26.11.2304 已公开发布（2026-11-23）
 
