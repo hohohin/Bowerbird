@@ -165,8 +165,10 @@ export function buildAssetContextMenu(s: AssetMenuSnapshot): {
   if (canvas) common.push(canvasSelection);
   if (s.hasGenerationGroup) common.push({ kind: "slot", id: "generation-group" });
   if (!canvas && !audio && !text && !s.manage && s.hasDetail) common.push(action("add-to-chat", "添加到对话框"));
-  if (video) common.push(action("open-transcript", "转录文稿", { icon: "file-text", disabled: busy || !storePath || file?.entries?.available === false }));
-  else if (asset) common.push(action("open-detail", text ? "打开文本编辑器" : audio ? "打开音频详情" : "打开图片详情"));
+  const unavailable = busy || !storePath || file?.entries?.available === false;
+  if (video || audio) common.push(action("open-transcript", "转录文稿", { icon: "file-text", disabled: unavailable }));
+  if (asset && !video) common.push(action("open-detail", text ? "打开文本编辑器" : audio ? "打开音频详情" : "打开图片详情",
+    audio ? { disabled: unavailable } : undefined));
   if (annotatable) common.push(action("edit", "编辑", { icon: "edit" }));
   if (s.canSearchPinterest) common.push(pinterest);
   if (!canvas && (!s.embedded || file)) common.push(action("select", !file && s.manage ? "选择/取消选择" : "选择"));

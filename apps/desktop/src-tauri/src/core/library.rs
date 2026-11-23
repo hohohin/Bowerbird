@@ -378,7 +378,7 @@ const ASSET_COLS_A: &str = "a.id, a.name, a.ext, a.origin_path, a.store_path, a.
     a.reference_count, a.library_hidden";
 
 // Search uses the current indexed revision. Reading an individual description also checks its original.
-const CURRENT_VIDEO_RECORD: &str = "CASE WHEN json_valid(vt.payload) THEN
+const CURRENT_MEDIA_ANALYSIS_RECORD: &str = "CASE WHEN json_valid(vt.payload) THEN
         json_extract(vt.payload,'$.current')=1 AND json_extract(vt.payload,'$.status')='completed' \
         AND a.size IS json_extract(vt.payload,'$.assetSize') \
         AND a.file_mtime IS json_extract(vt.payload,'$.assetModified') \
@@ -401,10 +401,11 @@ const CURRENT_VIDEO_RECORD: &str = "CASE WHEN json_valid(vt.payload) THEN
             AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id)
         )) ELSE 0 END";
 
-pub(super) fn video_understanding_keyword_match(pattern: &str) -> String {
-    let video = super::material_catalog::VIDEO;
-    format!("({video} AND EXISTS(SELECT 1 FROM analyses vt WHERE vt.asset_id=a.id AND vt.kind IN ('video_transcript','video_analysis') \
-        AND ({CURRENT_VIDEO_RECORD}) \
+pub(super) fn media_understanding_keyword_match(pattern: &str) -> String {
+    use super::material_catalog::{AUDIO, VIDEO};
+    format!("(({VIDEO} OR {AUDIO}) AND EXISTS(SELECT 1 FROM analyses vt WHERE vt.asset_id=a.id \
+        AND vt.kind IN ('video_transcript','video_analysis') AND (vt.kind='video_transcript' OR {VIDEO}) \
+        AND ({CURRENT_MEDIA_ANALYSIS_RECORD}) \
         AND (CASE WHEN json_valid(vt.payload) THEN json_extract(vt.payload,'$.text') LIKE {pattern} ESCAPE '\\' ELSE 0 END)))")
 }
 
@@ -519,6 +520,17 @@ impl Database {
     }
 
     pub(crate) fn insert_saved_asset(&self, a: &Asset, automatic: bool, annotation: Option<&str>) -> AppResult<()> {
+        self.insert_saved_asset_for_project(a, automatic, annotation, None, || Ok(()))
+    }
+
+    pub(super) fn insert_saved_asset_for_project(
+        &self,
+        a: &Asset,
+        automatic: bool,
+        annotation: Option<&str>,
+        project_id: Option<&str>,
+        publish: impl FnOnce() -> AppResult<()>,
+    ) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         tx.execute(
@@ -555,6 +567,11 @@ impl Database {
             tx.execute("INSERT INTO analyses(id,asset_id,kind,payload,created_at) VALUES(?1,?2,'annotation',?3,strftime('%s','now'))",
                 rusqlite::params![ulid::Ulid::new().to_string(),a.id,payload])?;
         }
+        if let Some(project) = project_id {
+            tx.execute("INSERT INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,strftime('%s','now'))",
+                rusqlite::params![project, a.id])?;
+        }
+        publish()?;
         tx.commit()?;
         Ok(())
     }
@@ -1485,11 +1502,11 @@ impl Database {
         }
         // 每个词一个参数位 ?N；term_cond 生成该词的多维度 OR 块（正词取原式、负词包 NOT）。
         let term_cond = |p: usize| {
-            let video_text = video_understanding_keyword_match(&format!("?{p}"));
+            let media_text = media_understanding_keyword_match(&format!("?{p}"));
             format!(
                 "(a.name LIKE ?{p} ESCAPE '\\' \
                   OR COALESCE(a.source_url,'') LIKE ?{p} ESCAPE '\\' \
-                  OR {video_text} \
+                  OR {media_text} \
                   OR EXISTS(SELECT 1 FROM asset_tags at JOIN tags t ON t.id = at.tag_id \
                     WHERE at.asset_id = a.id AND t.name LIKE ?{p} ESCAPE '\\') \
                   OR EXISTS(SELECT 1 FROM asset_prompts ap JOIN prompts pm ON pm.id = ap.prompt_id \
@@ -1562,7 +1579,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         Ok(conn.query_row(
             &format!("SELECT vt.payload FROM analyses vt JOIN assets a ON a.id=vt.asset_id
-                      WHERE a.id=?1 AND {video} AND vt.kind='video_analysis' AND ({CURRENT_VIDEO_RECORD})
+                      WHERE a.id=?1 AND {video} AND vt.kind='video_analysis' AND ({CURRENT_MEDIA_ANALYSIS_RECORD})
                       ORDER BY vt.created_at DESC,vt.id DESC LIMIT 1"),
             [asset_id], |row| row.get(0),
         ).optional()?)

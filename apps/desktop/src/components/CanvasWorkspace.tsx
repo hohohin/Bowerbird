@@ -5930,9 +5930,11 @@ export function CanvasWorkspace({
   function closeCreationPreview() { setPreviewMember(null); creationImage.close(); }
   const lightboxPath = canvasLightbox?.images[canvasLightbox.index];
   const lightboxAssetId = canvasLightbox?.assetIds?.[canvasLightbox.index];
-  const lightboxVideo = lightboxPath && isVideoPath(lightboxPath)
+  const lightboxMedia = lightboxPath && (isVideoPath(lightboxPath) || isAudioPath(lightboxPath))
     ? (lightboxAssetId ? assetById.get(lightboxAssetId) : [...assetById.values()].find(asset => asset.store_path === lightboxPath))
     : undefined;
+  const lightboxVideo = isVideoPath(lightboxPath) ? lightboxMedia : undefined;
+  const lightboxAudio = isAudioPath(lightboxPath) ? lightboxMedia : undefined;
   const lightboxVideoJob = lightboxVideo && lightboxPath
     ? Object.values(genJobs).find(job => job.turns.some(turn => turn.images.includes(lightboxPath)))
     : undefined;
@@ -6698,7 +6700,7 @@ export function CanvasWorkspace({
                   role="group"
                   data-frequent-asset-id={node.kind === "asset" ? node.asset.assetId ?? undefined : undefined}
                   tabIndex={0}
-                  aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "单击查看，双击添加引用" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
+                  aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "单击查看，双击添加引用" : isAudioPath(node.asset.storePath) ? "点击查看音频详情" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
                   aria-expanded={node.kind === "folder" ? expanded : undefined}
                   data-canvas-filter={node.kind === "asset" ? materialFilterState(node.asset) : undefined}
                   className={`canvas-node generation-group is-${node.kind} ${node.kind === "asset" && isVideoPath(node.asset.storePath) ? "is-video" : ""} ${expanded ? "is-expanded" : ""} ${!showAssetNames ? "is-name-hidden" : ""} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
@@ -6748,7 +6750,7 @@ export function CanvasWorkspace({
                       <GenerationGroupControls index={galleryIndex} count={gallery.length} onSelect={index => {
                         setConversationImageSelection(previous => ({ ...previous, [node.id]: { newest: gallery[gallery.length - 1].id, selected: gallery[index].id } }));
                       }} />
-                      {isAudioPath(node.asset.storePath) && node.asset.assetId && node.asset.storePath ? <AudioWaveform className="canvas-audio-waveform" assetId={node.asset.assetId} path={node.asset.storePath} name={node.asset.name} version={node.asset.storePath} onWavePointerDown={event => beginNodeDrag(event, node)} /> : isVideoPath(node.asset.storePath) ? <VideoPoster path={node.asset.storePath} poster={node.asset.thumbPath} alt={node.asset.name} draggable={false} /> : path ? (
+                      {isAudioPath(node.asset.storePath) && node.asset.assetId && node.asset.storePath ? <AudioWaveform className="canvas-audio-waveform" assetId={node.asset.assetId} path={node.asset.storePath} name={node.asset.name} version={videoSourceKey(assetById.get(node.asset.assetId)) ?? node.asset.storePath} onWavePointerDown={event => beginNodeDrag(event, node)} /> : isVideoPath(node.asset.storePath) ? <VideoPoster path={node.asset.storePath} poster={node.asset.thumbPath} alt={node.asset.name} draggable={false} /> : path ? (
                         <CanvasImage path={node.asset.storePath} thumbPath={node.asset.thumbPath} sourceWidth={node.asset.width} sourceHeight={node.asset.height} alt={node.asset.name} draggable={false} />
                       ) : (
                         <div className="canvas-node-placeholder">{node.asset.name.slice(0, 1)}</div>
@@ -6785,7 +6787,7 @@ export function CanvasWorkspace({
                               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
                               onClick={(event) => { if (!consumeSuppressedNodeClick(event)) activateCanvasMaterial(groupedAssetNode(asset, node, index)); }}
                               onContextMenu={(event) => openCanvasAssetContextMenu(event, node, asset)}>
-                              {isAudioPath(asset.storePath) && asset.assetId && asset.storePath ? <AudioWaveform className="canvas-audio-waveform" assetId={asset.assetId} path={asset.storePath} name={asset.name} version={asset.storePath} /> : isVideoPath(asset.storePath) ? <VideoPoster path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} /> : assetPath ? <CanvasImage path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height} alt="" draggable={false} />
+                              {isAudioPath(asset.storePath) && asset.assetId && asset.storePath ? <AudioWaveform className="canvas-audio-waveform" assetId={asset.assetId} path={asset.storePath} name={asset.name} version={videoSourceKey(assetById.get(asset.assetId)) ?? asset.storePath} /> : isVideoPath(asset.storePath) ? <VideoPoster path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} /> : assetPath ? <CanvasImage path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height} alt="" draggable={false} />
                                 : <span className="canvas-folder-asset-placeholder">{asset.name.slice(0, 1)}</span>}
                               {showAssetNames && <span className="canvas-folder-asset-name">{asset.name}</span>}
                             </Member>;
@@ -7030,7 +7032,7 @@ export function CanvasWorkspace({
             setDocumentPromptLoad({ ...prompt, id: canvasId("document-prompt") });
             setSelectedChatId(null); useStore.getState().setBoardActive(true); documentEditorSession.current++; setDocumentEditor(null);
           }}/></Suspense>}
-        {creationImagePreview && (isVideoPath(creationImagePreview.asset.store_path)
+        {creationImagePreview && (isVideoPath(creationImagePreview.asset.store_path) || isAudioPath(creationImagePreview.asset.store_path)
           ? <LibraryVideoPreview asset={creationImagePreview.asset} job={creationImagePreview.job} path={creationImagePreview.asset.store_path!} sourceKey={videoSourceKey(creationImagePreview.asset)} projectId={projectId ?? null} onClose={creationImage.close}/>
           : <CreationImagePreview asset={currentPreviewAsset ?? creationImagePreview.asset} projectId={projectId}
               job={currentPreviewImage ? outputJob(currentPreviewImage) : creationImagePreview.job}
@@ -7047,7 +7049,11 @@ export function CanvasWorkspace({
                   onIndexChange: index => { const image = previewGallery[index]; if (image) setPreviewMember({ openedId: previewOpenedId, nodeId: image.id }); } }
                 : undefined} />)}
         {canvasLightbox && (
-          lightboxPath && lightboxVideo ? <CreationImagePreview asset={lightboxVideo} projectId={projectId} job={lightboxVideoJob}
+          lightboxPath && lightboxAudio ? <LibraryVideoPreview asset={lightboxAudio} path={lightboxPath}
+            sourceKey={videoSourceKey(lightboxAudio)} projectId={projectId} onClose={() => setCanvasLightbox(null)}
+            navigation={{ index: canvasLightbox.index, count: canvasLightbox.images.length,
+              onIndexChange: index => setCanvasLightbox(current => current ? { ...current, index } : null) }}/>
+          : lightboxPath && lightboxVideo ? <CreationImagePreview asset={lightboxVideo} projectId={projectId} job={lightboxVideoJob}
             workflowOrigin={lightboxOrigin ? { nodeId: lightboxOrigin.id, title: workflow?.document.cardNames?.[lightboxOrigin.id] } : undefined}
             onClose={() => setCanvasLightbox(null)} video={{ path: lightboxPath, sourceKey: videoSourceKey(lightboxVideo), onAddFrame: addVideoFrame, onSaveTrim: saveVideoTrim }}
             navigation={{ index: canvasLightbox.index, count: canvasLightbox.images.length,

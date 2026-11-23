@@ -25,7 +25,7 @@ export interface AudioWaveformProps {
 type Loaded = { key: string; assetId: string; path: string; data?: AudioWaveformData; error?: unknown };
 const timeLabel = (time: number) => time < 1 ? "0:00" : videoDurationLabel(time) || "0:00";
 
-function paint(canvas: HTMLCanvasElement, data: AudioWaveformData, verticalInset = 24) {
+export function paintAudioWaveform(canvas: HTMLCanvasElement, data: AudioWaveformData, verticalInset = 24) {
   const width = canvas.clientWidth, height = canvas.clientHeight;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
@@ -60,7 +60,7 @@ export function AudioWaveformThumbnail({ asset, className = "" }: { asset: Asset
     });
   }, [visible, key, asset.id, asset.store_path]);
   useEffect(() => {
-    if (visible && data && canvas.current) paint(canvas.current, data, 3);
+    if (visible && data && canvas.current) paintAudioWaveform(canvas.current, data, 3);
   }, [visible, data, width, height]);
   return <span ref={ref} className={`audio-waveform-thumbnail ${className}`} role="img" aria-label={`音频：${asset.name}`}>
     {data ? <canvas ref={canvas} /> : <Music2 size={18} aria-hidden="true" />}
@@ -111,7 +111,7 @@ export function AudioWaveform({ assetId, path, name, version, expectedVersion, d
   useEffect(() => {
     const target = canvas.current;
     if (!target || !visible || !data) return;
-    const draw = () => paint(target, data);
+    const draw = () => paintAudioWaveform(target, data);
     draw();
     const resize = new ResizeObserver(draw); resize.observe(target);
     const theme = new MutationObserver(draw); theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });

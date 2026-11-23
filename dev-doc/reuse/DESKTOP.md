@@ -141,6 +141,7 @@
 - 推荐 UI 入口：[AudioWaveform.tsx](../../apps/desktop/src/components/AudioWaveform.tsx) 的 `AudioWaveform`；底层为 [audioPreview.ts](../../apps/desktop/src/lib/audioPreview.ts) 的 `playAudioPreview`／`stopAudioPreview` 与 [audioPreviewPeaks.ts](../../apps/desktop/src/lib/audioPreviewPeaks.ts) 的 `requestAudioWaveform`。实际调用：[AudioFileMediaCard.tsx](../../apps/desktop/src/components/AudioFileMediaCard.tsx) 和 [AssetDetail.tsx](../../apps/desktop/src/components/AssetDetail.tsx) 都渲染 `AudioWaveform`。
 - 边界：一个 `HTMLAudioElement` 跨卡片持有持续播放；卸载只结束临时试听，不能随意停持续播放。原件修改／回收前释放对应句柄，`expectedVersion` 是原件指纹，不是 UI revision；波形按可见订阅和有限并发获取，不全量解码到 React。不是多轨混音器或视频播放器。
 - 状态：**可跨模块复用**；格式与生命周期约束见 [音频素材库](../AUDIO-LIBRARY.md)。
+- 完整音频详情经 [LibraryVideoPreview](../../apps/desktop/src/components/LibraryVideoPreview.tsx) 使用共用预览壳。主舞台由 [AudioDetailPlayer](../../apps/desktop/src/components/AudioDetailPlayer.tsx) 复用波形缓存、全局播放器与 `MediaTrimTimeline`。其 `seekRequest` 接收文稿阅读器选中的秒数和请求版本。
 - 画布独立音频卡片通过 `AudioWaveform.onWavePointerDown` 接入既有 `beginNodeDrag`，保留波形单击试听并在拖动／取消／多选后抑制误播；加载中也可拖动，完成后焦点回到卡片以支持撤销。素材库、详情与组内试听无需传此入口。[回归记录](../AUDIO-LIBRARY.md#画布音频拖动修复2026-11-10)。
 
 ## 在应用内拖素材，或把原件拖到其他应用

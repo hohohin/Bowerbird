@@ -16,12 +16,13 @@ import { AssetDetail } from "./AssetDetail";
 import { useImagePreviewHud } from "./useImagePreviewHud";
 import { ImagePreviewContinuation } from "./ImagePreviewContinuation";
 import { VideoPlayer } from "./VideoPlayer";
+import { AudioDetailPlayer } from "./AudioDetailPlayer";
 import { VideoTranscriptPanel, type VideoAnalysisView } from "./VideoTranscriptPanel";
 import { loadImagePreviewHistory } from "../lib/imagePreviewContinuation";
 import { useStore } from "../store";
 import "./CreationImagePreview.css";
 
-export function CreationImagePreview({ asset: originalAsset, projectId, job: providedJob, onClose, video, navigation,
+export function CreationImagePreview({ asset: originalAsset, projectId, job: providedJob, onClose, video, audio, navigation,
   workflowOrigin, parentNodeId, onCreateWorkflowFromAsset, openTranscript }: {
   asset: Asset;
   projectId: string | null;
@@ -29,6 +30,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   onClose: () => void;
   openTranscript?: boolean;
   video?: Pick<ComponentProps<typeof VideoPlayer>, "path" | "sourceKey" | "frameTarget" | "onAddFrame" | "onAddFrameToCanvas" | "onSaveTrim">;
+  audio?: { path: string; sourceKey?: string; onSaveTrim: (request: VideoTrimRequest) => Promise<Asset> };
   navigation?: { index: number; count: number; assetIds?: readonly string[]; onIndexChange: (index: number) => void };
   workflowOrigin?: { nodeId: string; title?: string };
   parentNodeId?: string | null;
@@ -42,7 +44,9 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
     ? undefined : providedJob;
   const navigationIndex = navigation?.assetIds?.indexOf(asset.id);
   const visibleIndex = navigationIndex !== undefined && navigationIndex >= 0 ? navigationIndex : navigation?.index ?? 0;
-  const mediaDetail = video ? "视频详情" : "图片详情";
+  const media = video ?? audio;
+  const mediaLabel = audio ? "音频" : video ? "视频" : "图片";
+  const mediaDetail = `${mediaLabel}详情`;
   const localVideo = !!video && asset.source === "comfy-h3";
   const requestKey = `${projectId ?? ""}:${asset.id}`;
   const [history, setHistory] = useState<{ key: string; job: GenJob | null; error?: unknown } | null>(null);
@@ -58,7 +62,8 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   const [conversationKey, setConversationKey] = useState<string | null>(null);
   const [videoAnalysis, setVideoAnalysis] = useState<{ key: string; view: VideoAnalysisView | null }>();
   const [videoSeek, setVideoSeek] = useState<{ key: string; time: number; revision: number }>();
-  const [videoReplacement, setVideoReplacement] = useState<{ key: string; revision: number; duration?: number | null }>();
+  const [mediaReplacement, setMediaReplacement] = useState<{ key: string; revision: number; duration?: number | null }>();
+  const [measuredAudio, setMeasuredAudio] = useState<{ key: string; duration: number }>();
   const [followLatest, setFollowLatest] = useState(false);
   const [continuation, setContinuation] = useState<{ originKey: string; jobId: string; turnKey?: string }>();
   const submitted = continuation?.originKey === originKey ? continuation : undefined;
@@ -83,7 +88,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   const [outputError, setOutputError] = useState<{ originKey: string; message: string }>();
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  const originalPath = video ? null : asset.store_path ?? asset.thumb_path;
+  const originalPath = media ? null : asset.store_path ?? asset.thumb_path;
   const [conversionFailed, setConversionFailed] = useState<string | null | undefined>(null);
   const path = useCompatibleImagePath(originalPath, () => setConversionFailed(originalPath));
   const zoom = useImageZoom(path, { min: 0.1, max: 16 });
@@ -94,7 +99,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   const dimensions = asset.width && asset.height ? asset : naturalSize?.path === path ? naturalSize : null;
   const imageRatio = dimensions?.width && dimensions.height ? dimensions.width / dimensions.height : 1;
   const contentMounted = contentKey === requestKey;
-  const imageAvailable = !!video || !!path && (loadedImage === path || failedImage === path)
+  const imageAvailable = !!media || !!path && (loadedImage === path || failedImage === path)
     || !!asset.thumb_path && loadedThumbnail === asset.thumb_path || !!originalPath && conversionFailed === originalPath || !originalPath;
   const imageIntroduced = introducedKey === requestKey && imageAvailable;
   const inspectorVisible = imageIntroduced && inspectorKey === requestKey;
@@ -168,7 +173,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   }, [requestKey]);
 
   useEffect(() => {
-    if (job || openTranscript || !contentMounted) return;
+    if (job || openTranscript || !contentMounted || (audio && !asset.generation_session_id)) return;
     let current = true;
     setHistory(null);
     void (async () => {
@@ -180,7 +185,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
       }
     })();
     return () => { current = false; };
-  }, [asset.id, asset.generation_session_id, projectId, job, requestKey, retry, contentMounted, localVideo, openTranscript]);
+  }, [asset.id, asset.generation_session_id, projectId, job, requestKey, retry, contentMounted, localVideo, openTranscript, !!audio]);
 
   const ready = history?.key === requestKey ? history : null;
   const source = liveJob ?? job ?? ready?.job;
@@ -202,7 +207,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
       if (outputRequest.current === request) setOutputError({ originKey, message: userErrorMessage(reason, "暂时无法打开这张生成图片") });
     }
   }, [originalAsset, originKey]);
-  const completedPath = !video && followLatest && submitted?.turnKey && liveJob && !liveJob.running
+  const completedPath = !media && followLatest && submitted?.turnKey && liveJob && !liveJob.running
     ? liveJob.turns.find(turn => turn.turnKey === submitted.turnKey && !turn.error)?.images[0] : undefined;
   useEffect(() => {
     if (completedPath) void showOutput(completedPath);
@@ -220,21 +225,22 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   const modelLabel = detailTurn?.videoOptions ? videoModelLabel(detailTurn.videoOptions.model_version)
     : detailTurn && (!video || localVideo) ? imageProviderLabel(detailTurn.provider || snapshot?.job.provider, entitlement, snapshot?.job.dreaminaModelVersion ?? null) : null;
   const generationRatio = detailTurn?.ratio ?? (snapshot?.job.turns.length === 1 ? snapshot.job.lastRatio : null);
-  const singleTurn = !video && detailTurn && snapshot?.job.turns.length === 1 && !snapshot.job.running && !detailTurn.error;
+  const singleTurn = !media && detailTurn && snapshot?.job.turns.length === 1 && !snapshot.job.running && !detailTurn.error;
   const references = detailTurn?.refAssets?.length ? detailTurn.refAssets : snapshot?.job.refAssets ?? [];
   const referencePaths = detailTurn?.refs?.length ? detailTurn.refs : references.flatMap(reference => reference.store_path ? [reference.store_path] : []);
   const hasConversation = !!job || !!snapshot || !!workflowOrigin || ready?.error != null || (!ready && (!!asset.generation_session_id || localVideo));
   const conversationContentReady = imageIntroduced && (!!snapshot || !!ready);
   const conversationVisible = conversationContentReady && conversationKey === requestKey;
-  const videoKey = `${requestKey}:${video?.path}:${video?.sourceKey ?? ""}`;
-  const replacement = videoReplacement?.key === videoKey ? videoReplacement : undefined;
+  const videoKey = `${requestKey}:${media?.path}:${media?.sourceKey ?? ""}`;
+  const replacement = mediaReplacement?.key === videoKey ? mediaReplacement : undefined;
   const transcriptKey = `${videoKey}:${replacement?.revision ?? 0}`;
   const selectedVideoView = videoAnalysis?.key === videoKey ? videoAnalysis.view : openTranscript ? "transcript" : null;
-  const workspaceView = video ? selectedVideoView : null;
+  const workspaceView = media ? selectedVideoView : null;
   const workspaceOpen = !!workspaceView;
   const cloudAuth = useStore(state => state.cloudAuth);
   const transcriptOwner = cloudAuth?.cloud_available && cloudAuth.logged_in ? cloudAuth.user_id : null;
-  const transcriptPrice = useVideoTranscriptPrice(video && contentMounted ? transcriptOwner : null);
+  const transcriptPrice = useVideoTranscriptPrice(media && contentMounted ? transcriptOwner : null);
+  const duration = measuredAudio?.key === transcriptKey ? measuredAudio.duration : replacement ? replacement.duration : asset.duration;
   const videoAnalysisStatus = transcriptPrice.credits !== null ? `转录 · ${transcriptPrice.credits} Bcoin`
     : transcriptPrice.loading ? "正在读取价格…"
     : transcriptPrice.connectionError ? "暂时无法连接转录服务"
@@ -263,12 +269,19 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
     setVideoAnalysis({ key: videoKey, view: null });
   }
 
-  async function saveVideoTrim(request: VideoTrimRequest) {
-    const result = await (video?.onSaveTrim ?? api.trimVideo)(request);
+  async function saveMediaTrim(request: VideoTrimRequest) {
+    const result = await (audio?.onSaveTrim ?? video?.onSaveTrim ?? api.trimVideo)(request);
     if (request.overwrite && result?.id === asset.id) {
-      setVideoReplacement(previous => ({
-        key: videoKey, revision: (previous?.revision ?? 0) + 1, duration: result.duration,
+      setMediaReplacement(previous => ({
+        key: videoKey, revision: (previous?.key === videoKey ? previous.revision : 0) + 1, duration: result.duration,
       }));
+      if (audio) {
+        setView({ originKey, asset: result });
+        useStore.setState(state => ({
+          assets: state.assets.map(item => item.id === result.id ? result : item),
+          promptedAssets: state.promptedAssets.map(item => item.id === result.id ? result : item),
+        }));
+      }
     }
     return result;
   }
@@ -319,8 +332,8 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
       || (!workspaceOpen && target.matches(".creation-image-preview-layout")));
   }
 
-  return createPortal(<div ref={surfaceRef} className={`creation-image-preview canvas-tactical${video ? " is-video-preview" : ""}${workspaceOpen ? " is-video-analysis" : ""}${closing ? " is-closing" : ""}`}
-    role="dialog" aria-modal="true" aria-label={workspaceOpen ? "视频分析工作区" : video ? "视频与生成记录预览" : "图片与生成记录预览"}
+  return createPortal(<div ref={surfaceRef} className={`creation-image-preview canvas-tactical${media ? " is-video-preview" : ""}${workspaceOpen ? " is-video-analysis" : ""}${closing ? " is-closing" : ""}`}
+    role="dialog" aria-modal="true" aria-label={workspaceOpen ? `${mediaLabel}分析工作区` : audio ? mediaDetail : `${mediaLabel}与生成记录预览`}
     onPointerDownCapture={event => {
       blankPress.current = event.button === 0 && isBlank(event.target) ? { x: event.clientX, y: event.clientY, moved: false } : null;
       const panel = event.target instanceof Element && event.currentTarget.contains(event.target)
@@ -385,28 +398,28 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
     <div ref={layoutRef} className="creation-image-preview-layout">
       {workspaceOpen && <header className="video-analysis-header">
         {!openTranscript && <button type="button" className="video-analysis-icon-button" onClick={dismiss}
-          aria-label="返回视频预览" title="返回视频预览"><ArrowLeft size={18} aria-hidden="true"/></button>}
+          aria-label={`返回${mediaLabel}预览`} title={`返回${mediaLabel}预览`}><ArrowLeft size={18} aria-hidden="true"/></button>}
         <div className="video-analysis-heading">
-          <h2 ref={analysisHeading} tabIndex={-1}>视频分析</h2>
+          <h2 ref={analysisHeading} tabIndex={-1}>{mediaLabel}分析</h2>
           <p title={asset.name}>{asset.name}</p>
         </div>
-        <div className="video-analysis-tabs" role="group" aria-label="视频分析视图">
+        <div className="video-analysis-tabs" role="group" aria-label={`${mediaLabel}分析视图`}>
           <button type="button" aria-pressed={workspaceView === "analysis"} onClick={() => selectAnalysisView("analysis")}>分析</button>
           <button type="button" aria-pressed={workspaceView === "transcript"} onClick={() => selectAnalysisView("transcript")}>转录文稿</button>
         </div>
         <button type="button" className="video-analysis-icon-button" onClick={close}
-          aria-label="关闭视频分析" title="关闭视频分析"><X size={19} aria-hidden="true"/></button>
+          aria-label={`关闭${mediaLabel}分析`} title={`关闭${mediaLabel}分析`}><X size={19} aria-hidden="true"/></button>
       </header>}
       {!openTranscript && hasConversation && <section className={`creation-image-preview-conversation creation-image-preview-record ${!detailsOpen ? "is-collapsed" : conversationVisible ? "is-ready" : "is-loading"}${detailsClosing ? " is-leaving" : ""}`}
         aria-label="生成记录" aria-hidden={workspaceOpen || !conversationVisible || !detailsOpen || detailsClosing} hidden={workspaceOpen}>
         <div className="creation-image-preview-conversation-plane" aria-hidden="true"/>
         <header className="creation-image-preview-conversation-head">
           <h2>生成记录</h2>
-          {!video && snapshot && snapshot.job.turns.length > 1 && <span>共 {snapshot.job.turns.length} 轮</span>}
+          {!media && snapshot && snapshot.job.turns.length > 1 && <span>共 {snapshot.job.turns.length} 轮</span>}
           <button type="button" onClick={toggleDetails} aria-label="收起生成记录面板" title="收起生成记录"><PanelLeftClose size={16}/></button>
         </header>
         {imageIntroduced && (workflowOrigin || snapshot) && <div className="creation-image-preview-record-source">
-          <span title={workflowOrigin?.title}>{workflowOrigin ? "画布生成卡" : video ? "当前视频" : "当前图片"}{modelLabel && ` · ${modelLabel}`}{generationRatio && ` · ${generationRatio}`}</span>
+          <span title={workflowOrigin?.title}>{workflowOrigin ? "画布生成卡" : `当前${mediaLabel}`}{modelLabel && ` · ${modelLabel}`}{generationRatio && ` · ${generationRatio}`}</span>
         </div>}
         <div className="creation-image-preview-history">
           {imageIntroduced && contentMounted && (snapshot ? singleTurn ? <div className="creation-image-preview-parameters">
@@ -420,16 +433,16 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
               })}</ul>
             </>}
           </div> : <GenerationPanel embedded readOnly followLatest={followLatest} hydratedAssets={[asset, ...snapshot.job.refAssets]}
-            previewOutput={video ? undefined : { path: asset.store_path ?? null, onSelect: path => void showOutput(path, true) }}
-            onAddVideoFrame={video?.onAddFrame} onSaveVideoTrim={video?.onSaveTrim ? saveVideoTrim : undefined}
+            previewOutput={media ? undefined : { path: asset.store_path ?? null, onSelect: path => void showOutput(path, true) }}
+            onAddVideoFrame={video?.onAddFrame} onSaveVideoTrim={video?.onSaveTrim ? saveMediaTrim : undefined}
             snapshot={snapshot} /> : <div className="creation-image-preview-info">
           {!job && !ready ? <p role="status">正在读取生成记录…</p> : ready?.error != null
             ? <div className="creation-image-preview-error" role="alert"><p>{userErrorMessage(ready.error, "生成记录暂时无法读取，请重试。")}</p><button type="button" onClick={() => setRetry(value => value + 1)}>重试</button></div>
             : <p>暂无生成记录</p>}
           </div>)}
         </div>
-        {!video && outputError?.originKey === originKey && <p className="creation-image-preview-action-note" role="alert">{outputError.message}</p>}
-        {!video && imageIntroduced && contentMounted && source && (source.sessionId ? <ImagePreviewContinuation key={requestKey}
+        {!media && outputError?.originKey === originKey && <p className="creation-image-preview-action-note" role="alert">{outputError.message}</p>}
+        {!media && imageIntroduced && contentMounted && source && (source.sessionId ? <ImagePreviewContinuation key={requestKey}
           asset={asset} job={source} sourceJobId={sourceJobId} parentNodeId={asset.id === originalAsset.id ? parentNodeId : null} enabled={!closing}
           draft={{ value: drafts[requestKey] ?? "", onChange: value => setDrafts(previous => ({ ...previous, [requestKey]: value })) }}
           onSent={(jobId, turnKey) => { setContinuation({ originKey, jobId, turnKey }); setFollowLatest(true); }}/>
@@ -439,15 +452,18 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
           </div>)}
         <span className="creation-image-preview-panel-mark" aria-hidden="true"/>
       </section>}
-      <section className="creation-image-preview-image" aria-label={video ? "播放视频" : "放大图片"}>
+      <section className="creation-image-preview-image" aria-label={media ? `播放${mediaLabel}` : "放大图片"}>
         <figure className="creation-image-preview-figure" style={{ "--image-ratio": imageRatio } as CSSProperties}>
-          <div ref={imageAnchorRef} className="creation-image-preview-image-anchor" style={(video
+          <div ref={imageAnchorRef} className="creation-image-preview-image-anchor" style={(media
             ? { "--image-scale": 1 }
             : { ...zoom.style, cursor: zoom.dragging ? "grabbing" : "grab", "--image-scale": zoom.scale }) as CSSProperties & { "--image-scale": number }}>
             <div className="creation-image-preview-image-depth" aria-hidden="true"><i/><i/></div>
             {video ? <VideoPlayer key={`${video.path}:${video.sourceKey ?? ""}`} {...video}
-              onSaveTrim={video.onSaveTrim ? saveVideoTrim : undefined} seekRequest={videoSeek?.key === transcriptKey ? videoSeek : undefined}
-              embedded fitContainer showTrim /> : <div className="creation-image-preview-image-viewport">
+              onSaveTrim={video.onSaveTrim ? saveMediaTrim : undefined} seekRequest={videoSeek?.key === transcriptKey ? videoSeek : undefined}
+              embedded fitContainer showTrim /> : audio ? (contentMounted && <AudioDetailPlayer key={videoKey} asset={asset}
+                path={audio.path} sourceKey={transcriptKey} onSaveTrim={saveMediaTrim}
+                duration={duration} onDuration={duration => setMeasuredAudio({ key: transcriptKey, duration })}
+                seekRequest={videoSeek?.key === transcriptKey ? videoSeek : undefined}/>) : <div className="creation-image-preview-image-viewport">
               {asset.thumb_path && asset.thumb_path !== path && loadedImage !== path && <img className="creation-image-preview-thumbnail"
                 src={convertFileSrc(asset.thumb_path)} alt="" aria-hidden="true" draggable={false}
                 onLoad={() => setLoadedThumbnail(asset.thumb_path!)}/>}
@@ -468,7 +484,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
       </section>
       {workspaceView && <section className="video-analysis-content" aria-label={workspaceView === "transcript" ? "转录文稿" : "转录操作"}>
         {contentMounted && <VideoTranscriptPanel key={transcriptKey} assetId={asset.id} sourceKey={transcriptKey}
-          view={workspaceView} active={!closing} price={transcriptPrice} durationSeconds={replacement ? replacement.duration : asset.duration}
+          view={workspaceView} active={!closing} price={transcriptPrice} durationSeconds={duration} mediaKind={audio ? "audio" : "video"}
           onRead={() => { analysisHeading.current?.focus({ preventScroll: true }); selectAnalysisView("transcript"); }}
           onSeek={time => setVideoSeek(previous => ({ key: transcriptKey, time, revision: (previous?.revision ?? 0) + 1 }))}/>}
       </section>}
@@ -481,8 +497,8 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
         </header>
         {contentMounted && <AssetDetail key={requestKey} panelOnly initialAsset={asset}
           onReady={() => setInspectorKey(requestKey)}
-          onOpenVideoAnalysis={video ? selectAnalysisView : undefined}
-          videoAnalysisStatus={video ? videoAnalysisStatus : undefined}
+          onOpenVideoAnalysis={media ? selectAnalysisView : undefined}
+          videoAnalysisStatus={media ? videoAnalysisStatus : undefined}
           selection={{ assetId: asset.id, onClose: close, onOpen: close, onNavigate: close }}/>}
         <span className="creation-image-preview-panel-mark" aria-hidden="true"/>
       </section>}
@@ -502,13 +518,13 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
             <button type="button" onClick={() => navigateMedia(visibleIndex + 1)} disabled={visibleIndex === navigation.count - 1}
               aria-label="下一项媒体" title="下一项媒体"><ChevronRight size={16}/></button>
           </>}
-          {!video && <>
+          {!media && <>
           <button type="button" onClick={() => zoom.zoomBy(1 / 1.25)} disabled={zoom.scale <= 0.1} title="缩小" aria-label="缩小图片"><ZoomOut size={16}/></button>
           <output className="creation-image-preview-scale" aria-label="图片缩放比例">{Math.round(zoom.scale * 100)}%</output>
           <button type="button" onClick={() => zoom.zoomBy(1.25)} disabled={zoom.scale >= 16} title="放大" aria-label="放大图片"><ZoomIn size={16}/></button>
           <button type="button" onClick={zoom.reset} title="适应画面" aria-label="适应画面"><Focus size={16}/></button>
           </>}
-          {video && <button type="button" aria-label="打开转录文稿" title="转录文稿" onClick={() => selectAnalysisView("transcript")}><FileText size={16}/></button>}
+          {media && <button type="button" aria-label="打开转录文稿" title="转录文稿" onClick={() => selectAnalysisView("transcript")}><FileText size={16}/></button>}
           {hasConversation && conversationVisible && <button ref={detailsToggleRef} type="button" onClick={toggleDetails} aria-pressed={detailsOpen && !detailsClosing}
             title={detailsOpen && !detailsClosing ? "收起生成记录" : "显示生成记录"} aria-label={detailsOpen && !detailsClosing ? "收起生成记录" : "显示生成记录"}>
             <PanelLeft size={16}/>

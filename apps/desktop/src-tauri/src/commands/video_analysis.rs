@@ -1,4 +1,4 @@
-use super::video_asset_revision::{source, FileStamp};
+use super::video_asset_revision::{source, FileStamp, SourceUsage};
 use crate::{
     db::Database,
     error::{AppError, AppResult},
@@ -24,7 +24,7 @@ fn current_description(db: &Database, asset_id: &str) -> AppResult<Option<VideoA
         return Ok(None);
     };
     let record: StoredDescription = serde_json::from_str(&payload)?;
-    let Ok(original) = source(db, asset_id) else {
+    let Ok(original) = source(db, asset_id, SourceUsage::VideoAnalysis) else {
         return Ok(None);
     };
     if !db.connected_source_matches(asset_id, &original)?
@@ -74,7 +74,7 @@ mod tests {
         db.scan_connection(&paths, &root).unwrap();
         let pending = db.pending_connected_fingerprints("").unwrap();
         assert_eq!(pending.len(), 1);
-        let (_, hash, _) = snapshot_source(&db, &pending[0]).unwrap();
+        let (_, hash, _) = snapshot_source(&db, &pending[0], SourceUsage::VideoAnalysis).unwrap();
         assert_eq!(hash, crate::core::external_files::fingerprint(&source).unwrap());
         assert!(db.pending_connected_fingerprints("").unwrap().is_empty());
         let persisted: String = db.conn.lock().unwrap().query_row(
@@ -85,7 +85,7 @@ mod tests {
     use std::{fs, path::Path};
 
     fn description_fixture(db: &Database, asset_id: &str, text: &str) -> Value {
-        let (_, source_hash, stamp) = snapshot_source(db, asset_id).unwrap();
+        let (_, source_hash, stamp) = snapshot_source(db, asset_id, SourceUsage::VideoAnalysis).unwrap();
         let mut payload = serde_json::to_value(registration(db, asset_id).unwrap()).unwrap();
         payload["schemaVersion"] = json!(1);
         payload["sourceHash"] = json!(source_hash);
@@ -112,6 +112,7 @@ mod tests {
                 created_at: None,
             },
             true,
+            None,
         )
         .unwrap();
         id

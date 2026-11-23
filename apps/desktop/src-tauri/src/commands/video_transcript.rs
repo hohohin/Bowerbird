@@ -1,6 +1,6 @@
 use crate::{
     cloud::{AuthClient, CloudClient},
-    core::{library::Analysis, paths::LibraryPaths},
+    core::{external_files::audio_path, library::Analysis, paths::LibraryPaths},
     db::Database,
     error::{AppError, AppResult},
     media::probe,
@@ -17,7 +17,10 @@ use std::{
 use tauri::{AppHandle, Emitter, State};
 
 use super::{
-    video_asset_revision::{registration, save_revision, snapshot_source, source, FileStamp, Registration},
+    video_asset_revision::{
+        registration, save_revision, snapshot_source, source, FileStamp, Registration, RevisionGuard,
+        SourceUsage,
+    },
     video_replication::{speech, stage_for_owner, stage_recovery, StageRecovery},
 };
 
@@ -254,7 +257,7 @@ fn load(db: &Database, asset_id: &str, source_hash: Option<&str>) -> AppResult<O
         .transpose()
 }
 
-fn save(db: &Database, asset_id: &str, record: &Record, select_revision: bool) -> AppResult<()> {
+fn save(db: &Database, asset_id: &str, record: &Record, select_path: Option<&Path>) -> AppResult<()> {
     save_revision(db, &Analysis {
         id: record_id(asset_id, &record.source_hash),
         asset_id: asset_id.to_owned(),
@@ -262,11 +265,16 @@ fn save(db: &Database, asset_id: &str, record: &Record, select_revision: bool) -
         payload: serde_json::to_string(record)?,
         provider: Some("doubao-speech".into()),
         created_at: None,
-    }, select_revision)
+    }, select_path.is_some(), select_path.map(|path| RevisionGuard {
+        path,
+        stamp: &record.stamp,
+        registration: &record.registration,
+        source_hash: &record.source_hash,
+    }))
 }
 
 fn save_final(db: &Database, root: &Path, asset_id: &str, record: &Record) -> AppResult<()> {
-    save(db, asset_id, record, false)?;
+    save(db, asset_id, record, None)?;
     if let Some(attempt) = record
         .full_attempts
         .last()
@@ -320,32 +328,31 @@ struct CheckedSource {
 }
 
 async fn check_source(db: Arc<Database>, asset_id: String) -> AppResult<CheckedSource> {
-    tokio::task::spawn_blocking(move || {
-        let (path, hash, stamp) = snapshot_source(&db, &asset_id).map_err(|error| match error {
-            AppError::Other(_) => error,
-            _ => invalid("无法读取视频原件，请检查文件是否可用"),
-        })?;
-        let media =
-            probe::probe(&path).map_err(|_| invalid("无法读取视频时长，请检查视频格式和完整性"))?;
-        if !media.duration.is_finite() || media.duration <= 0.0 {
-            return Err(invalid("无法确认视频时长，请检查原文件后重试"));
-        }
-        if media.duration > speech::MAX_FULL_AUDIO_SECONDS {
-            return Err(invalid("视频超过 2 小时，请先裁剪后再转录"));
-        }
-        if FileStamp::read(&path).as_ref().ok() != Some(&stamp) {
-            return Err(invalid("读取期间视频已变化，请重新转录"));
-        }
-        Ok(CheckedSource {
-            path,
-            hash,
-            stamp,
-            registration: registration(&db, &asset_id)?,
-            duration_seconds: media.duration,
-        })
+    let (path, hash, stamp, registered, video_duration) = tokio::task::spawn_blocking(move || {
+        let (path, hash, stamp) = snapshot_source(&db, &asset_id, SourceUsage::Transcript)
+            .map_err(|error| match error {
+                AppError::Other(_) => error,
+                _ => invalid("无法读取原件，请检查文件是否可用"),
+            })?;
+        let video_duration = (!audio_path(&path)).then(|| {
+            probe::probe(&path)
+                .map(|media| media.duration)
+                .map_err(|_| invalid("无法读取视频时长，请检查视频格式和完整性"))
+        }).transpose()?;
+        Ok::<_, AppError>((path, hash, stamp, registration(&db, &asset_id)?, video_duration))
     })
     .await
-    .map_err(|_| invalid("无法读取视频原件"))?
+    .map_err(|_| invalid("无法读取原件"))??;
+
+    let duration_seconds = match video_duration {
+        Some(duration) => duration,
+        None => speech::audio_source_duration(&path).await?,
+    };
+    speech::validate_full_duration(duration_seconds)?;
+    if FileStamp::read(&path).as_ref().ok() != Some(&stamp) {
+        return Err(invalid("读取期间原件已变化，请重新转录"));
+    }
+    Ok(CheckedSource { path, hash, stamp, registration: registered, duration_seconds })
 }
 
 async fn verify_source(
@@ -358,14 +365,14 @@ async fn verify_source(
     let input = input.to_owned();
     let expected = expected.to_owned();
     tokio::task::spawn_blocking(move || {
-        let (resolved, current, stamp) = snapshot_source(&db, &asset_id)?;
+        let (resolved, current, stamp) = snapshot_source(&db, &asset_id, SourceUsage::Transcript)?;
         if resolved != input || current != expected {
-            return Err(invalid("转录期间视频已变化，请转录当前原件"));
+            return Err(invalid("转录期间原件已变化，请转录当前版本"));
         }
         Ok((stamp, registration(&db, &asset_id)?))
     })
     .await
-    .map_err(|_| invalid("无法核对视频原件"))?
+    .map_err(|_| invalid("无法核对原件"))?
 }
 
 #[derive(Deserialize)]
@@ -492,7 +499,7 @@ fn confirmed_price(
 ) -> AppResult<i64> {
     if let Some(quote) = quote {
         if quote.source_hash != record.source_hash {
-            return Err(invalid("报价后视频原件已变化，请重新核对后再转录"));
+            return Err(invalid("报价后原件已变化，请重新核对后再转录"));
         }
         if let Some(credits) = expected_credits.filter(|credits| *credits > 0) {
             return Ok(credits);
@@ -609,7 +616,7 @@ async fn recover_legacy(
         merge_segment(&mut record.view, segmentation.plan[index], result)?;
         record.view.completed_segments = Some(index + 1);
         segmentation.segment_attempt = 0;
-        save(&run.db, run.asset_id, record, false)?;
+        save(&run.db, run.asset_id, record, None)?;
     }
     let mut view = record.view.clone();
     view.status = if view.text.is_empty() {
@@ -634,7 +641,7 @@ async fn start_file_speech(
     }
     let source_duration_ms = (run.source_duration_seconds * 1000.0).ceil() as u64;
     if source_duration_ms > capability.max_duration_ms {
-        return Err(invalid("视频时长超过当前转录服务上限，请先裁剪后重试"));
+        return Err(invalid("素材时长超过当前转录服务上限，请先裁剪后重试"));
     }
     let key = format!("file-speech:{}", uuid::Uuid::new_v4());
     let audio_path = file_speech::audio_path(run.root, &key);
@@ -675,7 +682,7 @@ async fn start_file_speech(
         terminal: false,
     });
     let previous_view = std::mem::replace(&mut record.view, VideoTranscript::new(Status::Running));
-    if let Err(error) = save(&run.db, run.asset_id, record, false) {
+    if let Err(error) = save(&run.db, run.asset_id, record, None) {
         record.full_attempts.pop();
         record.view = previous_view;
         let _ = fs::remove_file(&audio_path);
@@ -737,7 +744,7 @@ async fn run_file_speech(
         .expect("active file speech attempt");
     if attempt.job_id.is_none() {
         attempt.job_id = Some(original.job_id.clone());
-        save(&run.db, run.asset_id, record, false)?;
+        save(&run.db, run.asset_id, record, None)?;
     }
     let attempt = record
         .full_attempts
@@ -838,7 +845,7 @@ pub async fn video_transcript_get(
     let owner = auth.snapshot().user_id;
     tokio::task::spawn_blocking(move || current_view(&db, &root, &asset_id, owner.as_deref()))
         .await
-        .map_err(|_| invalid("无法读取视频转录"))?
+        .map_err(|_| invalid("无法读取转录文稿"))?
 }
 
 async fn refresh_completed_timing(
@@ -851,7 +858,7 @@ async fn refresh_completed_timing(
         let _start = STARTS.lock().await;
         let key = (root.to_owned(), asset_id.to_owned());
         if !ACTIVE.lock().unwrap().insert(key.clone()) {
-            return Err(invalid("视频转录正在处理，请稍后补齐字词时间"));
+            return Err(invalid("转录正在处理，请稍后补齐字词时间"));
         }
         Activity(key)
     };
@@ -860,11 +867,11 @@ async fn refresh_completed_timing(
     let attempt = record
         .timing_attempt(service.owner)
         .ok_or_else(|| invalid("请使用转录原账号和原件补齐字词时间"))?;
-    let input = source(&db, asset_id)?;
+    let input = source(&db, asset_id, SourceUsage::Transcript)?;
     let (stamp, registered) =
         verify_source(db.clone(), asset_id, &input, &record.source_hash).await?;
     if stamp != record.stamp || !record.matches_registration(&registered) {
-        return Err(invalid("视频原件已变化，请保留现有转录文稿"));
+        return Err(invalid("原件已变化，请保留现有转录文稿"));
     }
     let job = service
         .lookup(attempt)
@@ -879,7 +886,7 @@ async fn refresh_completed_timing(
     let (after_stamp, after_registration) =
         verify_source(db.clone(), asset_id, &input, &record.source_hash).await?;
     if after_stamp != stamp || after_registration != registered {
-        return Err(invalid("视频原件已变化，请保留现有转录文稿"));
+        return Err(invalid("原件已变化，请保留现有转录文稿"));
     }
     if service.auth.snapshot().user_id.as_deref() != Some(service.owner) {
         return Err(invalid("账号已切换，请使用转录原账号补齐字词时间"));
@@ -895,7 +902,7 @@ async fn refresh_completed_timing(
             |row| row.get::<_, String>(0),
         )
         .optional()?
-        .ok_or_else(|| invalid("视频文稿已变化，请刷新预览后再试"))?;
+        .ok_or_else(|| invalid("转录文稿已变化，请刷新预览后再试"))?;
     let mut local: Record = serde_json::from_str(&raw)?;
     if local.stamp != stamp
         || !local.matches_registration(&registered)
@@ -903,7 +910,7 @@ async fn refresh_completed_timing(
             .timing_attempt(service.owner)
             .is_some_and(|latest| latest.key == attempt.key && latest.job_id == attempt.job_id)
     {
-        return Err(invalid("视频文稿已变化，请刷新预览后再试"));
+        return Err(invalid("转录文稿已变化，请刷新预览后再试"));
     }
     if timings.status != Status::Completed
         || local.view.text != timings.text
@@ -1021,7 +1028,7 @@ pub async fn video_transcript_quote(
     let no_audio = record.view.status == Status::NoAudio
         || (candidate && !speech::has_audio_track(&source.path).await?);
     if FileStamp::read(&source.path).as_ref().ok() != Some(&source.stamp) {
-        return Err(invalid("读取期间视频已变化，请重新获取报价"));
+        return Err(invalid("读取期间原件已变化，请重新获取报价"));
     }
     Ok(TranscriptQuote {
         source_hash: source.hash,
@@ -1046,7 +1053,7 @@ pub async fn video_transcript_start(
 ) -> AppResult<VideoTranscript> {
     let owner = auth.snapshot().user_id;
     if expected_user_id.is_some() && expected_user_id != owner {
-        return Err(invalid("账号已切换，请用原账号继续视频转录"));
+        return Err(invalid("账号已切换，请用原账号继续转录"));
     }
     let root = paths.root.clone();
     let key = (root.clone(), asset_id.clone());
@@ -1064,7 +1071,7 @@ pub async fn video_transcript_start(
             let pending = load(&db, &asset_id, None)?
                 .is_some_and(|record| cloud_pending(&root, &asset_id, &record));
             let message = if pending {
-                "原视频暂不可用，请恢复原件后取回已提交的转录".to_owned()
+                "原件暂不可用，请恢复后取回已提交的转录".to_owned()
             } else {
                 error.to_string()
             };
@@ -1077,14 +1084,14 @@ pub async fn video_transcript_start(
     record.registration = checked.registration;
     record.current = true;
     if record.view.is_complete() {
-        save(&db, &asset_id, &record, true)?;
+        save(&db, &asset_id, &record, Some(&checked.path))?;
         let _ = app.emit("library://assets-changed", ());
         return Ok(record.view);
     }
     let resume = cloud_pending(&root, &asset_id, &record);
     let Some(owner) = owner else {
         return Ok(VideoTranscript::interrupted(
-            "请登录 Bowerbird 后转录视频",
+            "请登录 Bowerbird 后转录",
             resume,
         ));
     };
@@ -1096,7 +1103,7 @@ pub async fn video_transcript_start(
             .or(record.owner.as_deref());
         if original_owner != Some(owner.as_str()) {
             return Ok(VideoTranscript::interrupted(
-                "此视频有待取回的转录，请登录原账号后继续",
+                "此素材有待取回的转录，请登录原账号后继续",
                 true,
             ));
         }
@@ -1109,12 +1116,12 @@ pub async fn video_transcript_start(
         {
             if FileStamp::read(&checked.path).as_ref().ok() != Some(&checked.stamp) {
                 return Ok(VideoTranscript::interrupted(
-                    "读取期间视频已变化，请重新获取报价",
+                    "读取期间原件已变化，请重新获取报价",
                     false,
                 ));
             }
             record.view = VideoTranscript::new(Status::NoAudio);
-            save(&db, &asset_id, &record, true)?;
+            save(&db, &asset_id, &record, Some(&checked.path))?;
             let _ = app.emit("library://assets-changed", ());
             return Ok(record.view);
         }
@@ -1133,7 +1140,7 @@ pub async fn video_transcript_start(
     record.view.quote_required = None;
     record.view.price_changed = None;
     let running = record.view.clone();
-    save(&db, &asset_id, &record, true)?;
+    save(&db, &asset_id, &record, Some(&checked.path))?;
     ACTIVE.lock().unwrap().insert(key.clone());
     let activity = Activity(key);
     let db = db.inner().clone();
@@ -1173,11 +1180,11 @@ pub async fn video_transcript_start(
                 }
             }
             Err(error) => {
-                tracing::warn!(asset = %asset_id, %error, "video transcription did not complete");
+                tracing::warn!(asset = %asset_id, %error, "media transcription did not complete");
                 let message = match &error {
                     AppError::Other(message) if !message.starts_with("json:") => message.as_str(),
                     AppError::Cloud(_) => "转录连接中断，请按原任务状态恢复",
-                    _ => "无法完成视频转录，请检查原件或音频工具后重试",
+                    _ => "无法完成转录，请检查原件或音频工具后重试",
                 };
                 let pending = cloud_pending(&root, &asset_id, &record);
                 record.view.interrupt(message, pending);
@@ -1187,7 +1194,7 @@ pub async fn video_transcript_start(
             }
         }
         if let Err(error) = save_final(&db, &root, &asset_id, &record) {
-            tracing::warn!(asset = %asset_id, %error, "could not save video transcription");
+            tracing::warn!(asset = %asset_id, %error, "could not save media transcription");
         }
         let _ = app.emit("library://assets-changed", ());
     });
@@ -1216,15 +1223,21 @@ mod tests {
 
     #[test]
     fn video_transcript_search_matches_text_and_exclusions_with_library_scope_and_revision() {
+        for (ext, media) in [("mp4", "videos"), ("wav", "audios")] {
+            assert_search_and_revision(ext, media);
+        }
+    }
+
+    fn assert_search_and_revision(ext: &str, media: &str) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("vid.mp4");
+        let path = dir.path().join(format!("original.{ext}"));
         fs::write(&path, b"fixture").unwrap();
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
         db.create_project("p", "p", "/p", "/p", "user").unwrap();
         db.conn.lock().unwrap().execute(
-            "INSERT INTO assets(id,name,ext,created_at,store_path,size,file_mtime) VALUES('vid','movie','mp4',10,?1,7,4)",
-            [path.to_str().unwrap()],
+            "INSERT INTO assets(id,name,ext,created_at,store_path,size,file_mtime) VALUES('vid','source',?1,10,?2,7,4)",
+            [ext, path.to_str().unwrap()],
         ).unwrap();
         let mut first = row("hash-a", Status::Completed, &db, &path);
         first.view = parse_result(json!({
@@ -1235,7 +1248,7 @@ mod tests {
             }]
         }))
         .unwrap();
-        save(&db, "vid", &first, true).unwrap();
+        save(&db, "vid", &first, Some(&path)).unwrap();
         let ids = |query: &str, project: Option<&str>| {
             db.search_assets(query, project, 10)
                 .unwrap()
@@ -1249,7 +1262,7 @@ mod tests {
         assert!(ids("窗边", Some("p")).is_empty());
         let filter = CatalogFilter {
             kind: "all".into(),
-            media: "videos".into(),
+            media: media.into(),
             query: Some("100%_中文".into()),
             ..Default::default()
         };
@@ -1268,9 +1281,13 @@ mod tests {
         assert!(current_view(&db, dir.path(), "vid", None)
             .unwrap()
             .is_none());
+        assert!(save(&db, "vid", &first, Some(&path)).is_err());
 
         let second = row("hash-b", Status::Running, &db, &path);
-        save(&db, "vid", &second, true).unwrap();
+        save(&db, "vid", &second, Some(&path)).unwrap();
+        // A late result for the old revision may still update its history.
+        save_final(&db, dir.path(), "vid", &first).unwrap();
+        assert!(!load(&db, "vid", Some("hash-a")).unwrap().unwrap().current);
         let reopened = current_view(&db, dir.path(), "vid", None).unwrap().unwrap();
         assert_eq!(reopened.status, Status::Interrupted);
         assert_eq!(reopened.cloud_pending, Some(false));
@@ -1279,8 +1296,101 @@ mod tests {
         assert_eq!(reused.view.utterances[0].words[0].end_ms, 85);
         reused.registration = registration(&db, "vid").unwrap();
         reused.current = true;
-        save(&db, "vid", &reused, true).unwrap();
+        save(&db, "vid", &reused, Some(&path)).unwrap();
         assert_eq!(ids("窗边", None), ["vid"]);
+    }
+
+    #[test]
+    fn video_transcript_source_accepts_audio_only_for_speech() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        for ext in ["wav", "mp3", "flac", "m4a", "ogg", "mp4", "jpg"] {
+            let original = directory.path().join(format!("source.{ext}"));
+            fs::write(&original, b"registered fixture").unwrap();
+            db.conn.lock().unwrap().execute(
+                "INSERT INTO assets(id,name,ext,store_path) VALUES(?1,'fixture',?1,?2)",
+                [ext, original.to_str().unwrap()],
+            ).unwrap();
+            assert_eq!(source(&db, ext, SourceUsage::Transcript).is_ok(), ext != "jpg");
+            assert_eq!(source(&db, ext, SourceUsage::VideoAnalysis).is_ok(), ext == "mp4");
+        }
+        assert!(source(&db, "unregistered", SourceUsage::Transcript).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local FFmpeg; synthetic files only"]
+    async fn video_transcript_standalone_audio_checks_duration_and_prepares_full_mp3() {
+        use crate::media::tools::{self, Tool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let ffmpeg = tools::resolve(Tool::Ffmpeg).unwrap();
+        for (ext, codec) in [
+            ("wav", "pcm_s16le"),
+            ("mp3", "libmp3lame"),
+            ("flac", "flac"),
+            ("m4a", "aac"),
+            ("ogg", "libvorbis"),
+        ] {
+            let path = dir.path().join(format!("original.{ext}"));
+            let input = tools::command(&ffmpeg)
+                .args(["-v", "error", "-nostdin", "-f", "lavfi", "-i",
+                    "sine=frequency=700:sample_rate=16000:duration=0.65",
+                    "-af", "adelay=350", "-c:a", codec])
+                .arg(&path).output().unwrap();
+            assert!(input.status.success(), "{ext}: {}", String::from_utf8_lossy(&input.stderr));
+            db.conn.lock().unwrap().execute(
+                "INSERT INTO assets(id,name,ext,store_path) VALUES(?1,'fixture',?1,?2)",
+                [ext, path.to_str().unwrap()],
+            ).unwrap();
+            let checked = check_source(db.clone(), ext.into()).await.unwrap();
+            assert!((checked.duration_seconds - 1.0).abs() < 0.15, "{ext}");
+            if ext == "mp3" {
+                let waveform = crate::media::audio::decode(&checked.path).unwrap();
+                assert!((checked.duration_seconds - waveform.duration).abs() < 1e-6);
+            }
+            let target = dir.path().join(format!("speech-{ext}.mp3"));
+            let extracted = speech::prepare_full_mp3(&checked.path, &target, checked.duration_seconds)
+                .await.unwrap().unwrap();
+            assert!((extracted.duration_seconds - 1.0).abs() < 0.20, "{ext}");
+            assert!(extracted.size_bytes < speech::MAX_FULL_AUDIO_BYTES);
+            let decoded = tools::command(&ffmpeg)
+                .args(["-v", "error", "-nostdin", "-i"]).arg(&target)
+                .args(["-f", "s16le", "pipe:1"]).output().unwrap();
+            assert!(decoded.status.success(), "{ext}");
+            let first_tone = decoded.stdout.chunks_exact(2)
+                .position(|pair| i16::from_le_bytes([pair[0], pair[1]]).unsigned_abs() > 500)
+                .unwrap() as f64 / 16_000.0;
+            assert!((first_tone - 0.35).abs() < 0.025, "{ext}: {first_tone}");
+        }
+
+        let over_limit = dir.path().join("over-limit.flac");
+        let generated = tools::command(&ffmpeg)
+            .args(["-v", "error", "-nostdin", "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono",
+                "-t", "7200.25", "-c:a", "flac"])
+            .arg(&over_limit).output().unwrap();
+        assert!(generated.status.success());
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO assets(id,name,ext,store_path) VALUES('over-limit','fixture','flac',?1)",
+            [over_limit.to_str().unwrap()],
+        ).unwrap();
+        let result = check_source(db.clone(), "over-limit".into()).await;
+        assert!(matches!(result, Err(AppError::Other(message)) if message.contains("超过 2 小时") && message.contains("裁剪")));
+
+        let boundary = dir.path().join("two-hours.mp3");
+        let generated = tools::command(&ffmpeg)
+            .args(["-v", "error", "-nostdin", "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono",
+                "-t", "7200", "-c:a", "libmp3lame"])
+            .arg(&boundary).output().unwrap();
+        assert!(generated.status.success());
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO assets(id,name,ext,store_path) VALUES('boundary','fixture','mp3',?1)",
+            [boundary.to_str().unwrap()],
+        ).unwrap();
+        let checked = check_source(db, "boundary".into()).await.unwrap();
+        assert_eq!(checked.duration_seconds, speech::MAX_FULL_AUDIO_SECONDS);
     }
 
     #[test]
@@ -1523,7 +1633,7 @@ mod tests {
         )
         .await
         .is_err());
-        save(&db, "vid", &initial, true).unwrap();
+        save(&db, "vid", &initial, Some(&path)).unwrap();
 
         let reopened = current_view(&db, dir.path(), "vid", None).unwrap().unwrap();
         assert_eq!(reopened.status, Status::Interrupted);
@@ -1628,7 +1738,7 @@ mod tests {
             job_id: Some(JOB.into()),
             terminal: true,
         });
-        save(&db, "vid", &saved, true).unwrap();
+        save(&db, "vid", &saved, Some(&path)).unwrap();
         let id = record_id("vid", &hash);
         db.conn.lock().unwrap().execute(
             "UPDATE analyses SET payload=json_set(payload,'$.utterances[0].futureField','retained') WHERE id=?1",
@@ -1705,6 +1815,12 @@ mod tests {
 
     #[tokio::test]
     async fn video_transcript_full_resume_reuses_original_key_and_keeps_final_timestamp() {
+        for ext in ["mp4", "wav"] {
+            assert_full_resume_reuses_original_key(ext).await;
+        }
+    }
+
+    async fn assert_full_resume_reuses_original_key(ext: &str) {
         use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
         use serde_json::Value;
         const JOB: &str = "12345678-1234-4123-8123-123456789abc";
@@ -1751,7 +1867,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("clip.mp4");
+        let path = dir.path().join(format!("source.{ext}"));
         fs::write(&path, b"fixture").unwrap();
         let db = Arc::new(Database::open_in_memory().unwrap());
         db.migrate().unwrap();
@@ -1759,12 +1875,12 @@ mod tests {
             .lock()
             .unwrap()
             .execute(
-                "INSERT INTO assets(id,name,ext,store_path) VALUES('vid','fixture','mp4',?1)",
-                [path.to_str().unwrap()],
+                "INSERT INTO assets(id,name,ext,store_path) VALUES('vid','fixture',?1,?2)",
+                [ext, path.to_str().unwrap()],
             )
             .unwrap();
         let hash = fingerprint(&path).unwrap();
-        let path = source(&db, "vid").unwrap();
+        let path = source(&db, "vid", SourceUsage::Transcript).unwrap();
         let mut record = row(&hash, Status::Running, &db, &path);
         let scratch = file_speech::audio_path(dir.path(), KEY);
         fs::create_dir_all(scratch.parent().unwrap()).unwrap();
@@ -1782,7 +1898,7 @@ mod tests {
             job_id: None,
             terminal: false,
         });
-        save(&db, "vid", &record, true).unwrap();
+        save(&db, "vid", &record, Some(&path)).unwrap();
         let calls: Calls = Arc::default();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -1862,7 +1978,7 @@ mod tests {
                 [path.to_str().unwrap()],
             )
             .unwrap();
-        let (input, hash, _) = snapshot_source(&db, "vid").unwrap();
+        let (input, hash, _) = snapshot_source(&db, "vid", SourceUsage::Transcript).unwrap();
         verify_source(db.clone(), "vid", &input, &hash)
             .await
             .unwrap();
@@ -1878,7 +1994,7 @@ mod tests {
         assert!(verify_source(db.clone(), "vid", &input, &hash)
             .await
             .is_err());
-        let (new_input, _, _) = snapshot_source(&db, "vid").unwrap();
+        let (new_input, _, _) = snapshot_source(&db, "vid", SourceUsage::Transcript).unwrap();
         verify_source(db, "vid", &new_input, &hash).await.unwrap();
     }
 }

@@ -32,9 +32,9 @@ export function creationImageAssetId(media: HTMLElement) {
 }
 
 function imageElement(root: HTMLElement | null, target: EventTarget | null, double: boolean) {
-  if (!(target instanceof Element) || !root?.contains(target)) return null;
+  if (!(target instanceof Element) || !root?.contains(target) || target.closest(".audio-waveform")) return null;
   const media = target.closest<HTMLElement>('[data-conversation-image],[data-asset-id],[data-frequent-asset-id],[data-creation-conversation]');
-  if (!media || unavailableImage(media, double)) return null;
+  if (!media || media.closest(".audio-file-card") || unavailableImage(media, double)) return null;
   const control = target.closest('button,input,textarea,select,a,[contenteditable="true"],[role="combobox"]');
   return control && control !== media ? null : media;
 }
@@ -80,7 +80,7 @@ class ImageGesture {
     const image = media && this.options.resolve(media);
     if (!image || !media) return null;
     const path = mediaPath(image, media);
-    if (!path || isAudioPath(path) || isTextPath(path)) return null;
+    if (!path || isTextPath(path)) return null;
     const video = isVideoPath(path);
     if (video && (!state.boardOpen || state.genEditing || !this.options.root.current?.querySelector('.creation-dock.is-creating[data-video-references="true"]'))) return null;
     return { ...image, media, video };
@@ -107,7 +107,8 @@ class ImageGesture {
       if (!this.current(request, image)) return;
       if (!asset) throw new Error("素材已移除，无法预览");
       const path = mediaPath({ assetId: asset.id, asset }, image.media);
-      if (!path || isAudioPath(path) || isTextPath(path)) return;
+      if (!path || isTextPath(path)) return;
+      if (isAudioPath(path) && !asset.store_path) return;
       if (isVideoPath(path)) {
         if (!this.handlesVideo(image.media) || this.options.onCanvasVideoPreview?.(path, image.media, asset)) return;
         const playable = await externalFiles.media(path);

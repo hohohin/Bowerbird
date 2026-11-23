@@ -116,9 +116,17 @@ try {
   assert.ok(Math.abs(afterPan.x - beforePan.x - 60) < 1 && Math.abs(afterPan.y - beforePan.y - 30) < 1, 'space drag pans from the waveform');
   assert.deepEqual(await geometry('audio'), beforeAudio, 'pan does not move the card');
   assert.equal(await page.locator('audio[data-audio-preview]').evaluate(a => a.paused), true, 'pan does not audition');
-  await page.evaluate(() => sessionStorage.setItem('reference-fixture', JSON.stringify(window.snapshot())));
+  await page.evaluate(() => {
+    sessionStorage.setItem('reference-fixture', JSON.stringify(window.snapshot()));
+    sessionStorage.setItem('canvas-settings', JSON.stringify({ canvas_show_asset_names: true }));
+  });
   await page.reload(); await wave().waitFor();
   assert.deepEqual(await geometry('audio'), beforeAudio, 'saved position survives reload');
+  await card('audio').locator('.canvas-node-name').click();
+  const detail = page.getByRole('dialog', { name: '音频详情', exact: true });
+  await detail.getByRole('region', { name: '音频播放器' }).getByRole('button', { name: '裁剪音频' }).waitFor();
+  await detail.getByRole('button', { name: '关闭预览' }).click();
+  await detail.waitFor({ state: 'hidden' });
   await page.screenshot({ path: `${output}/canvas.png` });
   assert.deepEqual(errors, []);
   console.log('Canvas audio: loading/ready drag, click seek, playback, cancel, multi-select, undo and reload passed.');

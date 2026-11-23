@@ -58,7 +58,7 @@ fn media_command(tool: Tool) -> AppResult<Command> {
     Ok(command)
 }
 
-pub(crate) async fn has_audio_track(source: &Path) -> AppResult<bool> {
+async fn probe_first_audio(source: &Path) -> AppResult<Value> {
     let probe = tokio::time::timeout(
         Duration::from_secs(30),
         media_command(Tool::Ffprobe)?
@@ -68,7 +68,7 @@ pub(crate) async fn has_audio_track(source: &Path) -> AppResult<bool> {
                 "-select_streams",
                 "a:0",
                 "-show_entries",
-                "stream=index",
+                "stream=index:format=duration",
                 "-of",
                 "json",
             ])
@@ -78,52 +78,74 @@ pub(crate) async fn has_audio_track(source: &Path) -> AppResult<bool> {
     .await
     .map_err(|_| error("检查音轨超时"))??;
     if !probe.status.success() {
-        return Err(error("无法检查视频音轨"));
+        return Err(error("无法检查音轨，请检查原文件格式和完整性"));
     }
     let info: Value = serde_json::from_slice(&probe.stdout)?;
-    let streams = info["streams"]
-        .as_array()
-        .ok_or_else(|| error("无法读取视频音轨信息"))?;
-    Ok(!streams.is_empty())
+    if !info["streams"].is_array() {
+        return Err(error("无法读取音轨信息"));
+    }
+    Ok(info)
 }
 
-/// Prepare a bounded copy of the first audio track on the video's playback timeline.
+pub(crate) async fn has_audio_track(source: &Path) -> AppResult<bool> {
+    let info = probe_first_audio(source).await?;
+    Ok(info["streams"][0]["index"].is_u64())
+}
+
+pub(crate) async fn audio_source_duration(source: &Path) -> AppResult<f64> {
+    let info = probe_first_audio(source).await?;
+    if !info["streams"][0]["index"].is_u64() {
+        return Err(error("音频原件没有可识别的音轨，请检查文件"));
+    }
+    // FFprobe reports encoded MP3 padding. The waveform and player use playable samples.
+    if source.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("mp3")) {
+        if let Some(duration) = audio::mp3_gapless_duration(source) {
+            return Ok(duration);
+        }
+    }
+    info["format"]["duration"]
+        .as_str()
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| error("无法读取音频时长，请检查原文件格式和完整性"))
+}
+
+pub(crate) fn validate_full_duration(duration: f64) -> AppResult<()> {
+    if !duration.is_finite() || duration <= 0.0 {
+        return Err(error("无法确认原件时长，请检查原文件后重试"));
+    }
+    if duration > MAX_FULL_AUDIO_SECONDS {
+        return Err(error("素材时长超过 2 小时，请先裁剪后再转录"));
+    }
+    Ok(())
+}
+
+/// Prepare a bounded copy of the first audio track on the source's playback timeline.
 /// The caller owns the source identity and the validated target's lifetime.
 pub(crate) async fn prepare_full_mp3(
     source: &Path,
     target: &Path,
     source_duration_seconds: f64,
 ) -> AppResult<Option<FullMp3>> {
-    if !source_duration_seconds.is_finite() || source_duration_seconds <= 0.0 {
-        return Err(error("无法确认视频时长，请检查原文件后重试"));
-    }
-    if source_duration_seconds > MAX_FULL_AUDIO_SECONDS {
-        return Err(error("视频超过 2 小时，请先裁剪后再转录"));
-    }
+    validate_full_duration(source_duration_seconds)?;
     if !has_audio_track(source).await? {
         return Ok(None);
     }
 
     let temporary = target.with_extension("pending.mp3");
     let duration = format!("{source_duration_seconds:.6}");
-    // Keep original PTS, including a positive media start, so utterances can
-    // seek directly on the player's clock. Trim before padding any gaps.
+    // Videos retain positive original timestamps on the playback clock. Standalone
+    // audio starts at zero even when its container has an encoder or muxing offset.
     let filter = format!("atrim=end={duration},aresample=16000:async=1:first_pts=0");
     let file_cap = MAX_FULL_AUDIO_BYTES.to_string();
     let result = async {
+        let mut command = media_command(Tool::Ffmpeg)?;
+        command.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-xerror", "-y"]);
+        if !crate::core::external_files::audio_path(source) {
+            command.arg("-copyts");
+        }
         let output = tokio::time::timeout(
             Duration::from_secs(600),
-            media_command(Tool::Ffmpeg)?
-                .args([
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-nostdin",
-                    "-xerror",
-                    "-y",
-                    "-copyts",
-                    "-i",
-                ])
+            command.arg("-i")
                 .arg(source)
                 .args([
                     "-map",
@@ -159,11 +181,11 @@ pub(crate) async fn prepare_full_mp3(
         let size_bytes = fs::metadata(&temporary)?.len();
         // Hitting the muxer's stop limit can leave a valid but truncated MP3.
         if size_bytes == 0 || size_bytes >= MAX_FULL_AUDIO_BYTES {
-            return Err(error("提取的音轨容量不符合要求，请先裁剪视频后重试"));
+            return Err(error("提取的音轨容量不符合要求，请先裁剪原件后重试"));
         }
         let duration_seconds = probe_full_mp3(&temporary).await?;
         if duration_seconds > source_duration_seconds + MP3_PADDING_SECONDS {
-            return Err(error("提取的音轨时长超出原片范围，请检查视频后重试"));
+            return Err(error("提取的音轨时长超出原件范围，请检查文件后重试"));
         }
         fs::rename(&temporary, target)?;
         Ok(Some(FullMp3 {
@@ -198,7 +220,7 @@ async fn probe_full_mp3(path: &Path) -> AppResult<f64> {
     .await
     .map_err(|_| error("核对提取音轨超时，请重试"))??;
     if !probe.status.success() {
-        return Err(error("无法核对提取的音轨，请检查视频时间轴后重试"));
+        return Err(error("无法核对提取的音轨，请检查原件时间轴后重试"));
     }
     let info: Value = serde_json::from_slice(&probe.stdout)
         .map_err(|_| error("无法读取提取的音轨信息，请重试"))?;
@@ -211,7 +233,7 @@ async fn probe_full_mp3(path: &Path) -> AppResult<f64> {
         .as_str()
         .and_then(|duration| duration.parse::<f64>().ok())
         .filter(|duration| duration.is_finite() && *duration > 0.0)
-        .ok_or_else(|| error("无法确认提取的音轨时长，请检查视频后重试"))
+        .ok_or_else(|| error("无法确认提取的音轨时长，请检查文件后重试"))
 }
 
 async fn write_wav(source: &Path, target: &Path, segment: Option<Segment>) -> AppResult<()> {

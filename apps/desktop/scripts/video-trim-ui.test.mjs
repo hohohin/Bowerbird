@@ -21,7 +21,7 @@ await page.exposeFunction('trimFixture', async request => {
   if (request.overwrite) await copyFile(file, source);
   return { store_path: request.overwrite ? '/.tmp/video-trim/source.mp4' : `/${file}` };
 });
-const dialog = page.getByRole('dialog', { name: /媒体预览/ });
+const dialog = page.getByRole('dialog', { name: '视频与生成记录预览', exact: true });
 const start = page.getByRole('spinbutton', { name: '入点秒数' });
 const end = page.getByRole('spinbutton', { name: '出点秒数' });
 const copies = () => page.evaluate(() => window.calls.filter(call => call.command === 'trim_video'));

@@ -276,23 +276,30 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
   function openAsset(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
     if (onInsertAsset) onInsertAsset(asset);
-    else if (isVideoAsset(asset)) activate(asset);
+    else if (isAudioAsset(asset)) {
+      const state = useStore.getState();
+      if (state.boardOpen || state.genEditing) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
+      else openPreview(asset);
+    } else if (isVideoAsset(asset)) activate(asset);
     else openDetail(asset);
   }
   function activate(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
-    if (onInsertAsset && isAudioAsset(asset)) { onInsertAsset(asset); return; }
-    if (isTextAsset(asset)) { openDetail(asset); return; }
     const state = useStore.getState();
     if (!onInsertAsset && projectId && state.activeProjectId !== projectId) return;
+    if (isAudioAsset(asset)) { openPreview(asset); return; }
+    if (isTextAsset(asset)) { openDetail(asset); return; }
     if (!onInsertAsset && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
-    else if (isAudioAsset(asset)) openDetail(asset);
-    else void run(async () => {
+    else openPreview(asset);
+  }
+  function openPreview(asset: Asset) {
+    const route = useStore.getState().projectRouteRevision;
+    void run(async () => {
       if (!asset.store_path) throw new Error("原文件暂不可用");
       const version = selectionVersion.current;
-      const path = await externalFiles.media(asset.store_path);
+      const path = isAudioAsset(asset) ? asset.store_path : await externalFiles.media(asset.store_path);
       if (!canShowOverlay() || filterRef.current !== filterKey || selectionVersion.current !== version) return;
-      if (useStore.getState().projectRouteRevision !== state.projectRouteRevision) return;
+      if (useStore.getState().projectRouteRevision !== route) return;
       setPreview({ asset, path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! });
     });
   }

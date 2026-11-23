@@ -14,6 +14,7 @@ import { notifyError } from "../lib/notify";
 import { canSearchPinterest } from "../lib/pinterestSearch";
 import type { Asset } from "../lib/types";
 import { videoSourceKey } from "../lib/videoSourceKey";
+import { isAudioAsset } from "../lib/audioMedia";
 import { AssetTransferMenuItems, useAssetTransferDialogs } from "./AssetTransferMenuItems";
 import { BatchAddToProjectsDialog } from "./BatchAddToProjectsDialog";
 import { CanvasAssetDeleteDialog } from "./CanvasAssetDeleteDialog";
@@ -68,7 +69,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
   const [groupCheck, setGroupCheck] = useState<{ menu: AssetMenuContext; projectId: string | null; ids: string[] | null } | null>(null);
   const [selectionAssets, setSelectionAssets] = useState<{ menu: AssetMenuContext; assets: Asset[] } | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; external: boolean; localPath?: string } | null>(null);
-  const [transcriptPreview, setTranscriptPreview] = useState<{ asset: Asset; path: string; projectId: string | null } | null>(null);
+  const [mediaPreview, setMediaPreview] = useState<{ asset: Asset; path: string; projectId: string | null; openTranscript: boolean } | null>(null);
   const [assignCollectionIds, setAssignCollectionIds] = useState<SelectionOperation | null>(null);
   const [projectPickIds, setProjectPickIds] = useState<SelectionOperation | null>(null);
   const [pendingCanvasDelete, setPendingCanvasDelete] = useState<{ assetIds: string[]; projectId: string | null; localPaths?: Record<string, string>; onComplete?: () => void } | null>(null);
@@ -77,7 +78,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
   useEffect(() => {
     if (!embedded && menu && menu.workspaceProjectId !== undefined && menu.workspaceProjectId !== activeProjectId) close();
   }, [menu, activeProjectId, selection]);
-  useEffect(() => { setTranscriptPreview(null); }, [activeProjectId]);
+  useEffect(() => { setMediaPreview(null); }, [activeProjectId]);
 
   useEffect(() => {
     setMenuBusy(false);
@@ -118,8 +119,8 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
   }, [menu, activeProjectId]);
 
   if (!menu) return <>
-    {transcriptPreview && <LibraryVideoPreview {...transcriptPreview} sourceKey={videoSourceKey(transcriptPreview.asset)}
-      openTranscript onClose={() => setTranscriptPreview(null)} />}
+    {mediaPreview && <LibraryVideoPreview {...mediaPreview} sourceKey={videoSourceKey(mediaPreview.asset)}
+      onClose={() => setMediaPreview(null)} />}
     {assignCollectionIds && <CollectionAssignDialog assetIds={assignCollectionIds.ids} onSaved={assignCollectionIds.onComplete} onClose={() => setAssignCollectionIds(null)} />}
     {transfer.dialogs}
     {pendingCanvasDelete && <CanvasAssetDeleteDialog target={pendingCanvasDelete} onComplete={pendingCanvasDelete.onComplete} onClose={() => setPendingCanvasDelete(null)} />}
@@ -205,18 +206,18 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
       close();
     });
   };
-  const openTranscript = async () => {
-    if (!asset || !storePath || busy || !isCurrent()) return;
+  const openMedia = async (openTranscript: boolean) => {
+    if (!asset || !storePath || busy || entries?.available === false || !isCurrent()) return;
     const routeRevision = useStore.getState().projectRouteRevision;
     const isCurrentPreview = () => isCurrent() && useStore.getState().projectRouteRevision === routeRevision;
     setMenuBusy(true);
     try {
-      const path = await externalFiles.media(storePath);
+      const path = isAudioAsset(asset) ? storePath : await externalFiles.media(storePath);
       if (!isCurrentPreview()) return;
-      setTranscriptPreview({ asset, path, projectId: membershipProjectId });
+      setMediaPreview({ asset, path, projectId: membershipProjectId, openTranscript });
       close();
     } catch (error) {
-      if (isCurrentPreview()) notifyError(error, "无法打开视频预览");
+      if (isCurrentPreview()) notifyError(error, isAudioAsset(asset) ? "无法打开音频预览" : "无法打开视频预览");
     } finally {
       if (isCurrent()) setMenuBusy(false);
     }
@@ -229,8 +230,8 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
     switch (action) {
       case "move-incomplete": menu.moveIncompleteSelection?.(); close(); break;
       case "add-to-chat": host.navigate(); store.addAssetToBoardFromDetail(assetId); close(); break;
-      case "open-detail": host.openDetail(menu); break;
-      case "open-transcript": void openTranscript(); break;
+      case "open-detail": if (asset && isAudioAsset(asset)) void openMedia(false); else host.openDetail(menu); break;
+      case "open-transcript": void openMedia(true); break;
       case "edit": host.navigate(); store.openAnnotator(assetId); close(); break;
       case "pinterest": host.searchPinterest(assetId); break;
       case "select": host.select(menu); break;

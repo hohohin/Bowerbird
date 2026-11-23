@@ -64,6 +64,7 @@ try {
   await root().getByRole('menuitem', { name: '反推提示词', exact: true }).focus();
   await page.keyboard.press('ArrowRight');
   await page.getByRole('menu', { name: '选择反推引擎' }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.textContent?.trim() === 'Bowerbird Cloud');
   assert.equal(await focused(), 'Bowerbird Cloud');
   await page.keyboard.press('ArrowDown'); assert.equal(await focused(), 'Bowerbird Cloud', 'skip disabled provider');
   await page.keyboard.press('ArrowLeft'); assert.equal(await focused(), '反推提示词');
@@ -148,11 +149,15 @@ try {
   assert.deepEqual([await root().boundingBox(), await deletion().boundingBox()].map(box => box.height),
     beforeHeight, 'library and group checks preserve the open menu dimensions');
   await close();
-  for (const kind of ['video', 'mixed', 'external']) {
+  for (const kind of ['video', 'audio', 'mixed', 'external']) {
     await open(kind);
     if (kind !== 'external') for (const name of ['反推提示词', '批量反推', '编辑', '分层编辑', '复制图片']) assert.equal(await page.getByRole('menuitem', { name, exact: true }).count(), 0);
     if (kind === 'video') {
       assert.equal(await root().getByRole('menuitem', { name: '打开视频详情', exact: true }).count(), 0);
+      assert.equal(await root().getByRole('menuitem', { name: '转录文稿', exact: true }).isEnabled(), true);
+    }
+    if (kind === 'audio') {
+      assert.equal(await root().getByRole('menuitem', { name: '打开音频详情', exact: true }).isEnabled(), true);
       assert.equal(await root().getByRole('menuitem', { name: '转录文稿', exact: true }).isEnabled(), true);
     }
     if (kind === 'external') { await page.getByRole('menuitem', { name: '删除', exact: true }).click(); assert.equal(await page.getByRole('menuitem', { name: '移出园丁鸟' }).count(), 0); }
@@ -201,6 +206,7 @@ try {
   await page.setViewportSize({width:1280,height:840});
   await page.locator('#project').click();
   assert.equal(await page.getByRole('menuitem', { name: '更新项目文件' }).count(), 0);
+  await page.waitForFunction(() => document.activeElement?.textContent?.trim() === '重命名');
   await page.keyboard.press('End'); assert.equal(await focused(), '删除项目 · 素材保留'); await page.keyboard.press('Escape');
   await page.locator('#disconnect').click(); await page.waitForFunction(() => document.activeElement?.textContent?.includes('图片输入')); await page.keyboard.press('Escape');
   await page.locator('.session-test').focus(); await page.keyboard.press('Shift+F10'); await page.getByRole('menu', { name: '生成会话操作' }).waitFor();

@@ -1,6 +1,6 @@
 //! Bounded catalog reads. Counts and pages share exactly the same filter contract.
 use super::{
-    library::{asset_from_row, video_understanding_keyword_match, Asset},
+    library::{asset_from_row, media_understanding_keyword_match, Asset},
     material_catalog::{catalog_prompts, CatalogTag, MaterialCatalog, AUDIO, IMAGE, VIDEO, TEXT, catalog_visibility},
 };
 use crate::{
@@ -134,7 +134,7 @@ impl CatalogFilter {
             values.push(Value::Text(project.clone()));
         }
         if let Some(query) = self.query.as_deref().filter(|q| !q.is_empty()) {
-            let transcript = video_understanding_keyword_match("?");
+            let transcript = media_understanding_keyword_match("?");
             let entry = if entry_name { " OR e.name LIKE ? ESCAPE '\\'" } else { "" };
             clauses.push(format!("(a.name LIKE ? ESCAPE '\\' OR {transcript}{entry})"));
             let pattern = format!(

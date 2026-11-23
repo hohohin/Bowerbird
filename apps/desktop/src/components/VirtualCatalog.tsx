@@ -43,7 +43,8 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   onActive: (id: string | null) => void; onAssetsChange?: (assets: Asset[]) => void;
   onBrowseGroup?: (head: string, shown: string | null) => void;
   onSelect: (asset: Asset, additive: boolean, range: boolean, location: CatalogLocation) => void;
-  onActivate?: (asset: Asset) => void; onOpen: (asset: Asset) => void; onContextMenu: (asset: Asset, x: number, y: number, location: CatalogLocation) => void;
+  onActivate?: (asset: Asset, location: CatalogLocation) => void; onOpen: (asset: Asset, location: CatalogLocation) => void;
+  onContextMenu: (asset: Asset, x: number, y: number, location: CatalogLocation) => void;
   readPage?: (sectionId: string, offset: number, limit: number) => Promise<Asset[]>;
   pageScope?: string;
   itemKey?: (asset: Asset) => string;
@@ -277,10 +278,12 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
               if (focused !== block.key) return null;
             }
             if (renderItem) return renderItem(asset, { width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }, cell.ratio, { section: section.id, index: block.offset + sourceIndex });
+            const locationOf = (shown: Asset): CatalogLocation => ({ section: section.id, index: block.offset + sourceIndex, assetId: shown.id });
             return <CatalogAssetCard key={section.projectId ? `${section.id}:${itemKey(asset)}` : itemKey(asset)} asset={asset} projectSection={section.projectId} group={page.groups[asset.id]} style={{ width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }}
               ratio={cell.ratio} selected={selected} revision={revision} onBrowseGroup={onBrowseGroup}
-              onSelect={(shown, additive, range) => onSelect(shown, additive, range, { section: section.id, index: block.offset + sourceIndex, assetId: shown.id })}
-              onActivate={onActivate} onOpen={onOpen} onContextMenu={(shown,x,y) => onContextMenu(shown,x,y,{ section: section.id, index: block.offset + sourceIndex, assetId: shown.id })}/>;
+              onSelect={(shown, additive, range) => onSelect(shown, additive, range, locationOf(shown))}
+              onActivate={onActivate ? shown => onActivate(shown, locationOf(shown)) : undefined}
+              onOpen={shown => onOpen(shown, locationOf(shown))} onContextMenu={(shown,x,y) => onContextMenu(shown,x,y,locationOf(shown))}/>;
           })}
         </div>;
       })}

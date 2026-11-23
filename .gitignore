@@ -95,6 +95,7 @@ dev-doc/performance/*/*
 !dev-doc/ui-studies/
 dev-doc/ui-studies/*
 !dev-doc/ui-studies/library-sidebar.html
+!dev-doc/ui-studies/audio-detail.html
 !dev-doc/ui-studies/library-tactical-2026-10-26/
 !dev-doc/ui-studies/library-selection-2026-10-26/
 !dev-doc/ui-studies/industrial-hud-2026-10-29/

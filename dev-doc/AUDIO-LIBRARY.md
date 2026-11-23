@@ -2,6 +2,12 @@
 
 产品范围与有效交互以 [PROJECT.md](../PROJECT.md#关键约定) 为准。本文件记录正式实现协议，独立预览和早期 native spike 不能替代正式组件验收。
 
+## 音频详情与转录
+
+- 全部素材、项目素材、已连接文件夹和画板的音频详情共用 `LibraryVideoPreview` 与 `CreationImagePreview`。普通单击音频卡片空白或名称进入详情，播放控件仍独立操作。修饰键和多选模式沿用素材选择，素材库创作选材时双击或按 Enter 仍可加入参考。
+- 详情的「分析」和右键「转录文稿」复用逐字阅读器、实时报价和任务恢复。点击时间或字词时，详情播放器使用全局播放器定位并持续播放。新任务沿用原整段 MP3 转录协议，全文按原件版本保存并进入关键词检索。画面描述仅适用于视频。
+- 裁剪复用 `MediaTrimTimeline` 的波形选区、时间输入和微调。调整任一端点后，裁剪模式内拖动、定位和播放均限制在选区内。暂停时按空格从入点播放，到达出点停止。另存保留音频格式及项目归属，外部引用须另存。覆盖前释放播放句柄，保存后刷新时长和波形，旧文稿自动失效。[播放器与裁剪界面示意](ui-studies/audio-detail.html)
+
 ## 数据与性能边界
 
 - `media::audio` 使用 Symphonia 0.5.5 流式解码，合并多声道 min/max，保留至多 2048 个桶及实际 `framesPerPeak/totalFrames`。不平均相反声道，不保留全曲 PCM。
@@ -20,7 +26,7 @@
 - 临时试听随指针离开、焦点离开、滚动、隐藏或卸载结束。持续播放不归单张卡片生命周期所有；滚动、虚拟卸载、切换媒体与关闭详情均保留。新播放替换旧声音，暂停、Escape、页面退出和关联原件操作会释放播放器。
 - 原件改名、移动、回收及所在目录操作在文件 IPC 前释放对应播放句柄；其他目录的音频不受影响。只移动项目成员或操作分身不停止原件播放。修改已知源版本会停掉旧播放并重取波形。
 - 控件阻止卡片点击／双击冒泡，多选模式让事件回到卡片；波形支持键盘左右定位、Home／End、Enter／Space 播放。
-- 2026-11-03 源码增量：项目创作／详情编辑开启时，全部／标签及真实集合中的音频卡片双击或 Enter 调用已有激活入口，将音频原件加入创作描述；普通素材库仍打开音频详情。波形和播放按钮维持原行为。视频自动模式识别为多参考；Seedance 只接受 MP3／WAV，其他格式明确拒绝，不静默丢弃。音频不进入图片生成，也不创建独立画板音频卡片。协议与验证见 [视频音频记录](../project_logs/2026-11-03-video-audio.md)。
+- Seedance 创作选材会把音频作为视频多参考原件，只接受 MP3／WAV，其他格式明确拒绝。音频不进入图片生成。[协议与验证](../project_logs/2026-11-03-video-audio.md)
 
 ## 格式与测试入口
 
@@ -30,7 +36,7 @@
 
 `node scripts/canvas-audio-drag-ui.test.mjs` 用正式画布及合成 WAV 先复现位置不变，修复后覆盖加载前／后拖动、单击定位试听、持续播放期间拖动、取消回退及随后播放、多选拖动、撤销、空格平移、保存坐标重开。既有 `audio-waveform-ui.test.mjs` 与 TypeScript 检查通过。截图和日志位于 `apps/desktop/.tmp/canvas-audio-drag/`、`.tmp/canvas-audio-drag-*.log`；仅源码与隔离浏览器验证，未操作真实资料库或发布安装包。
 
-首版扩展名：WAV、MP3、FLAC、M4A、OGG。已覆盖 PCM WAV、MP3、FLAC、AAC-LC M4A、Vorbis OGG 合成样本；容器后缀不承诺任意内嵌编码。未增加转码副本、在线转写、音频生成或声音理解服务。
+支持 WAV、MP3、FLAC、M4A、OGG。合成样本覆盖 PCM WAV、MP3、FLAC、AAC-LC M4A、Vorbis OGG。容器后缀不承诺任意内嵌编码。
 
 在 `apps/desktop` 执行：
 
@@ -38,6 +44,7 @@
 node --test scripts/audio-media.test.mjs
 node scripts/audio-waveform-ui.test.mjs
 node scripts/audio-library-ui.test.mjs
+node scripts/canvas-audio-drag-ui.test.mjs
 node node_modules/typescript/bin/tsc --noEmit
 node node_modules/vite/bin/vite.js build --outDir .tmp/audio-library-build
 ```
@@ -49,6 +56,8 @@ node node_modules/vite/bin/vite.js build --outDir .tmp/audio-library-build
 ```powershell
 cargo test --lib core::audio
 cargo test --lib media::audio
+cargo test --lib commands::audio_trim -- --include-ignored
+cargo test --lib commands::video_transcript
 cargo check --locked --lib
 ```
 
