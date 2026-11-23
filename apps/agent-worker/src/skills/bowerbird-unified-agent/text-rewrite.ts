@@ -33,3 +33,14 @@ export function parseTextRewriteResult(result: HarnessTurnResult): string {
       typeof record.text !== "string" || !record.text.trim()) throw new Error("unified_agent_text_result_invalid");
   return record.text;
 }
+
+export const TEXT_EDITOR_OUTPUT_LIMIT = 16000;
+
+/** Read only complete JSON characters from the specified response's text field. */
+export function textRewritePreview(raw: string): string {
+  const match = /^\s*\{\s*"schemaVersion"\s*:\s*1\s*,\s*"text"\s*:\s*"((?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[\da-fA-F]{4}))*)/.exec(raw);
+  if (!match) return "";
+  const text = JSON.parse('"' + match[1] + '"') as string;
+  // Wait for the rest of a Unicode escape pair before publishing it.
+  return text.replace(/[\uD800-\uDBFF]$/, "");
+}

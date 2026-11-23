@@ -55,6 +55,61 @@ function claimed(
   };
 }
 
+test("text-editor publishes a fresh bounded preview on lease recovery and commits only the final document text", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "text-editor-preview-"));
+  const runClaim = claimed();
+  runClaim.artifactUrls = [];
+  const goal = 'bowerbird:cloud-text-skill:v1\n' + JSON.stringify({ id: "text-editor", instruction: "继续写" });
+  const events: Array<{ seq: number; type: string; displayPayload: Record<string, unknown> }> = [];
+  let raw: Uint8Array | undefined;
+  let turns = 0;
+  const control = {
+    async loadRawCheckpoint() { return raw; },
+    async downloadVerifiedJson() { return { schemaVersion: 1, goal, textRewrite: { source: "窗外下雨" } }; },
+    async saveRawCheckpoint(args: { bytes: Uint8Array; sha256: string }) {
+      raw = args.bytes;
+      runClaim.run.checkpointHash = args.sha256;
+      runClaim.run.snapshotSchemaVersion = 1;
+    },
+    async appendEvents(_run: string, _lease: string, batch: typeof events) {
+      for (const event of batch) if (!events.some(previous => previous.seq === event.seq)) events.push(event);
+    },
+    async finish() {},
+  } as unknown as AgentControlClient;
+  const processor = new UnifiedPlanningRunProcessor({
+    workspaceRoot: folder,
+    vision: { apiKey: "unused", baseUrl: "https://unused.invalid", model: "unused", mock: true },
+    createAdapter() { return { id: "dsh", async open() { return {
+      runId: runClaim.run.id, sessionId: "editor",
+      async turn(_prompt, onContent) {
+        const attempt = ++turns;
+        const chunks = [
+          { type: "text" as const, text: '{"schemaVersion":1,"text":"' },
+          { type: "text" as const, text: attempt === 1 ? "旧回复" : "雨声\\n" },
+          { type: "text" as const, text: '落在街道上。"}' },
+        ];
+        onContent?.(chunks[0]);
+        onContent?.(chunks[1]);
+        ok(events.some(event => event.type === "text.rewrite.delta"
+          && event.displayPayload.attempt === attempt && event.displayPayload.text === (attempt === 1 ? "旧回复" : "雨声\n")));
+        ok(events.every(event => event.type !== "text.result"));
+        if (attempt === 1) throw new Error("lease_interrupted");
+        onContent?.(chunks[2]);
+        return { stopReason: "end_turn", committedContent: chunks };
+      },
+      async close() {}, async cancel() {},
+    }; } }; },
+  });
+  const context = { claimed: runClaim, control, signal: { aborted: false } } as AgentRunContext;
+  try {
+    await rejects(() => processor.process(context), /lease_interrupted/);
+    runClaim.lease.leaseId = "next-lease";
+    await processor.process(context);
+    deepEqual(events.filter(event => event.type === "text.rewrite.delta").map(event => event.seq), [100, 101, 120, 121]);
+    deepEqual(events.find(event => event.type === "text.result")?.displayPayload, { schemaVersion: 1, text: "雨声\n落在街道上。" });
+  } finally { rmSync(folder, { recursive: true, force: true }); }
+});
+
 test("VPS text skill is frozen before model execution and restored after a crash", async () => {
   const folder = mkdtempSync(join(tmpdir(), "h3-method-recovery-"));
   const previous = process.env.BOWERBIRD_TEXT_SKILL_DIR;

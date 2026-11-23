@@ -5,10 +5,10 @@ import type { PlateEditor } from "platejs/react";
 import { useStore } from "../store";
 import { normalizeDocument, parseMarkdown, serializeReadableMarkdown } from "../lib/documentCodec";
 import { usePortalTarget } from "../lib/portalTarget";
-import { textAgentSource, textAgentUnavailable, TEXT_AGENT_LABELS, type TextAgentMessage, type TextAgentProvider } from "../lib/textAgent";
-import { TextAgentTask, initialTextAgentTask } from "../lib/textAgentTask";
+import { textAgentSource, textAgentUnavailable, type TextAgentMessage } from "../lib/textAgent";
+import { initialTextAgentTask } from "../lib/textAgentTask";
 import { userErrorMessage } from "../lib/userError";
-import { ModelSelect } from "./creation/ModelSelect";
+import { EditorAgentModel, useTextEditorServices } from "./text-editor/TextEditorServices";
 import "./TextAgent.css";
 
 export const TextAgentContext = createContext<((id: string, rect: DOMRect) => void) | null>(null);
@@ -19,26 +19,15 @@ function anchorFor(editor: PlateEditor, id: string): Anchor | null {
   return node ? { id, snapshot: JSON.stringify(node) } : null;
 }
 
-/** A single bubble owns requests, so moving/deleting a block cannot retarget an in-flight write. */
-export function TextAgentScope({ editor, projectId, children }: { editor: PlateEditor; projectId?: string; children: ReactNode }) {
+export function TextAgentScope({ editor, children }: { editor: PlateEditor; children: ReactNode }) {
   const [target, setTarget] = useState<Target | null>(null);
   const open = (id: string, rect: DOMRect) => {
     const anchor = anchorFor(editor, id);
     if (anchor) setTarget({ anchor, left: rect.left, top: rect.bottom + 8 });
   };
-  return <TextAgentContext.Provider value={open}>{children}{target && <TextAgentBubble key={target.anchor.id} editor={editor} projectId={projectId} target={target} onClose={(restoreFocus = true) => { setTarget(null); if (restoreFocus) editor.tf.focus(); }}/>}</TextAgentContext.Provider>;
+  return <TextAgentContext.Provider value={open}>{children}{target && <TextAgentBubble key={target.anchor.id} editor={editor} target={target} onClose={(restoreFocus = true) => { setTarget(null); if (restoreFocus) editor.tf.focus(); }}/>}</TextAgentContext.Provider>;
 }
 
-export function TextAgentModel({ provider, setProvider, busy }: { provider: TextAgentProvider; setProvider(value: TextAgentProvider): void; busy: boolean }) {
-  const auth = useStore(state => state.cloudAuth), entitlement = useStore(state => state.cloudEntitlement);
-  useStore(state => state.codexHealth); useStore(state => state.cloudAgentRuns);
-  const balance = entitlement ? entitlement.balances.daily + entitlement.balances.sub + entitlement.balances.topup : null;
-  return <ModelSelect value={provider} label={TEXT_AGENT_LABELS[provider]} kind="Agent" source={provider === "cloud" ? "cloud" : "personal"}
-    options={(["codex-cli", "cloud"] as const).map(key => ({ key, label: TEXT_AGENT_LABELS[key], source: key === "cloud" ? "cloud" : "personal", reason: busy ? "请先等待当前回复" : textAgentUnavailable(key) }))}
-    onChange={key => { if (key === "cloud" || key === "codex-cli") setProvider(key); }} cloudBalance={balance} cloudLoggedIn={auth?.logged_in}/>;
-}
-
-function defaultProvider(): TextAgentProvider { return textAgentUnavailable("codex-cli") && !textAgentUnavailable("cloud") ? "cloud" : "codex-cli"; }
 function writeAfter(editor: PlateEditor, anchor: Anchor, text: string): Anchor | null {
   const index = editor.children.findIndex(node => node.id === anchor.id);
   if (index < 0 || JSON.stringify(editor.children[index]) !== anchor.snapshot) return null;
@@ -47,26 +36,35 @@ function writeAfter(editor: PlateEditor, anchor: Anchor, text: string): Anchor |
   return anchorFor(editor, nodes[nodes.length - 1].id);
 }
 
-function useTextAgentConversation(editor: PlateEditor, target: Target, projectId?: string) {
-  const [provider, setProvider] = useState<TextAgentProvider>(defaultProvider);
+function useTextAgentConversation(editor: PlateEditor, target: Target) {
+  const services = useTextEditorServices();
   const [prompt, setPrompt] = useState(""), [messages, setMessages] = useState<TextAgentMessage[]>([]);
-  const [pending, setPending] = useState<string | null>(null), [state, setState] = useState(initialTextAgentTask);
-  const anchor = useRef(target.anchor), sessionId = useRef(crypto.randomUUID());
-  const [task] = useState(() => new TextAgentTask(setState, text => {
-    setMessages(previous => [...previous, { role: "assistant", text }]);
-    const next = writeAfter(editor, anchor.current, text);
-    if (next) anchor.current = next; else setPending(text);
-  }));
-  useEffect(() => { task.activate(); return () => task.close(); }, [task]);
-  function send() {
+  const state = services.owner === 'paragraph' && (messages.length > 0 || services.state.resumable) ? services.state : initialTextAgentTask;
+  const [pending, setPending] = useState<string | null>(null), [error, setError] = useState("");
+  const anchor = useRef(target.anchor), request = useRef<AbortController | null>(null);
+  useEffect(() => () => request.current?.abort(), []);
+  async function send() {
+    if (request.current) return;
+    const controller = new AbortController();
     try {
       const node = editor.children.find(node => node.id === anchor.current.id);
       if (!node) throw new Error("原段落已删除，请在新的段落打开 Agent。");
       anchor.current = anchorFor(editor, anchor.current.id)!;
       const source = textAgentSource(serializeReadableMarkdown(normalizeDocument([node])), messages);
+      const response = services.generate(prompt, source, controller.signal, 'paragraph');
+      request.current = controller;
+      setError("");
       setMessages(previous => [...previous, { role: "user", text: prompt }]); setPrompt("");
-      void task.run({ provider, prompt, source, projectId, sessionId: sessionId.current, requestId: crypto.randomUUID() });
-    } catch (reason) { setState(previous => ({ ...previous, error: userErrorMessage(reason, "本次内容无法提交，请检查段落后重试。") })); }
+      const text = await response;
+      if (controller.signal.aborted) return;
+      setMessages(previous => [...previous, { role: "assistant", text }]);
+      const next = writeAfter(editor, anchor.current, text);
+      if (next) anchor.current = next; else setPending(text);
+    } catch (reason) {
+      if (!controller.signal.aborted && !(reason instanceof DOMException && reason.name === 'AbortError')) {
+        setError(userErrorMessage(reason, "本次内容无法提交，请检查段落后重试。"));
+      }
+    } finally { request.current = null; }
   }
   function insert() {
     if (!pending) return;
@@ -75,8 +73,10 @@ function useTextAgentConversation(editor: PlateEditor, target: Target, projectId
     anchor.current = anchorFor(editor, nodes[nodes.length - 1].id)!;
     setPending(null); editor.tf.focus();
   }
-  const reason = useStore(state => textAgentUnavailable(provider, state));
-  return { provider, setProvider, prompt, setPrompt, messages, pending, state, task, send, insert, reason };
+  const reason = useStore(state => textAgentUnavailable(services.provider, state));
+  return { prompt, setPrompt, messages, pending, state, error, send, insert, reason, busy: services.busy,
+    canResume: services.owner === 'paragraph' && services.canResume,
+    resume: () => services.resume('paragraph'), stop: () => services.stop('paragraph') };
 }
 type Conversation = ReturnType<typeof useTextAgentConversation>;
 
@@ -87,21 +87,21 @@ function AgentInput({ conversation: c }: { conversation: Conversation }) {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSend(c)) c.send(); }
   }}/>;
 }
-function canSend(c: Conversation) { return !c.state.busy && !c.state.resumable && !c.pending && !!c.prompt.trim() && !c.reason; }
+function canSend(c: Conversation) { return !c.busy && !c.pending && !!c.prompt.trim() && !c.reason; }
 function AgentFooter({ conversation: c }: { conversation: Conversation }) {
-  if (c.state.busy) return <div className="text-agent-footer"><button aria-label="停止" onClick={() => void c.task.stop()}><Square size={13}/></button></div>;
+  if (c.state.busy) return <div className="text-agent-footer"><button aria-label="停止" onClick={c.stop}><Square size={13}/></button></div>;
   return <div className="text-agent-footer">
     {c.pending && <button onMouseDown={event => event.preventDefault()} onClick={c.insert}>插入到光标处</button>}
-    {c.state.resumable ? <><button onClick={() => void c.task.stop()}>停止</button><button onClick={() => void c.task.run()}>继续取回</button></>
+    {c.state.resumable ? <><button onClick={c.stop}>停止</button>{c.canResume && <button onClick={c.resume}>继续取回</button>}</>
       : <button aria-label="发送" disabled={!canSend(c)} onClick={c.send}><ArrowUp size={16}/></button>}
   </div>;
 }
 function AgentHistory({ conversation: c }: { conversation: Conversation }) {
   const log = useRef<HTMLDivElement>(null);
-  useEffect(() => { if (log.current) log.current.scrollTop = log.current.scrollHeight; }, [c.messages]);
+  useEffect(() => { if (log.current) log.current.scrollTop = log.current.scrollHeight; }, [c.messages, c.state.preview]);
   return <>
-    {c.messages.length > 0 && <div ref={log} className="text-agent-messages" role="log">{c.messages.map((message, index) => <p key={index} data-role={message.role}>{message.text}</p>)}</div>}
-    {c.state.error && <p role="alert">{c.state.error}</p>}
+    {c.messages.length > 0 && <div ref={log} className="text-agent-messages" role="log">{c.messages.map((message, index) => <p key={index} data-role={message.role}>{message.text}</p>)}{c.state.preview && <p aria-label="Agent 回复预览">{c.state.preview}</p>}</div>}
+    {(c.state.error || c.error) && <p role="alert">{c.state.error || c.error}</p>}
     <p role="status">{c.pending ? "段落已变化，结果尚未写入。" : c.state.status}</p>
     {!c.state.busy && c.reason && <p className="text-agent-unavailable">{c.reason}</p>}
   </>;
@@ -126,13 +126,13 @@ function useAgentDismiss(root: RefObject<HTMLDivElement>, onClose: (restoreFocus
     return () => document.removeEventListener('pointerdown', outside, true);
   }, [root, onClose]);
 }
-function TextAgentBubble({ editor, projectId, target, onClose }: { editor: PlateEditor; projectId?: string; target: Target; onClose(restoreFocus?: boolean): void }) {
-  const portal = usePortalTarget(), position = useBubblePosition(target), c = useTextAgentConversation(editor, target, projectId);
+function TextAgentBubble({ editor, target, onClose }: { editor: PlateEditor; target: Target; onClose(restoreFocus?: boolean): void }) {
+  const portal = usePortalTarget(), position = useBubblePosition(target), c = useTextAgentConversation(editor, target);
   const root = useRef<HTMLDivElement>(null);
   useAgentDismiss(root, onClose);
   return createPortal(<div ref={root} role="dialog" aria-label="段落 Agent" className="text-agent-bubble" style={position}
     onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === "Escape" && !event.defaultPrevented) { event.stopPropagation(); onClose(); } }}>
-    <div className="text-agent-heading"><TextAgentModel provider={c.provider} setProvider={c.setProvider} busy={c.state.busy || c.state.resumable}/><button aria-label="关闭 Agent" onClick={() => onClose()}><X size={15}/></button></div>
+    <div className="text-agent-heading"><EditorAgentModel/><button aria-label="关闭 Agent" onClick={() => onClose()}><X size={15}/></button></div>
     <AgentHistory conversation={c}/><AgentInput conversation={c}/><AgentFooter conversation={c}/>
   </div>, portal);
 }

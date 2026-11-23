@@ -13,8 +13,9 @@ export function agentMock(command:string,args:any):unknown{
    if(w.agentReadError)throw Error('暂时无法读取回复，请继续取回。');
    return w.agentHold?null:{schemaVersion:1,requestId:w.agentMismatch?'other-request':args.requestId,text:w.agentText??'雨落在空荡的街道。'};
  }
+ if(command==='agent_ds_workflow_progress')return w.agentPreview?[{id:args.requestId,kind:'text-preview',text:w.agentPreview,status:'running',at:1}]:[];
  if(command==='agent_ds_workflow_cancel'){if(w.agentCancelError)throw Error('尚未确认停止，请检查原任务。');return true;}
  if(command==='project_thread_create')return args.value;
- if(command==='cloud_agent_start'||command==='cloud_agent_get'||command==='cloud_agent_cancel')return {runId:command==='cloud_agent_get'&&w.cloudMismatch?'other-run':'cloud-text',projectId:'p',status:command==='cloud_agent_cancel'?'cancelled':w.cloudStatus??(w.agentHold?'running':'succeeded'),updatedAt:1,snapshot:{run:{},events:[{type:'text.result',display_payload:w.cloudPayload??{schemaVersion:1,text:'雨落在空荡的街道。'}}],artifacts:[]}};
+ if(command==='cloud_agent_start'||command==='cloud_agent_get'||command==='cloud_agent_cancel')return {runId:command==='cloud_agent_get'&&w.cloudMismatch?'other-run':'cloud-text',projectId:'p',status:command==='cloud_agent_cancel'?'cancelled':w.cloudStatus??(w.agentHold?'running':'succeeded'),updatedAt:1,snapshot:{run:{},events:[...(w.cloudPreviewEvents??[]),{type:'text.result',display_payload:w.cloudPayload??{schemaVersion:1,text:'雨落在空荡的街道。'}}],artifacts:[]}};
  return undefined;
 }

@@ -177,7 +177,7 @@ export const api = {
       autoDelivered: boolean;
       notice?: string | null;
     }>("agent_ds_chat", { text, images, imageNames, visualProfileId }),
-  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text" | "agent-video", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string, transport?: "local-ds" | "codex-cli", isolatedSession?: boolean, sessionGeneration?: boolean, visualProfile?: { profileId: string; version: number }) =>
+  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text" | "agent-video" | "text-editor", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string, transport?: "local-ds" | "codex-cli", isolatedSession?: boolean, sessionGeneration?: boolean, visualProfile?: { profileId: string; version: number }) =>
     invoke<{ path: string; sessionId?: string | null; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source, purpose, images, sessionScope, imageProvider, transport, isolatedSession, sessionGeneration, visualProfile }),
   agentDsWorkflowCancel: (requestId: string) => invoke<void>("agent_ds_workflow_cancel", { requestId }),
   agentVideoStudioOpen: (requestId: string, editorSessionId: string, bounds: { x: number; y: number; width: number; height: number }) => invoke<void>("agent_video_studio_open", { requestId, editorSessionId, bounds }),

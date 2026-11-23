@@ -155,6 +155,6 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
   </div>;
   return <TextEditorServices projectId={agent?.projectId}><TooltipProvider><TextMediaContext.Provider value={media}><Plate editor={editor} onValueChange={({ value: changed }) => emitChange(changed)}>
     <DiscussionChanges onChange={emitChange}/>
-    {agent ? <TextAgentScope editor={editor} projectId={agent.projectId}>{content}</TextAgentScope> : content}
+    <TextAgentScope editor={editor}>{content}</TextAgentScope>
   </Plate></TextMediaContext.Provider></TooltipProvider></TextEditorServices>;
 });

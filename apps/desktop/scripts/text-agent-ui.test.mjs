@@ -15,17 +15,23 @@ const url=`${server.resolvedUrls.local[0]}scripts/fixtures/text-workspace-live/p
 const block=()=>page.locator('.text-document-block').filter({hasText:'窗外的光'});
 async function open(){
  if(coverage&&page.url()!=='about:blank'){coverageEntries.push(...await page.coverage.stopJSCoverage());await page.coverage.startJSCoverage({resetOnNavigation:false});}
- await page.goto(url);await block().locator('[data-slate-leaf]').click();await page.getByRole('button',{name:'Agent',exact:true}).click();
+ await page.goto(url,{timeout:60000});await block().locator('[data-slate-leaf]').click();await page.getByRole('button',{name:'Agent',exact:true}).click();
 }
 try {
  await open();
  assert.equal(await page.getByRole('button',{name:'Agent',exact:true}).count(),1);
  const bubble=page.getByRole('dialog',{name:'段落 Agent',exact:true});
+ await page.evaluate(()=>{window.agentHold=true;window.agentPreview='雨落在';});
  await bubble.getByRole('textbox',{name:'发送给 Agent'}).fill('帮我写一个雨夜开场');
  await bubble.getByRole('button',{name:'发送',exact:true}).click();
+ await bubble.getByLabel('Agent 回复预览').filter({hasText:'雨落在'}).waitFor();
+ assert(!await page.evaluate(()=>window.draft?.markdown.includes('雨落')));
+ await page.evaluate(()=>{window.agentPreview='雨落在空荡的';});
+ await bubble.getByLabel('Agent 回复预览').filter({hasText:'雨落在空荡的'}).waitFor();
+ await page.evaluate(()=>{window.agentHold=false;});
  await page.waitForFunction(()=>window.draft?.markdown.includes('雨落在空荡的街道。'));
  const local=await page.evaluate(()=>window.calls.find(c=>c.command==='agent_ds_workflow_start').args);
- assert.equal(local.transport,'codex-cli');assert.equal(local.isolatedSession,true);assert.equal(local.imageProvider,undefined);
+ assert.equal(local.transport,'codex-cli');assert.equal(local.purpose,'text-editor');assert.equal(local.isolatedSession,true);assert.equal(local.imageProvider,undefined);
  assert.match(local.source,/窗外的光/);
  assert.match(await page.evaluate(()=>window.draft.markdown),/窗外[\s\S]*雨落[\s\S]*第二段/);
  await bubble.getByRole('textbox',{name:'发送给 Agent'}).fill('继续写');
@@ -49,6 +55,10 @@ try {
  assert.ok(cloud.intentPrompt.startsWith('bowerbird:cloud-text-skill:v1\n'));
  const method=JSON.parse(cloud.intentPrompt.split('\n')[1]);assert.equal(method.id,'text-editor');assert.ok(method.instruction);assert.equal(method.instructions,undefined);
  assert.equal(cloud.agentRuntime,'dsh');assert.equal(cloud.skillId,'bowerbird-unified-agent');assert.equal(cloud.threadId,undefined);assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='project_thread_create').length),0);assert.match(cloud.textRewrite.source,/窗外/);
+ await bubble.getByRole('button',{name:'关闭 Agent'}).click();
+ await block().locator('[data-slate-leaf]').click();
+ await page.getByRole('toolbar',{name:'文字格式'}).getByRole('button',{name:'Agent 指令',exact:true}).click();
+ assert.match(await page.getByRole('button',{name:/选择Agent模型/}).innerText(),/Cloud DSH/);
  console.log('PASS shared provider/credits menu and Cloud DSH text-result write-back');
  await open();await page.evaluate(()=>window.agentHold=true);
  await bubble.getByRole('textbox',{name:'发送给 Agent'}).fill('帮我写一段');await bubble.getByRole('button',{name:'发送',exact:true}).click();

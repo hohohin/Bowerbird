@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import { equal, throws, ok } from "node:assert/strict";
-import { parseTextRewriteResult, textRewritePrompt } from "./text-rewrite.ts";
+import { parseTextRewriteResult, textRewritePreview, textRewritePrompt } from "./text-rewrite.ts";
 import { validateUnifiedAgentPlanningInput } from "./schemas.ts";
 
 test("long multilingual source and complete result survive JSON escaping", () => {
@@ -32,4 +32,9 @@ test("only a structured completed answer is accepted, never commentary or partia
     throws(() => parseTextRewriteResult({ stopReason: "end_turn", committedContent: [{ type: "text", text }] }), /text_result_invalid/);
   }
   throws(() => parseTextRewriteResult({ stopReason: "cancelled", committedContent: [{ type: "text", text: '{"schemaVersion":1,"text":"ok"}' }] }), /text_result_invalid/);
+});
+test("writing preview decodes complete JSON characters and ignores partial framing", () => {
+  equal(textRewritePreview('{"schemaVersion":1,"text":"街道\\n灯\\uD83D'), "街道\n灯");
+  equal(textRewritePreview('{"schemaVersion":1,"text":"街道\\n灯\\uD83D\\uDD26\\'), "街道\n灯🔦");
+  equal(textRewritePreview('{"untrustedSource":"不显示"}'), "");
 });

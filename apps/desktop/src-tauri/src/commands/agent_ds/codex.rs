@@ -140,6 +140,15 @@ pub(super) fn start(root: PathBuf, id: String, payload: DeliveryPayload, isolate
 }
 
 fn start_with_binary(root: PathBuf, id: String, payload: DeliveryPayload, binary: &str, isolated_session: bool) -> Result<DeliveryOutcome, AppError> {
+    start_request(root, id, payload, binary, isolated_session, false)
+}
+
+pub(super) fn start_text_editor(root: PathBuf, id: String, payload: DeliveryPayload) -> Result<DeliveryOutcome, AppError> {
+    let binary = resolve_codex_binary().ok_or_else(|| AppError::Other("未找到 Codex CLI，请在设置中安装并登录".into()))?;
+    start_request(root, id, payload, &binary, true, true)
+}
+
+fn start_request(root: PathBuf, id: String, payload: DeliveryPayload, binary: &str, isolated_session: bool, editor_task: bool) -> Result<DeliveryOutcome, AppError> {
     let scope = payload.target_session_id.clone().ok_or_else(|| AppError::Other("Codex CLI 缺少卡片身份".into()))?;
     // Reuse the same format/byte limits as native DSH image attachments.
     workflow_image_parts(&payload.images).map_err(AppError::Other)?;
@@ -178,10 +187,22 @@ fn start_with_binary(root: PathBuf, id: String, payload: DeliveryPayload, binary
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     let (finished_tx, finished_rx) = watch::channel(false);
     active.insert(id.clone(), Active { scope: scope.clone(), cancel: cancel_tx, finished: finished_rx });
+    let binary = binary.to_owned();
     tokio::spawn(async move {
         let (tool_stop, tool_cancel) = watch::channel(false);
         let mut video_tools = None;
         let completed = async {
+            if editor_task {
+                let reply = super::super::local_chat::run_editor_turn(&binary, &root, &payload.text, &mut cancel_rx, |text| {
+                    let preview = PublicEvent { id: id.clone(), kind: "text-preview".into(), text: text.to_owned(),
+                        status: "running".into(), at: chrono::Utc::now().timestamp_millis() as u64 };
+                    if let Err(error) = write_json_atomic(&root.join("public-progress.json"), &vec![preview]) {
+                        tracing::warn!("保存文本编辑器预览失败: {error}");
+                    }
+                }).await?;
+                write_json_atomic(&workflow_file(&root, &id, "results")?, &json!({"schemaVersion":1,"requestId":id,"text":reply}))?;
+                return Ok(String::new());
+            }
             if video_project.is_some() {
                 write_json_atomic(&root.join("public-progress.json"), &vec![PublicEvent { id: "video-prepare".into(), kind: "tool".into(), text: "正在准备视频制作环境".into(), status: "running".into(), at: chrono::Utc::now().timestamp_millis() as u64 }])?;
                 let prepared = super::video::prepare(&root, &scope, &mut cancel_rx).await?;

@@ -98,7 +98,7 @@ class DshAcpHarnessSession implements HarnessSession {
       : undefined;
   }
 
-  async turn(prompt: HarnessPromptBlock[]): Promise<HarnessTurnResult> {
+  async turn(prompt: HarnessPromptBlock[], onContent?: (content: HarnessPromptBlock) => void): Promise<HarnessTurnResult> {
     if (this.closed) throw new HarnessAdapterError("session_closed");
     if (this.inFlight) throw new HarnessAdapterError("turn_in_progress");
     this.inFlight = true;
@@ -111,7 +111,10 @@ class DshAcpHarnessSession implements HarnessSession {
           sessionId: this.sessionId,
           prompt: firstTurn && this.checkpointContext ? [this.checkpointContext, ...prompt] : prompt,
         },
-        (content) => committedContent.push(content),
+        (content) => {
+          committedContent.push(content);
+          onContent?.(content);
+        },
       );
       return { stopReason: result.stopReason, committedContent };
     } finally {

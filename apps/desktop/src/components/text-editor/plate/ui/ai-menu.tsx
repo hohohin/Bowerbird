@@ -62,12 +62,13 @@ import { cn } from '@/components/text-editor/plate/lib/utils';
 import { commentPlugin } from '@/components/text-editor/plate/components/editor/plugins/comment-kit';
 
 import { AIChatEditor } from './ai-chat-editor';
-import { EditorAgentModel, EditorAgentStatus } from '../../TextEditorServices';
+import { EditorAgentModel, EditorAgentPreview, EditorAgentStatus, useTextEditorServices } from '../../TextEditorServices';
 import { discussionPlugin } from '../components/editor/plugins/discussion-kit';
 import { userErrorMessage } from '@/lib/userError';
 
 export function AIMenu() {
   const { api, editor } = useEditorPlugin(AIChatPlugin);
+  const services = useTextEditorServices();
   const mode = usePluginOption(AIChatPlugin, 'mode');
   const toolName = usePluginOption(AIChatPlugin, 'toolName');
 
@@ -192,6 +193,10 @@ export function AIMenu() {
 
           api.aiChat.hide();
         }}
+        onFocusOutside={event => {
+          // Plate's block selection focuses its hidden input while opening this menu.
+          if (event.target === editor.getOption(BlockSelectionPlugin, 'shadowInputRef')?.current) event.preventDefault();
+        }}
         align="center"
         side="bottom"
       >
@@ -202,8 +207,9 @@ export function AIMenu() {
         >
           <div className="px-3 py-2"><EditorAgentModel /></div>
           <EditorAgentStatus/>
+          <EditorAgentPreview/>
           {chat.error && <p role="alert">{userErrorMessage(chat.error, 'Agent 未能完成请求，请重试。')}</p>}
-          {mode === 'chat' &&
+          {!isLoading && mode === 'chat' &&
             content &&
             toolName === 'generate' && <AIChatEditor content={content} />}
 
@@ -211,6 +217,7 @@ export function AIMenu() {
             <div className="flex grow select-none items-center gap-2 p-2 text-muted-foreground text-sm">
               <Loader2Icon className="size-4 animate-spin" />
               {messages.length > 1 ? '改写中…' : '思考中…'}
+              <Button size="sm" variant="ghost" onClick={() => api.aiChat.stop()}>停止</Button>
             </div>
           ) : (
             <CommandPrimitive.Input
@@ -220,12 +227,13 @@ export function AIMenu() {
                 'border-b focus-visible:ring-transparent'
               )}
               value={input}
+              disabled={services.busy}
               onKeyDown={(e) => {
                 if (isHotkey('backspace')(e) && input.length === 0) {
                   e.preventDefault();
                   api.aiChat.hide();
                 }
-                if (isHotkey('enter')(e) && !e.shiftKey && input.trim()) {
+                if (isHotkey('enter')(e) && !e.shiftKey && !e.nativeEvent.isComposing && input.trim()) {
                   e.preventDefault();
                   e.stopPropagation();
                   void api.aiChat.submit(input);
@@ -239,7 +247,7 @@ export function AIMenu() {
             />
           )}
 
-          {!isLoading && (
+          {!isLoading && !services.busy && (
             <CommandList>
               <AIMenuItems
                 input={input}
@@ -677,8 +685,11 @@ export function AILoadingBar() {
         )}
       >
         <span className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
-        <span>{status === 'submitted' ? '思考中…' : '写作中…'}</span>
-        <EditorAgentStatus/>
+        <div>
+          <span>写作中…</span>
+          <EditorAgentPreview/>
+          <EditorAgentStatus/>
+        </div>
         <Button
           size="sm"
           variant="ghost"

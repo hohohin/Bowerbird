@@ -14,3 +14,4 @@
 .text-agent-messages [data-role=user] { color:var(--bb-muted); padding-left:12px; border-left:1px solid var(--bb-line); }
 .text-agent-bubble > p { margin:0; font-size:12px; color:var(--bb-muted); }
 .text-agent-bubble > [role=alert] { color:var(--bb-danger); }
+.text-editor-agent-preview { max-width:min(420px,52vw); max-height:160px; overflow:auto; padding:4px 8px; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--bb-ink); }

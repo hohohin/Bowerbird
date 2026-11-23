@@ -92,7 +92,7 @@ export interface WorkflowNode {
   profileName?: string;
   profileCache?: { inputKey: string; profileId: string };
 }
-export interface WorkflowAgentEvent { id: string; kind: "message" | "tool"; text: string; status: string; at: number }
+export interface WorkflowAgentEvent { id: string; kind: "message" | "tool" | "text-preview"; text: string; status: string; at: number }
 export interface H3ImageGenerationInput {
   assetIds: string[];
   referenceNodeIds: (string | null)[];
