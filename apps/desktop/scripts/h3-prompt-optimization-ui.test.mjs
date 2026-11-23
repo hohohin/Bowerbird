@@ -49,7 +49,7 @@ try {
     const calls = window.h3Calls, starts = window.optimizeStarts, cancels = [];
     let resultMode = 'succeeded';
     let missingImageMode;
-    const asset = { id: 'optimized-video', store_path: '/synthetic.mp4', ext: 'mp4', width: 768, height: 1344 };
+    const asset = { id: 'optimized-video', name: '合成视频', store_path: '/synthetic.mp4', ext: 'mp4', width: 768, height: 1344 };
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
       if (missingImageMode && command === 'comfy_video_environment' && args.action === 'detect' && args.mode === missingImageMode) {
         return { phase: 'missing', endpoint: args.endpoint, existing: [], installed: false, canInstall: true, message: '模拟本机图片模型缺失' };
@@ -442,6 +442,9 @@ try {
     const invoke = window.__TAURI_INTERNALS__.invoke;
     window.__TAURI_INTERNALS__.invoke = (command, args) => {
       if(command === 'comfy_video' && args.action === 'start') window.dispatchTrace.push({ key: 'localDispatch' });
+      if (command === 'project_canvas_node_create' && args.value.projectId === 'p' && args.value.id.startsWith('workflow-comfy:')) {
+        return invoke(command, { ...args, value: { ...args.value, x: 1180, y: 60 } });
+      }
       return invoke(command,args);
     };
     for (const key of ['canvasWorkflowAuthorize','canvasWorkflowSave','projectCanvasGet','cloudAgentStart','projectThreadCreate']) {
@@ -449,7 +452,10 @@ try {
       api[key] = async (...args) => {
         window.dispatchTrace.push({ key, prompt: key === 'cloudAgentStart' ? args[0].textRewrite.source : undefined });
         if (key === 'canvasWorkflowSave') await promise;
-        return original(...args);
+        const result = await original(...args);
+        return key === 'projectCanvasGet' && args[0] === 'p'
+          ? { ...result, nodes: result.nodes.filter(node => node.projectId === 'p') }
+          : result;
       };
     }
   });
@@ -524,6 +530,24 @@ try {
   assert.equal(await card.getByText('查看优化结果', { exact: true }).count(), 0);
   assert.equal(await card.getByRole('button', { name: /查看技能执行.*审批/ }).count(), 0);
   const retryButton = card.getByRole('button', { name: '重试', exact: true });
+  async function hideVideoOutputs() {
+    await page.evaluate(async () => {
+      const { api } = await import('/src/lib/api.ts');
+      const { emit } = await import('/@id/@tauri-apps/api/event');
+      const snapshot = await api.projectCanvasGet('p');
+      for (const node of snapshot.nodes.filter(node => node.id.startsWith('workflow-comfy:') && node.hiddenAt == null)) {
+        await api.projectCanvasNodeUpdate(node.id, { hiddenAt: Date.now() });
+      }
+      await emit('creative://changed', { projectId: 'p' });
+    });
+  }
+  async function reopenVideoCard() {
+    const jobId = await page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.steps.h3.jobId);
+    await card.waitFor({ state: 'hidden' });
+    await page.locator(`[data-canvas-node-id="workflow-comfy:${jobId}"]`).hover();
+    await card.getByRole('button', { name: '固定在画板上', exact: true }).click();
+  }
+  await reopenVideoCard();
   await retryButton.waitFor();
   await videoStatus.getByText('视频已生成', { exact: true }).waitFor();
   assert.equal(await card.getByText('视频已生成', { exact: true }).count(), 1);
@@ -539,6 +563,7 @@ try {
   await retryButton.click();
   await page.waitForFunction(({ local, cloud }) => window.h3Calls.length === local + 1 && window.optimizeStarts.length === cloud + 1 &&
     JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', autoBefore);
+  await reopenVideoCard();
   assert.equal(await page.evaluate(() => window.optimizeStarts.at(-1).textRewrite.source), '用户修改后的提示词');
   assert.match(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), /单一连续镜头/);
   assert.match(await preview.innerText(), /单一连续镜头/);
@@ -560,11 +585,13 @@ try {
   await runButton.click();
   await guard.getByRole('button', { name: '沿用旧优化结果' }).click();
   await page.waitForFunction(n => window.h3Calls.length === n + 1 && JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', staleCounts[0]);
+  await reopenVideoCard();
   assert.match(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), /单一连续镜头/);
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), staleCounts[1]);
   await runButton.click();
   await guard.getByRole('button', { name: '先优化再运行' }).click();
   await page.waitForFunction(n => window.h3Calls.length === n + 2 && JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', staleCounts[0]);
+  await reopenVideoCard();
   assert.equal(await page.evaluate(() => window.optimizeStarts.at(-1).textRewrite.source), '沿楼梯向上运镜。');
   assert.equal(await autoCheckbox.isChecked(), false);
   await page.evaluate(async () => {
@@ -664,7 +691,20 @@ try {
   }]);
   assert.equal(await imageDraft.innerText(), '一只玻璃杯');
   assert.match(await imageCard.getByRole('button', { name: '展开编辑优化后提示词' }).innerText(), /杯沿形成窄而清晰的高光/);
-  await imageStatus.getByText('已提交生成', { exact: true }).waitFor();
+  await imageStatus.getByText('正在生成图片', { exact: true }).waitFor();
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const { generationPromptNodeId } = await import('/src/lib/projectNodeIds.ts');
+    const { emit } = await import('/@id/@tauri-apps/api/event');
+    const run = JSON.parse(sessionStorage.getItem('workflow-p')).document.run;
+    const { jobId, turnKey } = run.steps['image-h3'];
+    await api.projectCanvasNodeCreate({ id: generationPromptNodeId(jobId, turnKey), projectId: 'p',
+      threadId: run.threadId, kind: 'prompt', assetId: null, role: 'prompt', x: 800, y: 60,
+      width: 280, height: 200, zIndex: 1, positionLocked: false,
+      payloadJson: JSON.stringify({ schema_version: 1, job_id: jobId, turn_key: turnKey, status: 'cancelled' }) });
+    await emit('creative://changed', { projectId: 'p' });
+  });
+  await imageStatus.getByText('已取消', { exact: true }).waitFor();
   await imageCard.getByRole('button', { name: '重试', exact: true }).waitFor();
   await imageCard.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
   await history.getByRole('button', { name: '恢复第 4 次优化结果', exact: true }).waitFor();
@@ -676,6 +716,7 @@ try {
   await imageDraft.and(page.locator(':focus')).waitFor();
   await imageCard.getByRole('button', { name: /^(运行|运行此卡片)$/ }).waitFor();
 
+  await hideVideoOutputs();
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
@@ -692,9 +733,15 @@ try {
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('canvas-settings')).h3_auto_optimize_prompt === false);
   const beforeConcurrentVideo = await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { api } = await import('/src/lib/api.ts');
+    const { emit } = await import('/@id/@tauri-apps/api/event');
     const controller = canvasWorkflowController('p');
     const image = controller.document.nodes.find(node => node.id === 'image-h3');
-    const [, id, turnKey] = image.sessionNodeIds.at(-1).split(':');
+    const sessionId = image.sessionNodeIds.at(-1);
+    const [, id, turnKey] = sessionId.split(':');
+    await api.projectCanvasNoteUpdate(sessionId,
+      JSON.stringify({ schema_version: 1, job_id: id, turn_key: turnKey, status: 'running' }));
+    await emit('creative://changed', { projectId: 'p' });
     // The workflow finished handing off this image, but the native generation is still running.
     window.store.setState({ genJobs: { [id]: { id, projectId: 'p', running: true, media: 'image', provider: 'minimax-h3-image',
       turns: [{ id: 1, turnKey, prompt: '玻璃杯', images: [] }], sessionId: null, streaming: '', lastPrompt: '玻璃杯',
@@ -714,9 +761,17 @@ try {
   await concurrent.getByRole('button', { name: '确认', exact: true }).click();
   await page.waitForFunction(n => window.h3Calls.length === n + 1 &&
     JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', beforeConcurrentVideo);
+  await reopenVideoCard();
 
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const { emit } = await import('/@id/@tauri-apps/api/event');
+    const snapshot = await api.projectCanvasGet('p');
+    const session = snapshot.nodes.find(node => node.kind === 'prompt' && JSON.parse(node.payloadJson).status === 'running');
+    const payload = JSON.parse(session.payloadJson);
+    await api.projectCanvasNoteUpdate(session.id, JSON.stringify({ ...payload, status: 'cancelled' }));
     window.store.setState({ genJobs: {} });
+    await emit('creative://changed', { projectId: 'p' });
     const invoke = window.__TAURI_INTERNALS__.invoke;
     const gate = Promise.withResolvers();
     window.releaseConcurrentVideo = gate.resolve;
@@ -732,7 +787,7 @@ try {
   await page.waitForFunction(() => window.concurrentVideoRunning);
   try {
     await videoStatus.getByText('正在生成视频', { exact: true }).waitFor();
-    await imageCard.getByRole('button', { name: /^(运行|运行此卡片|重试)$/ }).click();
+    await imageCard.getByRole('button', { name: /^(运行|运行此卡片|重试)$/ }).press('Enter');
     await concurrent.getByRole('button', { name: '取消', exact: true }).click();
     await concurrent.waitFor({ state: 'hidden' });
     assert.equal(await page.evaluate(() => window.imageDispatches.length), 1);
@@ -787,6 +842,7 @@ try {
     .find(node => node.id === 'image-h3').h3Prompt.edited === '优化后的柔光高光');
   const sixFields = 'subject_definitions: <Picture 1> 指定人物。\r\n\r\nsummary: 雨声中，她回头。\n\nretention_analysis: 保留衣着。\n' +
     'detailed_description: [Shot 1] 她说 <d>[Chinese] 等一下。</d>\noverall_soundscape: 雨落在伞面。\nnon_diegetic_music: N/A';
+  await hideVideoOutputs();
   await page.evaluate(async text => {
     const { api } = await import('/src/lib/api.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
