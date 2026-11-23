@@ -16,11 +16,10 @@ page.setDefaultTimeout(10000);
 await page.route('**/*', route => { if (new URL(route.request().url()).hostname !== '127.0.0.1') { remote.push(route.request().url()); return route.abort(); } return route.continue(); });
 await page.route('**/fixture/reference.png*', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect width="400" height="200" fill="#95b4ac"/></svg>' }));
 const button = name => page.getByRole('button', { name, exact: true });
-const catalog = page.locator('.text-workspace .library-catalog-transition');
+const projectDestination = name => page.getByRole('group', { name: '选择项目' }).getByRole('button', { name, exact: true });
+const catalog = page.locator('.text-workspace .library-catalog');
 const card = id => catalog.locator(`.folder-media-card[data-asset-id="${id}"]`);
 async function chooseMedia(name) {
-  await catalog.getByRole('tablist', {name:'素材视图切换条'}).hover();
-  await page.waitForFunction(() => document.querySelector('.text-workspace .file-view-heading')?.hasAttribute('data-navigation-open'));
   if (!await button(name).isVisible()) await button('更多素材库控件').click();
   await button(name).click();
 }
@@ -32,12 +31,12 @@ try {
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-workspace-live/preview.html`);
   const editor = page.getByRole('textbox', { name: '文档正文', exact: true });
   await editor.waitFor();
-  assert.equal(await page.locator('.text-workspace .library-catalog-transition').count(), 1, 'editor reuses the real canvas catalog');
   // The standalone shell does not run App's project bootstrap.
   await page.evaluate(async () => window.store.setState({ projects: await window.__TAURI_INTERNALS__.invoke('list_projects', {}) }));
-  await page.getByRole('tab', { name: '全部素材', exact: true }).click();
+  await button('全部素材').click();
   await page.getByRole('dialog', { name: '文本编辑器', exact: true }).focus();
   await card('img1').waitFor();
+  assert.equal(await catalog.count(), 1, 'editor reuses the real canvas catalog');
   const block = editor.locator('.slate-blockWrapper').first();
   const plateAction = page.getByRole('menuitem', { name: '复制段落', exact: true });
   const assetMenu = page.getByRole('menu', { name: '素材操作', exact: true });
@@ -99,20 +98,22 @@ try {
   await chooseMedia('视频'); await card('video1').waitFor();
   await chooseMedia('音频'); await card('audio1').waitFor();
   await chooseMedia('图片'); await card('img1').waitFor();
-  const globalTab = page.getByRole('tab', { name: '全部素材', exact: true });
-  const projectTab = page.getByRole('tab', { name: '项目素材', exact: true });
+  const globalTab = button('全部素材');
+  const projectTab = catalog.getByRole('button', { name: '秋日短片', exact: true });
   await globalTab.click(); await globalTab.focus(); await page.keyboard.press('Shift+e');
-  assert.equal(await globalTab.getAttribute('aria-selected'), 'true', 'modified letters do not change the library source');
+  assert.equal(await globalTab.getAttribute('aria-current'), 'true', 'modified letters do not change the library mode');
   await page.keyboard.press('e');
-  await page.waitForFunction(() => document.querySelector('.text-workspace [role="tab"][aria-selected="true"]')?.textContent.includes('项目素材'));
+  await page.waitForFunction(() => document.querySelector('.text-workspace .library-sidebar-scroll')?.dataset.mode === 'tags');
+  await page.keyboard.press('q');
+  await projectTab.click();
   await page.waitForFunction(() => window.calls.some(call => call.command === 'catalog_overview' && call.args.filter.projectId === 'p'));
   await card('img1').waitFor();
   assert.equal(await catalog.locator('[data-asset-id^="page-"]').count(), 0, 'project scope filters the real catalog');
   await page.getByRole('spinbutton', { name: '高频引用次数阈值' }).press('q');
-  assert.equal(await projectTab.getAttribute('aria-selected'), 'true', 'typing in a library input does not trigger source shortcuts');
-  await projectTab.focus(); await page.keyboard.press('q');
+  assert.equal(await projectTab.getAttribute('aria-current'), 'true', 'typing in a library input does not change the project scope');
+  await globalTab.click();
   await card('img1').waitFor();
-  assert.equal(await globalTab.getAttribute('aria-selected'), 'true', 'Q returns to the global library');
+  assert.equal(await globalTab.getAttribute('aria-current'), 'true', 'the global library can be restored');
   await button('添加素材').click();
   await page.getByText('手动固定', { exact: true }).click();
   assert.equal(await page.locator('.canvas-frequent-assets [data-row="pinned"] [data-asset-id]').count(), 0, 'picking ignores the library chrome');
@@ -137,8 +138,6 @@ try {
   assert.equal(await button('打开素材库').count(), 1, 'Escape from the resize grip closes the library');
   assert.equal(await editor.count(), 1, 'resize grip Escape preserves the editor');
   await button('打开素材库').click(); await card('img1').waitFor();
-  await page.getByRole('tab', { name: '文件夹', exact: true }).click();
-  await page.waitForFunction(() => !!document.querySelector('.text-workspace .connected-collections'));
   await page.getByRole('treeitem', { name: '创作笔记', exact: true }).click();
   await card('img1').waitFor();
   await card('img1').click({ button: 'right' });
@@ -179,14 +178,14 @@ try {
   await page.keyboard.press('Escape');
   assert.equal(await detail.count(), 0, 'Escape dismisses local asset detail');
   assert.equal(await editor.count(), 1);
-  await page.getByRole('tab', { name: '全部素材', exact: true }).click();
+  await globalTab.click();
   await page.waitForFunction(() => !!document.querySelector('.text-workspace .categorized-library:not(.is-tag-catalog)'));
   const scroller = catalog.locator('.catalog-scroller');
   await scroller.evaluate(element => { element.scrollTop = element.scrollHeight; });
   await page.waitForFunction(() => window.calls.some(call => call.command === 'catalog_page' && call.args.offset > 0));
   await scroller.evaluate(element => { element.scrollTop = 0; }); await card('img1').waitFor();
   const search = page.getByRole('searchbox', { name: '搜索素材', exact: true });
-  if (!await search.isVisible()) await button('更多素材库控件').click();
+  await button('搜索素材').click();
   await search.fill('分镜 140');
   await card('page-139').waitFor();
   assert.equal(await card('img1').count(), 0, 'search filters shared catalog assets');
@@ -259,11 +258,11 @@ try {
   assert.equal(calls[0].args.input.requestId, calls[1].args.input.requestId, 'unchanged repeat save uses same idempotency identity');
   await page.evaluate(() => { window.saveError = true; });
   await replaceBody('保存失败仍保留');
-  await button('保存到项目').click(); await button('秋日短片').click();
+  await button('保存到项目').click(); await projectDestination('秋日短片').click();
   await page.getByRole('alert').filter({ hasText: '目录暂时无法写入' }).waitFor();
   assert.equal((await editor.locator('[data-slate-string]').allTextContents()).join('').trim(), '保存失败仍保留');
   await page.evaluate(() => { window.saveError = false; window.saveDelay = 300; });
-  await button('保存到项目').click(); await button('秋日短片').click();
+  await button('保存到项目').click(); await projectDestination('秋日短片').click();
   await replaceBody('保存期间继续编辑');
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
   assert.equal((await editor.locator('[data-slate-string]').allTextContents()).join('').trim(), '保存期间继续编辑');
@@ -316,7 +315,7 @@ try {
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
   assert.equal(await page.evaluate(() => window.calls.find(call => call.command === 'create_text_document').args.input.requestId), reloadRequestId, 'same snapshot retains retry identity across page reload');
   await page.evaluate(async () => window.store.setState({ projects: await window.__TAURI_INTERNALS__.invoke('list_projects', {}) }));
-  await page.getByRole('tab', { name:'全部素材', exact:true }).click();
+  await globalTab.click();
   await card('img1').waitFor();
   await page.evaluate(() => { window.mediaMissing = false; window.mediaDelay = 0; });
   const frequent = page.locator('.text-workspace .canvas-frequent-assets [data-row="frequent"] [data-asset-id="img1"]');
@@ -347,10 +346,27 @@ try {
   assert.deepEqual(await page.evaluate(() => window.annotationCalls), ['img1']);
   await button('放大编辑').click(); await editor.waitFor();
   assert.equal((await editor.locator('[data-slate-string]').allTextContents()).join('').trim(), '标注前保留的草稿', 'outer tool navigation retains the draft');
+  await page.evaluate(async () => {
+    const { serializeMarkdown } = await import('/src/lib/documentCodec.ts');
+    const { openTextDocument } = await import('/src/lib/recentTextDocuments.ts');
+    const markdown = serializeMarkdown([{ id: 'rich', type: 'p', align: 'center', children: [{ text: '旧草稿正文' }] }]);
+    await openTextDocument({ title: '外部改动夹具', markdown: markdown.replace('旧草稿正文', '新版正文') });
+  });
+  await button('最近文档').click();
+  await page.getByRole('menuitem', { name: /外部改动夹具/ }).click();
+  await page.getByRole('alert').filter({ hasText: '正文已在外部修改' }).waitFor();
+  assert.equal(await editor.count(), 0);
+  await button('保留原富状态另存草稿').click();
+  await editor.getByText('新版正文', { exact: true }).waitFor();
+  await button('最近文档').click();
+  await page.getByRole('menuitem', { name: /外部改动夹具（富状态草稿）/ }).click();
+  await editor.getByText('旧草稿正文', { exact: true }).waitFor();
+  assert.equal(await editor.getByText('旧草稿正文', { exact: true }).evaluate(node => getComputedStyle(node).textAlign), 'center');
+  assert.equal(await page.evaluate(() => window.sourceDraft.markdown.includes('标注前保留的草稿')), true);
   assert.deepEqual(errors, []); assert.deepEqual(remote, []);
   assert.equal((await page.evaluate(() => window.calls)).some(call => /generate|start_agent|local_chat_send/.test(call.command)), false);
   console.log('PASS real TextWorkspace: shared canvas catalog/collections/frequent, isolated browsing and overlays, frozen insertion, typed saves, retries and themes');
-} catch (error) { await mkdir(artifacts, { recursive: true }); await page.screenshot({ path: `${artifacts}/failure.png` }); await writeFile(`${artifacts}/failure.json`, JSON.stringify({ errors, calls: await page.evaluate(() => window.calls.slice(-30)) }, null, 2)); throw error; }
+} catch (error) { console.error(error); await mkdir(artifacts, { recursive: true }); await page.screenshot({ path: `${artifacts}/failure.png` }); await writeFile(`${artifacts}/failure.json`, JSON.stringify({ errors, calls: await page.evaluate(() => window.calls?.slice(-30)) }, null, 2)); throw error; }
 finally {
   if (coverage) {
     const entries = [...coverageChunks, ...await page.coverage.stopJSCoverage()].filter(entry => /\/src\/(?:components\/(?:TextWorkspace|TextWorkspaceLibrary|TextPlateEditor|useTextWorkspace)\.tsx|lib\/(?:textWorkspaceSave|documentComposer|portalTarget)\.tsx?)(?:\?|$)/.test(entry.url));

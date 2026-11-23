@@ -3,7 +3,7 @@
 
 import * as React from 'react';
 
-import { insertInlineEquation } from '@platejs/math';
+import { insertInlineEquation } from '../components/editor/plugins/math-schema';
 import { RadicalIcon } from 'lucide-react';
 import { useEditorRef } from 'platejs/react';
 

@@ -4,11 +4,15 @@ import { Plus, RotateCcw, Save } from "lucide-react";
 import type { Asset } from "../lib/types";
 import type { DocumentMedia, DocumentValue } from "../lib/documentTypes";
 import { api } from "../lib/api";
-import { parseMarkdown, serializeMarkdown } from "../lib/documentCodec";
+import { parseMarkdown, parseMarkdownWithState, serializeMarkdown } from "../lib/documentCodec";
+import { serializeMarkdownInWorker } from "../lib/documentSerialization";
+import type { DocumentStateMismatch } from "../lib/documentState";
+import { recoverTextDocumentState } from "../lib/recoverTextDocumentState";
 import { documentMedia, documentReferenceIds, textDocuments } from "../lib/textDocuments";
 import { finishTextDocumentSave, getTextDocumentDraft, keepTextDocumentDraft, subscribeTextDocumentDraft, type TextDocumentDraft } from "../lib/textDocumentDrafts";
 import { userErrorMessage } from "../lib/userError";
 import { TextPlateEditor, type TextPlateHandle } from "./TextPlateEditor";
+import { TextDocumentStateChoice } from "./TextDocumentStateChoice";
 import "./TextDocumentEditor.css";
 
 interface Props { asset: Asset; onSaved?(): void; onDirtyChange?(dirty: boolean): void }
@@ -25,6 +29,8 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false), [inserting, setInserting] = useState(false);
+  const [stateChoice, setStateChoice] = useState<{ draft: TextDocumentDraft; value: DocumentValue; mismatch: DocumentStateMismatch }>();
+  const [recovering, setRecovering] = useState(false);
   const current = useRef(draft), mounted = useRef(true), plate = useRef<TextPlateHandle>(null);
   const canonical = useRef("");
   const pendingValue = useRef<DocumentValue>();
@@ -49,11 +55,38 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
     const assets = await api.getAssetsByIds(ids);
     return assets.map(documentMedia).filter((item): item is DocumentMedia => item !== null);
   }
-  function loadDraft(next: TextDocumentDraft) {
-    const nextValue = next.base.format !== "text" ? parseMarkdown(next.text) : [];
+  function displayDraft(next: TextDocumentDraft, nextValue: DocumentValue) {
+    setStateChoice(undefined);
     canonical.current = next.base.format !== "text" ? serializeMarkdown(nextValue) : next.text;
     setValue(nextValue); replace(next);
     hydrateMedia(nextValue);
+  }
+  function loadDraft(next: TextDocumentDraft) {
+    const parsed = next.base.format === "text" ? { value: [] } : parseMarkdownWithState(next.text);
+    if (parsed.mismatch) {
+      readEpoch.current++;
+      setStateChoice({ draft: { ...next, mode: "body" }, value: parsed.value, mismatch: parsed.mismatch });
+      return;
+    }
+    displayDraft(next, parsed.value);
+  }
+  function openLatest() {
+    if (!stateChoice) return;
+    displayDraft(stateChoice.draft, stateChoice.value);
+    setError("");
+  }
+  async function keepRichDraft() {
+    if (!stateChoice || recovering) return;
+    const ticket = readEpoch.current;
+    setRecovering(true); setError("");
+    try {
+      await recoverTextDocumentState(asset.name, stateChoice.mismatch);
+      if (!mounted.current || ticket !== readEpoch.current) return;
+      openLatest();
+      setNotice("原富状态已另存到工作区的最近文档。");
+    } catch (reason) {
+      if (mounted.current && ticket === readEpoch.current) setError(userErrorMessage(reason, "富状态草稿暂时无法另存，请重试。"));
+    } finally { if (mounted.current) setRecovering(false); }
   }
   useEffect(() => {
     mounted.current = true;
@@ -81,15 +114,21 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
   function changeValue(next: DocumentValue) {
     readEpoch.current++; pendingValue.current = next; setEditing(true);
     clearTimeout(draftTimer.current);
-    draftTimer.current = setTimeout(captureValue, 300);
+    draftTimer.current = setTimeout(() => {
+      void serializeMarkdownInWorker(next).then(text => applyValue(next, text)).catch(reason => {
+        if (mounted.current && pendingValue.current === next) setError(userErrorMessage(reason, "文档暂时无法保存，当前内容仍保留。"));
+      });
+    }, 300);
   }
   function captureValue() {
     clearTimeout(draftTimer.current);
     const next = pendingValue.current;
-    if (!next) return;
-    const text = serializeMarkdown(next);
+    if (next) applyValue(next, serializeMarkdown(next));
+  }
+  function applyValue(next: DocumentValue, text: string) {
+    if (pendingValue.current !== next) return;
     pendingValue.current = undefined;
-    setValue(next); setEditing(false);
+    if (mounted.current) setEditing(false);
     if (text !== canonical.current) { canonical.current = text; changeText(text); }
   }
   function switchMode(mode: "body" | "source") {
@@ -105,6 +144,7 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
     } catch { setError("源码暂时无法转换，请检查格式；内容仍保留在编辑区。"); }
   }
   async function save() {
+    if (stateChoice) return;
     captureValue();
     const start = current.current;
     if (!start || saving || start.text === start.base.text) return;
@@ -148,16 +188,17 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
     if (!event.nativeEvent.isComposing && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void save(); }
   }}>
     <div className="text-document-toolbar">
-      {draft?.base.format === "markdown" && <div className="text-document-modes"><button aria-pressed={draft.mode === "body"} onClick={() => switchMode("body")}>正文</button><button aria-pressed={draft.mode === "source"} onClick={() => switchMode("source")}>源码</button></div>}
-      {draft && draft.base.format !== "text" && <button title="插入已有素材的原文件引用" disabled={draft.mode !== "body" || inserting} onClick={() => void insertFiles()}><Plus size={14}/>插入素材</button>}
-      <span className="text-document-save-state">{dirty ? "未保存" : ""}</span>
-      <button aria-label="重新读取原文件" title="重新读取原文件" disabled={saving} onClick={() => void reload()}><RotateCcw size={14}/></button>
-      <button disabled={!dirty || saving} onClick={() => void save()}><Save size={14}/>{saving ? "保存中…" : "保存"}</button>
+      {!stateChoice && draft?.base.format === "markdown" && <div className="text-document-modes"><button aria-pressed={draft.mode === "body"} onClick={() => switchMode("body")}>正文</button><button aria-pressed={draft.mode === "source"} onClick={() => switchMode("source")}>源码</button></div>}
+      {!stateChoice && draft && draft.base.format !== "text" && <button title="插入已有素材的原文件引用" disabled={draft.mode !== "body" || inserting} onClick={() => void insertFiles()}><Plus size={14}/>插入素材</button>}
+      <span className="text-document-save-state">{dirty ? "磁盘原件 · 有未保存更改" : "磁盘原件 · 手动保存"}</span>
+      <button aria-label="重新读取原文件" title="重新读取原文件" disabled={saving || !!stateChoice} onClick={() => void reload()}><RotateCcw size={14}/></button>
+      <button disabled={!dirty || saving || !!stateChoice} onClick={() => void save()}><Save size={14}/>{saving ? "保存中…" : "保存"}</button>
     </div>
     {error && <div className="text-document-error" role="alert">{error}</div>}
     {notice && <div className="text-document-notice" role="status">{notice}</div>}
     {draft?.base.format === "docx" && <div className="text-document-notice">保存为 Word 文档；复杂排版可能变化，正文与基础格式会保留。</div>}
-    {!draft ? <div className="text-document-loading">{error ? "" : "正在读取文本…"}</div> : draft.base.format === "text" ? <textarea className="text-document-source is-plain" aria-label="文本内容" value={draft.text} onChange={event => changeText(event.target.value)} />
+    {stateChoice ? <TextDocumentStateChoice saving={recovering} onOpenLatest={openLatest} onSaveDraft={() => void keepRichDraft()}/>
+      : !draft ? <div className="text-document-loading">{error ? "" : "正在读取文本…"}</div> : draft.base.format === "text" ? <textarea className="text-document-source is-plain" aria-label="文本内容" value={draft.text} onChange={event => changeText(event.target.value)} />
       : draft.mode === "source" ? <textarea className="text-document-source" aria-label="Markdown 源码" value={draft.text} spellCheck={false} onChange={event => changeText(event.target.value)} />
       : <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={attachAssets} />}
   </section>;

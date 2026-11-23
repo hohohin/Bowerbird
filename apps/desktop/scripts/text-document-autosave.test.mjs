@@ -36,3 +36,18 @@ test('an idle close does not write or change the saved revision',async()=>{let w
 test('source checkpoints persist even when document text stays the same',async()=>{const writes=[];const writer=new TextDocumentAutosave({...document,sourceVersion:'before'},async entry=>{writes.push(entry);return saved(entry);},()=>{});writer.update({...document,sourceVersion:'after'});await writer.flush();assert.equal(writes[0].sourceVersion,'after');assert.equal(writer.pending,false);});
 
 test('switching to a saved copy cancels the former scheduled write',async()=>{let writes=0;const writer=new TextDocumentAutosave(document,async entry=>{writes++;return saved(entry);},()=>{});writer.update({...document,markdown:'kept in copy'});writer.cancelScheduled();await delay(380);assert.equal(writes,0);assert.equal(writer.document.markdown,'kept in copy');});
+
+test('a projection returned by the worker cannot replace newer typing or a captured snapshot', async () => {
+  const writes = [];
+  const writer = new TextDocumentAutosave(document, async entry => { writes.push(entry.markdown); return saved(entry); }, () => {});
+  const publish = markdown => writer.update({ ...writer.document, markdown });
+  let release;
+  writer.stage(() => publish('旧稿'), () => new Promise(resolve => { release = resolve; }));
+  const flushing = writer.flush();
+  writer.stage(() => publish('最新正文'), async () => () => publish('最新正文'));
+  writer.capture();
+  release(() => publish('旧稿'));
+  await flushing;
+  assert.deepEqual(writes, ['最新正文']);
+  assert.equal(writer.pending, false);
+});

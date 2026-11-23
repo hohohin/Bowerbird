@@ -15,7 +15,7 @@ import { MarkdownPlugin, deserializeMd, markdownToAstProcessor, serializeMd, rem
 import remarkGfm from "remark-gfm";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkMath from 'remark-math';
-import { readDocumentState, writeDocumentState } from './documentState.ts';
+import { readDocumentState, writeDocumentState, type DocumentStateMismatch } from './documentState.ts';
 import { documentMediaMarkup } from './documentProjection.ts';
 import type { DocumentBlock, DocumentText, DocumentValue } from "./documentTypes.ts";
 
@@ -38,16 +38,23 @@ export function createEmptyDocument(): DocumentValue {
 
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
 
-function normalizeNode(node: unknown): DocumentBlock | DocumentText {
+type NormalizedNodes = WeakMap<object, DocumentBlock | DocumentText>;
+
+function normalizeNode(node: unknown, cache?: NormalizedNodes): DocumentBlock | DocumentText {
   if (!isRecord(node)) return { text: '' };
-  if (typeof node.text === 'string') return { ...node, text: node.text };
-  return { ...node, id: typeof node.id === 'string' ? node.id : crypto.randomUUID(), type: typeof node.type === 'string' ? node.type : 'p',
-    children: Array.isArray(node.children) && node.children.length ? node.children.map(normalizeNode) : [{ text: '' }] };
+  const cached = cache?.get(node);
+  if (cached) return cached;
+  const normalized = typeof node.text === 'string' ? { ...node, text: node.text } : {
+    ...node, id: typeof node.id === 'string' ? node.id : crypto.randomUUID(), type: typeof node.type === 'string' ? node.type : 'p',
+    children: Array.isArray(node.children) && node.children.length ? node.children.map(child => normalizeNode(child, cache)) : [{ text: '' }],
+  };
+  cache?.set(node, normalized);
+  return normalized;
 }
 /** Normalize the editor boundary, including ids on nodes newly created by Plate. */
-export function normalizeDocument(value: unknown): DocumentValue {
+export function normalizeDocument(value: unknown, cache?: NormalizedNodes): DocumentValue {
   if (!Array.isArray(value)) return createEmptyDocument();
-  const result = value.map(normalizeNode).filter((node): node is DocumentBlock => typeof node.type === 'string' && Array.isArray(node.children));
+  const result = value.map(node => normalizeNode(node, cache)).filter((node): node is DocumentBlock => typeof node.type === 'string' && Array.isArray(node.children));
   const document: DocumentValue = result.length ? result : createEmptyDocument();
   if ('discussions' in value) document.discussions = (value as DocumentValue).discussions;
   return document;
@@ -91,11 +98,15 @@ function parseNode(node: MarkdownNode, source: string): DocumentValue {
   return safeSyntax(node) ? normalizeDocument(deserializeMd(codec, text, parseOptions)) : [rawBlock(text)];
 }
 export function parseMarkdown(source: string): DocumentValue {
+  return parseMarkdownWithState(source).value;
+}
+
+export function parseMarkdownWithState(source: string): { value: DocumentValue; mismatch?: DocumentStateMismatch } {
   const stored = readDocumentState(source);
-  if (stored.value) return stored.value;
+  if (stored.value) return { value: stored.value };
   const ast = parseMarkdownAst(stored.source);
   const blocks = ast.children.flatMap(node => parseNode(node, stored.source));
-  return blocks.length ? blocks : createEmptyDocument();
+  return { value: blocks.length ? blocks : createEmptyDocument(), mismatch: stored.mismatch };
 }
 
 /** Shared syntax tree for read-only consumers that must not expose preserved raw blocks. */

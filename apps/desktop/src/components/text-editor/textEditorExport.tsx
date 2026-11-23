@@ -5,6 +5,7 @@ import { normalizeDocument, serializeReadableMarkdown } from '../../lib/document
 import { BaseEditorKit } from './plate/components/editor/editor-base-kit';
 import { DocxExportKit } from './plate/components/editor/plugins/docx-export-kit';
 import { EditorStatic } from './plate/ui/editor-static';
+import { EquationSchema, InlineEquationSchema } from './plate/components/editor/plugins/math-schema';
 import utilities from './plate/utilities.css?raw';
 import mathStyles from 'katex/dist/katex.min.css?inline';
 import { exportDataUrl, exportNodes } from './textEditorExportNodes';
@@ -29,7 +30,15 @@ async function inlineMathFonts(document: Document) {
   return math;
 }
 async function documentHtml(editor: PlateEditor) {
-  const staticEditor = createSlateEditor({ plugins: BaseEditorKit, value: await exportNodes(editor) });
+  const value = await exportNodes(editor);
+  const hasEquations = (nodes: typeof value): boolean => nodes.some(node => ['equation', 'inline_equation'].includes(node.type) || hasEquations(node.children.filter(child => Array.isArray(child.children)) as typeof value));
+  const plugins: SlatePlugin[] = [...BaseEditorKit] as SlatePlugin[];
+  if (hasEquations(value)) {
+    // Static HTML serialization needs resolved renderers before rendering the tree.
+    const { EquationElementStatic, InlineEquationElementStatic } = await import('./plate/ui/equation-node-static');
+    plugins.push(EquationSchema.withComponent(EquationElementStatic), InlineEquationSchema.withComponent(InlineEquationElementStatic));
+  }
+  const staticEditor = createSlateEditor({ plugins, value });
   const html = await serializeHtml(staticEditor, { editorComponent: EditorStatic, props: { style: { padding: '32px', maxWidth: '900px', margin: 'auto' } } });
   const document = new DOMParser().parseFromString(html, 'text/html');
   await inlineMedia(document);

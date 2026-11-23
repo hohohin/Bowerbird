@@ -11,7 +11,7 @@
 .text-workspace-name { display:flex; align-items:center; gap:6px; min-width:0; margin-right:12px; }
 .text-workspace-name input { border:0; font-size:14px; width:130px; max-width:130px; min-width:70px; }
 .text-workspace-recent { white-space:nowrap; flex-shrink:0; }
-.text-workspace-autosave { width:16px; display:inline-flex; flex-shrink:0; color:var(--bb-muted); }
+.text-workspace-autosave { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; color:var(--bb-muted); font-size:11px; white-space:nowrap; }
 .text-workspace-autosave.is-error { color:var(--bb-danger); }
 .text-workspace .text-workspace-recents.text-plate-ui { z-index:80; width:min(340px,calc(100vw - 32px)); max-height:min(480px,70vh); overflow-y:auto; background:var(--bb-surface); color:var(--bb-ink); border-color:var(--bb-line); }
 .text-workspace-recents [role=menuitem] { display:flex; align-items:center; gap:10px; min-height:36px; }

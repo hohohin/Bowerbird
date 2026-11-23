@@ -223,7 +223,7 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 
 - 内容卡行列尺寸：`canvasNotes.ts` 的 `canvasGridWeights` 供 `CanvasTextCard` 布局和 `readCanvasNote` 草稿读取共用；维数不匹配、非有限值或非正值沿既有等分回退，避免显示修复后仍把非法尺寸再次提交。拖动约束须同时考虑相邻两格的可分配范围；53 行／列保存与恢复见 `canvas-large-grid-resize-ui.test.mjs`。
 - 文档卡的展示、框选和连线端点共用 `canvasDocumentHeight(width)`。卡片保持 3:4 比例，接近视口时通过 `requestDocumentReading(source, "card")` 在共用 Worker 中生成可滚动全文；素材目录使用同一队列的 `"excerpt"` 模式。
-- 可移植 Markdown 和 Agent 文本调用 `serializeReadableMarkdown`；需要完整恢复的编辑器保存调用 `serializeMarkdown`，由 `parseMarkdown` 校验并恢复。外部富文本粘贴通过 `documentPasteData` 处理统一的网页默认字体，内部 Slate 复制沿原有剪贴板格式传递。
+- 可移植 Markdown 和 Agent 文本调用 `serializeReadableMarkdown`。编辑器日常保存通过 [documentSerialization.ts](../../apps/desktop/src/lib/documentSerialization.ts) 的 `serializeMarkdownInWorker` 使用同一完整 Markdown 编解码。`parseMarkdownWithState` 供编辑入口识别有效尾注与正文冲突，`parseMarkdown` 继续提供以最新正文为准的文档值。外部富文本粘贴通过 `documentPasteData` 处理统一的网页默认字体，内部 Slate 复制沿原有剪贴板格式传递。
 - 工作流读取文档时，`canvasSessionOutputs.ts` 的 `canvasWorkflowInputState` 检查端口，`canvasInputAssetIds` 返回有序素材 ID，`canvasInputValue` 提供实际执行需要的完整文本与引用。画板文档编辑沿用 `TextDocumentAutosave`，`stage` 暂存最新编辑，`capture` 和 `flush` 分别用于同步读取和等待保存。
 
 ## 视频采集与复刻原件添加画板

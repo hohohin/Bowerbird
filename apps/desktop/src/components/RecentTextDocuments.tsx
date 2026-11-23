@@ -42,5 +42,6 @@ export function TextAutosaveStatus({ status }: { status: AutosaveStatus }) {
   const label = status === 'saved' ? '已自动保存到本机' : status === 'saving' ? '正在自动保存' : '自动保存失败';
   return <span className={`text-workspace-autosave is-${status}`} role="status" aria-label={label} title={label}>
     {status === 'saving' ? <LoaderCircle size={13}/> : status === 'saved' ? <Check size={13}/> : '!'}
+    <span>工作区草稿 · {status === 'saved' ? '本机自动保存' : label}</span>
   </span>;
 }

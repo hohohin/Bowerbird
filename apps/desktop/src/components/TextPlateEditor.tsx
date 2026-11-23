@@ -3,7 +3,7 @@ import { documentPasteData } from "../lib/documentPaste";
 import { Plate, PlateContainer, PlateContent, PlateElement, createPlatePlugin, usePlateEditor, useEditorRef, usePluginOption, type PlateElementProps } from "platejs/react";
 import type { Value } from "platejs";
 import { BlockSelectionPlugin } from '@platejs/selection/react';
-import type { DocumentMedia, DocumentValue } from "../lib/documentTypes";
+import type { DocumentBlock, DocumentMedia, DocumentText, DocumentValue } from "../lib/documentTypes";
 import { normalizeDocument, parseMarkdown } from "../lib/documentCodec";
 import { getDragAssets } from "../lib/dragPayload";
 import { TextAgentScope } from "./TextAgent";
@@ -30,13 +30,16 @@ interface Props {
   onDropAssets(ids: string[]): Promise<DocumentMedia[]>;
 }
 function plateValue(value: DocumentValue): Value {
-  const next = structuredClone(value);
-  const visit = (nodes: Value) => nodes.forEach(node => {
-    if (typeof node.caption === 'string' && ['img', 'audio', 'video'].includes(node.type)) node.caption = [{ text: node.caption }];
-    visit(node.children.filter((child): child is Value[number] => typeof child.type === 'string' && Array.isArray(child.children)));
-  });
-  visit(next);
-  return next;
+  const adapt = (node: DocumentBlock | DocumentText): DocumentBlock | DocumentText => {
+    if (!Array.isArray(node.children)) return node;
+    const block = node as DocumentBlock;
+    const caption = typeof block.caption === 'string' && ['img', 'audio', 'video'].includes(block.type)
+      ? [{ text: block.caption }] : block.caption;
+    const children = block.children.map(adapt);
+    if (caption === block.caption && children.every((child, index) => child === block.children[index])) return block;
+    return { ...block, children, ...(caption === block.caption ? {} : { caption }) };
+  };
+  return value.map(node => adapt(node) as DocumentBlock);
 }
 
 function RawElement(props: PlateElementProps) { return <PlateElement {...props} as="pre" className="text-document-raw">{props.children}</PlateElement>; }
@@ -51,7 +54,6 @@ function DiscussionChanges({ onChange }: { onChange(value: Value): void }) {
 }
 
 export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextPlateEditor({ value, media, onChange, onDropAssets, toolbarStart, toolbarEnd, agent }, ref) {
-  // Initialization clones the entire Slate tree. Later external documents are applied by the effect below.
   const [initialValue] = useState(() => plateValue(value));
   const editor = usePlateEditor({
     plugins: [...EditorKit.filter(plugin => plugin.key !== 'fixed-toolbar').map(plugin => plugin.key === 'discussion' ? discussionPlugin.extend({ options: { discussions: value.discussions ?? [] } }) : plugin), createPlatePlugin({ key: "raw", node: { isElement: true, component: RawElement } })],
@@ -59,10 +61,13 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
     override: { components: { img: TextMediaElement, audio: TextMediaElement, video: TextMediaElement } },
   });
   const bodyRef = useRef<HTMLDivElement>(null);
-  const emitted = useRef(value), mounted = useRef(true);
+  const applied = useRef(value), emitted = useRef(new WeakSet<DocumentValue>()), mounted = useRef(true);
+  // Slate operations replace the edited path and keep unaffected nodes by identity.
+  const normalizedNodes = useRef(new WeakMap<object, DocumentBlock | DocumentText>());
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => { if (value !== emitted.current) {
-    emitted.current = value;
+  useEffect(() => { if (value !== applied.current) {
+    applied.current = value;
+    if (emitted.current.has(value)) return;
     editor.setOption(discussionPlugin, 'discussions', value.discussions ?? []);
     editor.tf.setValue(plateValue(value));
   } }, [editor, value]);
@@ -97,10 +102,10 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
   }
   function insertMarkdown(text: string) { editor.tf.insertNodes(parseMarkdown(text), { select: true }); editor.tf.focus(); }
   function emitChange(changed: Value) {
-    const next = normalizeDocument(changed);
+    const next = normalizeDocument(changed, normalizedNodes.current);
     const discussions = editor.getOption(discussionPlugin, 'discussions');
     if (discussions.length) next.discussions = discussions;
-    emitted.current = next; onChange(next);
+    emitted.current.add(next); onChange(next);
   }
   useImperativeHandle(ref, () => ({ insertMedia, insertMarkdown, reserveInsertion }));
   const content = <div className="text-plate-ui text-plate-shell">

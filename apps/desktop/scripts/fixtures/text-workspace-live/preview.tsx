@@ -49,9 +49,19 @@ w.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, convertFileSrc:
   }
   throw Error(`Unexpected IPC ${command}`);
 } };
+function initialMarkdown() {
+  const search = new URLSearchParams(location.search);
+  if (search.has('benchmark')) {
+    const paragraph = '窗外的光落在桌面上。'.repeat(10);
+    const image = '<img data-bowerbird-asset="img1" data-caption="" />';
+    const table = '| 镜头 | 画面 | 时长 |\n| --- | --- | --- |\n| 1 | 光落在桌面上 | 3 秒 |\n| 2 | 深处传来脚步声 | 4 秒 |';
+    return [...Array(100).fill(paragraph), ...Array(8).fill(image), ...Array(6).fill(table)].join('\n\n') + '\n';
+  }
+  return search.has('markdown') ? '' : '# 剧本\n\n窗外的光落在桌面上。\n\n第二段内容。\n';
+}
 function App() {
   const [opened, setOpened] = useState(true);
-  const [draft, setDraft] = useState({ title: '剧本', markdown: new URLSearchParams(location.search).has('markdown') ? '' : '# 剧本\n\n窗外的光落在桌面上。\n\n第二段内容。\n' });
+  const [draft, setDraft] = useState(() => ({ title: '剧本', markdown: initialMarkdown() }));
   return <><button onClick={() => setOpened(true)}>放大编辑</button>{opened && <TextWorkspace initialDocument={draft} origin={new URLSearchParams(location.search).has("recents") ? { key: "fixture", version: new URLSearchParams(location.search).get("source") ?? "initial" } : undefined} projectId="p" onChange={(next, context) => { w.draft = next; if (context.isSourceDocument) { w.sourceDraft = next; setDraft(next); } }} onClose={next => { setDraft(next); setOpened(false); }} onAddToComposer={next => { w.composer = next; setDraft(next); setOpened(false); }}/>}</>;
 }
 document.documentElement.dataset.theme = 'dark';

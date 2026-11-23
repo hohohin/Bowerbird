@@ -29,6 +29,8 @@ await fresh();await page.keyboard.type('# Scene title');await page.keyboard.pres
 });
 await check('math renders and remains editable after reopening',async()=>{
 await slash('公式');await page.getByRole('textbox',{name:'TeX 公式',exact:true}).fill('x^2 + y^2 = z^2');await page.getByRole('textbox',{name:'TeX 公式',exact:true}).press('Enter');await editor.locator('.katex').waitFor();await reopen();await editor.locator('.katex').waitFor();assert.match(await editor.locator('.katex').innerText(),/x/);
+await toolbar.locator('[aria-label="导出"]').click();const download=page.waitForEvent('download',{timeout:60000});await page.getByRole('menuitem',{name:'导出 HTML',exact:true}).click();assert.match(await readFile(await (await download).path(),'utf8'),/class="katex"/);
+await fresh();await page.keyboard.type('$x$');await editor.locator('.slate-inline_equation .katex').waitFor();
 });
 await check('date and emoji insert at caret and persist',async()=>{
 await slash('日期');await editor.locator('.slate-date').click();await page.getByRole('gridcell').filter({hasText:/^15$/}).first().click();await page.keyboard.press('Escape');await editor.locator('[data-slate-node=element]').first().click();await page.keyboard.press('End');await toolbar.locator('[aria-label="表情"]').click();await page.getByRole('button',{name:'😀',exact:true}).click();await reopen();assert.match(await editor.innerText(),/😀/);assert.equal(await editor.locator('.slate-date').count(),1);

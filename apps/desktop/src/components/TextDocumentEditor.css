@@ -11,6 +11,9 @@
 .text-document-error { color: var(--bb-danger); }
 .text-document-notice { color: var(--bb-muted); }
 .text-document-loading { padding: 30px; color: var(--bb-muted); font-size: 13px; }
+.text-document-state-choice p { margin: 0; padding: 16px 16px 4px; font-size: 13px; }
+.text-document-state-choice .text-document-toolbar { padding: 4px 9px 12px; }
+.text-document-state-choice button { color: var(--bb-blue); }
 .text-document-body { flex: 1; min-height: 0; overflow: auto; outline: none; padding: 24px clamp(16px, 4vw, 46px) 60px 48px; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
 .text-document-source { display: block; flex: 1; width: 100%; min-height: 200px; resize: none; padding: 24px; border: 0; outline: none; color: var(--bb-ink); background: transparent; font: 13px/1.8 ui-monospace, Consolas, monospace; tab-size: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
 .text-document-source.is-plain { font-family: inherit; font-size: 14px; }

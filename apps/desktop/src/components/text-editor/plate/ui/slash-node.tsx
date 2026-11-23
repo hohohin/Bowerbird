@@ -181,6 +181,7 @@ const groups: Group[] = [
         value: KEYS.excalidraw,
       },
       {
+        focusEditor: false,
         icon: <Code2 />,
         keywords: [
           'code-drawing',
