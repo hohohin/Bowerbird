@@ -164,12 +164,12 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
       pending.current.add(block.key);
       const requestedRevision = version.current;
       const section = sections[block.section];
-      const pageFilter = { ...filter, id: section.tagId ?? filter.id };
+      const pageFilter = { ...filter, id: section.tagId ?? filter.id, projectId: section.projectId ?? filter.projectId };
       void catalogCache.read(`${pagePrefix}${block.key}`, async () => {
         const deletionEpoch = originalDeletionEpoch();
         const assets = await (readPage ? readPage(section.id, block.offset, CATALOG_PAGE_SIZE) : materialCatalog.page(pageFilter, block.offset, CATALOG_PAGE_SIZE));
         const ids = readPage ? [] : assets.map(asset => asset.id);
-        const groups = ids.length ? await api.listGenerationGroups(ids, filter.projectId, pageFilter) ?? {} : {};
+        const groups = ids.length ? await api.listGenerationGroups(ids, pageFilter.projectId, pageFilter) ?? {} : {};
         return { assets, groups, deletionEpoch };
       }, !!filter.color).then(page => {
         if (!alive.current || version.current !== requestedRevision || catalogCache.revision(!!filter.color) !== requestedRevision) return;
@@ -277,7 +277,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
               if (focused !== block.key) return null;
             }
             if (renderItem) return renderItem(asset, { width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }, cell.ratio, { section: section.id, index: block.offset + sourceIndex });
-            return <CatalogAssetCard key={asset.id} asset={asset} group={page.groups[asset.id]} style={{ width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }}
+            return <CatalogAssetCard key={section.projectId ? `${section.id}:${itemKey(asset)}` : itemKey(asset)} asset={asset} projectSection={section.projectId} group={page.groups[asset.id]} style={{ width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }}
               ratio={cell.ratio} selected={selected} revision={revision} onBrowseGroup={onBrowseGroup}
               onSelect={(shown, additive, range) => onSelect(shown, additive, range, { section: section.id, index: block.offset + sourceIndex, assetId: shown.id })}
               onActivate={onActivate} onOpen={onOpen} onContextMenu={(shown,x,y) => onContextMenu(shown,x,y,{ section: section.id, index: block.offset + sourceIndex, assetId: shown.id })}/>;

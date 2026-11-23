@@ -14,9 +14,8 @@ export function CanvasLibraryResize({ panelId, collapsed, onClose, onEscape, res
     catch { return initialWidth ?? null; }
   });
   const [maximum, setMaximum] = useState(480);
-  const [requiredWidth, setRequiredWidth] = useState(480);
   const [dragging, setDragging] = useState(false);
-  const minimum = Math.min(requiredWidth, maximum);
+  const minimum = Math.min(370, maximum);
   const width = Math.min(maximum, Math.max(minimum, preferredWidth ?? maximum));
 
   useLayoutEffect(() => {
@@ -34,34 +33,6 @@ export function CanvasLibraryResize({ panelId, collapsed, onClose, onEscape, res
     measure();
     return () => { observer.disconnect(); workspace.style.removeProperty("--canvas-source-width"); };
   }, [panelId, reserveWidth]);
-
-  useLayoutEffect(() => {
-    const panel = document.getElementById(panelId)!;
-    let frame = 0;
-    let observedSidebar: HTMLElement | null = null;
-    const measure = () => {
-      frame = 0;
-      const sidebar = panel.querySelector<HTMLElement>(".catalog-sidebar, .file-browser-places");
-      const navigation = panel.querySelector<HTMLElement>(".library-view-switch");
-      if (!sidebar || !navigation) return;
-      if (sidebar !== observedSidebar) {
-        if (observedSidebar) observer.unobserve(observedSidebar);
-        observer.observe(sidebar); observedSidebar = sidebar;
-      }
-      // Reserve a stable title slot. Long names truncate within the available space
-      // instead of widening the drawer after each catalog/title finishes loading.
-      const titleWidth = 64;
-      // Centered navigation needs equal clearance on each side: title on the left,
-      // one 28px overflow control on the right, with 16px inset and 8px gap.
-      setRequiredWidth(Math.ceil(sidebar.getBoundingClientRect().width + navigation.getBoundingClientRect().width + 2 * (Math.max(titleWidth, 28) + 24) + 16));
-    };
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
-    const observer = new ResizeObserver(schedule); observer.observe(panel);
-    const changes = new MutationObserver(schedule);
-    changes.observe(panel, { childList:true, subtree:true, characterData:true });
-    schedule();
-    return () => { observer.disconnect(); changes.disconnect(); cancelAnimationFrame(frame); };
-  }, [panelId]);
 
   useLayoutEffect(() => {
     const workspace = handle.current?.closest<HTMLElement>(".canvas-workspace");

@@ -13,8 +13,8 @@ page.setDefaultNavigationTimeout(60000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
-const source = key => page.getByRole('tablist', { name: '素材库来源' }).locator(`[data-tab-value="${key}"]`);
-const tags = page.getByRole('complementary', { name: '标签分类' });
+const sidebar = page.getByRole('complementary', { name: '素材库导航', exact: true });
+const tags = sidebar.locator('.catalog-contact-index');
 const search = page.getByRole('searchbox', { name: '搜索素材' });
 const scroller = page.locator('.catalog-scroller');
 const card = id => page.locator(`[data-asset-id="${id}"]`);
@@ -25,14 +25,14 @@ async function assertScopedSearch(projectId) {
   await page.waitForFunction(projectId => window.requests.some(({ command, args }) => command === 'catalog_page'
     && args.filter.kind === 'all' && args.filter.query === 'small' && args.filter.projectId === projectId), projectId);
   await card('asset-0').waitFor();
-  assert.equal(await tags.isVisible(), false);
+  assert.equal(await sidebar.isVisible(), true);
   assert.equal(await page.locator('.catalog-section-heading').count(), 0);
-  assert.equal(await page.getByRole('tab', { name: '标签', selected: true }).count(), 1);
+  assert.equal(await sidebar.getByRole('button', { name: '标签模式', pressed: true }).count(), projectId ? 0 : 1);
 }
 
 try {
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?navigation&home`);
-  await page.getByRole('tab', { name: '标签', exact: true }).click();
+  await sidebar.getByRole('button', { name: '标签模式', exact: true }).click();
   await tags.getByRole('button', { name: /Z 末尾/ }).click();
   await card('asset-299940').waitFor();
   const originalTop = await scroller.evaluate(el => el.scrollTop);
@@ -47,18 +47,17 @@ try {
   await card('asset-299940').waitFor();
   await page.waitForFunction(top => Math.abs(document.querySelector('.catalog-scroller').scrollTop - top) < 2, originalTop);
   await search.press('Escape');
-  const resize = page.getByRole('separator', { name: '调整标签侧栏宽度' });
+  const resize = page.getByRole('separator', { name: '调整素材库侧栏宽度' });
   const before = Number(await resize.getAttribute('aria-valuenow'));
   await resize.press('ArrowRight');
   await page.waitForFunction(before => Number(document.querySelector('.catalog-sidebar-resize').getAttribute('aria-valuenow')) > before, before);
   const resized = await resize.getAttribute('aria-valuenow');
-  await source('project').click();
-  await page.getByRole('button', { name: '查看项目素材 项目A' }).click();
-  await tags.waitFor();
+  await sidebar.getByRole('button', { name: '层级模式', exact: true }).click();
+  await sidebar.getByRole('button', { name: '项目A', exact: true }).click();
   assert.equal(await resize.getAttribute('aria-valuenow'), resized);
   await assertScopedSearch('p');
   await page.getByRole('button', { name: '清空搜索' }).click();
-  await tags.waitFor();
+  await sidebar.getByRole('button', { name: '项目A', exact: true }).waitFor();
   await search.press('Escape');
   assert.ok(await page.evaluate(() => window.maxInFlight <= 3));
   assert.ok(await page.locator('.catalog-asset-card, [data-asset-id]').count() < 180);

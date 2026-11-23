@@ -1099,15 +1099,16 @@ pub async fn list_generation_groups(
     asset_ids: Vec<String>,
     project_id: Option<String>,
     filter: Option<crate::core::catalog_browser::CatalogFilter>,
-) -> Result<HashMap<String, Vec<Asset>>, AppError> {
+) -> Result<HashMap<String, Vec<crate::core::catalog_browser::CatalogPageAsset>>, AppError> {
+    use crate::core::catalog_browser::CatalogPageAsset;
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || -> Result<HashMap<String, Vec<Asset>>, AppError> {
-        if let Some(filter) = filter { return db.catalog_generation_groups(&filter, &asset_ids); }
+    tokio::task::spawn_blocking(move || -> Result<HashMap<String, Vec<CatalogPageAsset>>, AppError> {
+        if let Some(filter) = filter { return db.catalog_generation_groups_with_references(&filter, &asset_ids); }
         let mut out = HashMap::new();
         for id in &asset_ids {
             let group = db.list_generation_group(id, project_id.as_deref())?;
             if !group.is_empty() {
-                out.insert(id.clone(), group);
+                out.insert(id.clone(), group.into_iter().map(|asset| CatalogPageAsset { asset, project_count: 0, is_reference: false }).collect());
             }
         }
         Ok(out)

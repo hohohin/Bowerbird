@@ -33,12 +33,12 @@ test("text originals never appear in image results, including uppercase and URL 
 
 test("text browsing keeps the project source and lens and clears the generated filter", () => {
   const mode = createLocalFileMode();
-  mode.getState().openSource("project");
-  mode.getState().setLens("tags");
+  mode.getState().selectHierarchy({ kind: "projects", projectId: "p" });
+  mode.getState().setSidebarMode("tags");
   mode.getState().setGeneratedFilter("source:generated");
   mode.getState().setMedia("texts");
-  assert.equal(mode.getState().source, "project");
-  assert.equal(mode.getState().lens, "tags");
+  assert.deepEqual(mode.getState().hierarchyTarget, { kind: "projects", projectId: "p" });
+  assert.equal(mode.getState().sidebarMode, "tags");
   assert.equal(mode.getState().generatedFilter, null);
 });
 

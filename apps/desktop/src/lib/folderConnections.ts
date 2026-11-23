@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { Asset } from "./types";
+import { useLocalFileMode } from "./localFileMode.ts";
 
 export interface FolderConnection {
   id: string; parent_id: string | null; root_id: string; name: string; path: string;
@@ -20,11 +21,11 @@ export const folderConnections = {
   connect: (path: string, projectId: string | null = null) => invoke<string>("connect_folder", { path, projectId }),
   refresh: (folderId: string | null = null, force = true) => invoke<void>("refresh_folder_connections", { folderId, force }),
   page: (folderId: string | null, offset: number, limit: number, media: ConnectionMedia = null, projectId: string | null = null, filter: ConnectionFilter = {}) => invoke<ConnectionEntry[]>("connection_entries", { folderId, offset, limit, filter, media: media === "all" ? null : media, projectId }),
-  ids: async (folderId: string | null = null, media: ConnectionMedia = null, projectId: string | null = null, start = 0, count = Infinity, filter: ConnectionFilter = {}) => {
+  ids: async (folderId: string | null = null, media: ConnectionMedia = null, projectId: string | null = null, start = 0, count = Infinity, filter: ConnectionFilter = {}, subtree = false) => {
     const result: string[] = [];
     for (let offset = start; offset < start + count; offset += 2000) {
       const limit = Math.min(2000, start + count - offset);
-      const page = await invoke<string[]>("connection_entry_ids", { folderId, filter, media: media === "all" ? null : media, projectId, offset, limit });
+      const page = await invoke<string[]>("connection_entry_ids", { folderId, filter, media: media === "all" ? null : media, projectId, offset, limit, subtree });
       result.push(...page); if (page.length < limit) break;
     }
     return result;
@@ -51,11 +52,22 @@ export const folderConnections = {
 
 // Retain a connect request while the destination view is still mounting.
 export const useConnectedNavigation = create<{ id: string | null; paneId: string | null; sequence: number }>(() => ({ id: null, paneId: null, sequence: 0 }));
-export function navigateConnectedFolder(id: string, paneId: string | null = null) {
+export function navigateConnectedFolder(id: string, paneId: string | null = null, mode = useLocalFileMode) {
+  mode.getState().selectHierarchy({ kind: "folders", folderId: id });
+  mode.getState().setOpen(true);
   useConnectedNavigation.setState(state => ({ id, paneId, sequence: state.sequence + 1 }));
 }
 
 export function connectedRows(folders: FolderConnection[]) {
+  return folderRows(folders, null);
+}
+
+export function connectedSubtreeRows(folders: FolderConnection[], folderId: string) {
+  const root = folders.find(item => item.id === folderId);
+  return root ? folderRows(folders, root) : [];
+}
+
+function folderRows(folders: FolderConnection[], root: FolderConnection | null) {
   const result: { item: FolderConnection; depth: number }[] = [], seen = new Set<string>();
   const children = new Map<string | null, FolderConnection[]>();
   for (const item of folders) { const siblings = children.get(item.parent_id); if (siblings) siblings.push(item); else children.set(item.parent_id, [item]); }
@@ -65,6 +77,7 @@ export function connectedRows(folders: FolderConnection[]) {
       seen.add(item.id); result.push({ item, depth }); visit(item.id, depth + 1);
     }
   }
-  visit(null, 0);
+  if (root) { seen.add(root.id); result.push({ item: root, depth: 0 }); visit(root.id, 1); }
+  else visit(null, 0);
   return result;
 }

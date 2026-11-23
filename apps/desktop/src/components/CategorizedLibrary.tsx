@@ -4,6 +4,7 @@ import { localClassification, projectClassification } from "../lib/localClassifi
 import { LibraryDropPreview } from "./LibraryDropPreview";
 import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { catalogCache } from "../lib/catalogCache";
 import { openCatalogMenu } from "../lib/openCatalogMenu";
 import { hasPendingOriginalDeletions, isPendingOriginal, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
@@ -21,7 +22,7 @@ import { selectCatalogItem } from "../lib/catalogSelection";
 import { externalFiles } from "../lib/externalFiles";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { useStore } from "../store";
-import type { Asset } from "../lib/types";
+import type { Asset, Project } from "../lib/types";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { CatalogSelectionBar } from "./CatalogSelectionBar";
 import { LibraryCatalogControls } from "./LibraryCatalogControls";
@@ -45,9 +46,10 @@ import "./CategorizedLibrary.css";
 
 const browsePositions = new Map<string, LibraryBrowsePosition>();
 
-export function CategorizedLibrary({ kind, media = "images", projectId = null, browseProjectId = projectId, projectScope = false, navigation, onClose, onNavigate, onCreateProject, onAssetsChange, onInsertAsset, onOpenAsset, onAssetContextMenu, positionId = "default", showEmptyTags = false, toolbarActions, dropPreview = false, semanticSearchEnabled = false }: {
-  kind: Exclude<CatalogKind, "collections">; projectId?: string | null; browseProjectId?: string | null; projectScope?: boolean; navigation: ReactNode; onClose: () => void; onNavigate?: () => void; onCreateProject?: (ids?: string[]) => Promise<unknown>;
-  media?: LibraryMedia; positionId?: string; showEmptyTags?: boolean;
+export function CategorizedLibrary({ kind, media = "images", projectId = null, browseProjectId = projectId, projectScope = false, overviewProjects, sidebarBody, onClose, onNavigate, onCreateProject, onAssetsChange, onInsertAsset, onOpenAsset, onAssetContextMenu, positionId = "default", toolbarActions, dropPreview = false, semanticSearchEnabled = false }: {
+  kind: Exclude<CatalogKind, "collections">; projectId?: string | null; browseProjectId?: string | null; projectScope?: boolean; onClose: () => void; onNavigate?: () => void; onCreateProject?: (ids?: string[]) => Promise<unknown>;
+  overviewProjects?: Project[]; sidebarBody?: HTMLElement | null;
+  media?: LibraryMedia; positionId?: string;
   toolbarActions?: ReactNode; dropPreview?: boolean; semanticSearchEnabled?: boolean;
   onAssetsChange?: (assets: Asset[]) => void;
   onInsertAsset?: (asset: Asset) => void; onOpenAsset?: (asset: Pick<Asset, "id">) => void;
@@ -58,13 +60,15 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const root = useRef<HTMLElement>(null);
   const glass = useLibraryGlass();
   const positions = pane?.positions ?? browsePositions;
-  const catalogProjectId = projectScope ? browseProjectId : projectId;
+  const catalogProjectId = projectScope ? browseProjectId : null;
+  const projectOverview = !!overviewProjects;
   const positionKey = JSON.stringify([pane ? "pane" : positionId, projectId, browseProjectId, projectScope, media, kind]);
   const [savedPosition] = useState(() => positions.get(positionKey));
   const flow = kind === "all";
   const [catalog, setCatalog] = useState<MaterialCatalog>({ tags: [], collections: [], prompts: [], tag_asset_ids: {} });
   const [active, setActive] = useState<string | null>(savedPosition?.active ?? null);
   const [total, setTotal] = useState(0);
+  const [projectCounts, setProjectCounts] = useState<Record<string, number>>({});
   const [untagged, setUntagged] = useState(0);
   const [catalogError, setCatalogError] = useState("");
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -72,7 +76,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const pendingDeletion = usePendingOriginalDeletion();
   const [multiple, setMultiple] = useState(false);
-  const [alphabetic, setAlphabetic] = useState(savedPosition?.alphabetic ?? false);
+  const alphabetic = true;
   const [assign, setAssign] = useState<string[] | null>(null);
   const [moveIds, setMoveIds] = useState<string[] | null>(null);
   const [manageTags, setManageTags] = useState(false);
@@ -88,12 +92,6 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const onBrowseGroup = useCallback((head: string, shown: string | null) => { if (shown) shownGroupAssets.current.set(head, shown); else shownGroupAssets.current.delete(head); }, []);
   const alive = useRef(true);
   const previewVersion = useRef(0);
-  const sidebar = useRef<HTMLElement>(null);
-  const resizing = useRef<{ pointer: number; x: number; width: number } | null>(null);
-  const [sidebarMetrics, setSidebarMetrics] = useState({ width: 208, max: 320 });
-  const [sidebarWidth, setSidebarWidth] = useState<number | null>(() => {
-    try { const value = Number(localStorage.getItem(`bowerbird.catalog.tagSidebarWidth${pane ? `.${pane.id}` : ""}`)); return value >= 89 && value <= 320 ? value : null; } catch { return null; }
-  });
   const [jump, setJump] = useState<{ id: string; sequence: number } | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const query = useLocalFileMode(s => s.query.trim());
@@ -109,11 +107,10 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const { ids: pinnedTags, toggle: togglePin } = useLibraryPins();
   const { width } = useLibraryThumbnail("library");
   const pinch = useThumbnailPinch("library");
-  const tags = useMemo(() => orderCatalogTags(catalog.tags, catalog.prompts, !!catalogProjectId && !alphabetic, pinnedTags), [catalog, catalogProjectId, alphabetic, pinnedTags]);
-  const visibleTags = useMemo(() => tags.filter(tag => showEmptyTags || tag.count > 0), [tags, showEmptyTags]);
+  const tags = useMemo(() => orderCatalogTags(catalog.tags, [], false, pinnedTags), [catalog, pinnedTags]);
   const filter = useMemo<CatalogFilter>(() => ({ kind: flat ? "all" : "tags", id: null, projectId: projectScope ? browseProjectId : null, media,
     query, generated: (media === "all" || media === "images" || media === "videos") && generatedFilter ? generatedFilter === "source:generated" : null, color: media === "images" ? color : null }), [flat, projectScope, browseProjectId, media, query, generatedFilter, color]);
-  const filterKey = JSON.stringify([filter, catalogProjectId]);
+  const filterKey = JSON.stringify([filter, projectOverview]);
   const semanticPaneInstance = useId();
   const browseBeforeSearch = useRef<{ key: string; top: number } | null>(null);
   const semantic = useLibrarySemanticSearch({ paneId: `${pane?.id ?? positionId}:${semanticPaneInstance}`, filter, revision,
@@ -121,7 +118,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     onResults: () => { if (browseBeforeSearch.current?.key !== filterKey) browseBeforeSearch.current = { key: filterKey, top: scroll.current?.scrollTop ?? 0 }; } });
   const session = semantic.result?.session;
   const sessionId = session?.sessionId;
-  const galleryTotal = session?.resultCount ?? total;
+  const galleryTotal = projectOverview ? overviewProjects.reduce((sum, project) => sum + (projectCounts[project.id] ?? 0), 0) : session?.resultCount ?? total;
   const galleryKey = sessionId ? `${filterKey}:${sessionId}` : filterKey;
   const galleryKeyRef = useRef(galleryKey); galleryKeyRef.current = galleryKey;
   const loadedMenuAssets = useRef<{ key: string; assets: Map<string, Asset> }>();
@@ -137,9 +134,11 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   useLayoutEffect(() => {
     if (!searching && galleryReady) searchReturn.current = undefined;
   });
-  const sections = useMemo<CatalogSectionInfo[]>(() => flat ? [{ id: "all", name: "", count: galleryTotal, tagId: null }]
-    : [...visibleTags.map(tag => ({ id: tag.id, name: tag.name, count: tag.count, tagId: tag.id })),
-      ...(untagged ? [{ id: UNTAGGED_SECTION, name: "未分类", count: untagged, tagId: UNTAGGED_SECTION }] : [])], [flat, galleryTotal, visibleTags, untagged]);
+  const sections = useMemo<CatalogSectionInfo[]>(() => overviewProjects
+    ? overviewProjects.map(project => ({ id: project.id, name: project.name, count: projectCounts[project.id] ?? 0, tagId: null, projectId: project.id }))
+    : flat ? [{ id: "all", name: "", count: galleryTotal, tagId: null }]
+    : [...tags.map(tag => ({ id: tag.id, name: tag.name, count: tag.count, tagId: tag.id })),
+      ...(untagged ? [{ id: UNTAGGED_SECTION, name: "未分类", count: untagged, tagId: UNTAGGED_SECTION }] : [])], [overviewProjects, projectCounts, flat, galleryTotal, tags, untagged]);
   const onActive = useCallback((id: string | null) => { if (!flat) setActive(id); }, [flat]);
   const position = useRef({ active, alphabetic, color, query, generatedFilter });
   position.current = { active, alphabetic, color, query, generatedFilter };
@@ -155,23 +154,10 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   }, [positions, positionKey, active, alphabetic, color, query, generatedFilter, sessionId, filterKey, searching, catalogLoading]);
   function navigateTag(id: string) { setActive(id); setJump(previous => ({ id, sequence: (previous?.sequence ?? 0) + 1 })); }
   function navigateLetter(letter: string) {
-    const target = orderCatalogTags(visibleTags, [], false).find(tag => !pinnedTags.includes(tag.id) && catalogInitial(tag.name) === letter)
-      ?? visibleTags.find(tag => catalogInitial(tag.name) === letter);
-    if (target) { setAlphabetic(true); navigateTag(target.id); }
+    const target = tags.find(tag => !pinnedTags.includes(tag.id) && catalogInitial(tag.name) === letter)
+      ?? tags.find(tag => catalogInitial(tag.name) === letter);
+    if (target) navigateTag(target.id);
   }
-  function resizeSidebar(value: number | null) {
-    const maximum = Math.min(320, (sidebar.current?.parentElement?.clientWidth ?? 520) - 200);
-    const next = value === null ? null : Math.max(89, Math.min(maximum, value));
-    setSidebarWidth(next);
-    try { if (next === null) localStorage.removeItem(`bowerbird.catalog.tagSidebarWidth${pane ? `.${pane.id}` : ""}`); else localStorage.setItem(`bowerbird.catalog.tagSidebarWidth${pane ? `.${pane.id}` : ""}`, String(next)); } catch { /* Session width still works. */ }
-  }
-  useLayoutEffect(() => {
-    const element = sidebar.current;
-    if (!element) return;
-    const observer = new ResizeObserver(() => setSidebarMetrics({ width: Math.round(element.getBoundingClientRect().width), max: Math.min(320, (element.parentElement?.clientWidth ?? 520) - 200) }));
-    observer.observe(element); if (element.parentElement) observer.observe(element.parentElement);
-    return () => observer.disconnect();
-  }, [kind]);
   useEffect(() => {
     alive.current = true;
     return () => { alive.current = false; previewVersion.current++; };
@@ -179,6 +165,19 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   useLayoutEffect(() => {
     let current = true; setCatalogError("");
     const key = `overview:${filterKey}`;
+    if (projectOverview) {
+      const apply = (value: Record<string, number>) => {
+        loadedCatalogScope.current = filterKey;
+        setProjectCounts(value); setCatalogLoading(false);
+      };
+      const cached = catalogCache.peek<Record<string, number>>(key);
+      if (cached) apply(cached.value);
+      else if (loadedCatalogScope.current !== filterKey) setCatalogLoading(true);
+      void catalogCache.read(key, () => materialCatalog.projectCounts(filter), !!filter.color).then(value => {
+        if (current && revision === catalogCache.revision(!!filter.color)) apply(value);
+      }).catch(error => { if (current) { setCatalogError(String(error)); setCatalogLoading(false); } });
+      return () => { current = false; };
+    }
     const apply = (value: Awaited<ReturnType<typeof materialCatalog.overview>>) => {
       loadedCatalogScope.current = filterKey;
       setCatalog(value.catalog); setTotal(value.total); setUntagged(value.untagged);
@@ -204,12 +203,12 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     const handler = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "a" || libraryHasOverlay(root.current)) return;
       const target = event.target as HTMLElement | null;
-      if (!target || !root.current?.contains(target) || target.closest('input,textarea,select,[role="combobox"],[contenteditable="true"]')) return;
+      if (!target || !root.current?.closest(".library-catalog")?.contains(target) || target.closest('input,textarea,select,[role="combobox"],[contenteditable="true"]')) return;
       event.preventDefault(); void selectAll();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [galleryKey, galleryTotal, working, reading]);
+  }, [galleryKey, galleryTotal, working, reading, sections]);
   function finishSelection() { selectionVersion.current++; setSelected(new Set()); setMultiple(false); anchor.current = null; }
   async function readIds(queryFilter: CatalogFilter, start: number, count: number) {
     const result: string[] = [], version = selectionVersion.current;
@@ -220,7 +219,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       const limit = Math.min(pageSize, start + count - offset);
       const ids = await (session ? semantic.readIds(session, offset, limit) : materialCatalog.ids(queryFilter, offset, limit));
       if (!current()) return [];
-      result.push(...(session ? ids : ids.map(id => shownGroupAssets.current.get(id) ?? id)));
+      result.push(...(session ? ids : ids.map(id => shownGroupAssets.current.get(projectOverview ? `${queryFilter.projectId}:${id}` : id) ?? id)));
       if (ids.length < limit) break;
     }
     if (!hasPendingOriginalDeletions()) return result;
@@ -232,7 +231,13 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     if (working || reading || (session && !galleryTotal)) return;
     const version = selectionVersion.current;
     await run(async () => {
-      const ids = await readIds(filter, 0, galleryTotal);
+      const ids = new Set<string>();
+      if (projectOverview) {
+        for (const section of sections) {
+          if (!alive.current || selectionVersion.current !== version) return;
+          for (const id of await readIds({ ...filter, projectId: section.projectId! }, 0, section.count)) ids.add(id);
+        }
+      } else for (const id of await readIds(filter, 0, galleryTotal)) ids.add(id);
       if (alive.current && selectionVersion.current === version && galleryKeyRef.current === galleryKey) { setSelected(new Set(ids)); setMultiple(true); }
     });
   }
@@ -270,7 +275,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
           for (let i = Math.min(a,b); i <= Math.max(a,b); i++) {
             const section = sections[i], start = section.id === first.section ? first.index : 0;
             const end = section.id === last.section ? last.index : section.count - 1;
-            const pageIds = await readIds({ ...filter, id: section.tagId ?? filter.id }, start, end - start + 1);
+            const pageIds = await readIds({ ...filter, id: section.tagId ?? filter.id, projectId: section.projectId ?? filter.projectId }, start, end - start + 1);
             // Range endpoints can be an older image currently shown in a group.
             for (const endpoint of [first, last]) if (endpoint.section === section.id && endpoint.assetId && pageIds.length) pageIds[endpoint.index - start] = endpoint.assetId;
             for (const id of pageIds) ids.push(id);
@@ -334,7 +339,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
           open(x, y, asset.id, { asset, moveIncompleteSelection: () => setMoveIds(ids) });
           return;
         }
-        open(x, y, asset.id, { asset, generationGroup: !session && [...shownGroupAssets.current.values()].includes(asset.id) ? { assetId: asset.id } : undefined, libraryProjectId: projectScope ? browseProjectId ?? undefined : undefined, fileSelection: { assets: targets, openReferences: () => setReferences(true),
+        open(x, y, asset.id, { asset, generationGroup: !session && [...shownGroupAssets.current.values()].includes(asset.id) ? { assetId: asset.id } : undefined, libraryProjectId: projectOverview ? location.section : browseProjectId ?? undefined, fileSelection: { assets: targets, openReferences: () => setReferences(true),
           onComplete: finishSelection, select: () => { anchor.current = location; setMultiple(true); setSelected(previous => new Set([...previous, asset.id])); } } });
       },
       failed: reason => notifyError(reason, "操作失败"),
@@ -378,55 +383,43 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     }} data-creation-pick-disabled={multiple || working} data-drop-target={dropTarget ?? undefined} data-file-import-project-id={projectScope ? browseProjectId ?? "" : ""}
       data-catalog-searching={searching || undefined}
       className={`categorized-library library-tactical${!flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : "按标签浏览素材"}
-    style={{ ...glass.style, ...(sidebarWidth !== null ? { "--catalog-sidebar-width": `${sidebarWidth}px` } : {}) } as CSSProperties}>
+    style={glass.style as CSSProperties}>
     {dropPreview && dropTarget && dropName && <LibraryDropPreview {...dragItem} target={dropName} collection={false}/>}
     {glass.definition}
     <LibraryMotion />
     <div className="file-view-heading">
-      {navigation}
+      {selected.size > 0 || multiple ? <CatalogSelectionBar count={selected.size} busy={working} projectId={projectId} onFinish={finishSelection}
+        onSelectAll={() => void selectAll()} onAssign={() => setAssign([...selected])} onMove={() => setMoveIds([...selected])}
+        onAdd={media !== "audios" ? () => void run(async () => { const key = galleryKey; const assets = await resolveSelection(); if (!alive.current || galleryKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onNavigate ?? onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); }) : undefined}/>
+      :
       <div className="video-collection-controls">
       <LibraryCatalogControls filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared} onSearchStart={() => {
         if (galleryReady) searchReturn.current = { ...position.current, top: scroll.current?.scrollTop ?? 0 };
-      }}>{toolbarActions}
+      }} onStartSelection={() => { setMultiple(true); requestAnimationFrame(() => root.current?.querySelector<HTMLButtonElement>(".catalog-selection button")?.focus()); }}>{toolbarActions}
         {flow && media === "videos" && (!projectScope || browseProjectId) && <VideoTranscriptBatchButton scope={{ projectId: projectScope ? browseProjectId : null, label: projectScope ? `项目内视频${scopedProjectName ? ` · ${scopedProjectName}` : ""}` : "全部视频" }}/>}
         {semantic.scope && <LibrarySemanticSearch key={semantic.scope} owner={root} search={semantic}
           scopeLabel={projectScope ? `项目素材${scopedProjectName ? ` / ${scopedProjectName}` : ""}` : "全部素材"}/>}
       </LibraryCatalogControls>
-      </div>
+      </div>}
     </div>
     <div className="catalog-body">
-      {!flow && <aside ref={sidebar} className="catalog-sidebar" aria-label="标签分类">
-        <div className="library-sidebar-meter" aria-hidden="true">{[0, 1, 2].map(group => <span key={group}>{Array.from({ length: 7 }, (_, index) => <i key={index}/>)}</span>)}</div>
-        <div className="library-sidebar-foot" aria-hidden="true"><i/><i/><i/><i/></div>
-        <div className="catalog-sidebar-heading"><strong>标签</strong>
+      {!flow && sidebarBody && createPortal(<>
+        <div className="catalog-sidebar-heading"><span>拼音 A–Z</span>
           <button title="管理标签" aria-label="管理标签" onClick={() => setManageTags(true)}><Settings2 size={15}/></button></div>
-        <p className="catalog-sort-note">{catalogProjectId ? <button onClick={() => { setAlphabetic(v => !v); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} title="根据本项目生图提示词和素材标签在本机排序；点击切换拼音顺序">{alphabetic ? "拼音 A–Z" : "项目相关优先"}</button> : "拼音 A–Z"}</p>
         {catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => invalidateCatalog()}>重试</button></p>}
-        <CatalogTagIndex tags={visibleTags} active={active} dropTarget={dropTarget} alphabetic={!catalogProjectId || alphabetic} pinned={pinnedTags} onTogglePin={id => { togglePin(id); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} onNavigate={navigateTag} onLetter={navigateLetter}/>
-        <div className="catalog-sidebar-resize" role="separator" aria-label="调整标签侧栏宽度" aria-orientation="vertical"
-          tabIndex={0} aria-valuemin={89} aria-valuemax={sidebarMetrics.max} aria-valuenow={sidebarMetrics.width} title="拖动调宽 · 左右键微调 · 双击恢复默认宽度"
-          onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId); resizing.current = { pointer: event.pointerId, x: event.clientX, width: sidebar.current!.getBoundingClientRect().width }; }}
-          onPointerMove={event => { const start = resizing.current; if (start?.pointer === event.pointerId) resizeSidebar(start.width + event.clientX - start.x); }}
-          onPointerUp={() => { resizing.current = null; }} onPointerCancel={() => { resizing.current = null; }} onLostPointerCapture={() => { resizing.current = null; }}
-          onDoubleClick={() => resizeSidebar(null)} onKeyDown={event => {
-            if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
-            event.preventDefault(); event.stopPropagation(); resizeSidebar(event.key === "Home" ? null : (sidebar.current?.getBoundingClientRect().width ?? 208) + (event.key === "ArrowLeft" ? -16 : 16));
-          }}/>
-      </aside>}
+        <CatalogTagIndex tags={tags} active={active} dropTarget={dropTarget} alphabetic pinned={pinnedTags} onTogglePin={id => { togglePin(id); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} onNavigate={navigateTag} onLetter={navigateLetter}/>
+      </>, sidebarBody)}
       <div ref={pinch} className="catalog-gallery">
         <LibraryTacticalBackdrop />
         {flat && !session && catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => invalidateCatalog()}>重试</button></p>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none" }}>
           {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !galleryTotal && (session || !catalogError) ? <p className="catalog-hint catalog-empty">{session ? emptySemanticResultMessage(session) : query || color || generatedFilter ? "没有匹配的素材。" : "还没有已登记的素材。"}</p> : null}
-          {(session || galleryReady) && <VirtualCatalog key={galleryKey} filter={filter} sections={sections} headings={!flat} width={width} revision={revision} scroll={scroll}
-            selected={selected} jump={flat ? null : jump} pageScope={sessionId} readPage={session ? (_section, offset, limit) => semantic.readPage(session, offset, limit) : undefined}
+          {(session || galleryReady) && <VirtualCatalog key={galleryKey} filter={filter} sections={sections} headings={projectOverview || !flat} width={width} revision={revision} scroll={scroll}
+            selected={selected} jump={flat ? null : jump} pageScope={projectOverview ? "projects" : sessionId} emptySection={projectOverview || !flat ? () => null : undefined} readPage={session ? (_section, offset, limit) => semantic.readPage(session, offset, limit) : undefined}
             initialTop={session ? 0 : browseBeforeSearch.current?.key === filterKey ? browseBeforeSearch.current.top : returnPosition?.query === query && returnPosition?.color === color && returnPosition?.generatedFilter === generatedFilter ? returnPosition.top : 0}
             onActive={onActive} onAssetsChange={catalogAssetsChanged} onBrowseGroup={onBrowseGroup} onSelect={select} onActivate={multiple || working ? undefined : activate} onOpen={openAsset} onContextMenu={context}/>}
         </OverlayScrollArea>
         <ThumbnailSizeSlider scope="library"/>
-        {(selected.size > 0 || multiple) && <CatalogSelectionBar count={selected.size} busy={working} projectId={projectId} onFinish={finishSelection}
-          onSelectAll={() => void selectAll()} onAssign={() => setAssign([...selected])} onMove={() => setMoveIds([...selected])}
-          onAdd={media !== "audios" ? () => void run(async () => { const key = galleryKey; const assets = await resolveSelection(); if (!alive.current || galleryKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onNavigate ?? onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); }) : undefined}/>}
       </div>
     </div>
     {preview && <LibraryVideoPreview {...preview} projectId={projectId} onClose={() => setPreview(null)}/>}

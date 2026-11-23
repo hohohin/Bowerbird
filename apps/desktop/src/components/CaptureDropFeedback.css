@@ -51,7 +51,7 @@ html[data-theme="light"] [data-capture-drop-target] { --capture-drop-tint: 8%; }
   --capture-drop-stripes: repeating-linear-gradient(-45deg,
     color-mix(in srgb, var(--capture-drop-line) 5%, transparent) 0 4px, transparent 4px 10px);
 }
-.library-tactical .catalog-sidebar .catalog-row[data-capture-drop-target] {
+.library-tactical .library-sidebar .catalog-row[data-capture-drop-target] {
   position: relative;
   border-radius: 0;
   background: color-mix(in srgb, var(--capture-drop-line) 14%, transparent);
@@ -59,7 +59,7 @@ html[data-theme="light"] [data-capture-drop-target] { --capture-drop-tint: 8%; }
   box-shadow: inset 3px 0 0 var(--capture-drop-line),
     inset 0 0 0 1px color-mix(in srgb, var(--capture-drop-line) 42%, transparent);
 }
-.library-tactical .catalog-sidebar .catalog-row[data-capture-drop-target]::after {
+.library-tactical .library-sidebar .catalog-row[data-capture-drop-target]::after {
   content: "";
   position: absolute;
   right: 4px;
@@ -72,7 +72,7 @@ html[data-theme="light"] [data-capture-drop-target] { --capture-drop-tint: 8%; }
 [data-catalog-section][data-capture-drop-target] {
   background: color-mix(in srgb, var(--capture-drop-line) var(--capture-drop-tint), transparent);
 }
-.library-tactical .catalog-sidebar .catalog-row[data-capture-drop-target="blocked"],
+.library-tactical .library-sidebar .catalog-row[data-capture-drop-target="blocked"],
 [data-catalog-section][data-capture-drop-target="blocked"] { background: var(--capture-drop-stripes); }
 [data-catalog-section][data-capture-drop-target]::before {
   content: "";
@@ -128,11 +128,11 @@ html[data-theme="light"] [data-capture-drop-target] { --capture-drop-tint: 8%; }
     color: CanvasText;
   }
   [data-capture-drop-target] { --capture-drop-line: Highlight; }
-  .library-tactical .catalog-sidebar .catalog-row[data-capture-drop-target] {
+  .library-tactical .library-sidebar .catalog-row[data-capture-drop-target] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
-  .library-tactical .catalog-sidebar .catalog-row[data-capture-drop-target="blocked"] { outline-style: dashed; }
+  .library-tactical .library-sidebar .catalog-row[data-capture-drop-target="blocked"] { outline-style: dashed; }
   [data-catalog-section][data-capture-drop-target]::before,
   .library-tactical [data-catalog-section][data-capture-drop-target] .catalog-section-title { border-color: Highlight; }
   .capture-drop-bubble::before { forced-color-adjust: none; }

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { MoreHorizontal } from "lucide-react";
 
-/** Shared overflow for the controls beside the centered source switch. */
+/** Shared overflow for narrow library content columns. */
 export function LibraryFloatingControls({ children, controlsRef }: { children: ReactNode; controlsRef?: RefObject<HTMLDivElement> }) {
   const root = useRef<HTMLDivElement>(null);
   const ownControls = useRef<HTMLDivElement>(null);
@@ -16,32 +16,22 @@ export function LibraryFloatingControls({ children, controlsRef }: { children: R
   }, [open]);
   useLayoutEffect(() => {
     const host = root.current!, row = controls.current!, heading = host.closest<HTMLElement>(".file-view-heading")!;
-    const navigation = heading.querySelector<HTMLElement>(".library-source-navigation, .library-view-switch");
-    if (!navigation) return;
     let wasCompact = false;
     const fit = () => {
       if (host.closest('[inert], [aria-hidden="true"]')) return;
-      const width = row.scrollWidth;
-      const projected = heading.matches(":has(.library-source-navigation)");
-      const navStyle = getComputedStyle(navigation), headingStyle = getComputedStyle(heading);
-      const expandedNavigation = parseFloat(navStyle.getPropertyValue('--lp-navigation-width')) || 0;
-      const types = row.querySelector<HTMLElement>('[aria-label="素材类型"]');
-      const expandedTypes = parseFloat(headingStyle.getPropertyValue('--lp-media-width')) || 0;
-      const expandedWidth = width + (types ? Math.max(0, expandedTypes - types.offsetWidth) : 0);
-      const preceding = host.offsetLeft;
-      const expandedAssembly = Math.max(navigation.getBoundingClientRect().width, expandedNavigation) + preceding + expandedWidth + 12;
-      const next = projected
-        ? heading.clientWidth <= 400 || expandedAssembly > heading.clientWidth
-          || (heading.dataset.hoverAnchored === 'true' && host.getBoundingClientRect().left + expandedWidth > heading.getBoundingClientRect().right)
-        : host.getBoundingClientRect().left + width > heading.getBoundingClientRect().right;
+      const style = getComputedStyle(heading);
+      const available = heading.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+      const siblings = [...(host.parentElement?.children ?? [])].filter(element => element !== host);
+      const occupied = siblings.reduce((sum, element) => sum + element.getBoundingClientRect().width + 4, 0);
+      const next = row.scrollWidth > available - occupied;
       if (!wasCompact && next && row.contains(document.activeElement)) setOpen(true);
       if (!next) setOpen(false);
       wasCompact = next; setCompact(next);
     };
     const observer = new ResizeObserver(fit);
-    observer.observe(heading); observer.observe(row); observer.observe(navigation);
+    observer.observe(heading); observer.observe(row);
     const position = new MutationObserver(fit);
-    position.observe(heading, { attributes: true, attributeFilter: ['style', 'data-hover-anchored'] });
+    position.observe(heading, { attributes: true, attributeFilter: ['style'] });
     for (let ancestor = host.parentElement; ancestor; ancestor = ancestor.parentElement) {
       if (ancestor !== heading) position.observe(ancestor, { attributes: true, attributeFilter: ['inert', 'aria-hidden'] });
     }

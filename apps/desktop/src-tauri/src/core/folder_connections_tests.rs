@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn subtree_selection_is_paged_and_preserves_reference_entry_identity() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.source.join("child").join("nested")).unwrap();
+    fs::create_dir_all(f.source.join("sibling")).unwrap();
+    let root = f.connect(&f.source);
+    let other = f.connect(&f.target);
+    let original = f.entries(&root).into_iter().find(|entry| entry.name == "one.png").unwrap();
+    let folders = f.db.connection_folders(None, None).unwrap();
+    let folder = |name: &str| folders.iter().find(|folder| folder.name == name).unwrap().id.as_str();
+    let child = folder("child");
+    let nested = folder("nested");
+    for target in [child, nested, folder("sibling"), &other] {
+        f.db.create_material_references(&f.paths, &[original.asset_id.clone()], target).unwrap();
+    }
+    let filter = ConnectionFilter { grouped: true, query: Some("one".into()), ..Default::default() };
+    let ids = |offset, limit| f.db.connection_entry_ids_in_scope(Some(child), None, Some("images"), offset, limit, &filter, true).unwrap();
+    let both = ids(0, 20);
+    assert_eq!(both.len(), 2);
+    assert_eq!([ids(0, 1), ids(1, 1)].concat(), both);
+    let entries = f.db.resolve_connection_entries(&both).unwrap();
+    assert!(entries.iter().all(|entry| entry.is_reference && (entry.folder_id == child || entry.folder_id == nested)));
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(child), None, Some("images"), 0, 20, &filter).unwrap().len(), 1);
+    f.db.conn.lock().unwrap().execute("INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)",
+        params![original.asset_id, original.asset.store_path]).unwrap();
+    assert!(ids(0, 20).is_empty());
+}
+
+#[test]
 fn create_folder_uses_current_files_root_or_picked_parent_and_refuses_collisions() {
     let f = Fixture::new();
     let default = f._temp.path().join("BowerbirdLibrary");

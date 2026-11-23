@@ -52,6 +52,27 @@ pub struct CatalogOverview {
     pub untagged: i64,
 }
 
+#[derive(Clone, Serialize)]
+pub struct CatalogPageAsset {
+    #[serde(flatten)]
+    pub asset: Asset,
+    pub project_count: i64,
+    pub is_reference: bool,
+}
+
+const CATALOG_REFERENCE_COLUMNS: &str = "a.*,
+    (SELECT COUNT(*) FROM project_assets pa JOIN projects p ON p.id=pa.project_id
+        WHERE pa.asset_id=a.id AND p.archived_at IS NULL) AS catalog_project_count,
+    EXISTS(SELECT 1 FROM connected_entries ce WHERE ce.asset_id=a.id AND ce.is_reference=1 AND ce.available=1) AS catalog_reference";
+
+fn catalog_page_asset_from_row(row: &rusqlite::Row) -> rusqlite::Result<CatalogPageAsset> {
+    Ok(CatalogPageAsset {
+        asset: asset_from_row(row)?,
+        project_count: row.get("catalog_project_count")?,
+        is_reference: row.get("catalog_reference")?,
+    })
+}
+
 #[derive(Serialize)]
 pub struct CatalogGraphAsset {
     pub id: String,
@@ -92,8 +113,12 @@ impl CatalogFilter {
     }
 
     pub(super) fn sql_with_entry_name(&self, entry_name: bool) -> AppResult<(String, Vec<Value>)> {
+        self.sql_for_scope(entry_name, false)
+    }
+
+    fn sql_for_scope(&self, entry_name: bool, project_overview: bool) -> AppResult<(String, Vec<Value>)> {
         let mut clauses = vec![
-            if self.kind == "connections" { super::material_catalog::CONNECTION_ENTRY_VISIBLE.into() } else { catalog_visibility(self.project_id.is_some()) },
+            if self.kind == "connections" { super::material_catalog::CONNECTION_ENTRY_VISIBLE.into() } else { catalog_visibility(project_overview || self.project_id.is_some()) },
             match self.media.as_str() {
                 "all" => format!("({IMAGE} OR {VIDEO} OR {AUDIO} OR {TEXT})"),
                 "images" => IMAGE.to_string(),
@@ -351,14 +376,42 @@ impl Database {
         offset: i64,
         limit: i64,
     ) -> AppResult<Vec<Asset>> {
+        self.catalog_page_rows(filter, offset, limit, "a.*", asset_from_row)
+    }
+
+    pub fn catalog_page_with_references(
+        &self, filter: &CatalogFilter, offset: i64, limit: i64,
+    ) -> AppResult<Vec<CatalogPageAsset>> {
+        self.catalog_page_rows(filter, offset, limit, CATALOG_REFERENCE_COLUMNS, catalog_page_asset_from_row)
+    }
+
+    pub fn catalog_project_counts(&self, filter: &CatalogFilter) -> AppResult<BTreeMap<String, i64>> {
+        let filter = CatalogFilter { kind: "all".into(), id: None, project_id: None, ..filter.clone() };
+        let (condition, values) = filter.sql_for_scope(false, true)?;
+        let count = gallery_count();
         let conn = self.conn.lock().unwrap();
         with_gallery_cache(&conn, true, |conn, provenance| {
-            let (sql, mut values) = filter.gallery_sql("a.*", provenance)?;
+            let mut stmt = conn.prepare(&format!("WITH {provenance}
+                SELECT pa.project_id,{count} FROM project_assets pa
+                JOIN projects p ON p.id=pa.project_id JOIN assets a ON a.id=pa.asset_id
+                WHERE p.archived_at IS NULL AND a.library_hidden=0 AND {condition} GROUP BY pa.project_id"))?;
+            let rows = stmt.query_map(params_from_iter(values), |row| Ok((row.get(0)?, row.get(1)?)))?;
+            Ok(rows.collect::<Result<BTreeMap<_, _>, _>>()?)
+        })
+    }
+
+    fn catalog_page_rows<T>(
+        &self, filter: &CatalogFilter, offset: i64, limit: i64, columns: &str,
+        map: impl FnMut(&rusqlite::Row) -> rusqlite::Result<T>,
+    ) -> AppResult<Vec<T>> {
+        let conn = self.conn.lock().unwrap();
+        with_gallery_cache(&conn, true, |conn, provenance| {
+            let (sql, mut values) = filter.gallery_sql(columns, provenance)?;
             values.push(Value::Integer(limit.clamp(1, 240)));
             values.push(Value::Integer(offset.max(0)));
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt
-                .query_map(params_from_iter(values), asset_from_row)?
+                .query_map(params_from_iter(values), map)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
@@ -387,6 +440,17 @@ impl Database {
     /// Carousel members obey the exact same scope as the page (including tags,
     /// search, media and project visibility), not the unfiltered global group.
     pub fn catalog_generation_groups(&self, filter: &CatalogFilter, asset_ids: &[String]) -> AppResult<HashMap<String, Vec<Asset>>> {
+        self.catalog_generation_group_rows(filter, asset_ids, "a.*", asset_from_row)
+    }
+
+    pub fn catalog_generation_groups_with_references(&self, filter: &CatalogFilter, asset_ids: &[String]) -> AppResult<HashMap<String, Vec<CatalogPageAsset>>> {
+        self.catalog_generation_group_rows(filter, asset_ids, CATALOG_REFERENCE_COLUMNS, catalog_page_asset_from_row)
+    }
+
+    fn catalog_generation_group_rows<T: Clone>(
+        &self, filter: &CatalogFilter, asset_ids: &[String], columns: &str,
+        map: impl Fn(&rusqlite::Row) -> rusqlite::Result<T>,
+    ) -> AppResult<HashMap<String, Vec<T>>> {
         if asset_ids.is_empty() { return Ok(HashMap::new()); }
         let group = generation_display_group("'asset:'||a.id");
         let (condition, mut values) = filter.sql()?;
@@ -396,16 +460,16 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         with_gallery_cache(&conn, true, |conn, provenance| {
             let eligible = gallery_eligible();
-            let mut stmt = conn.prepare(&format!("WITH {provenance} SELECT a.*,{group} AS group_key FROM assets a WHERE {condition} AND {eligible} AND {group} IN (SELECT {group} FROM assets a WHERE a.id IN ({placeholders})) ORDER BY a.created_at,a.id"))?;
-            let mut groups: HashMap<String, Vec<Asset>> = HashMap::new();
-            for row in stmt.query_map(params_from_iter(values), |row| Ok((row.get::<_, String>("group_key")?, asset_from_row(row)?)))? {
-                let (key, asset) = row?;
-                groups.entry(key).or_default().push(asset);
+            let mut stmt = conn.prepare(&format!("WITH {provenance} SELECT {columns},{group} AS group_key FROM assets a WHERE {condition} AND {eligible} AND {group} IN (SELECT {group} FROM assets a WHERE a.id IN ({placeholders})) ORDER BY a.created_at,a.id"))?;
+            let mut groups: HashMap<String, Vec<(String, T)>> = HashMap::new();
+            for row in stmt.query_map(params_from_iter(values), |row| Ok((row.get::<_, String>("group_key")?, row.get("id")?, map(row)?)))? {
+                let (key, id, asset) = row?;
+                groups.entry(key).or_default().push((id, asset));
             }
             let mut result = HashMap::new();
             for group in groups.into_values() {
-                for id in ids.iter().filter(|id| group.iter().any(|asset| &asset.id == *id)) {
-                    result.insert(id.clone(), group.clone());
+                for id in ids.iter().filter(|id| group.iter().any(|(member, _)| member == *id)) {
+                    result.insert(id.clone(), group.iter().map(|(_, asset)| asset.clone()).collect());
                 }
             }
             Ok(result)
@@ -442,6 +506,50 @@ mod tests {
             media: "images".into(),
             ..Default::default()
         }
+    }
+    #[test]
+    fn project_sections_match_filtered_pages_and_flag_shared_assets() {
+        let db = fixture();
+        for id in ["q", "archived"] {
+            db.create_project(id, id, id, id, "user").unwrap();
+        }
+        db.conn.lock().unwrap().execute_batch("
+            UPDATE projects SET archived_at=1 WHERE id='archived';
+            INSERT INTO assets(id,name,ext,created_at,generation_session_id)
+                VALUES('older','poster draft','jpg',1,'generated');
+            INSERT INTO asset_colors(asset_id,bucket) VALUES('older','blue');
+            INSERT INTO project_assets(project_id,asset_id,created_at) VALUES
+                ('p','b',1),('p','older',1),('q','a',1),('q','b',1),('q','older',1),('q','d',1),('archived','a',1);
+            INSERT INTO connected_roots(id,path) VALUES('root','/ref');
+            INSERT INTO connected_folders(id,root_id,path,name) VALUES('folder','root','/ref','Ref');
+            INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference)
+                VALUES('reference','folder','a','/ref/a.bowerbird','a',1);
+        ").unwrap();
+        for filter in [
+            filter(),
+            CatalogFilter { media: "videos".into(), ..filter() },
+            CatalogFilter { generated: Some(true), color: Some("blue".into()), query: Some("poster".into()), ..filter() },
+            CatalogFilter { generated: Some(false), color: Some("red".into()), query: Some("%_".into()), ..filter() },
+        ] {
+            let counts = db.catalog_project_counts(&filter).unwrap();
+            assert!(!counts.contains_key("archived"));
+            for project in ["p", "q"] {
+                let scoped = CatalogFilter { project_id: Some(project.into()), ..filter.clone() };
+                let page = db.catalog_page_with_references(&scoped, 0, 60).unwrap();
+                assert_eq!(counts.get(project).copied().unwrap_or_default(), page.len() as i64);
+                for item in page {
+                    match item.asset.id.as_str() {
+                        "a" => { assert_eq!(item.project_count, 2); assert!(item.is_reference); }
+                        "b" => { assert_eq!(item.project_count, 2); assert!(!item.is_reference); }
+                        "d" => assert_eq!(item.project_count, 1),
+                        other => panic!("Unexpected grouped or hidden row: {other}"),
+                    }
+                }
+            }
+        }
+        let scoped = CatalogFilter { project_id: Some("p".into()), ..filter() };
+        let groups = db.catalog_generation_groups_with_references(&scoped, &["b".into()]).unwrap();
+        assert!(groups["b"].iter().any(|item| item.asset.id == "older" && item.project_count == 2));
     }
     #[test]
     fn gallery_cache_observes_local_rolled_back_and_external_changes() {

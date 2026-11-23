@@ -1,6 +1,8 @@
 import type { GenerationMedia, VideoOptions } from "./videoGeneration";
 import type { AnnotationTool } from "./annotation";
 export interface Asset {
+  project_count?: number;
+  is_reference?: boolean;
   id: string;
   name: string;
   ext?: string | null;

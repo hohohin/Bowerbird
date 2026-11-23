@@ -34,6 +34,11 @@ export function installCatalogPagingMock(w: any) {
         return {total:assets.length,untagged:assets.filter((a:any)=>!tagged.has(a.id)).length,
           catalog:{...catalog,tag_asset_ids:{},tags:catalog.tags.map((t:any)=>({...t,count:(catalog.tag_asset_ids?.[t.id]??[]).filter((id:string)=>ids.has(id)).length}))}};
       }
+      if (command === "catalog_project_counts") {
+        const projects = w.store?.getState().projects ?? await base("list_projects");
+        return Object.fromEntries(await Promise.all((projects ?? []).map(async (project: any) =>
+          [project.id, (await read({ ...args.filter, projectId: project.id })).length])));
+      }
       if(command==="catalog_page"||command==="catalog_ids") {
         const page=(await read(args.filter)).slice(args.offset,args.offset+args.limit);
         return command==="catalog_ids"?page.map((a:any)=>a.id):page;

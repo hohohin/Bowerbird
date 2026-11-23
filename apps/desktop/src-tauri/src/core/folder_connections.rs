@@ -423,9 +423,20 @@ impl Database {
         &self, folder: Option<&str>, project: Option<&str>, media_filter: Option<&str>,
         offset: i64, limit: i64, filter: &ConnectionFilter,
     ) -> AppResult<Vec<String>> {
+        self.connection_entry_ids_in_scope(folder, project, media_filter, offset, limit, filter, false)
+    }
+
+    pub fn connection_entry_ids_in_scope(
+        &self, folder: Option<&str>, project: Option<&str>, media_filter: Option<&str>,
+        offset: i64, limit: i64, filter: &ConnectionFilter, subtree: bool,
+    ) -> AppResult<Vec<String>> {
         let (mut condition, mut values) = filter.sql(project, media_filter)?;
         if let Some(folder) = folder {
-            condition.push_str(" AND e.folder_id=?");
+            if subtree {
+                condition.push_str(" AND e.folder_id IN (WITH RECURSIVE descendants(id) AS (SELECT id FROM connected_folders WHERE id=? UNION SELECT f.id FROM connected_folders f JOIN descendants d ON f.parent_id=d.id) SELECT id FROM descendants)");
+            } else {
+                condition.push_str(" AND e.folder_id=?");
+            }
             values.push(Value::Text(folder.into()));
         }
         values.push(Value::Integer(limit.clamp(1, 2000)));

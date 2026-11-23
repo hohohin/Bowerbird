@@ -459,8 +459,17 @@ w.__TAURI_INTERNALS__ = {
     if (sourceLibrary && command === "search_assets") return assets.filter(asset => asset.name.includes(args.query));
     if (sourceLibrary && command === "list_assets") return assets.filter((asset: any) => !asset.library_hidden && (!args.folderId || asset.id === "existing") && (args.projectId !== "library-project" || w.libraryMembers?.includes(asset.id)));
     if (sourceLibrary && command === "count_assets") return assets.filter((asset: any) => !asset.library_hidden).length;
-    if (command === "material_catalog") return { tags: [], collections: [], prompts: [] };
-    if (command === "material_catalog_assets") return canvasLibrary ? assets.filter((asset: any) => !asset.library_hidden) : [];
+    if (command === "material_catalog") return { tags: sourceLibrary ? [{ id: "sample", name: "A 参考", description: "", projectCount: 0, count: assets.length }] : [],
+      collections: [], prompts: [], tag_asset_ids: sourceLibrary ? { sample: assets.map(asset => asset.id) } : {} };
+    if (command === "material_catalog_assets") return canvasLibrary || sourceLibrary ? assets.filter((asset: any) => !asset.library_hidden) : [];
+    if (canvasLibrary && sourceLibrary && ["folder_connections", "connection_entries", "connection_entry_ids"].includes(command)) {
+      const visible = assets.filter((asset: any) => !asset.library_hidden && (!args.filter?.query || asset.name.includes(args.filter.query)));
+      if (command === "folder_connections") return [{ id: "test-root", root_id: "test-root", parent_id: null, name: "测试目录", path: "/sample", count: visible.length, available: true }];
+      const slice = visible.slice(args.offset, args.offset + args.limit);
+      if (command === "connection_entry_ids") return slice.map(asset => `entry-${asset.id}`);
+      return slice.map(asset => ({ id: `entry-${asset.id}`, folder_id: "test-root", asset_id: asset.id, name: asset.name,
+        path: asset.store_path, available: true, is_reference: false, asset }));
+    }
     if (command === "folder_connections" || command === "connection_entries") return [];
     if (command === "count_assets") return 0;
     if (command.startsWith("list_")) return [];

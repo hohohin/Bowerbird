@@ -196,16 +196,15 @@ H3 图片卡和视频卡在原文框下复用 `H3OptimizationActions` 和 `H3Pro
 - **自由图片舞台：** 同一预览支持普通导入图片，没有会话时只显示图片和详情。详情／会话均可独立收起，工具栏保留重开入口；详情保持挂载以保留未完成编辑和滚动位置。`CreationImagePreview.css` 仅在窗口边界裁切，图片与角标共同变换；预览私有 [useImagePreviewHud.ts](../../apps/desktop/src/components/useImagePreviewHud.ts) 按图片边界定位四组标题／控制，维持屏幕尺寸、窗口安全边距及侧面板避让，并将预览中心换算成每侧局部坐标作为共同旋转／透视原点，不作为跨模块布局接口。拖拽／滚轮只从图片开始，空白单击退出，按下／松手来源和移动距离防止拖图误关。外围投影线保留，面板及图片后层沿用 `ProjectManagerPanel.css`／`ProjectCreateCard.css` 的层叠与短闪语汇，不导入项目卡片内部逻辑；两侧正文与底板同属一个虚拟平面，选取／输入／键盘聚焦时共享姿态锁定，原图保持平面。缩放复用 [useImageZoom.ts](../../apps/desktop/src/lib/useImageZoom.ts) 的 `zoomBy`／`reset`；宿主显式允许 0.1–16 倍，原灯箱与普通详情仍默认 1–8 倍。已移除没有消费者的空白舞台滚轮参数。
 - **渐进加载与渲染：** 图片先绘制，缩略图可先于原件显示；`AssetDetail.onReady(assetId)` 在首次分析、标签、集合读取全部 settled 后通知预览宿主，不等待 CLI 健康检查；独立详情另读生成来源。宿主按请求身份及图片入场状态显现两侧，`GenerationPanel` 的只读提示词视图延后挂载，固定投影区避免资料加载后重排。后景滤镜只保留两侧玻璃阅读面，全屏背景、点阵、四角控件和详情吸顶栏不再叠加滤镜。`useCompatibleImagePath(path, onError?)` 可选回调用于转换失败时释放图片加载门控，原调用保持兼容；旧详情页仍逐项呈现初始数据。`image-preview-rendering-ui.test.mjs` 核对滤镜范围、历史读取次数、空闲停刷及独立详情兼容；不代表高 GPU 负载下的原生帧率验收。
 
-## 切换素材库来源与视角
+## 素材库侧栏与模式
 
 - **控件与批量操作：** [LibraryCatalogControls.tsx](../../apps/desktop/src/components/LibraryCatalogControls.tsx) 共用素材类型、来源、颜色准备及窄栏收纳，文件夹只通过 children 增加刷新同步；颜色准备由宿主传递查询范围与刷新回调。`CatalogSelectionBar` 共用取消／全选／文件夹分配及画板或新项目动作，宿主保留素材 ID 或目录条目 ID 的解析。两者由 `CategorizedLibrary`、`ConnectedCollections` 同时调用。
 - **以文搜图：** 首页与展开的画板素材栏为全部／项目平铺图片视图启用 [LibrarySemanticSearch.tsx](../../apps/desktop/src/components/LibrarySemanticSearch.tsx)，沿用浮动控件收纳。每栏维护提交、取消、结果会话与退出焦点，目录范围和名称／来源／颜色筛选仍由 `CatalogFilter` 表达。[VirtualCatalog.tsx](../../apps/desktop/src/components/VirtualCatalog.tsx) 通过 `readPage`／`pageScope` 显示会话排序并隔离缓存，范围选择／全选同样读取会话 ID；复用素材卡、预览、拖动和上下文菜单。退出结果恢复原浏览位置，素材库变化校验当前会话，模型或索引重置立即退出对应结果。文件夹、标签及文本编辑器维持原入口。[桌面交互回归](../../apps/desktop/scripts/library-semantic-search-ui.test.mjs)。
 
 - **用途／关键词：** 目录切换、整栏转场、catalog、素材栏、减少动态效果。
-- **导航：** [LibrarySourceTabs.tsx](../../apps/desktop/src/components/LibrarySourceTabs.tsx) 通过两个 `LibraryViewSwitch` 切换全部素材／项目／文件夹，以及逻辑范围下的平铺／标签。当前入口文字常驻，点击已选项目打开锚定的 `ContextMenu`。没有有效项目时沿用内容区选择器。主页、画板和文本编辑器共用。Q／E／F 切来源，Tab 在逻辑范围内切视角。
+- **导航** — [LibrarySidebar.tsx](../../apps/desktop/src/components/LibrarySidebar.tsx) 常驻于主页、画板和文本工作区共用的素材库壳层。Q 切回层级，E 切入全局标签，Tab 在画板内开合抽屉。项目行通过 `useProjectAssetDrop` 与全局项目右键菜单复用操作。
 - **投影外观：** `LibraryControlProjection` 与 `LibraryProjection.css` 覆盖在既有 `.file-view-heading`。导航与旁侧控件保留指针锚定，窄栏由 `LibraryFloatingControls` 收纳。选中标签一直可读，较长项目名截断并保留完整可访问名称。
-- **路由和搜索：** `LibraryCatalogTransition` 按来源和视角选择 `CategorizedLibrary` 或 `ConnectedCollections`，沿用标签与文件夹侧栏转场。`LibraryCatalogControls` 提供搜索，复用 `VirtualCatalog` 的无分组标题结果布局。文件夹同时用连接条目查询和分页，保留分身和组图身份。清空搜索复原浏览位置。
-- **项目选择复用：** [ProjectManagerPanel.tsx](../../apps/desktop/src/components/ProjectManagerPanel.tsx) 与 [ProjectFolder.tsx](../../apps/desktop/src/components/ProjectFolder.tsx) 的可选 `selection` 模式复用项目读取、搜索、排序与卡片，仅回调素材库项目选择，不进入项目、不提供项目管理菜单／新建。默认最小尺寸，`ThumbnailSizeSlider` 可传 `size` 控制本面板宽度，不改项目管理页尺寸偏好；普通项目面板行为保留。选择器只在内容区呈现，顶部导航仍悬浮。
+- **路由和搜索** — [LibraryCatalog.tsx](../../apps/desktop/src/components/LibraryCatalog.tsx) 把目录树和 `CatalogTagIndex` 挂到稳定的侧栏。右侧由 `CategorizedLibrary` 或 `ConnectedCollections` 复用 `VirtualCatalog`，项目和连接目录按分段读取。文件夹多选保留目录条目身份，项目总览按素材身份去重。
 - **实用证据：** [LibraryHome.tsx](../../apps/desktop/src/components/LibraryHome.tsx) 和 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 共用该入口。
 - **范围／状态：可跨模块复用（已有素材目录）。** 接口沿用 `CategorizedLibrary` props，DOM 与动画绑定目录侧栏及 `all/tags/collections` 语义；不能作为通用路由转场容器。内部 `floatSidebar` 等是模块内部专用，不独立导入或复制成其他板块动效。
 - **验证：** `test:library:navigation` 覆盖悬浮导航几何、来源查询、视角独立切换、Q／E／F／Tab、深浅主题、分栏与项目菜单。`library-tab-memory-ui.test.mjs` 验证重启和跨项目返回。`material-catalog-ui.test.mjs` 和 `folder-view-parity-ui.test.mjs` 验证搜索覆盖、清空与位置恢复。`canvas-library-projection-ui.test.mjs` 核对 480px 抽屉和筛选收纳。

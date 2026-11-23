@@ -32,12 +32,12 @@ test("image, video and audio filters remain disjoint even with an image thumbnai
 
 test("changing media preserves the folders source and remembered logical lens", () => {
   const mode = createLocalFileMode();
-  mode.getState().setLens("tags");
-  mode.getState().openSource("folders");
+  mode.getState().selectHierarchy({ kind: "folders", folderId: null });
+  mode.getState().setSidebarMode("tags");
   for (const media of ["audios", "videos", "images", "audios"]) {
     mode.getState().setMedia(media);
-    assert.equal(mode.getState().source, "folders");
-    assert.equal(mode.getState().lens, "tags");
+    assert.deepEqual(mode.getState().hierarchyTarget, { kind: "folders", folderId: null });
+    assert.equal(mode.getState().sidebarMode, "tags");
     assert.equal(mode.getState().media, media);
   }
 });

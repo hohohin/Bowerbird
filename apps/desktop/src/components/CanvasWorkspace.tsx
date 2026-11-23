@@ -14,7 +14,7 @@ import { CreationModeIndicator } from "./CreationModeIndicator";
 import { creationImageAssetId, useCreationImageInteraction } from "./useCreationImageInteraction";
 import { useImeGuard } from "../lib/useImeGuard";
 import { useLocalFileMode } from "../lib/localFileMode";
-import { libraryShortcutSource, type LibrarySource } from "../lib/localFileMode";
+import { libraryProject, libraryShortcutMode } from "../lib/localFileMode";
 import { ProjectInspectorShell } from "./ProjectInspectorShell";
 import { WorkflowAgentDetail } from "./WorkflowAgentDetail";
 import { WORKFLOW_SKILL_ENABLED, WORKFLOW_PLANNER_ENABLED, WORKFLOW_TEMPLATE_LIBRARY_ENABLED } from "../lib/featureFlags";
@@ -127,8 +127,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { LibrarySourceTabs } from "./LibrarySourceTabs";
-import { LibraryCatalogTransition } from "./LibraryCatalogTransition";
+import { LibraryCatalog } from "./LibraryCatalog";
 import { CanvasFrequentAssets, useCanvasFrequentAssets } from "./CanvasFrequentAssets";
 import { Lightbox } from "./Lightbox";
 import type { VideoFrame } from "../lib/videoFrame";
@@ -610,15 +609,9 @@ export function CanvasWorkspace({
     && state.guide.sessions.designer?.projectId === projectId && [2, 7, 8].includes(state.guide.sessions.designer.step));
   const sourcePanelId = useId();
   const planeId = useId();
-  const sourceScope = useLocalFileMode(state => state.source);
   const localFilesOpen = useLocalFileMode(state => state.open);
-  const browseProjectId = useLocalFileMode(state => state.browseProjectId);
-  const contextProjectId = useLocalFileMode(state => state.contextProjectId);
+  const browseProjectId = useLocalFileMode(libraryProject);
   const libraryMedia = useLocalFileMode(state => state.media);
-  function changeSource(value: LibrarySource) {
-    useLocalFileMode.getState().openSource(value);
-    useStore.getState().clearSelect();
-  }
   function openLibrary() {
     useLocalFileMode.getState().setOpen(true);
     useStore.getState().clearSelect();
@@ -2226,7 +2219,7 @@ export function CanvasWorkspace({
   }, [exploring]);
 
   useEffect(() => {
-    if (explainTutorialSources) { changeSource("project"); setSourceCollapsed(false); }
+    if (explainTutorialSources) { useLocalFileMode.getState().selectHierarchy({ kind: "projects", projectId }); setSourceCollapsed(false); }
   }, [explainTutorialSources, exploring]);
 
   useLayoutEffect(() => {
@@ -2239,8 +2232,8 @@ export function CanvasWorkspace({
 
   useEffect(() => {
     function toggleLibrary(event: KeyboardEvent) {
-      const source = libraryShortcutSource(event.key);
-      if ((!source && event.key !== "Tab" && event.key !== "Escape") || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.isComposing || event.keyCode === 229
+      const sidebarMode = libraryShortcutMode(event.key);
+      if ((!sidebarMode && event.key !== "Tab" && event.key !== "Escape") || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.isComposing || event.keyCode === 229
         || event.defaultPrevented || exploring || workspaceRef.current?.closest("[inert]")
         || loadingRef.current || useStore.getState().projectRoutePending) return;
       const target = event.target as HTMLElement | null;
@@ -2259,20 +2252,14 @@ export function CanvasWorkspace({
       }
       const open = useStore.getState().canvasLibraryOpen;
       if (event.key !== "Tab" && !open) return;
-      if (source && target && boardShellRef.current?.contains(target)) return;
-      if (event.key === "Tab" && open && !composerTab && useLocalFileMode.getState().source === "folders") return;
+      if (event.key === "Tab" && open && target && sourcePanelRef.current?.contains(target) && target !== sourcePanelRef.current) return;
       // Escape belongs to the canvas while it is being used alongside the drawer.
       if (event.key === "Escape" && target && boardShellRef.current?.contains(target)) return;
       event.preventDefault(); event.stopPropagation();
       if (event.key === "Escape") { closeSource(); return; }
-      if (composerTab) {
-        if (!open) { openLibrary(); setCanvasLibraryOpen(true); beginOnboardingOperation("expand-source", projectId)(); }
-        requestAnimationFrame(() => sourcePanelRef.current?.focus({ preventScroll: true }));
-        return;
-      }
       if (!open) { openLibrary(); setCanvasLibraryOpen(true); beginOnboardingOperation("expand-source", projectId)(); return; }
-      if (event.key === "Tab") useLocalFileMode.getState().toggleCatalog();
-      else if (source) changeSource(source);
+      if (event.key === "Tab") { closeSource(); return; }
+      if (sidebarMode) { useLocalFileMode.getState().setSidebarMode(sidebarMode); useStore.getState().clearSelect(); }
       requestAnimationFrame(() => sourcePanelRef.current?.focus({ preventScroll: true }));
     }
     window.addEventListener("keydown", toggleLibrary, true);
@@ -5843,19 +5830,6 @@ export function CanvasWorkspace({
     );
   }
 
-  const sourceNavigation = <header className="library-browser-heading">
-    <div data-tour="source-scope" className="library-floating-navigation">
-      <LibrarySourceTabs onSourceChange={changeSource}/>
-    </div>
-    {sourceScope === "project" && contextProjectId && contextProjectId === projectId && browseProjectId !== contextProjectId && <div className="library-cross-project">
-      <span role="status">正在跨项目浏览</span>
-      <button type="button" onClick={() => {
-        useLocalFileMode.getState().selectProject(contextProjectId);
-        sourcePanelRef.current?.focus({ preventScroll: true });
-      }}>回到当前项目</button>
-    </div>}
-  </header>;
-
   function frequentPickTarget(target: EventTarget | null) {
     if (!frequentPickingRef.current || loadingRef.current || useStore.getState().projectRoutePending
       || useStore.getState().activeProjectId !== projectId || !(target instanceof Element)
@@ -5943,7 +5917,7 @@ export function CanvasWorkspace({
       }}
     >
       <aside ref={sourcePanelRef} id={sourcePanelId} className="canvas-source-panel library-browser" aria-label="画板素材库"
-        data-file-import-project-id={sourceScope === "project" ? projectId ?? "" : ""}
+        data-file-import-project-id={browseProjectId ?? ""}
         aria-hidden={sourceCollapsed} tabIndex={-1} onDragStart={event => {
           if (!(event.target as HTMLElement).closest('[data-asset-id]') || !getDragAssets()?.length) return;
           if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
@@ -5956,8 +5930,8 @@ export function CanvasWorkspace({
           });
         }}>
         <div id={`${sourcePanelId}-content`} className="canvas-source-content">
-          {(sourceCatalogVisited || !sourceCollapsed) && <LibraryCatalogTransition key={projectId} media={libraryMedia} projectId={projectId} semanticSearchEnabled={!sourceCollapsed}
-            navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>}
+          {(sourceCatalogVisited || !sourceCollapsed) && <LibraryCatalog key={projectId} media={libraryMedia} projectId={projectId} semanticSearchEnabled={!sourceCollapsed}
+            onClose={closeSource} onAssetsChange={setCatalogAssets}/>}
         </div>
         <CanvasFrequentAssets library={frequentLibrary} projectId={projectId} picking={frequentPicking} onPickingChange={setFrequentPicking}/>
       </aside>

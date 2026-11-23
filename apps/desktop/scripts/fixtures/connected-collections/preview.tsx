@@ -40,7 +40,15 @@ w.connectionProgress = (payload: unknown) => listeners.forEach((fn, id) => { if 
 w.connectionAvailability = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://connection-availability") fn({ payload }); });
 if (captureDrop) w.explorerDrag = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "source-browser://drag") fn({ payload }); });
 function entries(args: any) {
-  const filtered = w.entries.filter((item: any) => (!args.folderId || item.folder_id === args.folderId)
+  const folders = new Set([args.folderId]);
+  if (args.subtree) {
+    let size: number;
+    do {
+      size = folders.size;
+      for (const folder of w.folders) if (folders.has(folder.parent_id)) folders.add(folder.id);
+    } while (size !== folders.size);
+  }
+  const filtered = w.entries.filter((item: any) => (!args.folderId || folders.has(item.folder_id))
     && (!args.media || (item.asset.ext === "mp4") === (args.media === "videos"))
     && (args.filter?.generated == null || !!item.asset.generation_session_id === args.filter.generated)
     && (!args.filter?.query || item.name.includes(args.filter.query) || item.asset.name.includes(args.filter.query))
@@ -118,7 +126,7 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 useStore.setState({ activeProjectId: null, libraryHomeView: "library", libraryThumbnailWidth: 150 });
-useLocalFileMode.getState().setCatalogView("collections");
+useLocalFileMode.getState().openBrowser();
 document.documentElement.dataset.theme = "dark";
 function Fixture() {
   const [visible, setVisible] = React.useState(true);

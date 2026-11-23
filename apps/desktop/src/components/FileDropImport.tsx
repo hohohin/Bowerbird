@@ -59,8 +59,7 @@ export function FileDropImport() {
       if (!files.length) { notifyError(null, "未读取到素材文件，请重新拖入"); return; }
       const projectId = destination.projectId;
       const libraryMode = libraryPaneAt(event.target)?.mode ?? useLocalFileMode;
-      const librarySource = libraryMode.getState().source;
-      const libraryProjectId = libraryMode.getState().browseProjectId;
+      const { sidebarMode, hierarchyTarget } = libraryMode.getState();
       const revision = state.projectRouteRevision;
       const place = destination.kind === "canvas" ? prepareExplorerCanvasDrop(event.target, projectId, event.clientX, event.clientY) : null;
       if (destination.kind === "canvas" && !place) {
@@ -84,8 +83,8 @@ export function FileDropImport() {
         }
         if (imported.length) {
           const current = useStore.getState();
-          if (!place && destination.kind !== "folder" && destination.kind !== "tag" && libraryMode.getState().source === librarySource
-            && (librarySource !== "project" || libraryMode.getState().browseProjectId === libraryProjectId)
+          if (!place && destination.kind !== "folder" && destination.kind !== "tag" && libraryMode.getState().sidebarMode === sidebarMode
+            && libraryMode.getState().hierarchyTarget === hierarchyTarget
             && current.activeProjectId === state.activeProjectId && current.projectRouteRevision === revision && !current.projectRoutePending) {
             current.setCurrentCollection(null); current.setCurrentFolder(null);
             current.setSearchQuery(""); current.setSmartFilter(null); current.setColorFilter(null);

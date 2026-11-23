@@ -9,6 +9,7 @@ export interface CatalogOverview { catalog: MaterialCatalog; total: number; unta
 export interface CatalogGraphAsset { id: string; name: string; store_path: string | null; thumb_path: string | null; tag_ids: string[] }
 export const materialCatalog = {
   overview: (filter: CatalogFilter, contextProject: string | null) => invoke<CatalogOverview>("catalog_overview", { filter, contextProject }),
+  projectCounts: (filter: CatalogFilter) => invoke<Record<string, number>>("catalog_project_counts", { filter }),
   page: (filter: CatalogFilter, offset: number, limit: number) => invoke<Asset[]>("catalog_page", { filter, offset, limit }),
   graphPage: (filter: CatalogFilter, after: string | null) => invoke<{ assets: CatalogGraphAsset[]; after: string | null }>("catalog_graph_page", { filter, after, limit: 512 }),
   ids: (filter: CatalogFilter, offset: number, limit: number) => invoke<string[]>("catalog_ids", { filter, offset, limit }),

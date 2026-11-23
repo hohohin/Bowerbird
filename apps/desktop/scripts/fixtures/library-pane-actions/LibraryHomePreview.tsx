@@ -2,9 +2,8 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Columns2, X } from "lucide-react";
 import { useStore } from "../../../src/store";
-import { LibrarySourceTabs } from "../../../src/components/LibrarySourceTabs";
-import { LibraryCatalogTransition } from "../../../src/components/LibraryCatalogTransition";
-import { useLocalFileMode } from "../../../src/lib/localFileMode";
+import { LibraryCatalog } from "../../../src/components/LibraryCatalog";
+import { libraryShortcutMode, useLocalFileMode } from "../../../src/lib/localFileMode";
 import { copyLibraryPane, createLibraryPane, LibraryPaneContext, registerLibraryPane, useActiveLibraryPane, type LibraryPaneState } from "../../../src/lib/libraryPane";
 import "../../../src/components/LibrarySplit.css";
 import "../../../src/components/LibraryTactical.css";
@@ -19,7 +18,7 @@ export function LibraryHome({ onCreateProject, active = true, shortcutsEnabled =
   const currentPanes = useRef(panes);
   currentPanes.current = panes;
   useEffect(() => {
-    useLocalFileMode.getState().openSource("global");
+    useLocalFileMode.getState().selectHierarchy({ kind: "all" });
   }, []);
   useEffect(() => {
     if (!active) return;
@@ -102,23 +101,21 @@ function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEna
   useEffect(() => registerLibraryPane(pane), [pane]);
   const media = pane.mode(s => s.media);
   const active = useActiveLibraryPane(s => s.pane === pane);
-  const navigation = <header className="library-browser-heading"><div className="library-floating-navigation">
-    <LibrarySourceTabs/>
-  </div></header>;
   return <div ref={root} className="library-pane-content" data-library-pane={pane.id} data-split={split || undefined} data-active={active || undefined} tabIndex={-1}
     onPointerDownCapture={() => useActiveLibraryPane.getState().activate(pane)} onFocusCapture={() => useActiveLibraryPane.getState().activate(pane)}
     onKeyDownCapture={event => {
       const state = useStore.getState(), target = event.target as HTMLElement;
-      if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.nativeEvent.isComposing || event.defaultPrevented
+      const mode = libraryShortcutMode(event.key);
+      if (!mode || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.nativeEvent.isComposing || event.defaultPrevented
         || !shortcutsEnabled || root.current?.closest("[inert]") || state.projectRoutePending || state.contextMenu || state.projectContextMenu
         || document.querySelector('[role="dialog"], [role="menu"]') || target.isContentEditable || target.closest('input, textarea, select, [role="combobox"]')) return;
-      event.preventDefault(); event.stopPropagation(); pane.mode.getState().toggleCatalog(); root.current?.focus({ preventScroll: true });
+      event.preventDefault(); event.stopPropagation(); pane.mode.getState().setSidebarMode(mode); root.current?.focus({ preventScroll: true });
     }}>
     <div className="library-pane-actions">
       {split && <button type="button" className="library-pane-close library-filter-trigger" aria-label="关闭此栏" title="关闭此栏" onClick={onClose}><X size={15} aria-hidden="true"/></button>}
       {!split && <button type="button" className="library-filter-trigger" aria-label="向右分栏" title="分栏" onClick={onSplit}><Columns2 size={15} aria-hidden="true"/></button>}
     </div>
-    <LibraryCatalogTransition media={media} positionId={pane.id} showEmptyTags={split} dropPreview={split} navigation={navigation}
+    <LibraryCatalog media={media} positionId={pane.id} dropPreview={split}
       onClose={() => pane.mode.getState().setOpen(false)} onCreateProject={onCreateProject}/>
   </div>;
 }

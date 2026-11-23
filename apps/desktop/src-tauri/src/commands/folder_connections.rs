@@ -532,16 +532,18 @@ pub async fn connection_entry_ids(
     project_id: Option<String>,
     offset: Option<i64>,
     limit: Option<i64>,
+    subtree: Option<bool>,
 ) -> AppResult<Vec<String>> {
     let db = db.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        db.connection_entry_ids_filtered(
+        db.connection_entry_ids_in_scope(
             folder_id.as_deref(),
             project_id.as_deref(),
             media.as_deref(),
             offset.unwrap_or(0),
             limit.unwrap_or(2000),
             &filter.unwrap_or_default(),
+            subtree.unwrap_or(false),
         )
     })
     .await

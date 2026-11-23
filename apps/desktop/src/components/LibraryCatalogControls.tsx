@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Search, X } from "lucide-react";
+import { ListChecks, Search, X } from "lucide-react";
 import { useLibraryModeStore } from "../lib/libraryPane";
 import { materialCatalog, type CatalogFilter } from "../lib/materialCatalog";
 import { FileColorFilter } from "./FileColorFilter";
@@ -8,9 +8,9 @@ import { LibraryFloatingControls } from "./LibraryFloatingControls";
 import { LibraryMediaSwitch } from "./LibraryMediaSwitch";
 
 /** All library views share controls, overflow and bounded color preparation. */
-export function LibraryCatalogControls({ filter, onColorChange, onColorsPrepared, onSearchStart, children }: {
+export function LibraryCatalogControls({ filter, onColorChange, onColorsPrepared, onSearchStart, onStartSelection, children }: {
   filter: CatalogFilter; onColorChange: (color: string | null) => void;
-  onColorsPrepared: () => void; onSearchStart: () => void; children?: ReactNode;
+  onColorsPrepared: () => void; onSearchStart: () => void; onStartSelection: () => void; children?: ReactNode;
 }) {
   const mode = useLibraryModeStore();
   const generated = mode(state => state.generatedFilter);
@@ -70,5 +70,6 @@ export function LibraryCatalogControls({ filter, onColorChange, onColorsPrepared
     {filter.media === "images" && <FileColorFilter open={open} onOpenChange={setOpen} color={filter.color} onColorChange={onColorChange}
       palette={{ colors: new Map(), ...progress, retry: () => setRetry(value => value + 1) }}/>}
     {children}
+    <button type="button" className="library-filter-trigger" aria-label="多选" title="多选" onClick={onStartSelection}><ListChecks size={14} aria-hidden="true"/></button>
   </LibraryFloatingControls></>;
 }

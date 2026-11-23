@@ -2,7 +2,6 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { LibraryHome } from "../../../src/components/LibraryHome";
 import { CategorizedLibrary } from "../../../src/components/CategorizedLibrary";
-import { LibrarySourceTabs } from "../../../src/components/LibrarySourceTabs";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
@@ -62,7 +61,7 @@ function Fixture() {
   w.project = setProject;
   return <><input aria-label="搜索素材" style={{ position: "absolute", top: 8, left: 20, width: 240, zIndex: 60 }} placeholder="搜索素材" onChange={e => useLocalFileMode.getState().setQuery(e.target.value)}/>
     <div style={{ position: "fixed", inset: "44px 0 0" }}>{project ? <CategorizedLibrary kind="tags" projectId="project-fixture" projectScope
-      navigation={<header className="library-browser-heading"><LibrarySourceTabs/></header>} onClose={() => {}}/>
+      onClose={() => {}}/>
       : <LibraryHome/>}</div></>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture/>);

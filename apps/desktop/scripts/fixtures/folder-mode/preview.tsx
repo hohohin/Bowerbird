@@ -2,7 +2,6 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { LocalFileWorkspace } from "../../../src/components/LocalFileWorkspace";
 import { PreservedWorkspace } from "../../../src/components/PreservedWorkspace";
-import { LibrarySourceTabs } from "../../../src/components/LibrarySourceTabs";
 import { LibraryBrowserButton } from "../../../src/components/LibraryBrowserButton";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { useStore } from "../../../src/store";
@@ -113,7 +112,7 @@ w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poste
 useStore.setState({searchQuery:'主库搜索',selectedIds:new Set(['library-selection']),smartFilter:'tag:主库标签'});
 function App(){
  const opened=useLocalFileMode(s=>s.open);const setOpen=useLocalFileMode(s=>s.setOpen);
- const navigation=<header className="library-browser-heading"><LibrarySourceTabs/>{!opened&&<LibraryBrowserButton/>}</header>;
+ const navigation=<header className="library-browser-heading">{!opened&&<LibraryBrowserButton/>}</header>;
  return <div className="app-shell" style={{height:'100vh',display:'flex',flexDirection:'column'}}>
    <Toolbar onRefresh={async()=>{}} canvasMode={false} onCanvasModeChange={()=>{}} onCreateCreative={()=>{}} onExplore={()=>{}} localFilesOpen={opened}/>
    <main className="relative flex min-h-0 flex-1 flex-col bg-canvas">

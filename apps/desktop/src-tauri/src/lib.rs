@@ -690,6 +690,7 @@ pub fn run() {
             commands::folder_connections::remove_connection_references,
             commands::connection_clipboard::clipboard_file_paths,
             commands::material_catalog::catalog_page,
+            commands::material_catalog::catalog_project_counts,
             commands::material_catalog::catalog_graph_page,
             commands::material_catalog::catalog_ids,
             commands::material_catalog::catalog_prepare_colors,

@@ -1,12 +1,12 @@
 use crate::core::catalog_browser::{
-    CatalogColorBatch, CatalogFilter, CatalogGraphPage, CatalogOverview,
+    CatalogColorBatch, CatalogFilter, CatalogGraphPage, CatalogOverview, CatalogPageAsset,
 };
 use crate::{
     core::{library::Asset, material_catalog::MaterialCatalog},
     db::Database,
     error::AppResult,
 };
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
@@ -64,9 +64,19 @@ pub async fn catalog_page(
     filter: CatalogFilter,
     offset: i64,
     limit: i64,
-) -> AppResult<Vec<Asset>> {
+) -> AppResult<Vec<CatalogPageAsset>> {
     let db = db.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || db.catalog_page(&filter, offset, limit))
+    tauri::async_runtime::spawn_blocking(move || db.catalog_page_with_references(&filter, offset, limit))
+        .await
+        .map_err(|e| crate::error::AppError::Other(e.to_string()))?
+}
+#[tauri::command]
+pub async fn catalog_project_counts(
+    db: State<'_, Arc<Database>>,
+    filter: CatalogFilter,
+) -> AppResult<BTreeMap<String, i64>> {
+    let db = db.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || db.catalog_project_counts(&filter))
         .await
         .map_err(|e| crate::error::AppError::Other(e.to_string()))?
 }

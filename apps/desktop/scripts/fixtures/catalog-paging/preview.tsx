@@ -4,10 +4,8 @@ import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { FileDropImport } from "../../../src/components/FileDropImport";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { LibraryHome } from "../../../src/components/LibraryHome";
-import { CategorizedLibrary } from "../../../src/components/CategorizedLibrary";
-import { LibraryCatalogTransition } from "../../../src/components/LibraryCatalogTransition";
-import { LibrarySourceTabs } from "../../../src/components/LibrarySourceTabs";
-import type { LibrarySource } from "../../../src/lib/localFileMode";
+import { LibraryCatalog } from "../../../src/components/LibraryCatalog";
+import { TextWorkspaceLibrary } from "../../../src/components/TextWorkspaceLibrary";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import { useStore } from "../../../src/store";
@@ -58,6 +56,8 @@ w.__TAURI_INTERNALS__ = {
     if (command === "release_source_browser_analysis") return;
     if (command === "capture_source_browser_image") { w.captured = args; return asset(0); }
     if(command === "catalog_prepare_colors") return {after:null,more:false,failed:0,updated:0};
+    if (command === "catalog_project_counts") return Object.fromEntries(useStore.getState().projects
+      .map(project => [project.id, range({ ...args.filter, projectId: project.id }).count]));
     if (command === "catalog_overview") {
       if (args.filter.query === "slow") await new Promise(r => setTimeout(r,400));
       const {count} = range(args.filter);
@@ -73,7 +73,7 @@ w.__TAURI_INTERNALS__ = {
         if (w.failOffset === args.offset) throw new Error("模拟分页读取失败");
         const {first,count} = range(args.filter);
         return Array.from({length:Math.min(args.limit,Math.max(0,count-args.offset))},(_,i)=>{
-          const value = asset(first+args.offset+i);
+          const value = { ...asset(first+args.offset+i), project_count: first + args.offset + i === 0 ? 2 : 1 };
           return w.distinctProjects ? { ...value, id: `${args.filter.projectId ?? "global"}:${value.id}` } : value;
         });
       } finally { w.inFlight--; }
@@ -96,12 +96,10 @@ useStore.setState({activeProjectId:null,libraryThumbnailWidth:150, projects: ["p
 function Fixture() {
   const [visible, setVisible] = React.useState(true);
   w.setLibraryVisible = setVisible;
-  const [kind,setKind] = React.useState<"all"|"tags">("all");
-  const [project,setProject] = React.useState(false);
-  w.changeKind=setKind; w.changeProject=setProject;
-  return <div style={{position:"fixed",inset:0}}>{visible && <CategorizedLibrary key={`${kind}:${project}`} kind={kind} projectId={project?"p":null} projectScope={project}
-    navigation={<input aria-label="搜索素材" onChange={e=>useLocalFileMode.getState().setQuery(e.target.value)}/>}
-    onClose={()=>{}} onCreateProject={async ids=>{w.created=ids;}}/>}<AssetContextMenu/></div>;
+  const media = useLocalFileMode(state => state.media);
+  w.changeKind = (kind: "all" | "tags") => useLocalFileMode.getState().setSidebarMode(kind === "tags" ? "tags" : "hierarchy");
+  w.changeProject = (project: boolean) => useLocalFileMode.getState().setProjectContext(project ? "p" : null);
+  return <div style={{position:"fixed",inset:0}}>{visible && <LibraryCatalog media={media} onClose={()=>{}} onCreateProject={async ids=>{w.created=ids;}}/>}<AssetContextMenu/></div>;
 }
 function SplitFixture() {
   const [open, setOpen] = React.useState(false);
@@ -113,9 +111,11 @@ function NavigationFixture() {
   const [project, setProject] = React.useState(!new URLSearchParams(location.search).has("home"));
   w.changeProject = setProject;
   React.useEffect(() => { useLocalFileMode.getState().setProjectContext(project ? "p" : null); useStore.setState({ activeProjectId: project ? "p" : null }); }, [project]);
-  return <div style={{ position: "fixed", inset: 0 }}><LibraryCatalogTransition media={media} projectId={project ? "p" : null} semanticSearchEnabled={new URLSearchParams(location.search).has("semantic")}
-    navigation={<header className="library-browser-heading"><div className="library-floating-navigation"><LibrarySourceTabs/></div></header>}
+  return <div style={{ position: "fixed", inset: 0 }}><LibraryCatalog media={media} projectId={project ? "p" : null} semanticSearchEnabled={new URLSearchParams(location.search).has("semantic")}
     onClose={() => {}}/><AssetContextMenu/></div>;
 }
 const params = new URLSearchParams(location.search);
-createRoot(document.getElementById("root")!).render(params.has("navigation") ? <NavigationFixture/> : params.has("split") ? <SplitFixture/> : <Fixture/>);
+const root = createRoot(document.getElementById("root")!);
+root.render(params.has("text") ? <div className="text-workspace-layout canvas-workspace" style={{ position:"fixed", inset:0 }}>
+  <TextWorkspaceLibrary open projectId="p" onClose={() => {}} onNavigate={() => {}} onInsert={() => {}} onReusePrompt={() => {}}/>
+</div> : params.has("navigation") ? <NavigationFixture/> : params.has("split") ? <SplitFixture/> : <Fixture/>);
