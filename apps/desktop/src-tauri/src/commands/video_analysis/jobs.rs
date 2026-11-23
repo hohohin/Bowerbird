@@ -1,7 +1,7 @@
 use super::{current_description, source, FileStamp};
 use crate::{
     cloud::{AuthClient, CloudClient},
-    commands::video_asset_revision::{registration, save_revision, snapshot_source, Registration},
+    commands::video_asset_revision::{registration, save_revision, snapshot_source, Registration, RevisionGuard, SourceUsage},
     core::{
         external_files::{fingerprint, preview_key},
         folder_connections::registered_path_spelling,
@@ -178,7 +178,7 @@ fn load(db: &Database, asset_id: &str) -> AppResult<Option<Record>> {
         .transpose()
 }
 
-fn save(db: &Database, asset_id: &str, record: &Record) -> AppResult<()> {
+fn save(db: &Database, asset_id: &str, path: &Path, record: &Record) -> AppResult<()> {
     save_revision(
         db,
         &Analysis {
@@ -190,6 +190,12 @@ fn save(db: &Database, asset_id: &str, record: &Record) -> AppResult<()> {
             created_at: None,
         },
         true,
+        Some(RevisionGuard {
+            path,
+            stamp: &record.stamp,
+            registration: &record.registration,
+            source_hash: &record.source_hash,
+        }),
     )
 }
 
@@ -208,7 +214,7 @@ fn ensure_current(db: &Database, asset_id: &str, path: &Path, record: &Record) -
 
 async fn local_info(db: Arc<Database>, asset_id: String) -> AppResult<(PathBuf, String, u64)> {
     let (path, version) = tokio::task::spawn_blocking(move || {
-        let path = source(&db, &asset_id)?;
+        let path = source(&db, &asset_id, SourceUsage::VideoAnalysis)?;
         let version = source_version(&path)?;
         Ok::<_, AppError>((path, version))
     })
@@ -306,7 +312,7 @@ pub async fn video_analysis_progress(
         let Some(record) = load(&db, &asset_id)? else {
             return Ok(None);
         };
-        let Ok(path) = source(&db, &asset_id) else {
+        let Ok(path) = source(&db, &asset_id, SourceUsage::VideoAnalysis) else {
             return Ok(None);
         };
         if ensure_current(&db, &asset_id, &path, &record).is_err()
@@ -384,12 +390,12 @@ pub async fn video_analysis_start(
     let checked_db = db.inner().clone();
     let checked_asset = asset_id.clone();
     let (path, full_hash, stamp, registered, version) = tokio::task::spawn_blocking(move || {
-        let initial_path = source(&checked_db, &checked_asset)?;
+        let initial_path = source(&checked_db, &checked_asset, SourceUsage::VideoAnalysis)?;
         let version = source_version(&initial_path)?;
         if version != expected_source_hash {
             return Err(invalid("视频原件已变化，请重新获取报价"));
         }
-        let (path, full_hash, stamp) = snapshot_source(&checked_db, &checked_asset)?;
+        let (path, full_hash, stamp) = snapshot_source(&checked_db, &checked_asset, SourceUsage::VideoAnalysis)?;
         if path != initial_path || source_version(&path)? != version {
             return Err(invalid("视频原件已变化，请重新获取报价"));
         }
@@ -502,7 +508,7 @@ pub async fn video_analysis_start(
             price_changed: false,
         });
     }
-    auth.with_current_user(&owner, || save(&db, &asset_id, &record))?;
+    auth.with_current_user(&owner, || save(&db, &asset_id, &path, &record))?;
     let progress = record.progress(true);
     let (db, cloud, auth) = (
         db.inner().clone(),
@@ -520,7 +526,7 @@ pub async fn video_analysis_start(
             record.status = Status::Interrupted;
             record.error = Some(error.to_string());
             if ensure_current(&db, &asset_id, &path, &record).is_ok() {
-                let _ = save(&db, &asset_id, &record);
+                let _ = save(&db, &asset_id, &path, &record);
             }
         }
         let _ = app.emit("library://assets-changed", ());
@@ -548,7 +554,7 @@ async fn finish(
         {
             record.status = Status::Interrupted;
             record.error = None;
-            return save(db, asset_id, record);
+            return save(db, asset_id, path, record);
         }
         let index = record.descriptions.len();
         let (start_ms, end_ms) = bounds(record.duration_ms, index)?;
@@ -568,7 +574,7 @@ async fn finish(
             });
             service
                 .auth
-                .with_current_user(service.owner, || save(db, asset_id, record))?;
+                .with_current_user(service.owner, || save(db, asset_id, path, record))?;
         }
         let attempt = record
             .pending
@@ -593,7 +599,7 @@ async fn finish(
             },
         };
         record.pending.as_mut().unwrap().job_id = Some(job.job_id.clone());
-        save(db, asset_id, record)?;
+        save(db, asset_id, path, record)?;
         if matches!(job.status.as_str(), "awaiting_upload" | "uploading") {
             let repair_manifest = match service.commit(&job.job_id).await {
                 Ok(committed) if !uploading(&committed) => {
@@ -646,7 +652,7 @@ async fn finish(
                     .ok_or_else(|| invalid("云端未返回画面描述，请恢复原任务"))?;
                 record.descriptions.push(text.chars().take(8_000).collect());
                 record.pending = None;
-                save(db, asset_id, record)?;
+                save(db, asset_id, path, record)?;
                 let _ = tokio::fs::remove_file(&proxy).await;
                 let _ = tokio::fs::remove_dir(&scratch).await;
             }
@@ -671,7 +677,7 @@ async fn finish(
     record.status = Status::Completed;
     service
         .auth
-        .with_current_user(service.owner, || save(db, asset_id, record))
+        .with_current_user(service.owner, || save(db, asset_id, path, record))
 }
 
 fn uploading(job: &transport::Job) -> bool {

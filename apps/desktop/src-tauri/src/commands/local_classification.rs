@@ -27,9 +27,9 @@ pub async fn video_text_tags_status(
 }
 
 fn video_text_status(db: &Database, asset_id: &str) -> crate::error::AppResult<VideoTextTagStatus> {
-    use super::video_asset_revision::{source, FileStamp};
+    use super::video_asset_revision::{source, FileStamp, SourceUsage};
     let mut status = VideoTextTagStatus::default();
-    let Ok(path) = source(db, asset_id) else { return Ok(status) };
+    let Ok(path) = source(db, asset_id, SourceUsage::VideoAnalysis) else { return Ok(status) };
     let Ok(stamp) = FileStamp::read(&path) else { return Ok(status) };
     if !db.connected_source_matches(asset_id, &path)? {
         return Ok(status);
