@@ -79,6 +79,7 @@ export function workflowGenerationActivity(node: WorkflowNode, run: WorkflowRun 
   const submitted = step?.generationSubmission === "submitted";
   const executing = !!run && workflowRunActive(run) && (step?.status === "running"
     || run.status === "running" && step?.status === "pending" && (run.startId === node.id || !!step.detail));
+  if (step?.comfyOptimization && !step.comfyAutoGeneration) return { running: executing };
   let canvasNodes = activityNodesBySnapshot.get(nodes);
   if (!canvasNodes) {
     canvasNodes = new Map(nodes.map(item => [item.id, item]));

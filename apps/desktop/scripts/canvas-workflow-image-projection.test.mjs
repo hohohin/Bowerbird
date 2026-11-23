@@ -131,6 +131,9 @@ try {
   const localRun = { status: 'running', steps: { [local.id]: { status: 'running', comfyOptimization: {} } } };
   assert.equal(workflowGenerationActivity(local, localRun, [], {}).running, true);
   assert.equal(workflowGenerationActivity(local, { ...localRun, status: 'stopped' }, [], {}).running, false);
+  const optimized = { status: 'done', steps: { [local.id]: { status: 'done', comfyOptimization: {} } } };
+  assert.deepEqual(workflowGenerationActivity(local, optimized, [], {}), { running: false },
+    'prompt-only optimization must release the card without awaiting an output');
   assert.equal(workflowGenerationActivity(local, { status: 'done', steps: { [local.id]: { status: 'done', jobId: 'local-job' } } }, [], {}).running, false);
 
   const point = (nodes, cards = [local], runs) => firstWorkflowVideoOutputPoint(
