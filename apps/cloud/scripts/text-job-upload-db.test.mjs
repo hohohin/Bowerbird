@@ -665,6 +665,10 @@ try {
     const { verifyFileSpeechFlow } = await import("./file-speech-flow.fixture.mjs");
     await verifyFileSpeechFlow(q, root);
   }
+  if (mode === "--library-visual") {
+    const { verifyLibraryVisualJobs } = await import("./library-visual-jobs.fixture.mjs");
+    await verifyLibraryVisualJobs(q, rival, dir);
+  }
 } finally {
   try {
     await Promise.all(sessions.map(client => client.end()));

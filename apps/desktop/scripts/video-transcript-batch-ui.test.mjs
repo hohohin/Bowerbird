@@ -17,6 +17,7 @@ async function installMock(available = false) {
   await page.evaluate(available => {
     window.store.setState({ cloudAuth: { logged_in: true, user_id: 'test-owner', cloud_available: true } });
     window.transcriptCalls = [];
+    window.visualCalls = [];
     window.videoMediaReads = [];
     window.transcriptCapabilities = { available, credits: available ? 5 : null, maxDurationMs: 7200000 };
     const prior = window.__TAURI_INTERNALS__.invoke;
@@ -53,6 +54,21 @@ async function installMock(available = false) {
         window.transcriptCalls.push({ command, args });
         return window.transcriptCapabilities;
       }
+      if (command === 'video_analysis_capabilities') return { available: true };
+      if (command === 'video_analysis_progress') return null;
+      if (command === 'video_text_tags_status') return { available: false, hasTranscript: true, hasDescription: false, credits: null };
+      if (command === 'video_analysis_quote') {
+        window.visualCalls.push({ command, args });
+        if (args.assetId.endsWith('unavailable')) throw new Error('无法确认视频时长');
+        const durationSeconds = args.assetId.endsWith('long') ? 7205 : 2;
+        return { sourceHash: `visual-${args.assetId}`, durationSeconds, durationMs: durationSeconds * 1000,
+          credits: 3, pricingVersion: 2, segmentCount: durationSeconds > 7200 ? 2 : 1,
+          chargeRequired: !args.assetId.endsWith('saved'), cloudPending: args.assetId.endsWith('pending') };
+      }
+      if (command === 'video_analysis_start') {
+        window.visualCalls.push({ command, args });
+        return { status: 'interrupted', segmentCount: 2, completedSegments: 1, cloudPending: true };
+      }
       if (command === 'video_transcript_get') {
         window.transcriptCalls.push({ command, args });
         if (args.assetId === 'menu-video-p') return record('interrupted', { quoteRequired: true });
@@ -81,14 +97,16 @@ async function installMock(available = false) {
   }, available);
 }
 
-async function openBatch() {
-  const entry = page.getByRole('button', { name: '批量转录视频', exact: true });
+async function openBatch(name = '批量转录视频') {
+  const entry = page.getByRole('button', { name, exact: true });
   if (!await entry.isVisible()) {
     const more = page.getByRole('button', { name: '更多素材库控件', exact: true });
     if (await more.isVisible()) await more.click();
   }
   await entry.click();
-  await dialog().waitFor();
+  const modal = page.getByRole('dialog', { name, exact: true });
+  await modal.waitFor();
+  return modal;
 }
 
 const preview = () => page.getByRole('dialog', { name: '视频与生成记录预览', exact: true });
@@ -123,8 +141,8 @@ async function openSharedPreview(action, path) {
 try {
   await page.goto(`${base}scripts/fixtures/catalog-paging/preview.html?navigation&home`);
   await page.waitForFunction(() => window.store && window.__TAURI_INTERNALS__?.invoke);
-  const navigation = page.getByRole('tablist', { name: '素材视图切换条', exact: true });
-  await navigation.getByRole('tab', { name: '全部素材', exact: true }).click();
+  const navigation = page.getByRole('complementary', { name: '素材库导航', exact: true });
+  await navigation.getByRole('button', { name: '全部素材', exact: true }).click();
   await installMock();
   await page.waitForFunction(() => window.transcriptCalls.some(call => call.command === 'video_transcript_capabilities'));
   const entry = page.getByRole('button', { name: '批量转录视频', exact: true });
@@ -147,7 +165,7 @@ try {
   const detail = preview().getByRole('region', { name: '视频详情', exact: true });
   const analysisEntry = detail.getByRole('region', { name: '视频分析', exact: true });
   await analysisEntry.getByRole('button', { name: '分析', exact: true }).click();
-  await workspace().getByRole('region', { name: '转录操作', exact: true }).getByText('本次试转录名额已使用。', { exact: true }).waitFor();
+  await workspace().getByRole('button', { name: '复刻', exact: true }).waitFor();
   assert.equal(await workspace().getByRole('searchbox', { name: '搜索文稿', exact: true }).count(), 0);
   await page.keyboard.press('Escape');
   await workspace().waitFor({ state: 'hidden' });
@@ -192,8 +210,20 @@ try {
   await dialog().getByText('需要重新核对音轨和费用，剩余视频未提交。', { exact: true }).waitFor();
   assert.deepEqual(await page.evaluate(() => window.transcriptCalls.filter(call => call.command === 'video_transcript_start').map(call => call.args.assetId)), ['global-long']);
   await dialog().getByRole('button', { name: '关闭', exact: true }).click();
-  await navigation.getByRole('tab', { name: '项目素材', exact: true }).click();
-  await page.getByRole('button', { name: '查看项目素材 项目A', exact: true }).click();
+  const visual = await openBatch('批量画面分析');
+  await visual.getByText(/总时长 02:00:13 · 共 6 段/).waitFor();
+  await visual.getByText(/预估上限 15 Bcoin/).waitFor();
+  await visual.getByText(/已有当前版本的画面描述/).waitFor();
+  await visual.getByRole('button', { name: '开始分析', exact: true }).click();
+  await visual.getByText(/剩余视频未提交/).waitFor();
+  assert.equal(await page.evaluate(() => window.visualCalls.filter(call => call.command === 'video_analysis_start').length), 1);
+  await visual.getByRole('button', { name: '关闭', exact: true }).click();
+  await navigation.getByRole('button', { name: '项目A', exact: true }).click();
+  const projectVisual = await openBatch('批量画面分析');
+  await projectVisual.getByRole('button', { name: '选择新的范围', exact: true }).click();
+  await projectVisual.getByText('项目内视频 · 项目A', { exact: true }).waitFor();
+  await page.waitForFunction(() => window.visualCalls.some(call => call.args.assetId.startsWith('p-')));
+  await projectVisual.getByRole('button', { name: '关闭', exact: true }).click();
   await openBatch();
   await dialog().getByRole('button', { name: '选择新的范围', exact: true }).click();
   await dialog().getByText('项目内视频 · 项目A', { exact: true }).waitFor();
@@ -205,11 +235,21 @@ try {
   await preview().getByRole('region', { name: '生成记录', exact: true }).waitFor();
   await page.keyboard.press('Escape');
   await preview().waitFor({ state: 'hidden' });
+  await navigation.getByRole('button', { name: '标签模式', exact: true }).click();
+  await navigation.getByRole('button', { name: '管理标签', exact: true }).click();
+  const tags = page.getByRole('dialog', { name: '管理分类数据', exact: true });
+  await tags.getByRole('combobox', { name: '选择视频素材', exact: true }).selectOption('menu-video-global');
+  await tags.getByRole('region', { name: '视频文本打标签', exact: true }).getByText('服务暂未开放。', { exact: true }).waitFor();
+  await tags.getByRole('button', { name: '关闭', exact: true }).click();
 
   await page.goto(`${base}scripts/fixtures/connected-collections/preview.html`);
   await page.waitForFunction(() => window.store && window.__TAURI_INTERNALS__?.invoke);
   await installMock(true);
   await page.locator('[data-collection-id="second"]').click();
+  const folderVisual = await openBatch('批量画面分析');
+  await folderVisual.getByRole('checkbox', { name: '包含子文件夹' }).check();
+  await folderVisual.getByText(/本次可处理 1 个视频/).waitFor();
+  await folderVisual.getByRole('button', { name: '关闭', exact: true }).click();
   await openBatch();
   await dialog().getByText('本次可处理 1 个视频，跳过 0 个。', { exact: true }).waitFor();
   assert.equal(await dialog().getByRole('checkbox', { name: '包含子文件夹' }).isChecked(), false);
@@ -226,6 +266,7 @@ try {
   await preview().waitFor({ state: 'hidden' });
   console.log('PASS: video menus open exact transcripts and browse double-click/Enter use one shared preview across global, project and connected views');
   console.log('PASS: batch actions hidden when unpriced, no original scan, scope and full-track quote, no further submissions on unknown state or a changed price');
+  console.log('PASS: batch visual analysis totals, existing-result skip, uncertain stop, project/folder scope and classification target');
 } finally {
   await browser.close();
   await server.close();

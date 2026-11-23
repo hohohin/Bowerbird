@@ -36,6 +36,7 @@ import { ContextMenu } from "./ContextMenu";
 import { ModalShell } from "./ModalShell";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { VideoTranscriptBatchButton } from "./VideoTranscriptBatch";
+import { VideoAnalysisBatchButton } from "./VideoAnalysisBatch";
 import { videoSourceKey } from "../lib/videoSourceKey";
 import { isVideoAsset } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
@@ -366,7 +367,10 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
       if (galleryReady) searchReturn.current = scroll.current?.scrollTop;
     }} onStartSelection={() => { setMultiple(true); requestAnimationFrame(() => root.current?.querySelector<HTMLButtonElement>(".catalog-selection button")?.focus()); }}>
       <button className="library-filter-trigger" aria-label="刷新文件夹" title="刷新同步" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}
-      {media === "videos" && current?.available && <VideoTranscriptBatchButton scope={{ projectId: scope, folderId: current.id, label: `文件夹内视频 · ${current.name}` }}/>}
+      {media === "videos" && current?.available && <>
+        <VideoTranscriptBatchButton scope={{ projectId: scope, folderId: current.id, label: `文件夹内视频 · ${current.name}` }}/>
+        <VideoAnalysisBatchButton scope={{ projectId: scope, folderId: current.id, label: `文件夹内视频 · ${current.name}` }}/>
+      </>}
     </LibraryCatalogControls></div>}</div>
     <div className="catalog-body">
       <div ref={pinch} className="catalog-gallery">

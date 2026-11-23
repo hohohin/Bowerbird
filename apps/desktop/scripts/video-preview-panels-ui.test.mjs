@@ -52,16 +52,27 @@ try {
       h3: { status: 'interrupted', text: '', utterances: [], cloudPending: true },
     };
     window.videoTranscripts = transcripts;
+    let visualStarted = false;
     HTMLElement.prototype.scrollIntoView = function (...args) {
       if (this.dataset.generationTurnKey) window.previewTurns.push(this.dataset.generationTurnKey);
       return scrollIntoView.apply(this, args);
     };
     window.__TAURI_INTERNALS__.invoke = (command, args = {}) => {
-      if (!['generation_history', 'video_analysis_get', 'video_transcript_capabilities', 'video_transcript_get', 'video_transcript_quote', 'video_transcript_start'].includes(command)) {
+      if (!['generation_history', 'video_analysis_get', 'video_analysis_capabilities', 'video_analysis_quote', 'video_analysis_progress', 'video_analysis_start', 'video_text_tags_status', 'video_transcript_capabilities', 'video_transcript_get', 'video_transcript_quote', 'video_transcript_start'].includes(command)) {
         return invoke(command, args);
       }
       window.calls.push({ command, args });
       if (command === 'video_analysis_get') return Promise.resolve(args.assetId === 'plain' ? { text: '窗边近景，暖色光线。' } : null);
+      if (command === 'video_analysis_capabilities') return Promise.resolve({ available: true });
+      if (command === 'video_analysis_quote') return Promise.resolve({ durationMs: 2000, durationSeconds: 2,
+        sourceHash: `version-${args.assetId}`, segmentCount: 1, credits: 5, chargeRequired: args.assetId !== 'plain', cloudPending: false, pricingVersion: 4 });
+      if (command === 'video_analysis_progress') return Promise.resolve(visualStarted && args.assetId === 'repeat'
+        ? { status: 'completed', segmentCount: 1, completedSegments: 1 } : null);
+      if (command === 'video_analysis_start') {
+        visualStarted = true;
+        return Promise.resolve({ status: 'completed', segmentCount: 1, completedSegments: 1 });
+      }
+      if (command === 'video_text_tags_status') return Promise.resolve({ available: false, hasTranscript: false, hasDescription: false, credits: null });
       if (command === 'video_transcript_capabilities') return window.transcriptCapabilities === 'offline'
         ? Promise.reject(new Error('connection refused')) : Promise.resolve(window.transcriptCapabilities);
       if (command === 'video_transcript_get') return Promise.resolve(transcripts[args.assetId] ?? null);
@@ -173,15 +184,21 @@ try {
     && call.args.videoFrame?.sourcePath.endsWith('/plain.mp4')));
   await page.waitForFunction(() => !document.fullscreenElement && !document.querySelector('.video-export-popup'));
   await detail.getByRole('region', { name: '视频分析', exact: true }).getByRole('button', { name: '分析', exact: true }).click();
-  await workspace.getByRole('region', { name: '转录操作', exact: true }).getByRole('button', { name: '转录 · 7 Bcoin', exact: true }).waitFor();
+  assert.equal(await workspace.getByRole('button', { name: /转录 ·/ }).count(), 0);
+  const replicationButton = workspace.getByRole('button', { name: '复刻', exact: true });
+  await replicationButton.click();
+  const replication = workspace.getByRole('region', { name: '强化复刻', exact: true });
+  const back = replication.getByRole('button', { name: '返回分析', exact: true });
+  await back.locator('svg.lucide-arrow-left').waitFor();
+  await back.click();
   const visualDescription = workspace.getByRole('region', { name: '画面描述', exact: true });
   await visualDescription.getByText('窗边近景，暖色光线。', { exact: true }).waitFor();
-  assert.deepEqual(await page.evaluate(() => window.calls.filter(call => call.command === 'video_analysis_get').map(call => call.args)), [{ assetId: 'plain' }]);
+  assert.ok(await page.evaluate(() => window.calls.some(call => call.command === 'video_analysis_get' && call.args.assetId === 'plain')));
   await workspace.getByRole('button', { name: '转录文稿', exact: true }).click();
   await visualDescription.waitFor({ state: 'hidden' });
   const quote = transcript.getByRole('button', { name: '转录 · 7 Bcoin', exact: true });
   await quote.waitFor();
-  await transcript.getByText('发送至 Bowerbird Cloud', { exact: false }).waitFor();
+  assert.equal(await transcript.getByText('发送至 Bowerbird Cloud', { exact: false }).count(), 0);
   assert.equal(await page.evaluate(() => window.calls.some(call => call.command === 'video_transcript_quote' || call.command === 'video_transcript_start')), false);
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'video_transcript_capabilities').length), 1);
   await quote.click();
@@ -215,19 +232,23 @@ try {
   assert.deepEqual(await page.evaluate(start => window.calls.slice(start)
     .filter(call => call.command.startsWith('video_transcript')).map(call => call.command), repeatBoundary), ['video_transcript_capabilities']);
   await repeatEntry.getByRole('button', { name: '分析', exact: true }).click();
-  const repeatAnalysis = workspace.getByRole('region', { name: '转录操作', exact: true });
-  const repeatQuote = repeatAnalysis.getByRole('button', { name: '转录 · 7 Bcoin', exact: true });
+  await workspace.getByRole('button', { name: /开始画面分析/ }).click();
+  const confirmVisual = page.getByRole('dialog', { name: '确认画面分析', exact: true });
+  await confirmVisual.getByRole('button', { name: '确认', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.calls.find(call => call.command === 'video_analysis_start')?.args),
+    { assetId: 'repeat', expectedUserId: 'test-owner', expectedCredits: 5, expectedSourceHash: 'version-repeat', expectedPricingVersion: 4 });
+  await workspace.getByRole('button', { name: '转录文稿', exact: true }).click();
+  const repeatQuote = transcript.getByRole('button', { name: '转录 · 7 Bcoin', exact: true });
   await repeatQuote.waitFor();
   assert.equal(await page.evaluate(start => window.calls.slice(start).some(call =>
     call.command === 'video_transcript_quote' || call.command === 'video_transcript_start'), repeatBoundary), false);
   await repeatQuote.click();
-  await repeatAnalysis.getByText('正在转录，关闭窗口后可回来查看。', { exact: true }).waitFor();
+  await transcript.getByText('正在转录，关闭窗口后可回来查看。', { exact: true }).waitFor();
   await page.evaluate(() => {
     window.videoTranscripts.repeat = { status: 'completed', text: '同账号第二条文稿。', utterances: [
       { startMs: 100, endMs: 1000, text: '同账号第二条文稿。' },
     ] };
   });
-  await repeatAnalysis.getByRole('button', { name: '查看转录文稿', exact: true }).click();
   await transcript.getByText('同账号第二条文稿。', { exact: true }).waitFor();
   assert.deepEqual(await page.evaluate(() => window.calls.filter(call => call.command === 'video_transcript_start').map(call => call.args)), [
     { assetId: 'plain', expectedUserId: 'test-owner', expectedCredits: 7, quote: { sourceHash: 'hash-plain' } },
@@ -290,8 +311,6 @@ try {
   await page.evaluate(() => { window.transcriptCapabilities = { available: true, credits: 1, maxDurationMs: 7200000 }; });
   await previewAnalysis.getByRole('button', { name: '分析', exact: true }).click();
   const availablePrice = '转录 · 1 Bcoin';
-  await workspace.getByRole('region', { name: '转录操作', exact: true }).getByRole('button', { name: availablePrice, exact: true }).waitFor();
-  assert.equal(await capabilityCount(), unavailableCount + 1);
   await workspace.getByRole('button', { name: '返回视频预览', exact: true }).click();
   await previewAnalysis.getByText(availablePrice, { exact: true }).waitFor();
   await enterTranscript();
@@ -436,9 +455,9 @@ try {
   assert.equal(await detail.getByRole('searchbox', { name: '搜索文稿', exact: true }).count(), 0);
   assert.deepEqual(await page.evaluate(() => window.timingCalls.map(call => call.command)), ['video_transcript_capabilities']);
   await analysisEntry.getByRole('button', { name: '分析', exact: true }).click();
-  await workspace.getByRole('region', { name: '转录操作', exact: true }).getByText('已完成转录。', { exact: true }).waitFor();
+  await workspace.getByRole('button', { name: '复刻', exact: true }).waitFor();
   assert.equal(await workspace.getByRole('searchbox', { name: '搜索文稿', exact: true }).count(), 0);
-  await workspace.getByRole('button', { name: '查看转录文稿', exact: true }).click();
+  await workspace.getByRole('button', { name: '转录文稿', exact: true }).click();
   await transcript.getByText('这份文稿只有句级时间，点击句首时间跳转。', { exact: true }).waitFor();
   await transcript.getByText('刚刚。', { exact: true }).waitFor();
   const box = await transcript.boundingBox();

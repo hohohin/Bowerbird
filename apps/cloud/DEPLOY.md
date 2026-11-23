@@ -1,5 +1,13 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 素材库画面分析关闭态候选
+
+本候选包含 `0100_library_visual_catalog.sql`、`0101_library_visual_jobs.sql`、`understand-proxy`、`understand-worker` 和 VPS 理解 Worker。按顺序先应用迁移，再部署两个 Edge 入口，最后切换 Worker。生产配置保持 `LIBRARY_VISUAL_ENABLED` 未设置，`library_video_analysis` 目录条目保持 inactive 且 `pricing_ready=false`。只有另行获准启价时才设置经过账单核验的每小时 Bcoin 和报价版本，并配置 `ARK_LIBRARY_VISUAL_MODEL`。现有私有暂存桶必须允许 MP4、对象上限至少为 32,000,000 字节。校验匿名拒绝、已登录用户不可报价，以及原转录、复刻和图片理解兼容。
+
+画面分析使用现有理解控制面和私有暂存签名传输。独立父任务整片预留一次，子段表独立租约和记账，从而兼容现有理解队列每条任务绑定唯一钱包预留的约束。上传提交核对对象路径、文件大小、MIME 和 SHA-256。Worker 在提交上游前再次校验对象摘要、静音 H.264 视频流、分辨率和时长。段回执保存可用的安全请求 ID、计量和媒体参数。最后一段成功后结算父任务。明确失败退还预留。提交后结果不明的段停止分派，原预留跨内容 TTL 保留供人工核对。查回供应商账单和回执，确认无法交付结果时使用受限 RPC `refund_unknown_library_visual(父任务 UUID, 审计原因)` 退款。该 RPC 不允许重投或扣费。过期清理移除画面代理、请求清单和描述正文，保留指纹和计量回执供对账。
+
+需要回退时先关闭新任务准入，由现役 Worker 跑完已受理任务或对账后再回退服务。已冻结报价的父任务可以在关闭新准入后继续提交下一段。只读回滚保留迁移、历史预留与回执。此处记录候选步骤，尚未部署。
+
 ## 2026-11-21 H3 视频 Skill 切换为官方结构版已部署
 
 获用户批准后，17:38:52（北京时间）以同目录 UTF-8 临时文件原子替换只读挂载的 `/opt/bowerbird/agent-worker/src/skills/text/h3-video-prompt/SKILL.md`。原方法备份为 `/opt/bowerbird/deploy-backups/h3-official-structure-20261121/SKILL.md`，替换前后哈希分别为 `45e895c7a6e5c163cf9bf1ee3346878b4f1219aebaffe5644fad4db04c00f5a7` 和 `5fc3920853580ceea0d8abb3adee69923b4ee717f6fee7cf7ef2265321e23523`，新文件 13,769 字节。

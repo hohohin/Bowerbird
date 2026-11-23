@@ -1,37 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../store";
 import { accountEntitlement } from "../lib/entitlement";
 import { userErrorMessage } from "../lib/userError";
 import { quoteVideoTranscript, refreshVideoTranscriptTiming, startVideoTranscript, useVideoTranscript, type useVideoTranscriptPrice } from "../lib/videoTranscript";
 import { VideoTranscriptReader } from "./VideoTranscriptReader";
+import { BcoinAmount } from "./BcoinAmount";
 
 export type VideoAnalysisView = "analysis" | "transcript";
 
-function SavedVideoDescription({ assetId }: { assetId: string }) {
-  const [description, setDescription] = useState<{ text: string } | null>(null);
-  useEffect(() => {
-    let current = true;
-    void invoke<{ text: string } | null>("video_analysis_get", { assetId }).then(result => {
-      if (current) setDescription(result);
-    }).catch(() => { if (current) setDescription(null); });
-    return () => { current = false; };
-  }, [assetId]);
-  if (!description?.text) return null;
-  return <section className="flex flex-col gap-2" aria-label="画面描述">
-    <h3 className="font-medium">画面描述</h3>
-    <p className="whitespace-pre-wrap break-words">{description.text}</p>
-  </section>;
-}
-
-export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSeconds, onSeek, view, onRead, price }: {
+export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSeconds, onSeek, price }: {
   assetId: string;
   sourceKey: string;
   active: boolean;
   durationSeconds?: number | null;
   onSeek: (time: number) => void;
-  view: VideoAnalysisView;
-  onRead: () => void;
   price: ReturnType<typeof useVideoTranscriptPrice>;
 }) {
   const auth = useStore(state => state.cloudAuth);
@@ -145,10 +127,7 @@ export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSecon
   } else if (transcript === undefined) {
     content = <p role="status">正在读取转录文稿…</p>;
   } else if (transcript?.status === "completed") {
-    content = view === "analysis" ? <>
-      <p role="status">已完成转录。</p>
-      <button type="button" className="app-button-primary" onClick={onRead}>查看转录文稿</button>
-    </> : <>
+    content = <>
       <VideoTranscriptReader transcript={transcript} onSeek={onSeek}/>
       {(transcript.canRefreshTiming && owner || timingError?.owner === owner) && <div className="video-analysis-reader-note">
         {timingError && timingError.owner === owner && <p role="alert">{timingError.message}</p>}
@@ -182,15 +161,14 @@ export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSecon
       action = <p role="status">视频时长超过转录上限，请先裁剪后重试。</p>;
     } else {
       action = <>
-        <p>将完整音轨发送至 Bowerbird Cloud，文稿保存在素材库。</p>
         {insufficient && <p role="status">可用积分不足，请补充积分后继续。</p>}
         <button type="button" className="app-button-primary" disabled={!active || insufficient} onClick={() => void start(false)}>
-          转录 · {price.credits} Bcoin
+          转录 · <BcoinAmount amount={price.credits}/>
         </button>
       </>;
     }
     content = <>
-      {view === "transcript" && transcript === null && <p className="video-analysis-empty-title">暂无转录文稿</p>}
+      {transcript === null && <p className="video-analysis-empty-title">暂无转录文稿</p>}
       {startError && <p role="alert">{startError}</p>}
       {transcript?.status === "interrupted" && <p role="status">{transcript.priceChanged ? "转录价格已变化，请确认新价格。"
         : userErrorMessage(transcript.error, transcript.cloudPending ? "转录尚未完成，可恢复原任务。" : "转录尚未完成。")}</p>}
@@ -198,7 +176,6 @@ export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSecon
     </>;
   }
   return <div ref={panel} className="video-transcript-panel" tabIndex={-1}>
-    {view === "analysis" && <SavedVideoDescription key={`${assetId}:${sourceKey}`} assetId={assetId}/>}
     {content}
   </div>;
 }

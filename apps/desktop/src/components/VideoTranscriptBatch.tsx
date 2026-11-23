@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
 import { Captions } from "lucide-react";
 import { create } from "zustand";
-import { folderConnections } from "../lib/folderConnections";
-import { materialCatalog } from "../lib/materialCatalog";
+import { videoBatchScopeIds, type VideoBatchScope } from "../lib/videoBatchScope";
 import { isPendingOriginal } from "../lib/pendingOriginalDeletion";
 import { userErrorMessage } from "../lib/userError";
 import { getVideoTranscript, quoteVideoTranscript, startVideoTranscript, useVideoTranscriptPrice, type VideoTranscript, type VideoTranscriptQuote } from "../lib/videoTranscript";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
+import { BcoinAmount } from "./BcoinAmount";
 
-type Scope = { projectId: string | null; label: string; folderId?: string };
 type Batch = {
   label: string;
   total: number;
@@ -31,49 +30,6 @@ type BatchPlan = {
 };
 
 const useBatch = create<{ task: Batch | null }>(() => ({ task: null }));
-
-async function scopeIds(scope: Scope, descendants: boolean, isCurrent: () => boolean): Promise<string[]> {
-  const ids = new Set<string>();
-  if (scope.folderId) {
-    const folders = [scope.folderId];
-    if (descendants) {
-      const listed = await folderConnections.list(scope.projectId, "videos");
-      const children = new Map<string, string[]>();
-      for (const folder of listed) {
-        if (!folder.parent_id || !folder.available) continue;
-        const siblings = children.get(folder.parent_id) ?? [];
-        siblings.push(folder.id);
-        children.set(folder.parent_id, siblings);
-      }
-      const seen = new Set(folders);
-      for (const folder of folders) {
-        for (const child of children.get(folder) ?? []) {
-          if (seen.has(child)) continue;
-          seen.add(child);
-          folders.push(child);
-        }
-      }
-    }
-    for (const folderId of folders) {
-      if (!isCurrent()) break;
-      const entries = await folderConnections.ids(folderId, "videos", scope.projectId);
-      for (const entry of await folderConnections.resolve(entries, isCurrent)) {
-        if (entry.available && !isPendingOriginal(entry.asset_id)) ids.add(entry.asset_id);
-      }
-    }
-  } else {
-    const filter = { kind: "all", id: null, projectId: scope.projectId, media: "videos", query: "", generated: null, color: null } as const;
-    let after: string | null = null;
-    do {
-      const page = await materialCatalog.graphPage(filter, after);
-      after = page.after;
-      for (const asset of page.assets) {
-        if (!isPendingOriginal(asset.id)) ids.add(asset.id);
-      }
-    } while (after && isCurrent());
-  }
-  return [...ids];
-}
 
 function updateBatch(update: Partial<Batch>) {
   const task = useBatch.getState().task;
@@ -166,7 +122,7 @@ async function runBatch(plan: BatchPlan, label: string, price: number) {
   updateBatch({ running: false, message });
 }
 
-export function VideoTranscriptBatchButton({ scope }: { scope: Scope }) {
+export function VideoTranscriptBatchButton({ scope }: { scope: VideoBatchScope }) {
   const { projectId, label, folderId } = scope;
   const [open, setOpen] = useState(false);
   const task = useBatch(state => state.task);
@@ -181,7 +137,7 @@ export function VideoTranscriptBatchButton({ scope }: { scope: Scope }) {
   </>;
 }
 
-function VideoTranscriptBatch({ scope, task, canStartNew, onClose }: { scope: Scope; task: Batch | null; canStartNew: boolean; onClose: () => void }) {
+function VideoTranscriptBatch({ scope, task, canStartNew, onClose }: { scope: VideoBatchScope; task: Batch | null; canStartNew: boolean; onClose: () => void }) {
   const { projectId, folderId, label } = scope;
   const [descendants, setDescendants] = useState(false);
   const [plan, setPlan] = useState<BatchPlan | null>(null);
@@ -199,7 +155,7 @@ function VideoTranscriptBatch({ scope, task, canStartNew, onClose }: { scope: Sc
     setProgress(null);
     setError("");
     void (async () => {
-      const ids = await scopeIds({ projectId, folderId, label }, descendants, () => current);
+      const ids = await videoBatchScopeIds({ projectId, folderId, label }, descendants, () => current);
       if (!current) return;
       setProgress({ checked: 0, total: ids.length });
       const next = await prepareBatch(ids, owner, () => current, checked => setProgress({ checked, total: ids.length }));
@@ -239,8 +195,7 @@ function VideoTranscriptBatch({ scope, task, canStartNew, onClose }: { scope: Sc
               <p role="status">{price.loading ? "正在读取转录价格…" : "视频转录服务暂不可用。"}</p>
               {!price.loading && <button type="button" className="app-button-secondary" onClick={price.refresh}>刷新服务状态</button>}
             </> : <>
-              <p>单条 {price.credits} Bcoin，本次 {currentPlan.videos.length} 条音轨，合计 {price.credits * currentPlan.videos.length} Bcoin。</p>
-              <p>将每个视频的完整音轨发送至 Bowerbird Cloud。</p>
+              <p>单条 <BcoinAmount amount={price.credits}/>，本次 {currentPlan.videos.length} 条音轨，合计 <BcoinAmount amount={price.credits * currentPlan.videos.length}/>。</p>
             </>)}
         </>
         : <p role="status">{progress ? `正在核对音轨和费用（${progress.checked} / ${progress.total}）…` : "正在统计视频…"}</p>)}

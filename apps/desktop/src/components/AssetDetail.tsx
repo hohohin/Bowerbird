@@ -1,8 +1,10 @@
 import { TacticalSelect } from "./TacticalSelect";
 import { AssetTagPicker } from "./AssetTagPicker";
+import { VideoTextTags } from "./VideoTextTags";
 import { userErrorMessage } from "../lib/userError";
 import { isPendingOriginal, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import type { VideoAnalysisView } from "./VideoTranscriptPanel";
+import { BcoinAmount } from "./BcoinAmount";
 import { AudioWaveform } from "./AudioWaveform";
 import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset, isSpreadsheetPath } from "../lib/textMedia";
@@ -135,7 +137,7 @@ function Meta({ label, value }: { label: string; value: ReactNode }) {
  * 详情页承载图片、音频和文档，视频预览通过 panelOnly 复用属性面板。
  */
 export function AssetDetail({ onExploreSource = (url) => { void open(url); }, selection, panelOnly = false, initialAsset, onReady,
-  onOpenVideoAnalysis, videoAnalysisStatus }: {
+  onOpenVideoAnalysis, videoAnalysisStatus, videoVisualQuote }: {
   onExploreSource?: (url: string) => void;
   /** Information-only inspector; the host owns playback and the generation conversation. */
   panelOnly?: boolean;
@@ -143,7 +145,8 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   /** Initial inspector content has settled; the host can reveal it without empty sections flashing. */
   onReady?: (assetId: string) => void;
   onOpenVideoAnalysis?: (view: VideoAnalysisView) => void;
-  videoAnalysisStatus?: string;
+  videoAnalysisStatus?: React.ReactNode;
+  videoVisualQuote?: number;
   selection?: { assetId: string; onClose: () => void; onOpen: (id: string) => void; onContextMenu?: ReturnType<typeof useStore.getState>["openContextMenu"]; onNavigate?: () => void };
 }) {
   const selectedId = useStore((s) => s.detailAssetId);
@@ -1010,6 +1013,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
               <h2 className="text-xs font-medium text-muted">视频分析</h2>
               {videoAnalysisStatus && <span className="text-xs text-muted">{videoAnalysisStatus}</span>}
             </div>
+            {videoVisualQuote !== undefined && <p className="text-xs text-muted">画面分析 · <BcoinAmount amount={videoVisualQuote}/></p>}
             <div className="flex flex-wrap gap-2">
               <button type="button" className="app-button-primary" onClick={() => onOpenVideoAnalysis("analysis")}>分析</button>
               <button type="button" className="app-button-secondary" onClick={() => onOpenVideoAnalysis("transcript")}>转录文稿</button>
@@ -1290,6 +1294,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
 
           }
           {id && <AssetTagPicker key={id} assetId={id} tags={tags} onChange={setTags}/>}
+          {panelOnly && videoAsset && id && <VideoTextTags key={id} assetId={id} onTagsChanged={setTags} onOpenAnalysis={onOpenVideoAnalysis}/>}
 
             </>
           )}

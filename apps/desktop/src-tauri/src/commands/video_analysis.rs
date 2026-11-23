@@ -7,11 +7,14 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
 
+pub(crate) mod jobs;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredDescription {
     text: String,
     stamp: FileStamp,
+    version: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -29,6 +32,8 @@ fn current_description(db: &Database, asset_id: &str) -> AppResult<Option<VideoA
     };
     if !db.connected_source_matches(asset_id, &original)?
         || FileStamp::read(&original).as_ref().ok() != Some(&record.stamp)
+        || record.version.as_ref().is_some_and(|version|
+            jobs::source_version(&original).as_ref().ok() != Some(version))
         || record.text.trim().is_empty()
     {
         return Ok(None);

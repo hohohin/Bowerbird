@@ -10,6 +10,8 @@
 
 ## 让新界面沿用主题、按钮和字段
 
+- 需要在报价旁显示 Bcoin 单位时，复用 [BcoinAmount](../../apps/desktop/src/components/BcoinAmount.tsx) 的本地化数字、顶栏同款图标和可读单位。该组件仅负责呈现，使用调用方已查得的有效金额。
+
 图片右键「维度」由 `AssetContextMenu` 的单图菜单提供，素材库与画板共用；复用 store `openCaptionRing` 按需加载维度及全局 `CaptionRing`。画板通过既有 `bowerbird://board-asset-peek` 传入节点元素作为锚点，避免同一素材多处出现时定位到素材栏；多选不提供此操作。素材缩略图和画板图片共用 DimensionBadge，单击左上角标签即可开环。生成卡缩略图的 × 只断开图片；右键输入加号可按维度名称单独断开正文，兼容既有共线记录。激活创作框后点标签插入；浏览画板时拖动标签复用工作流自动连接，按目标端口保存所选维度正文快照和来源图片。
 
 工作流模板预览与首次运行前的 Agent 详情共用 `workflowPromptPreview` 将提示词内的引用标记显示为对应名称。[工作流提示词](../../apps/desktop/src/lib/canvasWorkflow.ts)
