@@ -63,6 +63,12 @@ macOS 的双架构回执单独维护。[macOS 全量发布验收](../macOS/RELEA
 
 自 2026-11-21 起，Windows 官网发布按用户授权在缺少 Authenticode 时继续，保留 Tauri 更新签名和公网安装包完整回读验签。下文可信发布者签名验收用于接入该能力时。
 
+## Windows 26.11.2303 已公开发布（2026-11-23）
+
+北京时间 17:26:59 公网核验通过，源码 `fcc6f0654`，SQLite 0062。素材库侧栏支持独立折叠「项目」和「拼音 A–Z」，新增「全部项目素材」，「管理标签」移至侧栏底部。TypeScript、Vite 生产构建、三组桌面界面回归和 1418 项 Windows 原生测试通过，56 项按配置跳过。
+
+官网和 Windows 自动更新清单均指向 26.11.2303。CDN 安装包完整回读并通过 Tauri 更新签名校验，SHA-256 为 `2f9cf1ce8f7938f46175c76c7995fee72b0ca137dfb97c07234c1243d14714b7`。按用户授权跳过 Authenticode。官网和 Windows 更新清单可回滚至 26.11.2302。旧版应用内安装和重启尚待实机验证。回执见 `.tmp/release-windows-26.11.2303/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2303_x64-setup.exe)
+
 ## Windows 26.11.2302 已公开发布（2026-11-23）
 
 北京时间 16:14 公网核验通过，源码 `cc767d6f8`，SQLite 0062。顶栏验签后可直接安装并重启，折叠生成卡预览随图片或视频结果移动，模型菜单可引导配置自有订阅 GPT Image 2。冻结源码通过 TypeScript、Vite 生产构建和 1418 项 Windows 原生测试，56 项按配置跳过。五组 Chromium 回归在同产品源码的存档提交通过。[回归记录](../project_logs/2026-11-23-source-archive.md)
