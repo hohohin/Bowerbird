@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type { DropdownMenuProps } from '@radix-ui/react-dropdown-menu';
 import { ArrowDownToLineIcon } from 'lucide-react';
 import { useEditorRef } from 'platejs/react';
-import { notifyError } from '@/lib/notify';
+import { notify, notifyError } from '@/lib/notify';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../primitives/dropdown-menu';
 import { ToolbarButton } from './toolbar';
 
@@ -14,6 +14,7 @@ export function ExportToolbarButton(props: DropdownMenuProps) {
   const [busy, setBusy] = useState(false);
   async function save(format: typeof formats[number][0]) {
     setBusy(true);
+    if (format === 'pdf') notify('在打印窗口将文档存为 PDF。');
     try { const { exportDocument } = await import('../../textEditorExport'); await exportDocument(editor, format); }
     catch (error) { notifyError(error, '导出失败，请检查文档中的媒体是否可访问后重试。'); }
     finally { setBusy(false); }

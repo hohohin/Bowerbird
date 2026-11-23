@@ -84,7 +84,7 @@
 - 固定和浮动工具栏使用同一插件变换；修复字号输入丢选区、表格合并后无法拆分、评论首次插入导致 Slate 节点身份变化、块操作后的隐式多选、滚动浮层位置和键盘导航。
 - 工具栏 Agent 使用既有 Codex CLI／Cloud DSH 及模型／积分菜单，可生成、改写、评论和改写所选表格；接受／舍弃作用于真实正文。请求期间手工编辑过目标时只保留回复预览；表格返回尺寸不匹配不改原表。取消失败可再次停止，读取失败取回原请求。Cloud 账号门控与计费链路保持不变。
 - 图片／音视频上传复用应用媒体导入；浏览器选择器的相对 `File.path` 不冒充本机原路径。附件使用内容哈希命名、原子写入、路径边界校验与 50 MiB 上限，同内容复用、不覆盖。原生命令为 `save_document_attachment` / `resolve_document_attachment`，需重编译桌面端后可用。
-- 按用户反馈移除 Markdown / HTML / Word 文档导入，保留 Markdown / HTML / PNG / PDF / Word 导出；HTML／图片／PDF 使用静态文档渲染，嵌入可读取的媒体和公式字体，绘图导出图像。Word 导出会受目标格式能力限制；富编辑器状态的完整恢复以应用保存的 Markdown 为准。
+- 按用户反馈移除 Markdown / HTML / Word 文档导入，保留 Markdown / HTML / PNG / PDF / Word 导出。HTML／图片／PDF 共用静态文档，嵌入可读取的媒体和公式字体，绘图以图像输出。导出 PDF 打开系统打印窗口，在窗口中选择存为 PDF。A4 保留可选、可搜索的文字，尽量让图片和表格行留在同一页。Word 导出会受目标格式能力限制。富编辑器状态的完整恢复以应用保存的 Markdown 为准。
 - 显式粘贴或插入的外部媒体链接可显示并保留 URL，不冒充素材库身份。未知 HTML／MDX／frontmatter 仍不执行，源码语法保留为原文块。Mermaid / Graphviz / Flowchart 本地渲染；PlantUML 只有点击“在线预览”后才发送图表源码。Excalidraw 运行字体本地化。
 
 正式入口为 `TextPlateEditor.tsx` 和 `components/text-editor/plate/`。旧 `TextBlockActions`、`TextBlockType`、`TextFormatToolbar`、`TextInputRules` 已被官方 kit 替代并删除。来源与适配说明见该目录 README，测试矩阵及质量工具边界见 [本轮日志](../project_logs/2026-11-06-text-editor-demo.md)。未发布安装包，未调用真实付费模型，Mac 原生、超大文档长期性能及跨设备恢复不在本轮验收范围。

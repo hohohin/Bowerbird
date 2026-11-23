@@ -10,6 +10,43 @@ import utilities from './plate/utilities.css?raw';
 import mathStyles from 'katex/dist/katex.min.css?inline';
 import { exportDataUrl, exportNodes } from './textEditorExportNodes';
 
+const documentTheme = '.text-plate-ui{--bb-surface:#fff;--bb-ink:#242424;--bb-muted:#666;--bb-secondary:#555;--bb-surface-hover:#f3f3f3;--bb-surface-2:#f6f6f6;--bb-line:#ddd;--bb-blue:#316bcc;--bb-danger:#b91c1c;font:16px/1.7 system-ui,sans-serif;background:#fff;color:#242424;color-scheme:light}*{box-sizing:border-box}img,video{max-width:100%}';
+
+const printLayout = `
+  #bowerbird-document-print { position: fixed; top: 0; left: -10000px; width: 182mm; visibility: hidden; }
+  @page { size: A4; margin: 14mm; }
+  @media print {
+    html:has(#bowerbird-document-print), body:has(> #bowerbird-document-print) {
+      height: auto !important; overflow: visible !important; background: white !important; color-scheme: light !important;
+    }
+    body:has(> #bowerbird-document-print) > :not(#bowerbird-document-print) { display: none !important; }
+    #bowerbird-document-print { position: static; width: auto; visibility: visible; }
+  }
+`;
+
+const printDocumentStyles = `
+  @media print {
+    .text-plate-ui { orphans: 2; widows: 2; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    .text-plate-ui > :first-child { overflow: visible; margin: 0 !important; padding: 0 !important; }
+    div:has(> div > table) { overflow: visible !important; }
+    h1, h2, h3, h4, h5, h6 { break-after: avoid; }
+    blockquote, figure, img, li, pre, tr { break-inside: avoid; }
+    pre { overflow: visible !important; white-space: pre-wrap; overflow-wrap: anywhere; }
+    ol, ul { padding-inline-start: 1.8em !important; }
+    table { border-collapse: separate !important; border-spacing: 0; }
+    th, td {
+      border: 0 !important; border-bottom: 1px solid #b7b7b7 !important; border-right: 1px solid #b7b7b7 !important;
+      padding: 0 6px !important; overflow-wrap: anywhere;
+    }
+    :is(th, td):first-child { border-left: 1px solid #b7b7b7 !important; }
+    thead tr:first-child th { border-top: 1px solid #b7b7b7 !important; background-color: #f6f6f6; }
+    :is(th, td)::before { content: none !important; }
+    figure { max-width: 100%; }
+    figcaption { height: auto !important; }
+    img, video { max-height: 245mm; object-fit: contain !important; }
+  }
+`;
+
 function download(blob: Blob, extension: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a'); link.href = url; link.download = `文档.${extension}`;
@@ -29,7 +66,7 @@ async function inlineMathFonts(document: Document) {
   for (const url of fontUrls) math = math.replaceAll(url, await exportDataUrl(url));
   return math;
 }
-async function documentHtml(editor: PlateEditor) {
+async function renderDocument(editor: PlateEditor) {
   const value = await exportNodes(editor);
   const hasEquations = (nodes: typeof value): boolean => nodes.some(node => ['equation', 'inline_equation'].includes(node.type) || hasEquations(node.children.filter(child => Array.isArray(child.children)) as typeof value));
   const plugins: SlatePlugin[] = [...BaseEditorKit] as SlatePlugin[];
@@ -43,8 +80,61 @@ async function documentHtml(editor: PlateEditor) {
   const document = new DOMParser().parseFromString(html, 'text/html');
   await inlineMedia(document);
   const math = await inlineMathFonts(document);
-  const theme = ':root{--bb-surface:#fff;--bb-ink:#242424;--bb-muted:#666;--bb-secondary:#555;--bb-surface-hover:#f3f3f3;--bb-surface-2:#f6f6f6;--bb-line:#ddd;--bb-blue:#316bcc;--bb-danger:#b91c1c}*{box-sizing:border-box}body{margin:0;font:16px/1.7 system-ui,sans-serif;background:white;color:#242424}img,video{max-width:100%}';
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${theme}\n${utilities}\n${math}</style></head><body class="text-plate-ui">${document.body.innerHTML}</body></html>`;
+  return { body: document.body, styles: `${documentTheme}\n${utilities}\n${math}`, math };
+}
+async function documentHtml(editor: PlateEditor) {
+  const { body, styles } = await renderDocument(editor);
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}\n${styles}</style></head><body class="text-plate-ui">${body.innerHTML}</body></html>`;
+}
+
+let printing = false;
+async function printDocument(editor: PlateEditor) {
+  if (printing) return;
+  printing = true;
+  const host = document.createElement('div');
+  host.id = 'bowerbird-document-print';
+  host.inert = true;
+  const layout = document.createElement('style');
+  const cleanup = () => {
+    window.removeEventListener('afterprint', cleanup);
+    // Some native print sheets do not dispatch a DOM afterprint event.
+    document.removeEventListener('pointerdown', cleanup, true);
+    document.removeEventListener('keydown', cleanup, true);
+    host.remove();
+    layout.remove();
+    printing = false;
+  };
+  try {
+    const { body, styles, math } = await renderDocument(editor);
+    const content = document.createElement('div');
+    content.className = 'text-plate-ui';
+    content.append(...body.childNodes);
+    for (const table of content.querySelectorAll('table')) {
+      const first = table.rows.item(0);
+      if (!table.tHead && first?.cells.length && [...first.cells].every(cell => cell.tagName === 'TH' && cell.rowSpan === 1)) {
+        table.createTHead().append(first);
+      }
+    }
+    const style = document.createElement('style');
+    style.textContent = styles + printDocumentStyles;
+    // WKWebView prints the main view. Isolate the static document's CSS without putting it in an iframe.
+    host.attachShadow({ mode: 'open' }).append(style, content);
+    // Chromium resolves custom fonts used in the shadow tree from document-level @font-face rules.
+    layout.textContent = printLayout + (math.match(/@font-face\s*\{[^}]*\}/g) ?? []).join('\n');
+    document.head.append(layout);
+    document.body.append(host);
+    await Promise.all([...content.querySelectorAll('img')].map(image => image.decode().catch(() => {})));
+    await document.fonts.ready;
+    window.addEventListener('afterprint', cleanup, { once: true });
+    await window.print();
+    if (host.isConnected) {
+      document.addEventListener('pointerdown', cleanup, { capture: true, once: true });
+      document.addEventListener('keydown', cleanup, { capture: true, once: true });
+    }
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 async function documentCanvas(editor: PlateEditor) {
   const html = await documentHtml(editor);
@@ -75,14 +165,8 @@ export async function exportDocument(editor: PlateEditor, format: 'html' | 'pdf'
     const { exportToDocx } = await import('./textEditorDocx');
     download(await exportToDocx(await exportNodes(editor), { editorPlugins: [...BaseEditorKit, ...DocxExportKit] as SlatePlugin[] }), format); return;
   }
+  if (format === 'pdf') { await printDocument(editor); return; }
   const canvas = await documentCanvas(editor);
-  if (format === 'png') { const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png')); if (blob) download(blob, format); return; }
-  const { PDFDocument } = await import('pdf-lib');
-  const pdf = await PDFDocument.create();
-  const image = await pdf.embedPng(canvas.toDataURL('image/png'));
-  const scale = 595.28 / canvas.width, pageHeight = 841.89;
-  for (let offset = 0; offset < canvas.height * scale; offset += pageHeight) {
-    pdf.addPage([595.28, pageHeight]).drawImage(image, { x: 0, y: pageHeight - canvas.height * scale + offset, width: 595.28, height: canvas.height * scale });
-  }
-  download(new Blob([await pdf.save() as Uint8Array<ArrayBuffer>], { type: 'application/pdf' }), format);
+  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+  if (blob) download(blob, format);
 }
