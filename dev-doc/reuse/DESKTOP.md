@@ -6,7 +6,7 @@
 
 - **用途／关键词**：平移、缩放、拖动、分批挂载、可见范围。
 - **入口**：[useCanvasFrame](../../apps/desktop/src/lib/useCanvasFrame.ts) 调度输入；[canvasDragPreview](../../apps/desktop/src/lib/canvasDragPreview.ts) 投射拖动位移；[canvasPaintWindow](../../apps/desktop/src/lib/canvasPaintWindow.ts) 裁剪屏外绘制。
-- **调用**：CanvasWorkspace 和 CanvasWorkflowLayer 按已恢复相机共用挂载范围；useWorkflowPortGeometry 随缩放测量受影响卡片。新连线通过 dragWire 登记实际显示端口。
+- **调用**：CanvasWorkspace 和 CanvasWorkflowLayer 按已恢复相机共用挂载范围；useWorkflowPortGeometry 随缩放测量受影响卡片。新连线通过 dragWire 登记实际显示端口。浮现的生成卡复用同一次拖动投影，随素材锚点移动。
 - **边界／状态**：未挂载卡片用数据几何，未知拓扑回原计算；最终位置、撤销与持久化由 CanvasWorkspace 执行。[首屏响应](../PROJECT-CANVAS-PLAN.md#2026-11-21项目打开与首屏响应) · [Chrome／WebView2 夹具](../../apps/desktop/scripts/fixtures/canvas-interaction-performance/README.md)。
 
 ## 3D 导演预演
@@ -48,6 +48,7 @@
 
 - **用途／关键词**：生成进度、任务阶段、排队数字、job／turn。
 - **入口**：[generationProgress.ts](../../apps/desktop/src/lib/generationProgress.ts) 的 `applyGenerationProgress`／`generationProgressLabel`。
+- **安装更新前判断本地生成**：[hasRunningLocalGeneration](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 汇总各项目正在运行的卡片和已交给生成会话的任务，可传入 `api.listGenJobs()` 的原生队列快照。[更新状态](../../apps/desktop/src/lib/appUpdater.ts) 在画板保存后复查。
 - **调用**：store 按运行中的 job＋turn 接收事件，`GenerationPanel`、`CanvasWorkspace` 和 `libraryGenerationActivity` 共用文案。
 - **边界／状态**：显示后端观察到的阶段及有效排队数字。耗时和调用次数不用于推算百分比。[阶段与恢复契约](../CANVAS-WORKFLOW.md#2026-11-08生成阶段反馈与-cli-进度核查源码待发布)。
 

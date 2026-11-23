@@ -220,6 +220,46 @@ try {
   assert.equal(await preview.getByRole('button', { name: /在画布.*生成卡/ }).count(), 0);
   await page.keyboard.press('Escape');
   await preview.waitFor({ state: 'detached' });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.locator('.canvas-zoom-controls').getByRole('button', { name: '缩小', exact: true }).click();
+  await editCard.waitFor({ state: 'detached' });
+  await editedClip.hover();
+  await editCard.waitFor();
+  const zoom = await editedClip.evaluate(el => new DOMMatrix(getComputedStyle(el.closest('.canvas-plane')).transform).a);
+  assert.ok(zoom >= 0.35 && zoom < 1, 'exercise Peek against a zoomed video material');
+  const clipBeforeDrag = await editedClip.boundingBox();
+  const checkPeekGap = async () => {
+    const card = await editCard.boundingBox(), anchor = await editedClip.boundingBox();
+    assert.ok(Math.abs(anchor.x - card.x - card.width - 12 * zoom) < 1);
+    assert.ok(Math.abs(anchor.y - card.y) < 1);
+  };
+  await checkPeekGap();
+  await editedClip.evaluate(el => {
+    // The shared drag renderer falls back to data geometry when a loop frame is present.
+    const frame = document.createElement('div');
+    frame.className = 'workflow-loop-frame';
+    frame.hidden = true;
+    frame.dataset.testLoopFrame = '';
+    el.closest('.canvas-plane').append(frame);
+  });
+  const grip = { x: clipBeforeDrag.x + 55, y: clipBeforeDrag.y + 40 };
+  await page.mouse.move(grip.x, grip.y);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 64, grip.y + 50, { steps: 5 });
+  await page.waitForFunction(({ id, previous }) => {
+    const material = document.querySelector(`[data-canvas-node-id="${id}"]`);
+    return material && Math.abs(material.getBoundingClientRect().x - previous) > 30 && !material.style.translate;
+  }, { id: video.editResultId, previous: clipBeforeDrag.x });
+  await checkPeekGap();
+  await page.mouse.up();
+  await checkPeekGap();
+  await page.locator('[data-test-loop-frame]').evaluate(frame => frame.remove());
+  await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+z`);
+  await page.waitForFunction(({ id, previous }) => {
+    const material = document.querySelector(`[data-canvas-node-id="${id}"]`);
+    return material && Math.abs(material.getBoundingClientRect().x - previous) < 1;
+  }, { id: video.editResultId, previous: clipBeforeDrag.x });
+  await checkPeekGap();
   await editedClip.click({ button: 'right' });
   await page.getByRole('menuitem', { name: '固定生成卡', exact: true }).click();
   await editCard.getByRole('button', { name: '取消固定并收起' }).waitFor();
@@ -231,7 +271,7 @@ try {
   await page.evaluate(() => window.resumeEditRun());
   await editCard.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
-  console.log('PASS new + and saved direct inputs, image/video result wires, whole video delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');
+  console.log('PASS new + and saved direct inputs, image/video result wires, video material Peek drag/undo at zoom, whole video delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');
 } finally {
   await browser.close();
   await server.close();

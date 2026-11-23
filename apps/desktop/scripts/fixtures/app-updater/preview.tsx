@@ -24,6 +24,7 @@ w.__TAURI_INTERNALS__ = {
   invoke: async (command: string, args: any) => {
     w.calls.push(command);
     if (w.failures?.[command]) throw w.failures[command];
+    if (command === "list_gen_jobs") return w.queuedJobs ?? [];
     if (command === "plugin:updater|check") {
       if (w.holdCheck) await new Promise<void>(resolve => { w.releaseCheck = resolve; });
       if (w.mode === "offline") throw "网络不可用";
@@ -45,21 +46,22 @@ w.__TAURI_INTERNALS__ = {
     return null;
   },
 };
-useStore.setState({ projectCanvasFlush: async () => {
+useStore.setState({ settingsRequest: { section: "system" }, projectCanvasFlush: async () => {
   w.calls.push("flush");
+  if (w.holdFlush) await new Promise<void>(resolve => { w.releaseFlush = resolve; });
   if (w.flushFails) throw new Error("保存失败");
 } });
 
 function Fixture() {
   const [visible, setVisible] = useState(true);
-  const [startupMounted, setStartupMounted] = useState(params.has("startup"));
+  const [startupMounted, setStartupMounted] = useState(true);
   const [ready, setReady] = useState(!params.has("notReady"));
   const [blocked, setBlocked] = useState(params.has("blocked"));
   return <div className="min-h-screen bg-bg p-8 text-ink"><button onClick={() => setVisible(!visible)}>切换设置</button>
     <button onClick={() => setStartupMounted(!startupMounted)}>切换启动组件</button>
     <button onClick={() => setReady(true)}>初始化完成</button>
     <ToastViewport />
-    {startupMounted && <AppUpdateMonitor ready={ready} />}
+    {startupMounted && <AppUpdateMonitor ready={ready && params.has("startup")} />}
     {blocked && <ModalShell title="素材库迁移" onClose={() => setBlocked(false)}>
       <button onClick={() => setBlocked(false)}>迁移完成</button>
     </ModalShell>}

@@ -121,6 +121,7 @@ H3 图片卡和视频卡在原文框下复用 `H3OptimizationActions` 和 `H3Pro
 ## 选择生成模型或图片比例
 
 - 卡片、创作框和会话续轮使用 [generationProviderIssue](../../apps/desktop/src/lib/generationAvailability.ts) 检查本次实际提交的图片或视频 provider。[ProviderIssueNotice](../../apps/desktop/src/components/creation/ProviderIssueNotice.tsx) 展示原因，并按返回的设置目标打开对应的自有订阅授权卡或账号页。工作流各卡片的渠道映射在 [workflowProviderIssue.ts](../../apps/desktop/src/lib/workflowProviderIssue.ts)。
+- 有自有订阅权益的用户可选中尚未配置的 GPT Image 2，卡片和创作框显示原因及「配置自有订阅」，直达「模型设置 → ChatGPT」。配置就绪前禁用生成和设为默认。
 - **用途／关键词：** provider、模型、比例、ratio、默认模型、Bcoin。
 - **入口：** [creation/ProviderSelect.tsx](../../apps/desktop/src/components/creation/ProviderSelect.tsx) 的 `ProviderSelect` 负责图片 provider 选择；其内部用 [ModelSelect.tsx](../../apps/desktop/src/components/creation/ModelSelect.tsx) 的 `ModelSelect`。比例图形菜单用 [RatioSelect.tsx](../../apps/desktop/src/components/creation/RatioSelect.tsx) 的 `RatioSelect`。
 - **实用证据：** [CreationBoard.tsx](../../apps/desktop/src/components/CreationBoard.tsx) 调用 `ProviderSelect` 与 `RatioSelect`；`ProviderSelect` 生成 `ModelOption[]` 后调用 `ModelSelect`。

@@ -57,27 +57,49 @@ try {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   assert.equal(await ring.evaluate(element => getComputedStyle(element).animationName), 'spin');
 
-  await page.evaluate(() => window.updater.setState({ phase: 'ready' }));
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const background = canvasWorkflowController('background-project');
+    background.document = { schema_version: 1, nodes: [{ id: 'video', kind: 'comfy-video' }],
+      run: { id: 'run', startId: 'video', order: ['video'], status: 'running', steps: { video: { status: 'running', jobId: 'gpu-job' } } } };
+    window.finishLocalVideo = () => { background.document.run.status = 'done'; };
+    const update = { ...window.updater.getState().update, install: () => window.__TAURI_INTERNALS__.invoke('plugin:updater|install') };
+    window.updater.setState({ phase: 'ready', update });
+  });
   await button.locator('.lucide-circle-arrow-up').waitFor();
   assert.equal(await ring.count(), 0);
   assert.equal(await dialog.count(), 0, 'verified download never opens the panel');
-  await button.click();
-  await dialog.getByRole('button', { name: '安装并重启', exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => window.calls.some(call => call.command === 'plugin:updater|install' || call.command === 'plugin:process|restart')), false);
-  for (const [phase, label] of [['ready', '更新已就绪'], ['installing', '正在安装更新'], ['installed', '重启完成更新']]) {
-    await page.evaluate(phase => window.updater.setState({ phase }), phase);
-    assert.match(await button.getAttribute('aria-label'), new RegExp(label));
-    if (phase === 'installing') {
-      await page.keyboard.press('Escape');
-      assert.equal(await dialog.isVisible(), true);
-    }
-  }
+  const confirm = page.getByRole('dialog', { name: '安装并重启', exact: true });
+  const installCalls = () => page.evaluate(() => window.calls.map(call => call.command).filter(name =>
+    name === 'plugin:updater|install' || name === 'plugin:process|restart'));
+  assert.match(await button.getAttribute('aria-label'), /安装并重启.*99\.1\.1/);
+  await button.focus(); await page.keyboard.press('Enter');
+  await confirm.waitFor();
+  await page.waitForFunction(() => document.activeElement?.textContent === '取消');
+  assert.equal(await dialog.count(), 0);
   await page.keyboard.press('Escape');
-  await dialog.waitFor({ state: 'hidden' });
+  await confirm.waitFor({ state: 'hidden' });
+  assert.equal(await button.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(await installCalls(), []);
+  await button.click();
+  await confirm.getByRole('button', { name: '安装并重启', exact: true }).click();
+  await page.waitForFunction(() => window.updater.getState().phase === 'installed');
+  assert.deepEqual(await installCalls(), ['plugin:updater|install', 'plugin:process|restart']);
+  await page.evaluate(() => { window.finishLocalVideo(); window.updater.setState({ phase: 'ready' }); });
+  await button.click();
+  await page.waitForFunction(() => window.updater.getState().phase === 'installed');
+  assert.equal(await confirm.count(), 0);
+  assert.equal(await dialog.count(), 0);
+  assert.deepEqual(await installCalls(), ['plugin:updater|install', 'plugin:process|restart', 'plugin:updater|install', 'plugin:process|restart']);
   await page.evaluate(() => window.updater.setState({ phase: 'available', error: '下载未完成，请重试。' }));
   assert.equal(await button.isVisible(), true, 'failed download retains the entry');
   await button.click();
   await dialog.getByRole('button', { name: '重新下载', exact: true }).waitFor();
+  await page.evaluate(() => window.updater.setState({ phase: 'installing' }));
+  await page.keyboard.press('Escape');
+  assert.equal(await dialog.isVisible(), true);
+  assert.equal(await button.isDisabled(), true);
+  await page.evaluate(() => window.updater.setState({ phase: 'installed' }));
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'hidden' });
   await button.blur();
@@ -101,5 +123,5 @@ try {
   await page.evaluate(() => window.updater.setState({ phase: 'current', update: null }));
   assert.equal(await slot.count(), 0);
   assert.deepEqual(errors, []);
-  console.log('PASS topbar update: no empty slot, screenshot icon size, download ring, reduced motion, blue install icon, System settings focus and retry, light/dark narrow layouts');
+  console.log('PASS topbar update: download details, cross-project local generation confirmation, direct install and restart, cancellation focus, no empty slot, screenshot sizing and theme layouts');
 } catch (error) { console.error(error, errors); throw error; } finally { await browser.close(); await server.close(); }

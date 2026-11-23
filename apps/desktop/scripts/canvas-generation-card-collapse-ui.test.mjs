@@ -26,6 +26,7 @@ page.on("pageerror", error => errors.push(error.message));
 const modifier = process.platform === "darwin" ? "Meta" : "Control";
 const origin = page.locator('[data-workflow-card="generator"]');
 const media = page.locator('[data-canvas-node-id="generation-session"]');
+const foregroundObstacle = page.locator('[data-canvas-node-id="old"]');
 const image = media.locator('[data-conversation-image="a"]');
 const preview = page.locator(".creation-image-preview");
 const reply = page.getByRole("dialog", { name: "继续修改此图", exact: true });
@@ -42,6 +43,23 @@ async function captureThemes(name) {
     await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
     await page.screenshot({ path: `${evidence}/${name}-${theme}.png` });
   }
+}
+
+async function assertPeekAgainstAnchor(zoom = 1) {
+  const card = await origin.boundingBox(), anchor = await media.boundingBox();
+  assert.ok(card && anchor);
+  assert.ok(Math.abs(anchor.x - (card.x + card.width) - 12 * zoom) < 1);
+  assert.ok(Math.abs(anchor.y - card.y) < 1);
+}
+
+async function assertPeekWinsHitTest() {
+  const card = await origin.boundingBox(), obstacle = await foregroundObstacle.boundingBox();
+  const left = Math.max(card.x, obstacle.x), right = Math.min(card.x + card.width, obstacle.x + obstacle.width);
+  const top = Math.max(card.y, obstacle.y), bottom = Math.min(card.y + card.height, obstacle.y + obstacle.height);
+  assert.ok(left < right && top < bottom, "the high-layer material physically overlaps the generator");
+  const id = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-workflow-card]')?.dataset.workflowCard,
+    { x: (left + right) / 2, y: (top + bottom) / 2 });
+  assert.equal(id, "generator");
 }
 
 try {
@@ -62,7 +80,7 @@ try {
     const session = { ...base, id: "generation-session", kind: "prompt", assetId: null, role: null, x: 450, y: 180, width: 260, height: 150,
       payloadJson: JSON.stringify({ schema_version: 1, job_id: "job", turn_key: "first-turn", text: "生成一只鸟",
         workflow_generation_group: group, status: "running", provider: "codex" }) };
-    snapshot.nodes = [{ ...base, x: 20, y: 195 }, session];
+    snapshot.nodes = [{ ...base, x: 20, y: 195, zIndex: 2_500_000 }, session];
     snapshot.view = { ...snapshot.view, panX: 100, panY: 100, zoom: 1 };
     sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
   });
@@ -174,14 +192,29 @@ try {
   assert.equal(await origin.count(), 0, "space-to-pan keeps the editor hidden");
   await page.keyboard.up("Space");
   await page.mouse.move(blank.x, blank.y);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await media.hover();
   await origin.waitFor();
   assert.equal(await peek.count(), 1);
+  await origin.evaluate(async card => {
+    for (const [element, animationName, duration] of [[card, "workflow-peek-in", "0.2s"],
+      [card.querySelector(".canvas-tactical-card-shell"), "workflow-peek-shell-connect", "0.16s"]]) {
+      const animation = getComputedStyle(element);
+      if (animation.animationName !== animationName || animation.animationDuration !== duration || animation.animationIterationCount !== "1") {
+        throw new Error(`Expected one ${animationName} animation of ${duration}`);
+      }
+    }
+    await Promise.all(card.getAnimations({ subtree: true }).filter(animation =>
+      ["workflow-peek-in", "workflow-peek-shell-connect"].includes(animation.animationName)).map(animation => animation.finished));
+    if (getComputedStyle(card).transform !== "none") throw new Error("The finished entry must release its transform");
+  });
   const peekPosition = await origin.boundingBox();
   const anchorPosition = await media.boundingBox();
-  assert.ok(Math.abs(anchorPosition.x - (peekPosition.x + peekPosition.width) - 12) < 1);
-  assert.ok(Math.abs(anchorPosition.y - peekPosition.y) < 1);
-  assert.equal(await origin.evaluate(card => getComputedStyle(card).zIndex), "11500");
+  await assertPeekAgainstAnchor();
+  await assertPeekWinsHitTest();
+  const obstacleZ = await foregroundObstacle.evaluate(card => Number(getComputedStyle(card).zIndex));
+  assert.equal(obstacleZ, 2_500_000);
+  assert.ok(await origin.evaluate(card => Number(getComputedStyle(card).zIndex)) > obstacleZ + 10000);
   assert.equal(await page.locator('[data-workflow-generator="generator"]').count(), 0, "peek leaves wires at the result anchor");
   await page.mouse.move(anchorPosition.x + 5, anchorPosition.y + 80);
   await page.mouse.move(anchorPosition.x - 5, anchorPosition.y + 80);
@@ -195,12 +228,16 @@ try {
   await editor.evaluate(element => element.blur());
   await origin.waitFor({ state: "detached" });
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.find(node => node.id === "generator").prompt === "生成一只蓝色的鸟");
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await media.hover();
   await peek.waitFor();
+  assert.deepEqual(await origin.evaluate(card => [getComputedStyle(card).animationName,
+    getComputedStyle(card.querySelector(".canvas-tactical-card-shell")).animationName]), ["none", "none"]);
   assert.equal(await editor.textContent(), "生成一只蓝色的鸟");
   await pin.click();
   assert.equal(await peek.count(), 0);
   assert.deepEqual(await origin.boundingBox(), peekPosition);
+  await assertPeekWinsHitTest();
   await captureThemes("expanded");
   const sourceBeforePinDrag = (await readWorkflow()).nodes.find(node => node.id === "generator");
   const header = await origin.locator("header strong").boundingBox();
@@ -219,6 +256,7 @@ try {
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "固定生成卡", exact: true }).press("Enter");
   await origin.waitFor();
+  assert.ok(await origin.evaluate(card => Number(getComputedStyle(card).zIndex)) > obstacleZ + 10000);
   await unpin.click();
   await origin.waitFor({ state: "detached" });
 
@@ -258,14 +296,41 @@ try {
   assert.equal(await image.count(), 1, "a running revision retains the previous image");
 
   const beforeDrag = await readWorkflow();
+  await page.mouse.move(blank.x, blank.y);
+  await origin.waitFor({ state: "detached" });
+  await media.hover();
+  await peek.waitFor();
   const box = await image.boundingBox();
   await page.mouse.move(box.x + 65, box.y + 100);
   await page.mouse.down();
   await page.mouse.move(box.x + 145, box.y + 160, { steps: 5 });
+  await page.waitForFunction(() => {
+    const media = document.querySelector('[data-canvas-node-id="generation-session"]');
+    const peek = document.querySelector('[data-workflow-peek-anchor="generation-session"]');
+    return media?.style.translate && peek?.style.translate === media.style.translate;
+  });
+  await page.waitForTimeout(240);
+  await assertPeekAgainstAnchor();
   await page.mouse.up();
   await waitForSourceX(beforeDrag.nodes[0].x, false);
+  await assertPeekAgainstAnchor();
+  assert.equal(await origin.evaluate(card => card.style.translate), "");
+  const movedPeekPosition = await origin.boundingBox();
+  await pin.click();
+  assert.deepEqual(await origin.boundingBox(), movedPeekPosition, "pinning after release keeps the moved anchor's current position");
+  await unpin.click();
+  await origin.waitFor({ state: "detached" });
+  await media.hover();
+  await peek.waitFor();
   await page.keyboard.press(`${modifier}+z`);
   await waitForSourceX(beforeDrag.nodes[0].x);
+  await assertPeekAgainstAnchor();
+  const obstacle = await foregroundObstacle.boundingBox();
+  await page.mouse.move(obstacle.x + 15, obstacle.y + 35);
+  await page.mouse.down();
+  await page.mouse.move(obstacle.x + 33, obstacle.y + 60);
+  await peek.waitFor({ state: "detached" });
+  await page.mouse.up();
   await page.evaluate(() => window.save());
   await page.reload();
   await image.waitFor();
@@ -286,7 +351,7 @@ try {
   await page.waitForTimeout(200);
   assert.equal(await origin.count(), 0, "zoom below 35% keeps the editor hidden");
   assert.deepEqual(errors, []);
-  console.log("PASS running placeholder, reduced motion, original placement, live wires, hover intent and bridge, editing focus, pinning and exact continuation with move undo");
+  console.log("PASS original placement, live wires, hover bridge, Peek animation and reduced motion, high layers, anchor drag/undo, pinning and exact continuation");
 } catch (error) {
   console.error("Canvas fixture", await page.evaluate(() => ({
     path: location.pathname,

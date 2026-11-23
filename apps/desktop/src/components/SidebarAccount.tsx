@@ -50,7 +50,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const downloadingUpdate = updatePhase === "downloading";
   const installIcon = updatePhase === "ready" || updatePhase === "installing" || updatePhase === "installed";
   const updateStatus = downloadingUpdate ? "正在下载更新"
-    : updatePhase === "ready" ? "更新已就绪"
+    : updatePhase === "ready" ? "安装并重启"
     : updatePhase === "installing" ? "正在安装更新"
     : updatePhase === "installed" ? "重启完成更新" : "发现新版本";
   const updateLabel = `${updateStatus} ${updateVersion ?? ""}${updatePercent === null ? "" : ` · ${updatePercent}%`}`;
@@ -96,8 +96,9 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
     <div ref={rootRef} className={topbar ? "topbar-account" : `relative border-t border-edge px-1 pb-1 pt-2 ${collapsed ? "mt-auto w-full" : "mt-2"}`}>
       {topbar && updateVersion && <span className="topbar-update-slot">
         <button type="button" className="topbar-update-button" data-install-icon={installIcon || undefined}
-          title={updateLabel} aria-label={updateLabel} aria-haspopup="dialog" aria-expanded={settingsOpen && settingsOrigin?.trigger === "update"}
-          onClick={() => openSettings("system", "update")}>
+          title={updateLabel} aria-label={updateLabel} aria-haspopup={installIcon ? undefined : "dialog"} aria-disabled={updatePhase === "installing" || undefined}
+          aria-expanded={installIcon ? undefined : settingsOpen && settingsOrigin?.trigger === "update"}
+          onClick={() => installIcon ? void useAppUpdater.getState().install() : openSettings("system", "update")}>
           {installIcon ? <CircleArrowUp size={18} aria-hidden="true" /> : <Download size={downloadingUpdate ? 14 : 18} aria-hidden="true" />}
           {downloadingUpdate && <svg className={`topbar-update-ring${updatePercent === null ? " motion-safe:animate-spin" : ""}`}
             width="24" height="24" viewBox="0 0 24 24" fill="none" strokeWidth="1.5" aria-hidden="true">

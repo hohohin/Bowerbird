@@ -1,11 +1,31 @@
-.workflow-card { position: absolute; border: 1px solid var(--bb-line); border-radius: 14px; background: var(--bb-surface); color: var(--bb-ink); box-shadow: 0 8px 24px #0002; user-select: none; }
-.workflow-card.is-selected { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
+.workflow-card { position: absolute; z-index: var(--workflow-card-z, 9000); border: 1px solid var(--bb-line); border-radius: 14px; background: var(--bb-surface); color: var(--bb-ink); box-shadow: 0 8px 24px #0002; user-select: none; }
+.workflow-card[data-workflow-pinned] { --workflow-card-z:var(--canvas-workflow-foreground-z); }
+.workflow-card.is-selected { --workflow-card-z:calc(var(--canvas-workflow-foreground-z) + 1); outline: 2px solid var(--bb-blue); outline-offset: 3px; }
 .workflow-card.is-key-target { outline: 2px dashed #c89b50; cursor: crosshair; }
 .workflow-card header { height: 43px; display:flex; align-items:center; gap:8px; padding:0 12px; border-bottom:1px solid var(--bb-line); cursor:grab; color:var(--bb-muted); }
 .workflow-card header strong { align-self:stretch; flex:1; font-size:13px; color:var(--bb-ink); }
 .workflow-card button { display:inline-flex; align-items:center; justify-content:center; gap:4px; }
 .workflow-card button:disabled { opacity:.4; cursor:not-allowed; }
-html[data-theme] .canvas-tactical .workflow-card[data-workflow-peek] > .canvas-tactical-card-shell { box-shadow:var(--hud-shadow-active); }
+.workflow-card[data-workflow-peek] {
+  --workflow-card-z:calc(var(--canvas-workflow-foreground-z) + 4);
+  animation:workflow-peek-in 200ms cubic-bezier(.16, .75, .25, 1);
+}
+html[data-theme] .canvas-tactical .workflow-card[data-workflow-peek] > .canvas-tactical-card-shell {
+  box-shadow:var(--hud-shadow-active);
+  animation:workflow-peek-shell-connect 160ms steps(1, end);
+}
+@keyframes workflow-peek-in {
+  from { opacity:0; transform:translate3d(10px, 0, 0) scale(.985); }
+  to { opacity:1; transform:translate3d(0, 0, 0) scale(1); }
+}
+@keyframes workflow-peek-shell-connect {
+  0%, 44% { box-shadow:var(--hud-shadow); }
+  24%, 100% { box-shadow:var(--hud-shadow-active); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workflow-card[data-workflow-peek],
+  html[data-theme] .canvas-tactical .workflow-card[data-workflow-peek] > .canvas-tactical-card-shell { animation:none; }
+}
 .workflow-card[data-workflow-peek] > header { cursor:default; }
 .workflow-peek-bridge { position:absolute; inset:0; pointer-events:none; }
 .workflow-peek-bridge::after { content:""; position:absolute; left:100%; top:0; bottom:0; width:12px; pointer-events:auto; }
@@ -97,7 +117,7 @@ html[data-theme] .canvas-tactical .workflow-card footer.workflow-agent-run-foote
 @media (prefers-reduced-motion: reduce) {
   .workflow-agent-question-status[data-awaiting-answer="true"]::before { animation:none; }
 }
-.workflow-card.is-agent:has(.workflow-agent-question-float) { --workflow-card-z:11010; }
+.workflow-card.is-agent:has(.workflow-agent-question-float) { --workflow-card-z:calc(var(--canvas-workflow-foreground-z) + 2); }
 .workflow-card.is-agent:has(.workflow-agent-question-status) .workflow-agent-run-footer > span { display:none; }
 .canvas-tactical .workflow-card.is-agent > header .canvas-tactical-module-icon { position:static; flex:none; }
 .workflow-card :is(.workflow-agent-question-status,.workflow-agent-question-bubble button:not(.canvas-tactical-card-close),.workflow-agent-input button):focus-visible {

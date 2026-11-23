@@ -1,8 +1,10 @@
 import { useEffect } from "react";
 import { useAppUpdater } from "../lib/appUpdater";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 export function AppUpdateMonitor({ ready }: { ready: boolean }) {
   const check = useAppUpdater(s => s.check);
+  const needsConfirmation = useAppUpdater(s => s.needsInstallConfirmation);
 
   useEffect(() => {
     if (!ready) return;
@@ -24,5 +26,9 @@ export function AppUpdateMonitor({ ready }: { ready: boolean }) {
     };
   }, [ready, check]);
 
-  return null;
+  return <ConfirmDialog open={needsConfirmation} title="安装并重启"
+    message="目前仍有进行中的本地生成，安装新版本可能会导致生成不可取回，请确认是否要安装并重启"
+    confirmLabel="安装并重启" danger
+    onCancel={() => useAppUpdater.setState({ needsInstallConfirmation: false })}
+    onConfirm={() => void useAppUpdater.getState().install(true)} />;
 }

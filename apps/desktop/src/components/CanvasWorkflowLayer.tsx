@@ -580,16 +580,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     }
     if (!confirmed && (node.kind === "comfy-video" || isH3ImageCard(node))) {
       const others = board.nodes.filter(card => card.id !== nodeId);
-      const runs = workflowRuns(board);
-      const anotherCardRunning = others.some(card => {
-        if (card.kind !== "comfy-video" && !isH3ImageCard(card)) return false;
-        return controller.startingAction(card.id) === "run" || runs.some(run => {
-          const step = run.steps[card.id];
-          return run.status === "running" && run.order.includes(card.id)
-            && (step?.status === "running" || step?.status === "pending" && run.startId === card.id)
-            && (!step.comfyOptimization || !!step.comfyAutoGeneration);
-        });
-      });
+      const anotherCardRunning = controller.hasRunningGenerationCard(card =>
+        card.id !== nodeId && (card.kind === "comfy-video" || isH3ImageCard(card)));
       // Image workflow steps hand off to the generation session before the GPU job finishes.
       const sessions = workflowSessionIds(others);
       const anotherImageJobRunning = Object.values(useStore.getState().genJobs).some(job =>
@@ -2088,8 +2080,9 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           } }}
         ratio={node.generation?.ratio ?? "16:9"} onRatioChange={ratio => patch(node.id, { generation: { ...node.generation, ratio } })} />;
       return <article key={node.id} data-canvas-node={peek ? undefined : ""} data-workflow-card={node.id} data-workflow-peek={peek ? "" : undefined}
+        data-workflow-peek-anchor={peek?.anchorId} data-workflow-pinned={pinned ? "" : undefined}
         data-h3-card={h3 || undefined} ref={peek ? undefined : workflowCardRef(node.id)} aria-busy={running} className={`workflow-card ${running ? "canvas-card-running" : imageFailure || failure && !failure.dismissed ? "canvas-card-error" : ""} is-${node.kind} ${localVideo ? "is-generation" : ""} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
-        style={{ left: displayed.x, top: displayed.y, width: workflowCardWidth(node), minHeight: height, zIndex: peek ? 11500 : `var(--workflow-card-z, ${selectedIds.has(node.id) ? 11000 : 9000})` }}
+        style={{ left: displayed.x, top: displayed.y, width: workflowCardWidth(node), minHeight: height }}
         onPointerEnter={peek ? () => onPeekInteraction?.("enter") : undefined}
         onPointerLeave={peek ? () => onPeekInteraction?.("leave") : undefined}
         onBlurCapture={peek ? () => onPeekInteraction?.("blur") : undefined}

@@ -69,7 +69,7 @@ import { CanvasMediaHover } from "./CanvasMediaHover";
 import { renderCanvasCards, useCanvasEntryCardContext } from "./CanvasEntryCard";
 import { CanvasImage, CanvasMediaProvider } from "./CanvasImage";
 import { useCanvasFrame, useLatestCallback } from "../lib/useCanvasFrame";
-import { canvasDragPreview, dragWire, graphWirePath } from "../lib/canvasDragPreview";
+import { CANVAS_DRAG_Z_LIFT, canvasDragPreview, dragWire, graphWirePath } from "../lib/canvasDragPreview";
 import { canvasPaintWindow } from "../lib/canvasPaintWindow";
 import { createCanvasCellHitCache } from "../lib/canvasCellHitCache";
 import { lazyModule } from "../lib/lazyModule";
@@ -575,6 +575,12 @@ export function CanvasWorkspace({
       : { materials: nodes, graph: graphNodes, hidden: new Set<string>() },
     [nodes, graphNodes, graphEdges, pendingOriginals, canvasReadEpoch, hideCanvasOriginal]);
   const shownMaterials = projection.materials, shownGraph = projection.graph;
+  // Foreground controls share the plane with persisted nodes and their temporary drag lift.
+  const workflowForegroundZ = useMemo(() => {
+    const materialZ = shownMaterials.reduce((highest, node) => Math.max(highest, node.order), 0);
+    const nodeZ = shownGraph.reduce((highest, node) => Math.max(highest, node.zIndex), materialZ);
+    return Math.max(11000, nodeZ + CANVAS_DRAG_Z_LIFT + 1);
+  }, [shownGraph, shownMaterials]);
   const outputNodesById = useMemo(() => new Map(shownGraph.filter(node => node.kind === "asset" && node.role === "output")
     .map(node => [node.id, node])), [shownGraph]);
   const concealedNodeIds = useRef(projection.hidden);
@@ -870,7 +876,9 @@ export function CanvasWorkspace({
   }, [workflowInteractive, workflow, workflowNodes, shownGraph, conversationCards, containedOutputIds, shownMaterials, threads]);
   const [pinnedWorkflowCards, setPinnedWorkflowCards] = useState<ReadonlyMap<string, { x: number; y: number; ran: boolean }>>(() => new Map());
   const [peekedCard, setPeekedCard] = useState<{ nodeId: string; anchorId: string } | null>(null);
-  const peekInteraction = useRef<{ anchor: HTMLElement; point: CanvasPoint; composing: boolean; ran: boolean } | null>(null);
+  const peekAnchorPoint = peekedCard && (shownMaterials.find(node => node.id === peekedCard.anchorId)
+    ?? shownGraph.find(node => node.id === peekedCard.anchorId));
+  const peekInteraction = useRef<{ anchor: HTMLElement; composing: boolean; ran: boolean } | null>(null);
   const peekIntent = useRef<ReturnType<typeof setTimeout>>();
   const peekClose = useRef<ReturnType<typeof setTimeout>>();
   const clearPeek = useCallback(() => {
@@ -2941,6 +2949,7 @@ export function CanvasWorkspace({
 
   function translateDrag(drag: DragProjection & { nodeId: string; selectedIds: Set<string> }, materials: CanvasNode[], graph: ProjectGraphNode[],
     workflowGeometry: WorkflowGeometry[], dx: number, dy: number) {
+    if (peekInteraction.current && peekedCard && !drag.selectedIds.has(peekedCard.anchorId)) clearPeek();
     const apply = () => {
       translateGraphSelection(graph, drag.selectedIds, dx, dy);
       translateMaterialSelection(materials, drag.selectedIds, dx, dy);
@@ -3526,6 +3535,7 @@ export function CanvasWorkspace({
       persistGeometries(nodesRef.current.filter((candidate) => drag.selectedIds.has(candidate.id)));
     }
     graphNodeDragRef.current = null;
+    if (drag.moved && peekedCard && drag.selectedIds.has(peekedCard.anchorId)) closePeekAfterLeave();
     setHover(null);
     setActiveDragId(null);
     setGuides([]);
@@ -3599,13 +3609,21 @@ export function CanvasWorkspace({
       || !!editor.querySelector('[aria-haspopup="listbox"][aria-expanded="true"]'));
   }
 
+  function peekAnchorIsDragging() {
+    if (!peekedCard) return false;
+    const anchorId = peekedCard.anchorId;
+    const materialDrag = nodeDragRef.current, graphDrag = graphNodeDragRef.current;
+    return materialDrag?.moved && materialDrag.selectedIds.has(anchorId)
+      || graphDrag?.moved && graphDrag.selectedIds.has(anchorId);
+  }
+
   const closePeekAfterLeave = useLatestCallback(() => {
     clearTimeout(peekClose.current);
     const interaction = peekInteraction.current;
-    if (!interaction || peekIsLocked()) return;
+    if (!interaction || peekIsLocked() || peekAnchorIsDragging()) return;
     peekClose.current = setTimeout(() => {
       const editor = peekEditor();
-      if (peekInteraction.current === interaction && !peekIsLocked(editor)
+      if (peekInteraction.current === interaction && !peekIsLocked(editor) && !peekAnchorIsDragging()
         && !interaction.anchor.matches(":hover") && !editor?.matches(":hover")) clearPeek();
     }, 220);
   });
@@ -3623,9 +3641,8 @@ export function CanvasWorkspace({
     if (!canStartPeek() || !anchor.isConnected || !anchor.matches(":hover") || peekIsLocked()) return;
     const origin = generationCardProjection.origins.get(anchorId);
     if (!origin || generationCardProjection.anchors.get(origin.id)?.id !== anchorId || pinnedCardOffsets.has(origin.id)) return;
-    const bounds = anchor.getBoundingClientRect();
     clearTimeout(peekClose.current);
-    peekInteraction.current = { anchor, point: toBoardPoint(bounds.left, bounds.top), composing: false, ran: false };
+    peekInteraction.current = { anchor, composing: false, ran: false };
     setPeekedCard({ nodeId: origin.id, anchorId });
   });
 
@@ -3722,10 +3739,11 @@ export function CanvasWorkspace({
     const anchor = generationCardProjection.anchors.get(nodeId);
     const card = workflowRef.current?.bounds(true).find(item => item.id === nodeId);
     if (!anchor || !card) return;
-    if (peekedCard?.nodeId === nodeId && peekInteraction.current) {
-      const { point, ran } = peekInteraction.current;
+    if (peekedCard?.nodeId === nodeId && peekAnchorPoint && peekInteraction.current) {
+      const { x, y } = peekAnchorPoint;
+      const { ran } = peekInteraction.current;
       setPinnedWorkflowCards(current => new Map(current).set(nodeId,
-        { x: point.x - card.width - 12 - card.x, y: point.y - card.y, ran }));
+        { x: x - card.width - 12 - card.x, y: y - card.y, ran }));
       clearPeek();
       return;
     }
@@ -4257,6 +4275,7 @@ export function CanvasWorkspace({
       for (const selected of graphNodesRef.current.filter((node) => drag.selectedIds.has(node.id) && node.kind !== "asset" && node.hiddenAt == null)) persistGraphNodeGeometry(selected);
     }
     nodeDragRef.current = null;
+    if (drag.moved && peekedCard && drag.selectedIds.has(peekedCard.anchorId)) closePeekAfterLeave();
     setActiveDragId(null);
     setGuides([]);
     setHover(null);
@@ -6329,10 +6348,11 @@ export function CanvasWorkspace({
             id={planeId}
             ref={planeRef}
             className="canvas-plane"
-            style={{ transform: `translate3d(${panRef.current.x}px, ${panRef.current.y}px, 0) scale(${zoomRef.current})` }}
+            style={{ transform: `translate3d(${panRef.current.x}px, ${panRef.current.y}px, 0) scale(${zoomRef.current})`,
+              "--canvas-workflow-foreground-z": workflowForegroundZ } as CSSProperties}
           >
             {projectId && workflowInteractive && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} getZoom={readCanvasZoom} opening={opening} entryCardIds={entryCardIds} deferredCandidateIds={deferredCandidateIds} graphNodes={nonChatGraphNodes} visibleGraphNodeIds={visibleGraphNodeIds} conversationCards={conversationCards} selectedConversationOutputs={selectedConversationOutputs} imageOnlyConversationIds={imageOnlyConversationIds} sessionHeights={sessionHeights} generationCardAnchors={generationCardProjection.anchors} pinnedCardOffsets={pinnedCardOffsets}
-              peekCard={peekedCard && peekInteraction.current ? { ...peekedCard, point: peekInteraction.current.point } : undefined}
+              peekCard={peekedCard && peekAnchorPoint ? { ...peekedCard, point: peekAnchorPoint } : undefined}
               onPeekInteraction={onPeekInteraction} onToggleGenerationPin={toggleGenerationPin}
               diagnosticTarget={diagnosticTarget} selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={workflowOnSelect}
               onNodesChanged={workflowOnNodesChanged} onEdited={workflowOnEdited}
@@ -6366,7 +6386,7 @@ export function CanvasWorkspace({
               return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} data-workflow-container={value.workflow_container ? node.id : undefined} tabIndex={0}
                 className={`canvas-note ${section ? "is-section" : value.note_type === "bubble" ? "is-bubble" : "is-text is-content-card"} ${value.note_type === "document" ? "is-document-card" : ""} ${value.artboard ? "is-artboard" : ""} ${selected ? "is-selected" : ""} ${writerFailures.length ? "canvas-card-error" : ""}`}
                 style={{ "--section-color": value.section_color, width: node.width, height: node.height,
-                  ...(plainSection ? { left: node.x, top: node.y } : { transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: section ? 0 : activeDragId === node.id || (activeDragId != null && selected) ? 10000 + node.zIndex : node.zIndex }) } as CSSProperties & { "--section-color"?: string }}
+                  ...(plainSection ? { left: node.x, top: node.y } : { transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: section ? 0 : activeDragId === node.id || (activeDragId != null && selected) ? CANVAS_DRAG_Z_LIFT + node.zIndex : node.zIndex }) } as CSSProperties & { "--section-color"?: string }}
                 onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
                 onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
                 onLostPointerCapture={event => endGraphNodeDrag(event, true)}
@@ -6468,7 +6488,7 @@ export function CanvasWorkspace({
               return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} data-local-chat-id={chatId}
                 role="button" tabIndex={0} aria-label={`对话 · ${chat?.title ?? "正在读取"}`} aria-busy={localChatRunning(chat)}
                 className={`canvas-chat-node${selectedCanvasNodeIds.has(node.id) ? " is-selected" : ""}${selectedChatId === chatId ? " is-focused" : ""}${localChatRunning(chat) ? " canvas-card-running" : ""}`}
-                style={{ width: node.width, minHeight: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: activeDragId === node.id ? 10000 + node.zIndex : node.zIndex }}
+                style={{ width: node.width, minHeight: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: activeDragId === node.id ? CANVAS_DRAG_Z_LIFT + node.zIndex : node.zIndex }}
                 onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
                 onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
                 onContextMenu={event => openCanvasNodeMenu(event, node.id)}
@@ -6520,7 +6540,7 @@ export function CanvasWorkspace({
                     minHeight: nodeRect(node).height,
                     height: imageOnly ? nodeRect(node).height : undefined,
                     transform: `translate3d(${node.x}px, ${node.y}px, 0)`,
-                    zIndex: quickRevision?.anchorId === node.id ? 12000 : activeDragId === node.id || (activeDragId != null && selectedCanvasNodeIds.has(node.id)) ? 10000 + node.zIndex : node.zIndex,
+                    zIndex: quickRevision?.anchorId === node.id ? workflowForegroundZ + 3 : activeDragId === node.id || (activeDragId != null && selectedCanvasNodeIds.has(node.id)) ? CANVAS_DRAG_Z_LIFT + node.zIndex : node.zIndex,
                   }}
                   onPointerDown={(event) => {
                     beginGraphNodeDrag(event, node);
@@ -6616,7 +6636,7 @@ export function CanvasWorkspace({
                     width: node.width,
                     minHeight: node.height,
                     transform: `translate3d(${node.x}px, ${node.y}px, 0)`,
-                    zIndex: activeDragId === node.id || (activeDragId != null && selectedCanvasNodeIds.has(node.id)) ? 10000 + node.zIndex : node.zIndex,
+                    zIndex: activeDragId === node.id || (activeDragId != null && selectedCanvasNodeIds.has(node.id)) ? CANVAS_DRAG_Z_LIFT + node.zIndex : node.zIndex,
                   }}
                   onPointerDown={(event) => {
                     beginGraphNodeDrag(event, node);
@@ -6686,7 +6706,7 @@ export function CanvasWorkspace({
                     width: nodeRect(node).width,
                     height: nodeRect(node).height,
                     transform: `translate3d(${node.x}px, ${node.y}px, 0)`,
-                    zIndex: quickRevision?.anchorId === node.id ? 12000 : movingWithSelection ? 10000 + node.order : node.order,
+                    zIndex: quickRevision?.anchorId === node.id ? workflowForegroundZ + 3 : movingWithSelection ? CANVAS_DRAG_Z_LIFT + node.order : node.order,
                   }}
                   onPointerDown={(event) => beginNodeDrag(event, node)}
                   onPointerEnter={node.kind === "asset" ? event => startPeek(event, node.id) : undefined}

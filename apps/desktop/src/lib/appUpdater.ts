@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { useStore } from "../store";
+import { api } from "./api";
+import type { GenJobSummary } from "./types";
+import { hasRunningLocalGeneration } from "./canvasWorkflowRuntime";
+import { notify } from "./notify";
 import { userErrorMessage } from "./userError";
 
 type Phase = "idle" | "checking" | "current" | "available" | "downloading" | "ready" | "installing" | "installed";
@@ -13,8 +18,8 @@ interface AppUpdaterState {
   startupChecked: boolean;
   check: (options?: { startup?: boolean; background?: boolean }) => Promise<void>;
   download: () => Promise<void>;
-  install: (beforeInstall: () => Promise<void>) => Promise<void>;
-  restart: () => Promise<void>;
+  needsInstallConfirmation: boolean;
+  install: (confirmed?: boolean) => Promise<void>;
 }
 
 let backgroundChecking = false;
@@ -27,7 +32,7 @@ export function updateDownloadPercent({ downloaded, total }: Pick<AppUpdaterStat
 // persisted: after an app restart the release must be checked and verified again.
 export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
   phase: "idle", update: null, downloaded: 0, total: null, error: null,
-  startupChecked: false,
+  startupChecked: false, needsInstallConfirmation: false,
   check: async ({ startup = false, background = false } = {}) => {
     // Session-only guard also covers StrictMode and component remounts.
     if (startup) {
@@ -82,30 +87,36 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
       set({ phase: "available", error: userErrorMessage(error, "更新包下载或验证未完成，请重新下载。") });
     }
   },
-  install: async (beforeInstall) => {
-    const { update, phase } = get();
-    if (!update || phase !== "ready") return;
-    set({ phase: "installing", error: null });
+  install: async (confirmed = false) => {
+    const { update, phase, needsInstallConfirmation } = get();
+    if (!update || (phase !== "ready" && phase !== "installed") || confirmed !== needsInstallConfirmation) return;
+    const canProceed = (queuedJobs?: GenJobSummary[]) => {
+      const state = useStore.getState();
+      if (state.classifyProgress || state.colorRebuild) throw new Error("请等待素材整理完成，再安装更新。");
+      if (confirmed || !hasRunningLocalGeneration(queuedJobs)) return true;
+      set({ phase, needsInstallConfirmation: true });
+      return false;
+    };
+    set({ phase: "installing", needsInstallConfirmation: false, error: null });
+    let restarting = false;
     try {
-      await beforeInstall();
+      if (!canProceed()) return;
+      await useStore.getState().projectCanvasFlush?.();
+      // Startup recovery can still be hydrating the store when the user clicks.
+      const queuedJobs = confirmed ? [] : await api.listGenJobs();
+      if (!canProceed(queuedJobs)) return;
       // Windows starts the passive NSIS installer and exits here; the installer
       // relaunches the app. Other desktop platforms return and need relaunch().
-      await update.install();
+      if (phase === "ready") await update.install();
+      restarting = true;
+      await relaunch();
+      set({ phase: "installed" });
     } catch (error) {
-      console.warn("[updater] install failed", error);
-      set({ phase: "ready", error: userErrorMessage(error, "更新尚未安装，请检查当前任务和保存状态后重试。") });
-      return;
-    }
-    set({ phase: "installed" });
-    await get().restart();
-  },
-  restart: async () => {
-    if (get().phase !== "installed") return;
-    set({ error: null });
-    try { await relaunch(); }
-    catch (error) {
-      console.warn("[updater] restart failed", error);
-      set({ error: "更新已安装，请关闭并重新打开应用。" });
+      console.warn("[updater] install or restart failed", error);
+      const message = restarting ? "更新已安装，请关闭并重新打开应用。"
+        : userErrorMessage(error, "更新尚未安装，请检查当前任务和保存状态后重试。");
+      set({ phase: restarting ? "installed" : phase, error: message });
+      if (!useStore.getState().settingsRequest) notify(message, "error");
     }
   },
 }));

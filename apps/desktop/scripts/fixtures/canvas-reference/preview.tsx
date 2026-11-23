@@ -115,6 +115,7 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "list_gen_jobs") return [];
     if (detailRoute) {
       if (command === "create_blank_project") {
         w.libraryProject = { ...project, id: "library-project", name: args.name, workspace_path: "/BowerbirdLibrary/项目/library-project", asset_count: 0 };

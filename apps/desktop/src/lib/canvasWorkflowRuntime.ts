@@ -10,7 +10,7 @@ import { isAudioPath } from "./audioMedia";
 import { voiceApi } from "./voice";
 import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey, type VoiceCardRequest } from "./voiceCard";
 import { api } from "./api";
-import type { Asset, CanvasNode, ProjectCanvasSnapshot } from "./types";
+import type { Asset, CanvasNode, GenJob, ProjectCanvasSnapshot } from "./types";
 import { firstWorkflowVideoOutputPoint, placeWorkflowOutput } from "./canvasOutputPlacement";
 import { assetPayloadJson, canvasAssetNodeSize, createCanvasAssetSnapshot } from "./creativeCanvas";
 import { DEFAULT_VIDEO_OPTIONS, isVideoPath, resolveVideoOptions, videoInputError } from "./videoGeneration";
@@ -44,7 +44,7 @@ import { ConfirmedDshTurnFailure, WorkflowInputError, WorkflowNodeError, workflo
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import { describeBrandImage } from "./describeBrandImage";
 import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoElapsed, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, h3R2VInputError, type ComfyVideoInput, type ComfyVideoStatus } from "./comfyVideo";
-import { H3_IMAGE } from "./genProviders";
+import { H3_IMAGE, isCloudProvider } from "./genProviders";
 import { imageOptimizationText, restoreImageOptimization, restoreH3VideoAudioReference, restoreH3R2VReferences, h3R2VPromptReferences, cleanH3OptimizedPrompt, h3OptimizationInstruction, type H3R2VPromptReferences } from "./h3PromptOptimization";
 import { compileAgentPrompt, compileGenerationPrompt, renderGenerationDraft, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowExecutionInputs, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowNodeRun, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, H3_VIDEO_AUDIO_PORT, H3_R2V_INPUT_PORTS, WORKFLOW_SKILLS,
   type CanvasWorkflow, type H3ImageGenerationInput, type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
@@ -104,6 +104,17 @@ export function canvasWorkflowController(projectId: string) {
   return controller;
 }
 
+/** Includes background projects and image jobs already handed off by their workflow step. */
+export function hasRunningLocalGeneration(queuedJobs: Pick<GenJob, "provider" | "running">[] = []) {
+  const jobs = [...queuedJobs, ...Object.values(useStore.getState().genJobs)];
+  if (jobs.some(job => job.running && !isCloudProvider(job.provider))) return true;
+  for (const controller of controllers.values()) {
+    if (controller.hasRunningGenerationCard(node => node.kind === "comfy-video" || node.kind === "voice"
+      || node.kind === "generation" && !isCloudProvider(workflowGenerationProvider(node)))) return true;
+  }
+  return false;
+}
+
 /** Deletion abandons local scheduling without waiting for a provider's terminal state. */
 export function discardProjectWorkflow(projectId: string) {
   controllers.get(projectId)?.discard();
@@ -149,6 +160,15 @@ export class CanvasWorkflowController {
   private queuedDraft?: { nodeId: string; document: CanvasWorkflow };
   private startingCards = new Map<string, CardStart>();
   startingAction(nodeId: string) { return this.startingCards.get(nodeId)?.kind; }
+  hasRunningGenerationCard(matches: (node: WorkflowNode) => boolean) {
+    const runs = workflowRuns(this.document).filter(run => run.status === "running");
+    if (!runs.length && !this.startingCards.size) return false;
+    return this.document.nodes.some(node => matches(node) && (this.startingAction(node.id) === "run" || runs.some(run => {
+      const step = run.steps[node.id];
+      if (!step || !run.order.includes(node.id) || (step.comfyOptimization && !step.comfyAutoGeneration)) return false;
+      return step.status === "running" || (step.status === "pending" && (run.startId === node.id || !!step.detail));
+    })));
+  }
   cancelStarting(nodeId: string) { this.startingCards.get(nodeId)?.cancel(); }
   private beginStart(nodeId: string, kind: CardStart["kind"], background = false): CardStart {
     const origin = useStore.getState();

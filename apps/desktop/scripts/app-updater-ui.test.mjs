@@ -3,10 +3,13 @@ import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-const server = await createServer({ server: { host: "127.0.0.1", port: 1597, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: ".tmp/app-updater-background/vite", optimizeDeps: { entries: ["scripts/fixtures/app-updater/preview.html"] },
+  server: { host: "127.0.0.1", port: 1597, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1050, height: 700 } });
+page.setDefaultTimeout(15_000);
+page.setDefaultNavigationTimeout(60_000);
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
 const button = (name) => page.getByRole("button", { name, exact: true });
@@ -115,15 +118,49 @@ try {
   await assertNoInstall();
   await mkdir(".tmp/app-updater-background", { recursive: true });
   await page.screenshot({ path: ".tmp/app-updater-background/ready.png" });
-  await page.evaluate(() => window.store.setState({ generating: true }));
+  const confirm = page.getByRole("dialog", { name: "安装并重启", exact: true });
+  await page.evaluate(() => window.store.setState({ genJobs: { image: { running: true, provider: "minimax-h3-image" } } }));
   await button("安装并重启").click();
-  await page.getByRole("alert").filter({ hasText: "正在进行" }).waitFor();
-  assert.equal(await page.evaluate(() => window.calls.includes("plugin:updater|install")), false);
-  await page.evaluate(() => { window.store.setState({ generating: false }); window.flushFails = true; });
+  await confirm.getByText("目前仍有进行中的本地生成，安装新版本可能会导致生成不可取回，请确认是否要安装并重启", { exact: true }).waitFor();
+  await confirm.getByRole("button", { name: "取消" }).click();
+  await assertNoInstall();
+  await page.evaluate(() => {
+    window.store.setState({ genJobs: {} });
+    window.queuedJobs = [{ running: true, provider: "minimax-h3-image" }];
+  });
   await button("安装并重启").click();
+  await confirm.waitFor();
+  await page.waitForFunction(() => document.activeElement?.textContent === "取消");
+  await page.keyboard.press("Escape");
+  await confirm.waitFor({ state: "hidden" });
+  assert.equal(await button("安装并重启").evaluate(el => el === document.activeElement), true, "native queue confirmation restores the settings button");
+  await assertNoInstall();
+  await page.evaluate(() => { window.queuedJobs = []; window.holdFlush = true; });
+  await button("安装并重启").click();
+  await page.waitForFunction(() => !!window.releaseFlush);
+  await page.evaluate(() => window.updater.getState().install());
+  assert.equal(await page.evaluate(() => window.calls.filter(c => c === "flush").length), 2, "a second click cannot begin another install");
+  await page.evaluate(() => {
+    window.store.setState({ genJobs: { late: { running: true, provider: "codex" } } });
+    window.holdFlush = false;
+    window.releaseFlush();
+  });
+  await confirm.waitFor();
+  await assertNoInstall();
+  await page.evaluate(() => { window.flushFails = true; });
+  await confirm.getByRole("button", { name: "安装并重启" }).click();
   await page.getByRole("alert").filter({ hasText: "保存失败" }).waitFor();
-  assert.equal(await page.evaluate(() => window.calls.includes("plugin:updater|install")), false);
-  await page.evaluate(() => { window.flushFails = false; window.installFails = true; });
+  await assertNoInstall();
+  await page.evaluate(() => { window.store.setState({ genJobs: {}, colorRebuild: { done: 1, total: 3 } }); });
+  await button("安装并重启").click();
+  await page.getByRole("alert").filter({ hasText: "等待素材整理完成" }).waitFor();
+  await assertNoInstall();
+  await page.evaluate(() => {
+    window.store.setState({ colorRebuild: null, generating: true, genJobs: {
+      cloud: { running: true, provider: "bowerbird-cloud-image_hd" }, finished: { running: false, provider: "codex" },
+    }, cloudAgentRuns: { remote: { status: "running" } } });
+    window.flushFails = false; window.installFails = true;
+  });
   await button("安装并重启").click();
   await page.getByRole("alert").filter({ hasText: "安装程序启动失败" }).waitFor();
   await page.evaluate(() => { window.installFails = false; window.restartFails = true; });
@@ -134,5 +171,5 @@ try {
   assert.ok(calls.indexOf("flush") < calls.indexOf("plugin:updater|install"));
   assert.equal(calls.filter(c => c === "plugin:updater|install").length, 2, "restart retries never install again");
   assert.deepEqual(errors, []);
-  console.log("PASS updater: automatic download on startup/poll/manual check, silent startup, progress/reopen, deduplication, verification gate, retry, task/save guards, manual install/restart");
-} finally { await browser.close(); await server.close(); }
+  console.log("PASS updater: automatic download, verification, local generation confirmation before and after save, cancellation, save failure, install and restart retry");
+} catch (error) { console.error(error, errors); throw error; } finally { await browser.close(); await server.close(); }

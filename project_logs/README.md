@@ -4,6 +4,7 @@
 
 ## 查阅
 
+- [2026-11-23 桌面源码存档](2026-11-23-source-archive.md) 记录顶栏安装、画板预览和模型提示的改动、验证与待验收项。
 - [2026-11-22 PROJECT 整理原文](2026-11-22-project-docs-history.md)：发布复审流水、历次约定与踩坑全文。
 - [桌面平台历史](2026-11-22-desktop-platform-history.md)：原 Windows／macOS README 的版本、签名与跨端交接。
 - [原文迁移索引](2026-10-31-migration-index.md)：按本地原行号找到日期文件及日志块。

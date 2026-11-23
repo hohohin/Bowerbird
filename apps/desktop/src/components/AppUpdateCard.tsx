@@ -1,16 +1,5 @@
 import { userErrorMessage } from "../lib/userError";
 import { updateDownloadPercent, useAppUpdater } from "../lib/appUpdater";
-import { useStore } from "../store";
-import { isAgentTaskActive } from "../lib/projectActivity";
-
-function busyReason() {
-  const state = useStore.getState();
-  if (state.generating || Object.values(state.cloudAgentRuns).some((run) => isAgentTaskActive(run.status))) {
-    return "请先完成或取消正在进行的生成 / Agent 任务，再安装更新。";
-  }
-  if (state.classifyProgress || state.colorRebuild) return "请等待素材整理完成，再安装更新。";
-  return null;
-}
 
 export function AppUpdateCard({ version, migrating }: {
   version: string | null; migrating: boolean;
@@ -27,16 +16,9 @@ export function AppUpdateCard({ version, migrating }: {
     : phase === "installed" ? "重启应用" : "检查更新";
 
   async function act() {
+    if (busy || migrating) return;
     if (phase === "available") return updater.download();
-    if (phase === "installed") return updater.restart();
-    if (phase === "ready") return updater.install(async () => {
-      if (migrating) throw new Error("请等待素材库迁移完成。");
-      const reason = busyReason();
-      if (reason) throw new Error(reason);
-      await useStore.getState().projectCanvasFlush?.();
-      const afterFlush = busyReason();
-      if (afterFlush) throw new Error(afterFlush);
-    });
+    if (phase === "ready" || phase === "installed") return updater.install();
     return updater.check();
   }
 
@@ -47,7 +29,8 @@ export function AppUpdateCard({ version, migrating }: {
           <div className="text-ink">当前版本</div>
           <p className="mt-1 text-xs text-muted">{version ?? "读取中…"}</p>
         </div>
-        <button type="button" onClick={() => void act()} disabled={busy || migrating}
+        <button type="button" onClick={() => void act()} disabled={phase !== "installing" && (busy || migrating)}
+          aria-disabled={phase === "installing" || undefined}
           className="shrink-0 rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:cursor-not-allowed disabled:opacity-50">
           {label}
         </button>
