@@ -44,3 +44,40 @@ export function textRewritePreview(raw: string): string {
   // Wait for the rest of a Unicode escape pair before publishing it.
   return text.replace(/[\uD800-\uDBFF]$/, "");
 }
+
+/** Observe only answer text while the metered proxy still consumes the original SSE bytes. */
+export function observeTextRewriteStream(response: Pick<Response, "ok" | "status" | "text" | "body">, onText: (text: string) => void) {
+  const body = response.body;
+  if (!response.ok || !body) return response;
+  return { ok: response.ok, status: response.status, async text() {
+    const decoder = new TextDecoder();
+    const reader = body.getReader();
+    const chunks: string[] = [];
+    let pending: string | null = "";
+    try {
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        const chunk = decoder.decode(next.value, { stream: true });
+        chunks.push(chunk);
+        if (pending === null) continue;
+        const lines: string[] = (pending + chunk).split("\n");
+        pending = lines.pop()!;
+        for (const line of lines) {
+          if (line.length > 128 * 1024 || !line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6)) as { choices?: Array<{
+              index?: unknown; delta?: { content?: unknown; role?: unknown };
+            }> };
+            if (!Array.isArray(event?.choices)) continue;
+            const delta = event.choices.find(choice => choice?.index === 0)?.delta;
+            if (typeof delta?.content === "string" && (delta.role === undefined || delta.role === "assistant")) onText(delta.content);
+          } catch { /* Preview cannot interfere with durable response validation. */ }
+        }
+        if (pending.length > 128 * 1024) pending = null;
+      }
+      chunks.push(decoder.decode());
+      return chunks.join("");
+    } finally { reader.releaseLock(); }
+  } };
+}

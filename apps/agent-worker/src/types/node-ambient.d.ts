@@ -223,7 +223,7 @@ declare class TextEncoder {
 
 declare class TextDecoder {
   constructor(encoding?: string, options?: { fatal?: boolean; ignoreBOM?: boolean });
-  decode(input?: Uint8Array): string;
+  decode(input?: Uint8Array, options?: { stream?: boolean }): string;
 }
 
 interface AbortSignal {

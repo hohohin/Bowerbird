@@ -2,7 +2,7 @@ import { AdaptiveToolGateway, type AdaptiveJournal } from "../harness/adaptive-t
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { publishedNativeSession, stageNativeSession } from "../cloud-chat/native-session.ts";
-import { nativeTextRewritePolicy, textRewritePrompt, parseTextRewriteResult, textRewritePreview, TEXT_EDITOR_OUTPUT_LIMIT } from "../skills/bowerbird-unified-agent/text-rewrite.ts";
+import { nativeTextRewritePolicy, observeTextRewriteStream, textRewritePrompt, parseTextRewriteResult, textRewritePreview, TEXT_EDITOR_OUTPUT_LIMIT } from "../skills/bowerbird-unified-agent/text-rewrite.ts";
 import { resolveCloudTextSkill, validateCloudTextSkillSnapshot, type CloudTextSkillSnapshot } from "../skills/cloud-text-skills.ts";
 import { ToolGatewayError } from "../harness/scoped-tool-gateway.ts";
 import { AdaptiveRunTools } from "../harness/adaptive-run-tools.ts";
@@ -595,18 +595,24 @@ export class UnifiedPlanningRunProcessor implements AgentRunProcessor {
           textResult = readFileSync(join(published, resultName), "utf8");
         } else {
           if (sessionRoot && nativeKey) snapshot = stageNativeSession(sessionRoot, run.id, { session_key: nativeKey, previous_job_id: null });
-          if (this.options.modelProxy) proxy = await startMeteredDeepSeekProxy({ ...this.options.modelProxy,
+          const preview = editorTask ? await streamEditorPreview(context, checkpoint.textPreviewAttempt!) : undefined;
+          const modelProxy = this.options.modelProxy;
+          if (modelProxy) proxy = await startMeteredDeepSeekProxy({ ...modelProxy,
             runId: run.id, leaseId: lease.leaseId, phase: "compose_plan", control: context.control, signal: context.signal, maxModelTurns: 3, allowedToolNames: [],
-            ...(snapshot && checkpoint.textSkill ? { systemPolicy: nativeTextRewritePolicy(checkpoint.textSkill) } : {}) });
+            ...(snapshot && checkpoint.textSkill ? { systemPolicy: nativeTextRewritePolicy(checkpoint.textSkill) } : {}),
+            ...(preview ? { fetch: async (url, init) => {
+              const response = await (modelProxy.fetch ?? fetch)(url, init);
+              return observeTextRewriteStream(response, text => preview.onContent({ type: "text", text }));
+            } } : {}),
+          });
           const runner = new UnifiedPlanningHarnessRunner({ runId: run.id,
             dispatch: async () => { throw new ToolGatewayError("tool_not_allowed"); },
           }, (environment, _provider, activity) => this.options.createAdapter(environment, proxy?.childEnvironment(), activity,
             { reasoningEffort: checkpoint.textSkill?.reasoningEffort, ...(snapshot ? { nativeSession: snapshot } : {}) }));
           const source = checkpoint.input.textRewrite!.source;
           const prompt = snapshot ? source : textRewritePrompt(checkpoint.input.goal, source, checkpoint.textSkill);
-          const preview = editorTask ? await streamEditorPreview(context, checkpoint.textPreviewAttempt!) : undefined;
           if (context.signal.aborted) throw new Error("unified_agent_run_cancelled");
-          const result = await runner.run(checkpoint, [{ type: "text", text: prompt }], preview?.onContent)
+          const result = await runner.run(checkpoint, [{ type: "text", text: prompt }], modelProxy ? undefined : preview?.onContent)
             .finally(() => preview?.drain());
           textResult = parseTextRewriteResult(result);
           if (editorTask && textResult.length > TEXT_EDITOR_OUTPUT_LIMIT) throw new Error("unified_agent_text_result_invalid");

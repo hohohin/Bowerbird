@@ -1,6 +1,6 @@
 import { test } from "node:test";
-import { equal, throws, ok } from "node:assert/strict";
-import { parseTextRewriteResult, textRewritePreview, textRewritePrompt } from "./text-rewrite.ts";
+import { deepEqual, equal, throws, ok } from "node:assert/strict";
+import { observeTextRewriteStream, parseTextRewriteResult, textRewritePreview, textRewritePrompt } from "./text-rewrite.ts";
 import { validateUnifiedAgentPlanningInput } from "./schemas.ts";
 
 test("long multilingual source and complete result survive JSON escaping", () => {
@@ -37,4 +37,29 @@ test("writing preview decodes complete JSON characters and ignores partial frami
   equal(textRewritePreview('{"schemaVersion":1,"text":"街道\\n灯\\uD83D'), "街道\n灯");
   equal(textRewritePreview('{"schemaVersion":1,"text":"街道\\n灯\\uD83D\\uDD26\\'), "街道\n灯🔦");
   equal(textRewritePreview('{"untrustedSource":"不显示"}'), "");
+});
+
+test("upstream text preview observes assistant content before the durable SSE response ends", async () => {
+  const event = (choices: unknown[]) => `data: ${JSON.stringify({ choices })}\r\n\r\n`;
+  const first = event([{ index: 0, delta: { role: "assistant", reasoning_content: "不显示", content: "街道💡" } }]);
+  const terminal = event([{ index: 1, delta: { content: "其他回复" } }, { index: 0, delta: { role: "tool", content: "非正文" } }]) +
+    event([{ index: 0, delta: { content: "继续写" } }]) + "data: [DONE]\n\n";
+  const encoder = new TextEncoder();
+  const firstBytes = [...encoder.encode(first)];
+  const observed: string[] = [];
+  let terminalSent = false;
+  const upstream = { ok: true, status: 200, async text() { throw new Error("reader should be used"); }, body: { getReader() { return {
+    async read() {
+      const byte = firstBytes.shift();
+      if (byte !== undefined) return { done: false, value: Uint8Array.of(byte) };
+      if (terminalSent) return { done: true, value: new Uint8Array() };
+      deepEqual(observed, ["街道💡"]);
+      terminalSent = true;
+      return { done: false, value: encoder.encode(terminal) };
+    },
+    async cancel() {}, releaseLock() {},
+  }; } } };
+  const response = observeTextRewriteStream(upstream, text => observed.push(text));
+  equal(await response.text(), first + terminal);
+  deepEqual(observed, ["街道💡", "继续写"]);
 });

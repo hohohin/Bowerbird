@@ -8,6 +8,10 @@
 
 需要回退时先关闭新任务准入，由现役 Worker 跑完已受理任务或对账后再回退服务。已冻结报价的父任务可以在关闭新准入后继续提交下一段。只读回滚保留迁移、历史预留与回执。此处记录候选步骤，尚未部署。
 
+## 2026-11-23 文本编辑器 Cloud DSH 增量预览已部署
+
+经用户确认，北京时间 21:32:50 切换现役 VPS Worker。文本编辑任务在上游模型生成期间通过现有私有 Run 事件发布正文预览，最终结果仍沿原持久化、计量和恢复链路提交。确认的新镜像仅叠加五个运行模块，现有 test-only 准入继续生效。部署前后五类队列均为空，五个文件在宿主与镜像中的校验均一致。[验证和回退记录](../../project_logs/2026-11-23-text-editor-cloud-stream.md)
+
 ## 2026-11-21 H3 视频 Skill 切换为官方结构版已部署
 
 获用户批准后，17:38:52（北京时间）以同目录 UTF-8 临时文件原子替换只读挂载的 `/opt/bowerbird/agent-worker/src/skills/text/h3-video-prompt/SKILL.md`。原方法备份为 `/opt/bowerbird/deploy-backups/h3-official-structure-20261121/SKILL.md`，替换前后哈希分别为 `45e895c7a6e5c163cf9bf1ee3346878b4f1219aebaffe5644fad4db04c00f5a7` 和 `5fc3920853580ceea0d8abb3adee69923b4ee717f6fee7cf7ef2265321e23523`，新文件 13,769 字节。
