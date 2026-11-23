@@ -127,12 +127,10 @@ try {
     const sessionWire = page.locator(`path[data-workflow-session-link="${session}"]`);
     assert.equal(await sessionWire.count(), 0, 'collapsed producer does not draw an internal wire to its own result');
     await result.hover();
-    const recall = result.getByRole('button', { name: '编辑生成卡', exact: true });
-    await recall.focus();
-    await recall.press('Enter');
+    await drawCard.getByRole('button', { name: '固定在画板上', exact: true }).click();
     await sessionWire.waitFor({ state: 'attached' });
     assert.match(await sessionWire.getAttribute('d'), /^M\s/);
-    await drawCard.getByRole('button', { name: '收起生成卡', exact: true }).click();
+    await drawCard.getByRole('button', { name: '取消固定并收起', exact: true }).click();
     await drawCard.waitFor({ state: 'detached' });
   }
   await page.reload();
@@ -170,18 +168,22 @@ try {
     const { publishGeneration } = await import('/scripts/fixtures/canvas-reference/generation.ts');
     const c = canvasWorkflowController('p');
     const calls = [];
-    let clipResultId;
+    const results = {};
     api.localAgentFindAssetId = async path => path.split('/').pop().replace('.mp4', '-asset');
     window.store.setState({ dreaminaHealth: { ok: true },
       cloudEntitlement: { policy: { can_use_byo: true, max_parallel_jobs: 10 }, balances: { daily: 0, sub: 0, topup: 0 } },
       startGeneration: async (...args) => {
         const { jobId, turnKey } = args[12];
         const id = args[0], path = '/fixture/' + id + '.mp4';
+        if (id === 'edit-clip' && window.holdEditRun) {
+          window.holdingEditRun = true;
+          await window.holdEditRun;
+        }
         calls.push({ inputs: args[1].map(asset => asset.store_path), kind: args[11].videoOptions.kind });
         await publishGeneration(args, [path]);
         const resultId = `gen-output:${jobId}:${turnKey}:0`;
-        if (id === 'clip') clipResultId = resultId;
-        await api.projectCanvasNodeUpdate(resultId, { x: id === 'clip' ? 560 : 1500, y: 100, width: 240, height: 135, positionLocked: true,
+        results[id] = resultId;
+        await api.projectCanvasNodeUpdate(resultId, { x: id === 'clip' ? 560 : 1000, y: 100, width: 240, height: 135, positionLocked: true,
           payloadJson: JSON.stringify({ schema_version: 1, execution: { job_id: jobId, turn_key: turnKey }, snapshot: { name: id, width: 320, height: 180 } }) });
         window.store.setState({ genJobs: { [jobId]: { turns: [{ turnKey, images: [path] }] } } });
         return { accepted: true };
@@ -191,7 +193,7 @@ try {
     if (c.document.run.status !== 'done') throw Error(JSON.stringify(c.issue));
     window.save();
     window.emitChange();
-    return { calls, clipResultId };
+    return { calls, clipResultId: results.clip, editResultId: results['edit-clip'] };
   });
   assert.deepEqual(video.calls, [
     { inputs: [], kind: 'text2video' },
@@ -200,9 +202,34 @@ try {
   await page.locator(`path[data-workflow-generated-link="${video.clipResultId}"]`).waitFor({ state: 'attached' });
   await checkWire(video.clipResultId, 'edit-clip');
   await checkWire('clip', 'completion');
+  const editedClip = page.locator(`[data-canvas-node-id="${video.editResultId}"]`);
+  await editedClip.waitFor();
+  await editCard.waitFor({ state: 'detached' });
+  assert.equal(await page.locator(`path[data-workflow-generated-link="${video.editResultId}"]`).count(), 0, 'a collapsed video does not draw a wire to itself');
+  const incoming = page.locator('path[data-workflow-target="edit-clip"]');
+  const end = await incoming.evaluate(el => el.getPointAtLength(el.getTotalLength()).matrixTransform(el.getScreenCTM()).x);
+  assert.ok(Math.abs(end - (await editedClip.boundingBox()).x) <= 2, 'the incoming link ends at the collapsed video');
+  assert.equal(await editedClip.locator('.canvas-generation-actions,.canvas-video-badge').count(), 0, 'the video preview carries no generation corner actions');
+  await editedClip.hover();
   await editCard.locator('[data-workflow-reference-asset="clip-asset"]').waitFor();
-  assert.equal(await clipCard.locator('.workflow-preview').count(), 0, 'the producer keeps its result on the canvas');
+  assert.equal(await clipCard.locator('.workflow-preview').count(), 0, 'the completion trigger keeps its producer on the canvas');
   assert.equal(await editCard.locator('.workflow-preview > *').count(), 1, 'only the upstream clip is shown inside the downstream generator');
+  await editedClip.click();
+  const preview = page.getByRole('dialog', { name: '视频与生成记录预览', exact: true });
+  await preview.waitFor();
+  assert.equal(await preview.getByRole('button', { name: /在画布.*生成卡/ }).count(), 0);
+  await page.keyboard.press('Escape');
+  await preview.waitFor({ state: 'detached' });
+  await editedClip.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '固定生成卡', exact: true }).click();
+  await editCard.getByRole('button', { name: '取消固定并收起' }).waitFor();
+  await page.evaluate(() => { window.holdEditRun = new Promise(resolve => { window.resumeEditRun = resolve; }); });
+  await editCard.getByRole('button', { name: /^(运行|重试)$/ }).click();
+  await page.waitForFunction(() => window.holdingEditRun);
+  assert.equal(await editCard.getAttribute('aria-busy'), 'true');
+  assert.equal(await editCard.getByRole('button', { name: '取消固定并收起' }).isDisabled(), true);
+  await page.evaluate(() => window.resumeEditRun());
+  await editCard.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
   console.log('PASS new + and saved direct inputs, image/video result wires, whole video delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');
 } finally {

@@ -49,7 +49,7 @@ try {
   assert.deepEqual((await snapshot()).groups, before.groups, "expansion does not persist display dimensions");
   assert.deepEqual((await snapshot()).groupItems, before.groupItems);
   await member("member-5").click();
-  await page.getByRole("dialog", { name: "图片与会话预览" }).waitFor();
+  await page.getByRole("dialog", { name: "图片与生成记录预览" }).waitFor();
   await page.keyboard.press("Escape");
   await group.getByRole("button", { name: "收起素材组" }).click();
   assert.equal(await group.getAttribute("aria-expanded"), "false");

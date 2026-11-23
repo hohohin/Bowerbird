@@ -14,11 +14,11 @@ export type AssetMenuAction =
   | "describe-cloud" | "describe-codex" | "dimensions" | "artboard" | "reuse" | "layers" | "history"
   | "assign" | "project-picker" | "reveal" | "open-system" | "copy-image" | "copy-path" | "references"
   | "show-in-library" | "hide-in-library" | "remove-references" | "remove-from-canvas" | "ungroup"
-  | "edit-generation-card" | "continue-image-generation" | "create-image-generation-card"
+  | "pin-generation-card" | "continue-image-generation" | "create-image-generation-card"
   | "remove-from-project" | "delete-originals" | "delete-generation" | "remove-canvas-item-from-project"
   | "delete-canvas-item" | "remove-canvas-group" | "remove-canvas-group-from-project" | "delete-canvas-group";
 
-type AssetMenuIcon = "edit" | "folder-plus" | "folder-tree" | "trash" | "ungroup" | "layers"
+type AssetMenuIcon = "edit" | "pin" | "folder-plus" | "folder-tree" | "trash" | "ungroup" | "layers"
   | "status-unavailable" | "status-ready" | "scan-search" | "scan" | "board" | "clipboard" | "message" | "file-text";
 type AssetMenuSlot = "canvas-selection" | "generation-group" | "merge-generation-group" | "transfers";
 type AssetMenuItem = MenuItemDescriptor<AssetMenuAction, AssetMenuIcon, AssetMenuSlot>;
@@ -46,7 +46,7 @@ export interface AssetMenuSnapshot {
   canvasImagesPending?: string;
   hasGenerationGroup: boolean;
   canvas?: { nodeCount: number; canRemove: boolean; itemTarget: boolean; groupCount?: number; canUngroup: boolean;
-    generationActions?: { edit: boolean; revise: boolean; create: boolean } };
+    generationActions?: { pin: boolean; revise: boolean; create: boolean } };
   file?: { local: boolean; entries?: { available: boolean; canRemoveReferences: boolean } };
   describe: { queued: boolean; cloudUsable: boolean; cloudAvailable: boolean; loggedIn: boolean;
     codexUsable: boolean; canUseByo: boolean; codexReason?: string | null };
@@ -159,7 +159,7 @@ export function buildAssetContextMenu(s: AssetMenuSnapshot): {
   }
 
   const common: AssetMenuItem[] = [];
-  if (canvas?.generationActions?.edit) common.push(action("edit-generation-card", "编辑生成卡", { icon: "edit" }));
+  if (canvas?.generationActions?.pin) common.push(action("pin-generation-card", "固定生成卡", { icon: "pin" }));
   if (canvas?.generationActions?.revise) common.push(action("continue-image-generation", "继续修改", { icon: "message" }));
   if (canvas?.generationActions?.create) common.push(action("create-image-generation-card", "基于此图新建生成卡", { icon: "board" }));
   if (canvas) common.push(canvasSelection);

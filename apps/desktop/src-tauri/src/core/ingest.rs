@@ -51,7 +51,7 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
 /// First durable save of newly received/generated content from a temporary workspace.
 /// Never use this for the user's existing local files; those use ingest_file.
 pub fn ingest_new_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppResult<Asset> {
-    ingest_file_with_dedup(paths, db, source, false, true)
+    ingest_file_with_dedup(paths, db, source, Deduplication::Exact, true)
 }
 
 fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<Asset>> {
@@ -60,7 +60,7 @@ fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<
         let conn = db.conn.lock().unwrap();
         let visible = super::material_catalog::catalog_visibility(false);
         let mut stmt = conn.prepare(&format!("SELECT a.id, a.store_path FROM assets a
-            WHERE a.size=?1 AND a.store_path IS NOT NULL AND a.library_hidden=0 AND {visible}
+            WHERE a.size=?1 AND a.store_path IS NOT NULL AND a.library_hidden=0 AND a.source IS NOT 'annotation' AND {visible}
             AND NOT EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id)"))?;
         let rows = stmt.query_map([size as i64], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
         rows.collect::<Result<Vec<_>, _>>()?
@@ -95,7 +95,10 @@ fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<
 // byte comparison when nothing was inserted since the initial fast path.
 static INGEST_REVISION: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
 
-fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, approximate: bool, automatic: bool) -> AppResult<Asset> {
+#[derive(Clone, Copy)]
+enum Deduplication<'a> { Annotation { source: &'a str, payload: &'a str }, Exact, Similar }
+
+fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, dedup: Deduplication<'_>, automatic: bool) -> AppResult<Asset> {
     // Keep the user's HEIC untouched. All consumers receive a full-size PNG,
     // including previews, classification and providers that cannot read HEIC.
     let normalized = if media::heic::is_path(source) {
@@ -113,7 +116,7 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
             .map_err(|error| AppError::Media(format!("无法解码图片 {}: {error}", source.display())))?)
     };
     let initial_revision = *INGEST_REVISION.lock().unwrap();
-    if !approximate {
+    if matches!(dedup, Deduplication::Exact) {
         if let Some(mut existing) = exact_duplicate(db, input, meta.size)? {
             preset::recognize_and_prefill(db, source, &mut existing)?;
             return Ok(existing);
@@ -169,11 +172,12 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
     };
 
     let mut revision = INGEST_REVISION.lock().unwrap();
-    let duplicate = if approximate && phash.as_deref().is_some_and(media::phash::is_high_entropy) {
-        db.find_asset_by_phash(phash.as_deref().unwrap())?
-    } else if approximate || *revision != initial_revision {
-        exact_duplicate(db, input, meta.size)?
-    } else { None };
+    let duplicate = match dedup {
+        Deduplication::Similar if phash.as_deref().is_some_and(media::phash::is_high_entropy) => db.find_asset_by_phash(phash.as_deref().unwrap())?,
+        Deduplication::Similar => exact_duplicate(db, input, meta.size)?,
+        Deduplication::Exact if *revision != initial_revision => exact_duplicate(db, input, meta.size)?,
+        _ => None,
+    };
     let duplicate = match duplicate {
         Some(asset) => match asset.store_path.as_deref() {
             Some(path) => db.reusable_capture_asset(&asset.id, path)?,
@@ -197,11 +201,12 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         .map(|d| d.as_secs() as i64)
         .unwrap_or(now);
 
+    let annotation = match dedup { Deduplication::Annotation { source, payload } => Some((source, payload)), _ => None };
     let mut asset = Asset {
         id: id.clone(),
         name,
         ext: Some(meta.ext),
-        origin_path: Some(source.to_string_lossy().into_owned()),
+        origin_path: annotation.is_none().then(|| source.to_string_lossy().into_owned()),
         store_path: Some(store_path.to_string_lossy().into_owned()),
         // 与 ingest_generated 一致：缩略图生成失败时落 None，
         // 前端异步补封面，失败保留静态占位，不创建视频播放器。
@@ -213,8 +218,8 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         phash,
         colors,
         rating: Some(0),
-        source: Some("imported".to_string()),
-        source_url: None,
+        source: Some(annotation.map_or("imported", |(source, _)| source).to_string()),
+        source_url: annotation.map(|_| String::new()),
         folder_id: None,
         created_at: Some(now),
         file_mtime: Some(file_mtime),
@@ -222,12 +227,16 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         reference_count: 0,
         library_hidden: false,
     };
-    db.insert_asset_with_auto_classification(&asset, automatic)?;
+    if let Err(error) = db.insert_saved_asset(&asset, automatic, annotation.map(|(_, payload)| payload)) {
+        let _ = fs::remove_file(&store_path);
+        if thumb_path != store_path { let _ = fs::remove_file(&thumb_path); }
+        return Err(error);
+    }
     *revision += 1;
     drop(revision);
     link_colors(db, &asset.id, asset.colors.as_deref());
     // 预设图识别：文件名命中内置 manifest → 预填 generation 身份 + meta（不调 codex）。
-    preset::recognize_and_prefill(db, source, &mut asset)?;
+    if annotation.is_none() { preset::recognize_and_prefill(db, source, &mut asset)?; }
     Ok(asset)
 }
 
@@ -407,6 +416,22 @@ pub(crate) fn ingest_from_bytes_with_classification(
     paths: &LibraryPaths, db: &Database, bytes: &[u8], source_url: &str,
     file_name: Option<&str>, content_type: Option<&str>, source: &str, automatic: bool,
 ) -> AppResult<Asset> {
+    let dedup = if source_url.is_empty() { Deduplication::Exact } else { Deduplication::Similar };
+    ingest_uploaded_image(paths, db, bytes, source_url, file_name, content_type, source, automatic, dedup)
+}
+
+pub(crate) fn ingest_annotation_from_bytes(
+    paths: &LibraryPaths, db: &Database, bytes: &[u8], file_name: &str, screenshot: bool, annotation: Option<&str>,
+) -> AppResult<Asset> {
+    let source = if screenshot { "screenshot" } else { "annotation" };
+    let dedup = annotation.map_or(Deduplication::Exact, |payload| Deduplication::Annotation { source, payload });
+    ingest_uploaded_image(paths, db, bytes, "", Some(file_name), None, source, true, dedup)
+}
+
+fn ingest_uploaded_image(
+    paths: &LibraryPaths, db: &Database, bytes: &[u8], source_url: &str,
+    file_name: Option<&str>, content_type: Option<&str>, source: &str, automatic: bool, dedup: Deduplication<'_>,
+) -> AppResult<Asset> {
     if bytes.is_empty() {
         return Err(AppError::Media("extension uploaded an empty image".into()));
     }
@@ -437,7 +462,8 @@ pub(crate) fn ingest_from_bytes_with_classification(
     fs::write(&source_path, bytes)?;
 
     let result = (|| -> AppResult<Asset> {
-        let mut asset = ingest_file_with_dedup(paths, db, &source_path, !source_url.is_empty(), automatic)?;
+        let mut asset = ingest_file_with_dedup(paths, db, &source_path, dedup, automatic)?;
+        if matches!(dedup, Deduplication::Annotation { .. }) { return Ok(asset); }
         let has_temporary_origin =
             asset.origin_path.as_deref() == Some(source_path.to_string_lossy().as_ref());
         // An identical screenshot reuses the existing asset without replacing its provenance.
@@ -1154,11 +1180,11 @@ mod tests {
         );
         small_img.save(&small_path).unwrap();
 
-        let first = ingest_file_with_dedup(&paths, &db, &full, true, true).unwrap();
+        let first = ingest_file_with_dedup(&paths, &db, &full, Deduplication::Similar, true).unwrap();
         assert_eq!(db.count_assets(None).unwrap(), 1);
 
         // 导入低清变体：应被模糊去重归并到高分图，不新增。
-        let merged = ingest_file_with_dedup(&paths, &db, &small_path, true, true).unwrap();
+        let merged = ingest_file_with_dedup(&paths, &db, &small_path, Deduplication::Similar, true).unwrap();
         assert_eq!(
             db.count_assets(None).unwrap(),
             1,

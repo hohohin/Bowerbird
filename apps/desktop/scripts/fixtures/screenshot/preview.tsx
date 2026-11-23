@@ -64,6 +64,9 @@ mockIPC(async (command, args) => {
     if (w.failOutput) throw new Error('剪贴板暂时不可用');
     return !(w.cancelSave && args.action === 'save');
   }
+  if (command === 'screenshot_history_list') return [{ id: 'history-image', created_at: '2026-11-01T01:00:00Z', width: 320, height: 240, bytes: 1024 }];
+  if (command === 'screenshot_history_image') return (await new Promise<Blob>(resolve => image.toBlob(blob => resolve(blob!)))).arrayBuffer();
+  if (command === 'screenshot_history_output' && args.action === 'canvas') return { savedToLibrary: true };
   if (command === 'update_settings') {
     if (args.applyScreenshotShortcuts && w.conflict) throw new Error('快捷键已被占用');
     w.settings = args.settings;

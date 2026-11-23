@@ -1,5 +1,6 @@
 //! Bounded local screenshot history. Records own their files, never library assets.
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{fs, io::Write, path::{Path, PathBuf}};
 
 const MAX_RECORDS: usize = 50;
@@ -12,6 +13,14 @@ pub struct HistoryEntry {
     pub width: u32,
     pub height: u32,
     pub bytes: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredHistoryEntry {
+    #[serde(flatten)]
+    entry: HistoryEntry,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    shapes: Vec<Value>,
 }
 
 pub struct HistoryStore { root: PathBuf }
@@ -53,15 +62,24 @@ impl HistoryStore {
         fs::read(path).map_err(|e| e.to_string())
     }
 
-    pub fn save(&self, id: &str, png: &[u8], width: u32, height: u32) -> Result<HistoryEntry, String> {
-        self.save_with_limits(id, png, width, height, MAX_RECORDS, MAX_BYTES)
+    pub fn output(&self, id: &str) -> Result<(Vec<u8>, HistoryEntry, Vec<Value>), String> {
+        let png = self.image(id, false)?;
+        let metadata = fs::read(self.path(id, "json")?).map_err(|e| e.to_string())?;
+        let stored: StoredHistoryEntry = serde_json::from_slice(&metadata).map_err(|e| e.to_string())?;
+        if stored.entry.id != id { return Err("这张截图已不在历史中。".into()); }
+        Ok((png, stored.entry, stored.shapes))
     }
 
-    fn save_with_limits(&self, id: &str, png: &[u8], width: u32, height: u32, max_records: usize, max_bytes: u64) -> Result<HistoryEntry, String> {
+    pub fn save(&self, id: &str, png: &[u8], width: u32, height: u32, shapes: &[Value]) -> Result<HistoryEntry, String> {
+        self.save_with_limits(id, png, width, height, shapes, MAX_RECORDS, MAX_BYTES)
+    }
+
+    fn save_with_limits(&self, id: &str, png: &[u8], width: u32, height: u32, shapes: &[Value], max_records: usize, max_bytes: u64) -> Result<HistoryEntry, String> {
         let path = self.path(id, "png")?;
         if png.len() as u64 > max_bytes { return Err("截图过大，无法存入历史，请缩小选区后重试。".into()); }
         if let Some(entry) = self.list()?.into_iter().find(|entry| entry.id == id) {
-            if self.image(id, false)? != png { return Err("这次截图已保存，请重新开始截图。".into()); }
+            let (record_png, _, record_shapes) = self.output(id)?;
+            if record_png != png || record_shapes != shapes { return Err("这次截图已保存，请重新开始截图。".into()); }
             self.prune(max_records, max_bytes)?;
             return Ok(entry);
         }
@@ -74,7 +92,8 @@ impl HistoryStore {
             atomic_write(&path, png)?;
             atomic_write(&self.path(id, "thumb.png")?, &thumb.into_inner())?;
             // Publishing metadata last makes incomplete writes invisible to readers.
-            atomic_write(&self.path(id, "json")?, &serde_json::to_vec(&entry).map_err(|e| e.to_string())?)
+            let stored = StoredHistoryEntry { entry: entry.clone(), shapes: shapes.to_vec() };
+            atomic_write(&self.path(id, "json")?, &serde_json::to_vec(&stored).map_err(|e| e.to_string())?)
         })();
         if let Err(error) = published {
             // Only this unpublished record belongs to this failed operation.
@@ -169,8 +188,9 @@ mod tests {
         let store = HistoryStore::new(temp.path().join("history"));
         let id = ulid::Ulid::new().to_string();
         let data = png();
-        store.save(&id, &data, 320, 120).unwrap();
-        store.save(&id, &data, 320, 120).unwrap();
+        store.save(&id, &data, 320, 120, &[]).unwrap();
+        store.save(&id, &data, 320, 120, &[]).unwrap();
+        assert!(store.output(&id).unwrap().2.is_empty(), "legacy metadata without shapes remains deliverable");
         let reopened = HistoryStore::new(temp.path().join("history"));
         assert_eq!(reopened.list().unwrap().len(), 1);
         assert_eq!(reopened.image(&id, false).unwrap(), data);
@@ -179,12 +199,28 @@ mod tests {
     }
 
     #[test]
+    fn history_delivery_recovers_annotations_without_listing_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = HistoryStore::new(temp.path().to_path_buf());
+        let id = ulid::Ulid::new().to_string();
+        let data = png();
+        let shapes = [serde_json::json!({"type": "rect", "token": "<bbox>100 200 300 400</bbox>"})];
+        store.save(&id, &data, 320, 120, &shapes).unwrap();
+        store.save(&id, &data, 320, 120, &shapes).unwrap();
+        let (output, entry, recovered) = store.output(&id).unwrap();
+        assert_eq!(output, data);
+        assert_eq!((entry.width, entry.height), (320, 120));
+        assert_eq!(recovered, shapes);
+        assert!(serde_json::to_value(&store.list().unwrap()[0]).unwrap().get("shapes").is_none());
+    }
+
+    #[test]
     fn retention_and_clear_only_touch_owned_history() {
         let temp = tempfile::tempdir().unwrap();
         let store = HistoryStore::new(temp.path().join("history"));
         let asset = temp.path().join("library.png");
         fs::write(&asset, png()).unwrap();
-        for n in 1..=3 { store.save_with_limits(&ulid::Ulid::from(n as u128).to_string(), &png(), 320, 120, 2, MAX_BYTES).unwrap(); }
+        for n in 1..=3 { store.save_with_limits(&ulid::Ulid::from(n as u128).to_string(), &png(), 320, 120, &[], 2, MAX_BYTES).unwrap(); }
         let entries = store.list().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].id, ulid::Ulid::from(3u128).to_string());
@@ -205,8 +241,8 @@ mod tests {
         fs::write(store.path(&id, "png").unwrap(), png()).unwrap();
         assert!(store.list().unwrap().is_empty());
         assert!(store.image(&id, false).is_err());
-        assert!(store.save_with_limits(&id, &png(), 320, 120, 50, 1).is_err());
-        store.save(&id, &png(), 320, 120).unwrap();
+        assert!(store.save_with_limits(&id, &png(), 320, 120, &[], 50, 1).is_err());
+        store.save(&id, &png(), 320, 120, &[]).unwrap();
         assert_eq!(store.list().unwrap().len(), 1);
     }
 
@@ -216,7 +252,7 @@ mod tests {
         let store = HistoryStore::new(temp.path().to_path_buf());
         let id = ulid::Ulid::new().to_string();
         fs::create_dir(store.path(&id, "json").unwrap()).unwrap();
-        assert!(store.save(&id, &png(), 320, 120).is_err());
+        assert!(store.save(&id, &png(), 320, 120, &[]).is_err());
         assert!(!store.path(&id, "png").unwrap().exists());
         assert!(!store.path(&id, "thumb.png").unwrap().exists());
         assert!(store.list().unwrap().is_empty());
@@ -228,7 +264,7 @@ mod tests {
         let store = HistoryStore::new(temp.path().to_path_buf());
         let data = png();
         for n in 1..=2 {
-            store.save_with_limits(&ulid::Ulid::from(n as u128).to_string(), &data, 320, 120, 50, data.len() as u64 + 1).unwrap();
+            store.save_with_limits(&ulid::Ulid::from(n as u128).to_string(), &data, 320, 120, &[], 50, data.len() as u64 + 1).unwrap();
         }
         assert_eq!(store.list().unwrap().len(), 1);
         assert_eq!(store.list().unwrap()[0].id, ulid::Ulid::from(2u128).to_string());
@@ -242,15 +278,15 @@ mod tests {
         let old_id = ulid::Ulid::from(1u128).to_string();
         let next_id = ulid::Ulid::from(2u128).to_string();
         let data = png();
-        store.save_with_limits(&old_id, &data, 320, 120, 1, MAX_BYTES).unwrap();
+        store.save_with_limits(&old_id, &data, 320, 120, &[], 1, MAX_BYTES).unwrap();
         // Permit reads and writes, but make Windows reject deletion until released.
         let locked = fs::OpenOptions::new().read(true).share_mode(3)
             .open(store.path(&old_id, locked_suffix).unwrap()).unwrap();
-        assert!(store.save_with_limits(&next_id, &data, 320, 120, 1, MAX_BYTES).is_err());
+        assert!(store.save_with_limits(&next_id, &data, 320, 120, &[], 1, MAX_BYTES).is_err());
         drop(locked);
         drop(store);
         let reopened = HistoryStore::new(temp.path().to_path_buf());
-        reopened.save_with_limits(&next_id, &data, 320, 120, 1, MAX_BYTES).unwrap();
+        reopened.save_with_limits(&next_id, &data, 320, 120, &[], 1, MAX_BYTES).unwrap();
         assert_eq!(reopened.list().unwrap().len(), 1);
         for suffix in ["png", "thumb.png", "json"] {
             assert!(!reopened.path(&old_id, suffix).unwrap().exists(), "{locked_suffix} deletion must resume after reopening: {suffix}");
@@ -276,7 +312,7 @@ mod tests {
         let store = HistoryStore::new(temp.path().to_path_buf());
         let data = png();
         let ids = [ulid::Ulid::from(1u128).to_string(), ulid::Ulid::from(2u128).to_string()];
-        for id in &ids { store.save(id, &data, 320, 120).unwrap(); }
+        for id in &ids { store.save(id, &data, 320, 120, &[]).unwrap(); }
         // Both deletion orders can leave pixels outside the visible history list.
         fs::remove_file(store.path(&ids[0], "json").unwrap()).unwrap();
         fs::remove_file(store.path(&ids[1], "png").unwrap()).unwrap();
@@ -289,7 +325,7 @@ mod tests {
         drop(store);
         let reopened = HistoryStore::new(temp.path().to_path_buf());
         let next_id = ulid::Ulid::from(3u128).to_string();
-        reopened.save(&next_id, &data, 320, 120).unwrap();
+        reopened.save(&next_id, &data, 320, 120, &[]).unwrap();
         for id in &ids {
             for suffix in ["png", "thumb.png", "json"] {
                 assert!(!reopened.path(id, suffix).unwrap().exists(), "orphan {id}.{suffix} must not escape the retention budget");

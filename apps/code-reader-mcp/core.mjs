@@ -17,7 +17,7 @@ export function allowedFile(file) {
   const name = parts.at(-1);
   if (/secret|credential|password|token|private[-_]?key|service[-_]?account/.test(name) && !/\.(rs|ts|tsx|js|mjs)$/.test(name)) return false;
   if ((/^auth\./.test(name) && !/\.(rs|[cm]?[jt]sx?|py)$/.test(name)) || /^config\.local\./.test(name) || /\.(lock|log|map|pem|key|p12|pfx|db|sqlite|bak)$/.test(name)) return false;
-  const rootFiles = ['PROJECT.md', 'AGENTS.md', 'package.json', 'pnpm-workspace.yaml'];
+  const rootFiles = ['PROJECT.md', 'AGENTS.md', 'GLOSSARY.md', 'package.json', 'pnpm-workspace.yaml'];
   return rootFiles.includes(file) || (/^(apps|website|dev-doc|Windows|macOS)\//.test(file) &&
     (/\.(md|rs|ts|tsx|mts|cts|js|jsx|mjs|cjs|css|html|json|toml|sql|yaml|yml|ps1|sh|cpp|h)$/.test(name) ||
       (/\.py$/.test(name) && /\/(?:src|tests?|scripts)\//.test(file))));

@@ -1,8 +1,8 @@
 import type { CanvasNode, ProjectCanvasSnapshot } from "./types";
 import { canvasConversationCards } from "./canvasConversationCards";
-import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds, workflowGenerationResultAnchor, workflowImageCardProjection } from "./canvasSessionOutputs";
+import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds, workflowGenerationCardProjection, workflowGenerationResultAnchor } from "./canvasSessionOutputs";
 import { readCanvasNote } from "./canvasNotes";
-import { isWorkflowGenerationResult, workflowCardWidth, type WorkflowNode } from "./canvasWorkflow";
+import { isWorkflowGenerationResult, workflowCardWidth, type CanvasWorkflow, type WorkflowNode } from "./canvasWorkflow";
 import { placeCanvasCardNearSource } from "./canvasReferencePlacement";
 
 export function workflowLayoutRect(node: WorkflowNode) {
@@ -37,19 +37,23 @@ export function workflowArrangementEdges(workflow: readonly WorkflowNode[], canv
   ]);
 }
 
-/** Use the same folded/embedded projection as the canvas, never its hidden history. */
-export function canvasOutputObstacles(canvas: ProjectCanvasSnapshot, workflow: readonly WorkflowNode[], exclude: ReadonlySet<string> = new Set()) {
+function visibleOutputProjection(canvas: ProjectCanvasSnapshot, document: CanvasWorkflow) {
   const archived = new Set(canvas.threads.filter(thread => thread.archivedAt != null).map(thread => thread.id));
   const grouped = new Set(canvas.groupItems.map(item => item.nodeId));
-  const contained = new Set([...grouped, ...containedSessionOutputIds(canvas.nodes, workflow)]);
+  const contained = new Set([...grouped, ...containedSessionOutputIds(canvas.nodes, document.nodes)]);
   const active = canvas.nodes.filter(node => !node.threadId || !archived.has(node.threadId));
-  const hidden = hiddenWorkflowSessionIds(workflow, active);
-  const conversations = canvasConversationCards(active, {}, hidden, contained, contentRoutedWorkflowSessionIds(active, workflow));
-  const { anchors } = workflowImageCardProjection({ schema_version: 1, nodes: [...workflow], run: null }, active, conversations, contained);
+  const hidden = hiddenWorkflowSessionIds(document.nodes, active);
+  const conversations = canvasConversationCards(active, {}, hidden, contained, contentRoutedWorkflowSessionIds(active, document.nodes));
+  return { active, contained, hidden, conversations, ...workflowGenerationCardProjection(document, active, conversations, contained) };
+}
+
+/** Use the same folded/embedded projection as the canvas, never its hidden history. */
+export function canvasOutputObstacles(canvas: ProjectCanvasSnapshot, workflow: readonly WorkflowNode[], exclude: ReadonlySet<string> = new Set()) {
+  const { active, contained, hidden, conversations, anchors } = visibleOutputProjection(canvas, { schema_version: 1, nodes: [...workflow], run: null });
   const visible = (node: CanvasNode) => node.hiddenAt == null && !exclude.has(node.id) && !contained.has(node.id)
-    && !hidden.has(node.id) && !conversations.hiddenIds.has(node.id) && (!node.threadId || !archived.has(node.threadId))
+    && !hidden.has(node.id) && !conversations.hiddenIds.has(node.id)
     && !(node.kind === "note" && readCanvasNote(node).note_type === "section");
-  return [...canvas.nodes.filter(visible).map(node => {
+  return [...active.filter(visible).map(node => {
     const card = conversations.cards.get(node.id);
     if (node.kind !== "prompt" || !card?.outputs.length) return node;
     const image = JSON.parse(card.outputs[card.outputs.length - 1].payloadJson).snapshot;
@@ -57,6 +61,14 @@ export function canvasOutputObstacles(canvas: ProjectCanvasSnapshot, workflow: r
     return { ...node, height: node.width * ratio };
   }), ...canvas.groups.filter(group => !exclude.has(group.id)),
     ...workflow.filter(node => node.kind !== "text" && !exclude.has(node.id) && !anchors.has(node.id)).map(workflowLayoutRect)];
+}
+
+/** An H3 result replaces its own card on its first independent delivery. */
+export function firstWorkflowVideoOutputPoint(canvas: ProjectCanvasSnapshot, document: CanvasWorkflow, source: WorkflowNode) {
+  if (source.kind !== "comfy-video") return;
+  const { active, contained, origins, exempt } = visibleOutputProjection(canvas, document);
+  if (exempt.has(source.id) || active.some(node => node.kind === "asset" && !contained.has(node.id) && origins.get(node.id)?.id === source.id)) return;
+  return { x: source.x, y: source.y };
 }
 
 export function placeWorkflowOutput(canvas: ProjectCanvasSnapshot, workflow: readonly WorkflowNode[], source: WorkflowNode,

@@ -6,6 +6,7 @@ use image::{
     ImageEncoder,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -15,6 +16,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Mutex,
     },
+    time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
@@ -34,6 +36,8 @@ struct CompletedScreenshot {
     png: Vec<u8>,
     width: u32,
     height: u32,
+    shapes: Vec<Value>,
+    output_done: bool,
     auto_save: bool,
     history_saved: bool,
     library_saved: bool,
@@ -64,10 +68,17 @@ pub struct ScreenshotState {
     output: tokio::sync::Mutex<()>,
     history: Mutex<()>,
     completed: Mutex<Option<CompletedScreenshot>>,
+    canvas_result: Mutex<Option<PendingCanvasResult>>,
 }
 struct ScreenshotFrame {
     session: String,
     png: Vec<u8>,
+    shapes: Vec<Value>,
+}
+
+struct PendingCanvasResult {
+    request_id: String,
+    reply: tokio::sync::oneshot::Sender<Result<CanvasPlacement, String>>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -458,6 +469,7 @@ pub(crate) fn deliver_capture_frames(
                 ScreenshotFrame {
                     session: session.clone(),
                     png,
+                    shapes: Vec::new(),
                 },
             );
         window
@@ -574,7 +586,7 @@ pub async fn screenshot_cancel(
     let _output = state.output.lock().await;
     close_capture(&app, session.as_deref()).await
 }
-fn pin(app: &AppHandle, png: Vec<u8>, width: u32, height: u32) -> Result<(), String> {
+fn pin(app: &AppHandle, png: Vec<u8>, width: u32, height: u32, shapes: Vec<Value>) -> Result<(), String> {
     let label = format!("pin-{}", ulid::Ulid::new());
     let scale = (600.0 / width as f64).min(500.0 / height as f64).min(1.0);
     app.state::<ScreenshotState>()
@@ -586,6 +598,7 @@ fn pin(app: &AppHandle, png: Vec<u8>, width: u32, height: u32) -> Result<(), Str
             ScreenshotFrame {
                 session: ulid::Ulid::new().to_string(),
                 png,
+                shapes,
             },
         );
     let builder = WebviewWindowBuilder::new(
@@ -651,7 +664,7 @@ async fn paste_clipboard(app: AppHandle) -> Result<(), String> {
         )
         .ok_or("剪贴板图片无效")?;
         drop(clipboard);
-        pin(&app, encode(&image)?, image.width(), image.height())
+        pin(&app, encode(&image)?, image.width(), image.height(), Vec::new())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -704,7 +717,7 @@ pub async fn screenshot_history_clear(window: WebviewWindow, app: AppHandle) -> 
     Ok(())
 }
 
-fn output_image(app: &AppHandle, window: &WebviewWindow, image: &image::RgbaImage, png: &[u8], action: &str) -> Result<bool, String> {
+fn output_image(app: &AppHandle, window: &WebviewWindow, image: &image::RgbaImage, png: &[u8], action: &str, shapes: &[Value]) -> Result<bool, String> {
     match action {
         "copy" => {
             let state = app.state::<ScreenshotState>();
@@ -715,7 +728,7 @@ fn output_image(app: &AppHandle, window: &WebviewWindow, image: &image::RgbaImag
                 bytes: Cow::Borrowed(image.as_raw()),
             }).map_err(|e| e.to_string())?;
         }
-        "pin" => pin(app, png.to_vec(), image.width(), image.height())?,
+        "pin" => pin(app, png.to_vec(), image.width(), image.height(), shapes.to_vec())?,
         "save" => {
             let path = app.dialog().file().set_parent(window).add_filter("PNG 图片", &["png"])
                 .set_file_name(format!("截图-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S"))).blocking_save_file();
@@ -727,13 +740,79 @@ fn output_image(app: &AppHandle, window: &WebviewWindow, image: &image::RgbaImag
     Ok(true)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanvasPlacement { saved_to_library: bool }
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum HistoryOutput { Standard(bool), Canvas(CanvasPlacement) }
+
+async fn output_to_canvas(app: &AppHandle, request_id: String, png: &[u8], width: u32, height: u32, shapes: &[Value]) -> Result<CanvasPlacement, String> {
+    if app.get_webview_window("main").is_none() { return Err("请打开主窗口后重试添加到画板。".into()); }
+    let state = app.state::<ScreenshotState>();
+    let (reply, result) = tokio::sync::oneshot::channel();
+    *state.canvas_result.lock().unwrap() = Some(PendingCanvasResult { request_id: request_id.clone(), reply });
+    let event = serde_json::json!({
+        "requestId": request_id,
+        "dataUrl": format!("data:image/png;base64,{}", STANDARD.encode(png)),
+        "fileName": format!("截图-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")),
+        "meta": {
+            "schema_version": 1, "source_asset_id": null, "source_store_path": "", "source_kind": "screenshot",
+            "image": { "width": width, "height": height }, "shapes": shapes,
+        },
+    });
+    let result = match app.emit_to("main", "screenshot://canvas", event) {
+        Ok(()) => match tokio::time::timeout(Duration::from_secs(25), result).await {
+            Ok(Ok(reply)) => reply,
+            _ => Err("主窗口暂未确认截图交付，请重试。".into()),
+        },
+        Err(error) => Err(error.to_string()),
+    };
+    state.canvas_result.lock().unwrap().take();
+    result
+}
+
+fn reveal_screenshot_destination(app: &AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.unminimize();
+        let _ = main.set_focus();
+    }
+}
+
 #[tauri::command]
-pub async fn screenshot_history_output(window: WebviewWindow, app: AppHandle, id: String, action: String) -> Result<bool, String> {
+pub fn screenshot_canvas_result(window: WebviewWindow, app: AppHandle, request_id: String, error: Option<String>, saved_to_library: Option<bool>) -> Result<(), String> {
+    if window.label() != "main" { return Err("操作仅限主窗口。".into()); }
+    let state = app.state::<ScreenshotState>();
+    let mut pending = state.canvas_result.lock().unwrap();
+    if pending.as_ref().is_some_and(|entry| entry.request_id == request_id) {
+        if let Some(entry) = pending.take() {
+            let placement = CanvasPlacement { saved_to_library: saved_to_library.unwrap_or(false) };
+            let _ = entry.reply.send(error.map_or(Ok(placement), Err));
+        }
+    }
+    Ok(())
+}
+
+fn canvas_request_id(window: &WebviewWindow, source: &str, attempt: Option<String>) -> String {
+    format!("{}:{}:{}", window.label(), source, attempt.unwrap_or_else(|| ulid::Ulid::new().to_string()))
+}
+
+#[tauri::command]
+pub async fn screenshot_history_output(window: WebviewWindow, app: AppHandle, id: String, action: String, delivery_id: Option<String>) -> Result<HistoryOutput, String> {
     local_window(&window)?;
-    let png = history_task(app.clone(), move |store| store.image(&id, false)).await?;
+    let read_id = id.clone();
+    let (png, entry, shapes) = history_task(app.clone(), move |store| store.output(&read_id)).await?;
+    if action == "canvas" {
+        let state = app.state::<ScreenshotState>();
+        let _output = state.output.lock().await;
+        return output_to_canvas(&app, canvas_request_id(&window, &id, delivery_id), &png, entry.width, entry.height, &shapes)
+            .await.map(HistoryOutput::Canvas);
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let image = image::load_from_memory(&png).map_err(|e| e.to_string())?.to_rgba8();
-        output_image(&app, &window, &image, &png, &action)
+        output_image(&app, &window, &image, &png, &action, &shapes).map(HistoryOutput::Standard)
     }).await.map_err(|e| e.to_string())?
 }
 
@@ -757,7 +836,7 @@ fn finish_capture(app: &AppHandle, completed: &mut CompletedScreenshot) -> Resul
     finish_record(completed, |completed| {
         let state = app.state::<ScreenshotState>();
         let _history = state.history.lock().unwrap();
-        history_store(app)?.save(&completed.session, &completed.png, completed.width, completed.height).map_err(|error| {
+        history_store(app)?.save(&completed.session, &completed.png, completed.width, completed.height, &completed.shapes).map_err(|error| {
             tracing::warn!("Screenshot history save failed: {error}");
             "截图已输出，但历史尚未保存。请检查磁盘空间后重试。".to_string()
         })?;
@@ -775,6 +854,7 @@ fn finish_capture(app: &AppHandle, completed: &mut CompletedScreenshot) -> Resul
 #[tauri::command]
 pub async fn screenshot_output(
     window: WebviewWindow, app: AppHandle, data: String, action: String, session: Option<String>,
+    shapes: Option<Vec<Value>>, delivery_id: Option<String>,
 ) -> Result<bool, String> {
     local_window(&window)?;
     let state = app.state::<ScreenshotState>();
@@ -784,38 +864,52 @@ pub async fn screenshot_output(
         if current.is_none() || current != session { return Err("截图已结束".into()); }
     }
     let capture = window.label().starts_with("snip-");
+    let pinned = window.label().starts_with("pin-");
+    let existing = if capture {
+        state.completed.lock().unwrap().as_ref().filter(|saved| Some(&saved.session) == session.as_ref()).cloned()
+    } else { None };
+    let shapes = if pinned {
+        state.images.lock().unwrap().get(window.label()).map(|frame| frame.shapes.clone()).unwrap_or_default()
+    } else { shapes.unwrap_or_default() };
+    let auto_save = action != "canvas" && app.state::<SettingsState>().get().screenshot_auto_save;
+    let output_session = session.clone().unwrap_or_default();
     let output_app = app.clone();
     let output_window = window.clone();
-    let output_session = session.clone();
-    let completed = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
-        let state = output_app.state::<ScreenshotState>();
-        let existing = state.completed.lock().unwrap().as_ref()
-            .filter(|saved| Some(&saved.session) == output_session.as_ref()).cloned();
-        let mut completed = if capture { existing } else { None };
-        if let Some(saved) = &completed {
-            if saved.action != action || encode(&decode(&data)?)? != saved.png {
+    let completed = tauri::async_runtime::spawn_blocking(move || -> Result<Option<CompletedScreenshot>, String> {
+        let image = decode(&data)?;
+        let png = encode(&image)?;
+        if let Some(saved) = existing {
+            if saved.action != action || saved.png != png || saved.shapes != shapes {
                 return Err("上次截图尚未保存完成，请重试原操作，或关闭后重新截图。".into());
             }
+            return Ok(Some(saved));
         }
-        if completed.is_none() {
-            let image = decode(&data)?;
-            let png = encode(&image)?;
-            if !output_image(&output_app, &output_window, &image, &png, &action)? { return Ok(false); }
-            if !capture { return Ok(true); }
-            completed = Some(CompletedScreenshot {
-                session: output_session.ok_or("截图已结束")?, action, png,
-                width: image.width(), height: image.height(),
-                auto_save: output_app.state::<SettingsState>().get().screenshot_auto_save,
-                history_saved: false, library_saved: false,
-            });
-        }
-        let mut completed = completed.unwrap();
-        let result = finish_capture(&output_app, &mut completed);
-        *state.completed.lock().unwrap() = Some(completed);
-        result.map(|_| true)
+        let output_done = action != "canvas";
+        if output_done && !output_image(&output_app, &output_window, &image, &png, &action, &shapes)? { return Ok(None); }
+        Ok(Some(CompletedScreenshot {
+            session: output_session, action, png, width: image.width(), height: image.height(),
+            shapes, output_done, auto_save, history_saved: false, library_saved: false,
+        }))
     }).await.map_err(|e| e.to_string())??;
-    if completed && capture { close_capture(&app, session.as_deref()).await?; }
-    Ok(completed)
+    let Some(mut completed) = completed else { return Ok(false); };
+    let canvas_output = completed.action == "canvas";
+    if !completed.output_done {
+        if capture { *state.completed.lock().unwrap() = Some(completed.clone()); }
+        let id = if capture { format!("capture:{}", completed.session) } else { canvas_request_id(&window, &completed.session, delivery_id) };
+        output_to_canvas(&app, id, &completed.png, completed.width, completed.height, &completed.shapes).await?;
+        completed.output_done = true;
+    }
+    if capture {
+        let output_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let result = finish_capture(&output_app, &mut completed);
+            *output_app.state::<ScreenshotState>().completed.lock().unwrap() = Some(completed);
+            result
+        }).await.map_err(|e| e.to_string())??;
+        close_capture(&app, session.as_deref()).await?;
+    }
+    if canvas_output { reveal_screenshot_destination(&app); }
+    Ok(true)
 }
 #[cfg(test)]
 mod tests {
@@ -828,14 +922,14 @@ mod tests {
             session: ulid::Ulid::new().to_string(),
             action: "pin".into(),
             png: encode(&image::RgbaImage::from_pixel(7, 9, image::Rgba([1, 2, 3, 255]))).unwrap(),
-            width: 7, height: 9, auto_save: true, history_saved: false, library_saved: false,
+            width: 7, height: 9, shapes: Vec::new(), output_done: true, auto_save: true, history_saved: false, library_saved: false,
         };
         let mut history_writes = 0;
         let mut library_writes = 0;
         for attempt in 0..3 {
             let result = finish_record(&mut completed, |capture| {
                 history_writes += 1;
-                history.save(&capture.session, &capture.png, capture.width, capture.height)?;
+                history.save(&capture.session, &capture.png, capture.width, capture.height, &capture.shapes)?;
                 Ok(())
             }, |_| {
                 library_writes += 1;

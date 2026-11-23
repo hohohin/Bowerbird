@@ -1,12 +1,11 @@
 import type { CanvasNode, GenJob } from "./types";
-import { canvasNodePayload as payload } from "./canvasNodePayload.ts";
+import { canvasNodePayload as payload, canvasOutputIsVideo } from "./canvasNodePayload.ts";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasDocumentTextValue, canvasNoteValue, readCanvasNote, type CanvasNotePayload } from "./canvasNotes";
 import { contentInputAxisIndex } from "./canvasContentInput";
 import { documentMediaReferences, type DocumentMediaReference } from "./documentProjection";
 import { activePromptReferences, isWorkflowGenerationResult, workflowActiveSession, workflowBindingKey, workflowInputProducers,
   workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowInput, type WorkflowNode, type WorkflowStep } from "./canvasWorkflow";
-import { isVideoPath } from "./videoGeneration";
 
 /** Result of the exact submitted turn, independent of other turns in its gallery. */
 export function submittedTurnState(id: string, nodes: readonly CanvasNode[]): "pending" | "done" | "closed" {
@@ -51,18 +50,20 @@ export function workflowSessionIds(workflow: readonly WorkflowNode[]) {
     .flatMap(node => [...(node.sessionNodeIds ?? []), ...(node.activeSessionNodeId ? [node.activeSessionNodeId] : [])]));
 }
 
-const ordinaryImageCard = (node: WorkflowNode) => node.kind === "generation" && node.generation?.media !== "video";
+const collapsibleGenerationCard = (node: WorkflowNode) => node.kind === "generation" || node.kind === "comfy-video";
+const videoGenerationCard = (node: WorkflowNode) => node.kind === "comfy-video" || node.generation?.media === "video";
+const ordinaryImageCard = (node: WorkflowNode) => node.kind === "generation" && !videoGenerationCard(node);
 const pendingGeneration = (status: unknown) => status === "running" || status === "querying" || status === "queued";
-const workflowImageOutput = (node: CanvasNode) => node.kind === "asset" && node.role === "output" && !!node.assetId
-  && !/^(workflow-video|workflow-comfy):/.test(node.id) && !isVideoPath(payload(node).snapshot?.name);
-const imageSessions = (node: WorkflowNode) => [...(node.sessionNodeIds ?? []), ...(node.outputs.image?.nodeIds ?? []), workflowActiveSession(node)];
+const workflowMediaOutput = (node: CanvasNode) => node.kind === "asset" && node.role === "output" && !!node.assetId;
+const generationSessions = (node: WorkflowNode) => [...(node.sessionNodeIds ?? []), ...(node.outputs.image?.nodeIds ?? []), workflowActiveSession(node)];
 
-/** An async workflow step can finish before its submitted image turn does. */
-export function workflowImageGenerationActivity(node: WorkflowNode, step: WorkflowStep | undefined,
+/** Submitted image and video turns can stay active outside a running workflow step. */
+export function workflowGenerationActivity(node: WorkflowNode, step: WorkflowStep | undefined,
   nodes: readonly CanvasNode[], jobs: Readonly<Record<string, GenJob>>): {
   running: boolean; jobId?: string; failed?: boolean; session?: CanvasNode; sessionStatus?: string; error?: string;
 } {
-  if (!ordinaryImageCard(node)) return { running: false };
+  if (!collapsibleGenerationCard(node)) return { running: false };
+  if (node.kind === "comfy-video") return { running: step?.status === "running", jobId: step?.jobId };
   const session = nodes.find(item => item.id === workflowActiveSession(node) && item.kind === "prompt");
   const data = session && payload(session);
   const jobId: string | undefined = step?.status === "running" ? step.jobId : data?.job_id ?? step?.jobId;
@@ -71,41 +72,51 @@ export function workflowImageGenerationActivity(node: WorkflowNode, step: Workfl
   const lastTurn = job?.turns[job.turns.length - 1];
   const live = lastTurn?.turnKey === turnKey ? job : undefined;
   const error = live ? lastTurn?.error ?? undefined : undefined;
-  const running = step?.status === "running" || (live?.running ?? pendingGeneration(data?.status));
+  const running = step?.status === "running" || (live?.running ?? (pendingGeneration(data?.status)
+    || (videoGenerationCard(node) && step?.status === "waiting" && !!step.videoJobActive && !data?.status)));
   const failed = !running && (data?.status === "failed" || (pendingGeneration(data?.status) && !!error));
   return { running, jobId, failed, session, sessionStatus: typeof data?.status === "string" ? data.status : undefined, error };
 }
 
 /** Exact saved result IDs and turn identities establish provenance, never Asset ID equality. */
-function imageOrigins(workflow: readonly WorkflowNode[], nodes: readonly CanvasNode[], runs: ReturnType<typeof workflowRuns> = []) {
-  const sources = new Map(workflow.filter(ordinaryImageCard).map(node => [node.id, node]));
+function generationOrigins(workflow: readonly WorkflowNode[], nodes: readonly CanvasNode[], runs: ReturnType<typeof workflowRuns> = []) {
+  const sources = new Map(workflow.map(node => [node.id, node]));
   const direct = new Map<string, WorkflowNode | null>(), jobs = new Map<string, WorkflowNode | null>();
   const turns = new Map<string, WorkflowNode | null>();
+  const delivered = new Map<string, WorkflowNode | null>();
   const key = (projectId: string, jobId: string, turnKey?: string) => JSON.stringify([projectId, jobId, turnKey]);
   function record(index: Map<string, WorkflowNode | null>, id: string, source: WorkflowNode) {
     index.set(id, index.has(id) && index.get(id) !== source ? null : source);
   }
   for (const source of sources.values()) {
-    for (const id of imageSessions(source)) if (id) record(direct, id, source);
+    for (const id of generationSessions(source)) if (id) record(direct, id, source);
     for (const id of source.resultNodeIds ?? []) record(direct, id, source);
   }
   for (const run of runs) for (const [id, step] of Object.entries(run.steps)) {
     const source = sources.get(id);
-    if (source && step.jobId) record(jobs, step.jobId, source);
+    if (!source) continue;
+    if (step.jobId) {
+      record(jobs, step.jobId, source);
+      if (source.kind === "comfy-video") record(delivered, `workflow-comfy:${step.jobId}`, source);
+    }
+    if (videoGenerationCard(source) && step.localDsRequestId) record(delivered, `workflow-video:${step.localDsRequestId}`, source);
   }
   const origins = new Map<string, WorkflowNode>();
   function owner(node: CanvasNode, data: ReturnType<typeof payload>): WorkflowNode | undefined {
     const group: unknown = data.workflow_generation_group;
     if (direct.has(node.id)) {
       const source = direct.get(node.id);
-      if (!source || typeof group === "string" && group.startsWith("workflow:") && group !== `workflow:${JSON.stringify([node.projectId, source.id])}`) return;
+      if (!source || data.workflow_source && data.workflow_source !== source.id
+        || typeof group === "string" && group.startsWith("workflow:") && group !== `workflow:${JSON.stringify([node.projectId, source.id])}`) return;
       return source;
     }
-    if (typeof group !== "string" || !group.startsWith("workflow:")) return;
-    try {
-      const [project, id] = JSON.parse(group.slice("workflow:".length));
-      return project === node.projectId ? sources.get(id) : undefined;
-    } catch { return; }
+    if (typeof group === "string" && group.startsWith("workflow:")) {
+      try {
+        const [project, id] = JSON.parse(group.slice("workflow:".length));
+        return project === node.projectId && (!data.workflow_source || data.workflow_source === id) ? sources.get(id) : undefined;
+      } catch { return; }
+    }
+    if (canvasOutputIsVideo(node)) return data.workflow_source ? sources.get(data.workflow_source) : delivered.get(node.id) ?? undefined;
   }
   for (const node of nodes) {
     if (node.kind !== "prompt") continue;
@@ -116,14 +127,19 @@ function imageOrigins(workflow: readonly WorkflowNode[], nodes: readonly CanvasN
     if (node.hiddenAt == null) origins.set(node.id, source);
   }
   for (const node of nodes) {
-    if (node.hiddenAt != null || !workflowImageOutput(node)) continue;
+    if (node.hiddenAt != null || !workflowMediaOutput(node)) continue;
     const data = payload(node), execution = data.execution;
     const resolved = owner(node, data);
-    const source = execution?.job_id && execution?.turn_key
-      ? turns.get(key(node.projectId, execution.job_id, execution.turn_key)) ?? resolved
+    const exactTurn = execution?.job_id && execution?.turn_key ? key(node.projectId, execution.job_id, execution.turn_key) : undefined;
+    const source = exactTurn
+      ? (turns.has(exactTurn) ? turns.get(exactTurn) : resolved)
       : resolved && (data.workflow_generation_group === `workflow:${JSON.stringify([node.projectId, resolved.id])}`
-        || data.workflow_source === resolved.id || resolved.outputs.image?.assetIds?.includes(node.assetId!)) ? resolved : undefined;
-    if (source && (!resolved || source === resolved) && (!direct.has(node.id) || direct.get(node.id) === source)) {
+        || data.workflow_source === resolved.id || delivered.get(node.id) === resolved
+        || resolved.outputs.image?.assetIds?.includes(node.assetId!)) ? resolved : undefined;
+    // Old native output payloads need not include a file extension in snapshot.name.
+    const video = node.outputIsVideo ?? (canvasOutputIsVideo(node) || !!source && videoGenerationCard(source) && node.id.startsWith("gen-output:"));
+    if (source && video === videoGenerationCard(source) && (!resolved || source === resolved)
+      && (!direct.has(node.id) || direct.get(node.id) === source)) {
       origins.set(node.id, source);
     }
   }
@@ -133,14 +149,22 @@ function imageOrigins(workflow: readonly WorkflowNode[], nodes: readonly CanvasN
 /** Video cards retain history-only presentation. Do not show an extra placeholder for a first image run. */
 export function hiddenWorkflowSessionIds(workflow: readonly WorkflowNode[], nodes: readonly CanvasNode[] = [],
   jobs: Readonly<Record<string, GenJob>> = {}) {
-  const hidden = workflowSessionIds(workflow.filter(node => node.generation?.media === "video"));
+  const hidden = workflowSessionIds(workflow.filter(videoGenerationCard));
   if (!nodes.length) return hidden;
-  const origins = imageOrigins(workflow, nodes);
-  const hasOutput = new Set(nodes.filter(workflowImageOutput).map(node => origins.get(node.id)?.id));
-  for (const source of workflow) {
+  const owned = workflowSessionIds(workflow);
+  for (const node of nodes) {
+    if (node.kind !== "prompt" || !owned.has(node.id)) continue;
+    const delivered = canvasSessionImages(node, nodes);
+    if (delivered.some(canvasOutputIsVideo)) hidden.add(node.id);
+    else if (delivered.some(output => output.outputIsVideo === false)) hidden.delete(node.id);
+  }
+  const imageCards = workflow.filter(ordinaryImageCard);
+  const origins = generationOrigins(imageCards, nodes);
+  const hasOutput = new Set(nodes.filter(workflowMediaOutput).map(node => origins.get(node.id)?.id));
+  for (const source of imageCards) {
     const active = workflowActiveSession(source);
     if (!active || hasOutput.has(source.id)) continue;
-    const activity = workflowImageGenerationActivity(source, undefined, nodes, jobs);
+    const activity = workflowGenerationActivity(source, undefined, nodes, jobs);
     if (activity.running || activity.failed) hidden.add(active);
   }
   return hidden;
@@ -168,10 +192,10 @@ export function contentRoutedWorkflowSessionIds(nodes: readonly CanvasNode[], wo
 }
 
 /** Compute the current projected media without mutating workflow or generation history. */
-export function workflowImageCardProjection(document: CanvasWorkflow, nodes: readonly CanvasNode[],
+export function workflowGenerationCardProjection(document: CanvasWorkflow, nodes: readonly CanvasNode[],
   conversations: ReturnType<typeof canvasConversationCards>, unavailable: ReadonlySet<string> = new Set()) {
   const runs = workflowRuns(document);
-  const origins = imageOrigins(document.nodes, nodes, runs);
+  const origins = generationOrigins(document.nodes.filter(collapsibleGenerationCard), nodes, runs);
   const exempt = contentRoutedWorkflowSourceIds(nodes, document.nodes);
   const descendants = new Set(document.nodes.filter(node => node.kind === "loop" || node.kind === "trigger").map(node => node.id));
   if (descendants.size) {
@@ -197,7 +221,7 @@ export function workflowImageCardProjection(document: CanvasWorkflow, nodes: rea
   const candidates = new Map<string, Map<string, CanvasNode>>();
   for (const node of nodes) {
     const source = origins.get(node.id);
-    if (!source || exempt.has(source.id) || unavailable.has(node.id) || !workflowImageOutput(node)) continue;
+    if (!source || exempt.has(source.id) || unavailable.has(node.id) || !workflowMediaOutput(node)) continue;
     const anchor = visible.get(conversations.aliases.get(node.id) ?? node.id);
     if (!anchor) continue;
     const gallery = conversations.cards.get(anchor.id);
@@ -215,7 +239,7 @@ export function workflowImageCardProjection(document: CanvasWorkflow, nodes: rea
       || [...owned.values()].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id))[0];
     if (anchor) anchors.set(source.id, anchor);
   }
-  return { anchors, origins };
+  return { anchors, origins, exempt };
 }
 
 // Canvas edits replace the snapshot array, so each immutable snapshot can
@@ -288,10 +312,13 @@ export function workflowGenerationResultAnchor(source: WorkflowNode, canvas: rea
   if (source.kind !== "generation" && source.kind !== "comfy-video") return;
   const sessionId = output.nodeIds?.[0] ?? workflowActiveSession(source);
   const session = canvas.find(card => card.id === sessionId && card.kind === "prompt" && card.hiddenAt == null);
-  if (session && source.kind === "generation" && source.generation?.media !== "video" && !payload(session).generation_group_dissolved) return presented(session.id);
-  const current = session ? canvasSessionImages(session, canvas).filter(card => card.hiddenAt == null) : [];
+  const video = videoGenerationCard(source);
+  const sameMedia = (card: CanvasNode) => card.outputIsVideo == null ? (video || !canvasOutputIsVideo(card)) : card.outputIsVideo === video;
+  const delivered = session ? canvasSessionImages(session, canvas).filter(card => card.hiddenAt == null) : [];
+  const current = delivered.filter(sameMedia);
+  if (session && !video && !payload(session).generation_group_dissolved && (!delivered.length || current.length)) return presented(session.id);
   const result = (output.assetIds?.length ? current.find(card => output.assetIds!.includes(card.assetId!)) : current.pop())
-    ?? canvas.find(card => source.resultNodeIds?.includes(card.id) && card.hiddenAt == null && card.assetId && output.assetIds?.includes(card.assetId));
+    ?? canvas.find(card => source.resultNodeIds?.includes(card.id) && card.hiddenAt == null && sameMedia(card) && card.assetId && output.assetIds?.includes(card.assetId));
   return result && presented(result.id);
 }
 

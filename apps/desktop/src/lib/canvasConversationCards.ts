@@ -1,5 +1,5 @@
 import { readCanvasNote } from "./canvasNotes.ts";
-import { canvasNodePayload as payload } from "./canvasNodePayload.ts";
+import { canvasNodePayload as payload, canvasOutputIsVideo } from "./canvasNodePayload.ts";
 import type { CanvasNode, GenJob } from "./types";
 
 export interface CanvasConversationCard {
@@ -123,7 +123,8 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
     const group = payload(node).workflow_generation_group;
     if (payload(node).generation_group_dissolved) continue;
     if (typeof group !== "string") continue;
-    const key = JSON.stringify([node.projectId, group]);
+    const key = JSON.stringify(group.startsWith("workflow:") && canvasOutputIsVideo(node)
+      ? [node.projectId, group, "video"] : [node.projectId, group]);
     const card = groups.get(key) ?? { anchor: node, latest: node, sessions: [], outputs: [], allOutputs: [] };
     card.outputs.push(node);
     card.allOutputs.push(node);

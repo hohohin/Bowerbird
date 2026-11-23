@@ -363,8 +363,8 @@ pub(super) fn generation_source<'a>(workflow: &'a Value, job: &str, prompt: &str
 }
 
 /// Match the desktop presentation boundary without moving executable workflow state.
-pub(super) fn image_workflow_can_replace(card: &Value, workflow: &Value, snapshot: &ProjectCanvasSnapshot) -> bool {
-    let Some(id) = card["id"].as_str().filter(|_| card["kind"] == "generation" && card["generation"]["media"] != "video") else {
+pub(super) fn generation_workflow_can_replace(card: &Value, workflow: &Value, snapshot: &ProjectCanvasSnapshot) -> bool {
+    let Some(id) = card["id"].as_str().filter(|_| matches!(card["kind"].as_str(), Some("generation" | "comfy-video"))) else {
         return false;
     };
     let mut pending: Vec<_> = array(&workflow["nodes"]).filter(|node| matches!(node["kind"].as_str(), Some("trigger" | "loop")))
@@ -392,7 +392,9 @@ pub(super) fn image_workflow_can_replace(card: &Value, workflow: &Value, snapsho
         && array(&run["loop"]["bodyIds"]).any(|body| body == id)) { return false; }
     !array(&workflow["nodes"]).any(|node| {
         if node["kind"] == "trigger" && inputs(node).any(|input| input["nodeId"] == id
-            || input["canvasNodeId"].as_str().or_else(|| input["pendingCompletionSession"].as_str()).is_some_and(|session| owns_session(card, session))) {
+            || input["canvasNodeId"].as_str().or_else(|| input["pendingCompletionSession"].as_str()).is_some_and(|target| {
+                owns_session(card, target) || array(&card["resultNodeIds"]).any(|result| result == target)
+            })) {
             return true;
         }
         let target = &node["textTarget"];
@@ -413,26 +415,36 @@ pub(super) fn image_workflow_can_replace(card: &Value, workflow: &Value, snapsho
 }
 
 /// Find the authoritative gallery anchor and detect earlier visible outputs.
-pub(super) fn image_workflow_history<'a>(source: &Value, snapshot: &'a ProjectCanvasSnapshot) -> (Option<&'a CanvasNode>, bool) {
+pub(super) fn generation_workflow_history<'a>(source: &Value, snapshot: &'a ProjectCanvasSnapshot) -> (Option<&'a CanvasNode>, bool) {
     let group = format!("workflow:{}", serde_json::json!([snapshot.canvas.project_id, source["id"]]));
+    let video = source["kind"] == "comfy-video" || source["generation"]["media"] == "video";
     let archived: HashSet<_> = snapshot.threads.iter().filter(|thread| thread.archived_at.is_some()).map(|thread| thread.id.as_str()).collect();
     let grouped: HashSet<_> = snapshot.group_items.iter().map(|item| item.node_id.as_str()).collect();
     let visible = snapshot.nodes.iter().filter(|node| node.hidden_at.is_none()
         && node.thread_id.as_deref().is_none_or(|thread| !archived.contains(thread)));
+    let opposite_turns: HashSet<_> = visible.clone().filter(|node| node.output_is_video == Some(!video))
+        .filter_map(|node| serde_json::from_str(&node.payload_json).ok().and_then(|data| turn(&data, true))).collect();
     let mut turns = HashSet::new();
     let mut anchor: Option<&CanvasNode> = None;
     for node in visible.clone().filter(|node| node.kind == CreativeNodeKind::Prompt) {
         let data: Value = serde_json::from_str(&node.payload_json).unwrap_or_default();
         if data["workflow_generation_group"] != group.as_str() && !owns_session(source, &node.id) { continue; }
-        if let Some(key) = turn(&data, false) { turns.insert(key); }
+        if let Some(key) = turn(&data, false) {
+            if opposite_turns.contains(&key) { continue; }
+            turns.insert(key);
+        }
         if data["generation_group_dissolved"] != true && anchor.is_none_or(|old| (node.created_at, &node.id) < (old.created_at, &old.id)) {
             anchor = Some(node);
         }
     }
     let has_product = visible.filter(|node| node.kind == CreativeNodeKind::Asset && node.role == Some(CreativeNodeRole::Output)
-        && node.asset_id.is_some() && !grouped.contains(node.id.as_str())).any(|node| {
+        && node.asset_id.is_some() && !grouped.contains(node.id.as_str())
+        && node.output_is_video.is_none_or(|output_is_video| output_is_video == video)).any(|node| {
         let data: Value = serde_json::from_str(&node.payload_json).unwrap_or_default();
         data["workflow_generation_group"] == group.as_str() || turn(&data, true).is_some_and(|key| turns.contains(&key))
+            || ((node.id.starts_with("workflow-comfy:") || node.id.starts_with("workflow-video:"))
+                && (data["workflow_source"].is_string() && data["workflow_source"] == source["id"]
+                    || array(&source["resultNodeIds"]).any(|id| id == node.id.as_str())))
     });
     (anchor, has_product)
 }

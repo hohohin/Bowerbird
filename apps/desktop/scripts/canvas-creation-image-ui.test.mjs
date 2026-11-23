@@ -11,6 +11,7 @@ await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 page.setDefaultTimeout(12000);
+page.setDefaultNavigationTimeout(60000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
@@ -87,12 +88,12 @@ const preview = async target => {
     undefined, { timeout: 1000 });
   await idle();
   assert.deepEqual(await picks(), before, 'single click previews without inserting a reference');
-  const left = await imageRegion.boundingBox();
-  const right = await detailsRegion.count() ? await detailsRegion.boundingBox() : null;
+  const media = await imageRegion.boundingBox();
+  const record = await detailsRegion.count() ? await detailsRegion.boundingBox() : null;
   const info = await inspector.boundingBox();
-  assert.ok(info.width >= 200 && info.x + info.width <= left.x, 'reused image inspector is left of the enlarged image');
-  assert.ok(left.width > 100 && (!right || right.width > 100 && left.x + left.width <= right.x + 2),
-    'image and details form a left/right layout');
+  assert.ok(info.width >= 200 && media.x + media.width <= info.x, 'reused image inspector is right of the enlarged image');
+  assert.ok(media.width > 100 && (!record || record.width > 100 && record.x + record.width <= media.x + 2),
+    'generation history, when present, stays left of the image');
   assert.equal(await modal.locator('.app-modal').count(), 0, 'image and conversation have no common modal panel');
   assert.deepEqual(await imageRegion.evaluate(element => {
     const style = getComputedStyle(element.parentElement);

@@ -124,10 +124,10 @@ try {
   await portrait.dblclick();
   assert.deepEqual(await page.evaluate(() => window.picked), ['b']);
   await page.waitForTimeout(600);
-  assert.equal(await page.getByRole('dialog', { name: '图片与会话预览' }).count(), 0);
+  assert.equal(await page.getByRole('dialog', { name: '图片与生成记录预览' }).count(), 0);
   await portrait.click();
   await page.waitForTimeout(800);
-  await page.getByRole('dialog', { name: '图片与会话预览' }).waitFor();
+  await page.getByRole('dialog', { name: '图片与生成记录预览' }).waitFor();
   await page.keyboard.press('Escape');
   await portrait.click({ button: 'right' });
   await page.getByRole('menuitem', { name: '添加到对话框', exact: true }).click();

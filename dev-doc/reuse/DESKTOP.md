@@ -41,7 +41,7 @@
 
 - **用途／关键词**：工作流输出、自动落点、可见占位、尺寸缓存、显式整理。
 - **入口**：[canvasReferencePlacement.ts](../../apps/desktop/src/lib/canvasReferencePlacement.ts) 提供 `placeCanvasCardNearSource` 和 `canvasOutputGrid`，[canvasOutputPlacement.ts](../../apps/desktop/src/lib/canvasOutputPlacement.ts) 提供 `placeWorkflowOutput`。
-- **调用**：`canvasWorkflowRuntime` 和 `CanvasWorkspace` 复用可见占位、缓存尺寸、落点及连线关系。源卡附近落点可给定最小横坐标，内容表等工作流产物复用 `placeWorkflowOutput`。普通生图首次交付的实际落点由 [project_canvas.rs](../../apps/desktop/src-tauri/src/core/project_canvas.rs) 和 [placement.rs](../../apps/desktop/src-tauri/src/core/project_canvas/placement.rs) 确定。
+- **调用**：`canvasWorkflowRuntime` 和 `CanvasWorkspace` 复用可见占位、缓存尺寸、落点及连线关系。源卡附近落点可给定最小横坐标，内容表等工作流产物复用 `placeWorkflowOutput`。H3 首个独立视频由 `firstWorkflowVideoOutputPoint` 接替生成卡原位。图片与远程视频首个独立产物落点由 [project_canvas.rs](../../apps/desktop/src-tauri/src/core/project_canvas.rs) 和 [placement.rs](../../apps/desktop/src-tauri/src/core/project_canvas/placement.rs) 确定。
 - **边界／状态**：自动交付只新增产物位置，用户显式整理仍走 `canvasArrangement`。原生执行使用自身几何输入，前端 DOM 测量只用于界面。[布局与验收](../CANVAS-WORKFLOW.md#2026-11-09产物卡片紧凑布局源码待发布)。
 
 ## 展示生成阶段
@@ -54,6 +54,7 @@
 ## 启动工作流或恢复定时预约
 
 - **用途／关键词**：触发器、定时、跨画板、执行锁、运行恢复、删除项目后的调度收尾。
+- **画板入口**：`CanvasWorkflowLayer` 的卡头拖动入口复用加号的拖线反馈，调用项目控制器的 `connectCompletionTrigger`，一次保存触发卡与完成／触发连线。
 - **入口**：[canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `canvasWorkflowController(projectId)` 提供项目控制器。[WorkflowScheduleCoordinator](../../apps/desktop/src/components/WorkflowScheduleCoordinator.tsx) 由 `App` 挂载，通过 `setTriggerTimersEnabled` 管理非归档项目计时。
 - **调用**：手动和定时运行复用 `start`。Agent 用 `create_canvas_cards` 配置触发卡，用 `runCard` 指定本批运行入口，协调器领取保存的动作，断线后读取原回执。[workflowTriggerSchedule.ts](../../apps/desktop/src/lib/workflowTriggerSchedule.ts) 提供 `workflowTriggerMode` 及 `activeTriggerSchedule`，供表单和运行时兼容旧卡、筛选有效预约。`nextDailyTrigger`／`triggerScheduleOccurrence`／`advanceTriggerSchedule` 计算本机时刻、运行身份及下次预约。
 - **边界／状态**：**工作流内部专用**。应用运行时调度，原生 SQLite 事务保护到点消费，复制清除 `triggerSchedule`。删除沿 `useProjectDeletion` → `ProjectDeleteDialog` → `deleteProjectCanvas`，原生成功后 store 调用 `discardProjectWorkflow`，只停止该项目的本地调度、计时器和后续保存。远端任务沿原身份处理。[工作流预约](../CANVAS-WORKFLOW.md#2026-11-05触发器定时执行源码未发布) · [项目删除](../PROJECT-CANVAS-PLAN.md#2026-11-10确认删除项目后不再由任务状态否决源码待发布)。
@@ -62,7 +63,7 @@
 
 - **用途／关键词**：当前输入、上游结果、预览、自动连线、生成卡投影。
 - **入口**：[canvasSessionOutputs.ts](../../apps/desktop/src/lib/canvasSessionOutputs.ts) 提供 `workflowBindingAssetIds`、`workflowGenerationResultAnchor` 和 `workflowGenerationPreviewIds`。[workflowCanvasCapabilities.ts](../../apps/desktop/src/lib/workflowCanvasCapabilities.ts) 提供 `workflowSourceMediaLabel`。
-- **调用**：从素材、内容格或上游本轮结果解析输入。卡片、引用和断开菜单共用来源名称。绘线和整理取当前可见卡片或单元格的锚点，预览读取当前产物。`workflowImageGenerationActivity` 根据会话和生成任务识别运行状态，`workflowImageCardProjection` 提供媒体锚点和节点来源。
+- **调用**：从素材、内容格或上游本轮结果解析输入。卡片、引用和断开菜单共用来源名称。绘线和整理取当前可见卡片或单元格的锚点，预览读取当前产物。`workflowGenerationActivity` 根据执行步骤、会话和生成任务识别图片、远程视频与 H3 的运行状态，`workflowGenerationCardProjection` 提供可收纳生成卡的媒体锚点和产物来源。原生读取按实际原件类型区分图片与视频，节点保留原有执行标识。
 - **边界／状态**：精确输入由原端口及编号定位，调度、重跑和提示词引用沿生成卡的输出身份取值。循环、触发器与定向内容写入保留生成卡。[结果接入下游](../CANVAS-WORKFLOW.md#2026-11-13生成结果接入下游桌面源码待发布)。
 
 ## 读取项目对话摘要和流式正文

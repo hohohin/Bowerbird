@@ -95,12 +95,13 @@ try {
       return Promise.resolve({ session_id: args.assetId === 'generated' ? 'video-session' : null, media: 'video', turns, references: [] });
     };
   }, directory);
-  const modal = page.getByRole('dialog', { name: '视频与会话预览', exact: true });
+  const modal = page.getByRole('dialog', { name: '视频与生成记录预览', exact: true });
   const workspace = page.getByRole('dialog', { name: '视频分析工作区', exact: true });
   const detail = modal.getByRole('region', { name: '视频详情', exact: true });
-  const history = modal.getByRole('region', { name: '独立会话面板' });
+  const history = modal.getByRole('region', { name: '生成记录', exact: true });
   const transcript = workspace.getByRole('region', { name: '转录文稿', exact: true });
   const player = modal.getByRole('region', { name: '视频播放器' });
+  const media = modal.getByRole('region', { name: '播放视频', exact: true });
   const enterTranscript = async () => {
     await modal.getByRole('button', { name: '打开转录文稿', exact: true }).click();
     await workspace.waitFor();
@@ -125,6 +126,8 @@ try {
   };
   await open('plain', false);
   assert.equal(await history.count(), 0);
+  const plainStage = await media.boundingBox();
+  assert.ok((await detail.boundingBox()).x > plainStage.x, 'ordinary video keeps details on the right');
   const previewEntry = detail.getByRole('region', { name: '视频分析', exact: true });
   await previewEntry.getByRole('button', { name: '分析', exact: true }).waitFor();
   await previewEntry.getByText('转录 · 7 Bcoin', { exact: true }).waitFor();
@@ -242,17 +245,29 @@ try {
   await history.locator('[data-generation-turn-key="later"]').getByText('后续视频的提示词').waitFor();
   await page.waitForFunction(() => window.previewTurns.at(-1) === 'generated');
   const center = await player.boundingBox();
-  assert.ok((await detail.boundingBox()).x < center.x);
-  assert.ok((await history.boundingBox()).x > center.x);
+  const generatedStage = await media.boundingBox();
+  assert.deepEqual([generatedStage.x, generatedStage.width], [plainStage.x, plainStage.width], 'generation history does not move the middle column');
+  assert.ok((await history.boundingBox()).x < center.x, 'generation record is to the left of the video');
+  assert.ok((await detail.boundingBox()).x > center.x, 'video details are to the right of the video');
+  assert.equal(await history.getByRole('button', { name: /在画布(展开|固定)生成卡/ }).count(), 0);
+  assert.deepEqual(await modal.locator('.creation-image-preview-image-foot button[aria-pressed]').evaluateAll(buttons => buttons.map(button => button.ariaLabel)),
+    ['收起生成记录', '收起视频详情'], 'left and right HUD toggles follow the panel order');
+  await modal.locator('.creation-image-preview-conversation').evaluateAll(panels =>
+    Promise.allSettled(panels.flatMap(panel => panel.getAnimations().map(animation => animation.finished))));
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await page.screenshot({ path: `${directory}/preview-${theme}.png` });
+  }
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await enterTranscript();
   await transcript.getByText('此视频没有音轨。', { exact: true }).waitFor();
   await history.waitFor({ state: 'hidden' });
   await workspace.getByRole('button', { name: '返回视频预览', exact: true }).click();
   await history.getByText('所选视频的原提示词').waitFor();
-  await modal.getByRole('button', { name: '收起会话面板' }).click();
+  await modal.getByRole('button', { name: '收起生成记录面板' }).click();
   await history.waitFor({ state: 'hidden' });
   assert.deepEqual(await player.boundingBox(), center, 'closing either panel preserves the player geometry');
-  await modal.getByRole('button', { name: '显示会话' }).click();
+  await modal.getByRole('button', { name: '显示生成记录' }).click();
   await history.waitFor();
   await close();
 

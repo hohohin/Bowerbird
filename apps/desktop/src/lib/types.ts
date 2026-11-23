@@ -1,5 +1,5 @@
 import type { GenerationMedia, VideoOptions } from "./videoGeneration";
-import type { AnnotationTool } from "./annotation";
+import type { AnnotationTool, DrawShape } from "./annotation";
 export interface Asset {
   project_count?: number;
   is_reference?: boolean;
@@ -100,6 +100,7 @@ export interface CanvasNode {
   kind: CreativeNodeKind;
   assetId: string | null;
   role: CreativeNodeRole | null;
+  outputIsVideo?: boolean;
   payloadJson: string;
   x: number;
   y: number;
@@ -375,17 +376,26 @@ export type AnnotationTransformOp =
   | { kind: "flip"; axis: "horizontal" | "vertical" }
   | { kind: "crop"; x1: number; y1: number; x2: number; y2: number };
 
-/** analyses(kind=annotation) 的 payload：标注输出图尺寸 + 相对原图的形状列表（坐标同图 1:1）。 */
+export interface EditableAnnotation {
+  base: { kind: "asset" } | { kind: "draft"; width: number; height: number; background: "#ffffff" };
+  /** 精确坐标相对应用完 transform 的底图，恢复时直接使用。 */
+  shapes: DrawShape[];
+}
+
+/** analyses(kind=annotation) 的 payload；shapes 为相对最终图的模型坐标。 */
 export interface AnnotationMeta {
   schema_version: 1;
   /** 白底草稿没有来源素材。 */
   source_asset_id: string | null;
   source_store_path: string;
+  source_kind?: "screenshot";
   image: { width: number; height: number };
   /** 裁剪/旋转/镜像过程（无变换时缺省）；供追溯与未来重编辑。 */
   transform?: AnnotationTransformOp[];
-  /** 覆盖时由本机保存层追加；各次操作独立保留在 analyses。 */
-  save_mode?: "overwrite";
+  /** 仅支持从干净底图恢复的输出保存编辑文档。 */
+  editable?: EditableAnnotation;
+  /** 原位保存时由本机保存层追加。 */
+  save_mode?: "overwrite" | "revision";
   source_sha256?: string;
   output_sha256?: string;
   shapes: AnnotationShape[];

@@ -98,7 +98,7 @@ try {
   }, videoAsset);
   await bell.click();
   await history.getByRole('button', { name: `反推 · ${videoAsset.name} · 失败，查看素材` }).click();
-  const videoPreview = page.getByRole('dialog', { name: '视频与会话预览', exact: true });
+  const videoPreview = page.getByRole('dialog', { name: '视频与生成记录预览', exact: true });
   await videoPreview.getByRole('button', { name: '打开转录文稿', exact: true }).waitFor();
   assert.deepEqual(await page.evaluate(() => window.videoNotificationLookup), [videoAsset.id]);
   assert.equal(await page.evaluate(() => window.videoNotificationPath), videoAsset.store_path);
@@ -106,7 +106,7 @@ try {
   assert.equal(await history.count(), 0);
   const videoSource = await videoPreview.locator('video').getAttribute('src');
   assert.equal(new URL(videoSource, page.url()).pathname, '/src-tauri/tests/fixtures/media/fragmented.mp4');
-  await page.waitForFunction(() => document.querySelector('[aria-label="视频与会话预览"] video')?.readyState >= HTMLMediaElement.HAVE_METADATA);
+  await page.waitForFunction(() => document.querySelector('[aria-label="视频与生成记录预览"] video')?.readyState >= HTMLMediaElement.HAVE_METADATA);
   await videoPreview.getByRole('button', { name: '关闭预览', exact: true }).click();
   await videoPreview.waitFor({ state: 'hidden' });
 

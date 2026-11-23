@@ -321,27 +321,21 @@ pub async fn save_annotated_image(
     let paths = Arc::new(paths.for_project(&db, project_id.as_deref())?);
     let db = db.inner().clone();
     let db_for_ingest = db.clone();
-    let annotation = annotation_json.clone();
     let asset = tokio::task::spawn_blocking(move || {
-        let asset = ingest::ingest_from_bytes(
+        let mut record: serde_json::Value = serde_json::from_str(&annotation_json)?;
+        let screenshot = record["source_kind"] == "screenshot";
+        let editable = record["editable"].is_object();
+        let has_marks = record["shapes"].as_array().is_some_and(|shapes| !shapes.is_empty());
+        if editable { record["output_sha256"] = annotation::bytes_hash(&bytes).into(); }
+        let payload = (!screenshot || has_marks).then(|| record.to_string());
+        ingest::ingest_annotation_from_bytes(
             &paths,
             &db_for_ingest,
             &bytes,
-            "",
-            Some(&file_name),
-            None,
-            "annotation",
-        )?;
-        // pHash 去重命中时返回既有资产：annotation 行照常追加（list 只取最新一条）。
-        db_for_ingest.insert_analysis(&Analysis {
-            id: Ulid::new().to_string(),
-            asset_id: asset.id.clone(),
-            kind: "annotation".to_string(),
-            payload: annotation,
-            provider: None,
-            created_at: None,
-        })?;
-        Ok::<_, AppError>(asset)
+            &file_name,
+            screenshot,
+            payload.as_deref(),
+        )
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
@@ -429,17 +423,33 @@ pub async fn read_image_data_url(
     paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
     path: String,
-) -> Result<String, AppError> {
+    with_hash: Option<bool>,
+) -> Result<ReadImageData, AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let canonical = readable_image_path(&paths, &db, &path)?;
-        let bytes = std::fs::read(&canonical)?;
-        let ext = canonical
+        let original = registered_image_path(&paths, &db, &path)?;
+        let original_bytes = with_hash.unwrap_or(false).then(|| std::fs::read(&original)).transpose()?;
+        let hash = original_bytes.as_deref().map(annotation::bytes_hash);
+        let mut ext = original
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
+        let bytes = if crate::media::heic::is_path(&original) {
+            ext = "png".to_string();
+            if let Some(bytes) = original_bytes {
+                // Decode the exact bytes included in the original hash, outside the preview cache.
+                let snapshot = tempfile::tempdir()?;
+                let source = snapshot.path().join("image.heic");
+                let png = snapshot.path().join("image.png");
+                std::fs::write(&source, bytes)?;
+                crate::media::heic::convert_to_png(&source, &png)?;
+                std::fs::read(png)?
+            } else {
+                std::fs::read(crate::core::external_files::compatible_image(&paths, &original)?)?
+            }
+        } else if let Some(bytes) = original_bytes { bytes } else { std::fs::read(original)? };
         let mime = match ext.as_str() {
             "png" => "image/png",
             "jpg" | "jpeg" => "image/jpeg",
@@ -450,13 +460,25 @@ pub async fn read_image_data_url(
         };
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-        Ok(format!("data:{mime};base64,{b64}"))
+        let url = format!("data:{mime};base64,{b64}");
+        Ok(match hash {
+            Some(sha256) => ReadImageData::WithHash { url, sha256 },
+            None => ReadImageData::Url(url),
+        })
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))?
 }
 
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+pub enum ReadImageData { Url(String), WithHash { url: String, sha256: String } }
+
 pub(super) fn readable_image_path(paths: &LibraryPaths, db: &Database, path: &str) -> Result<PathBuf, AppError> {
+    crate::core::external_files::compatible_image(paths, &registered_image_path(paths, db, path)?)
+}
+
+fn registered_image_path(paths: &LibraryPaths, db: &Database, path: &str) -> Result<PathBuf, AppError> {
     let p = Path::new(path);
     if !p.is_file() {
         return Err(AppError::Other(format!("文件不存在: {path}")));
@@ -473,7 +495,7 @@ pub(super) fn readable_image_path(paths: &LibraryPaths, db: &Database, path: &st
         }
         db.resolve_external_paths(&[key])?;
     }
-    crate::core::external_files::compatible_image(paths, &canonical)
+    Ok(canonical)
 }
 
 #[cfg(test)]

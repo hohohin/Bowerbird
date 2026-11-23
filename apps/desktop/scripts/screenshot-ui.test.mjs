@@ -27,6 +27,10 @@ try {
   await page.evaluate(() => document.addEventListener('keydown', event => event.stopPropagation(), { once: true }));
   await page.keyboard.press('Escape');
   assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'screenshot_cancel')), 'Esc must exit even when a child layer consumes bubbling keys');
+  await page.getByRole('button', { name: '历史截图', exact: true }).click();
+  const history = page.getByRole('dialog', { name: '历史截图' });
+  await history.getByRole('button', { name: '添加到画板', exact: true }).click();
+  await history.getByText('当前未打开画板，截图已保存到素材库', { exact: true }).waitFor();
   await page.goto(url + '?pendingDecode');
   await page.waitForFunction(() => window.calls.some(c => c.command === 'screenshot_show'), null, { timeout: 5000 });
   assert.ok(await page.evaluate(() => window.basePaints > 0), 'hidden frame is drawn before showing without awaiting decode');
@@ -87,6 +91,13 @@ try {
   await page.getByRole('button', { name: '复制截图', exact: true }).click();
   let exported = await output(); assert.equal(exported.action, 'copy');
   const base = exported.data; assert.deepEqual(await pixels(base), { width: 800, height: 600, pixel: [255, 255, 255, 255] });
+  await page.getByRole('button', { name: '箭头', exact: true }).click(); await drag(140, 140, 300, 200);
+  await page.getByRole('button', { name: '添加到画板', exact: true }).click();
+  assert.equal((await output()).action, 'canvas');
+  assert.equal((await output()).shapes[0].token, '<point>100 200</point> → <point>500 400</point>', 'tokens use cropped source pixels');
+  await page.keyboard.press('Meta+Enter');
+  await page.waitForFunction(() => window.calls.filter(c => c.command === 'screenshot_output' && c.args.action === 'canvas').length === 2);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
   // All annotation tools produce pixels, undo returns byte-identical crop, redo restores them.
   for (const name of ['矩形', '椭圆', '直线／折线', '箭头', '画笔', '荧光笔', '马赛克', '高斯模糊']) {
     await page.getByRole('button', { name, exact: true }).click();
@@ -95,6 +106,7 @@ try {
     await page.waitForFunction(() => document.querySelector('.snip-draft').width === 1600);
     assert.equal(await page.evaluate(() => window.basePaints), before, `${name} preview does not replay committed pixels`);
     await page.mouse.up();
+    assert.equal(await page.evaluate(() => window.basePaints), before, `${name} appends to the committed bitmap`);
     if (name === '矩形') {
       await page.mouse.move(200, 160); await page.keyboard.down('Alt');
       await page.getByText('#FF0000', { exact: true }).waitFor(); await page.keyboard.up('Alt');
@@ -106,6 +118,7 @@ try {
     assert.equal(await page.evaluate(() => window.basePaints), beforeExport, 'export crops the cached composition');
     const drawn = (await output()).data; assert.notEqual(drawn, base, name);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
+    assert.equal(await page.evaluate(() => window.basePaints), beforeExport + 1, `${name} undo rebuilds the committed bitmap`);
     if (name === '矩形') {
       await page.keyboard.down('Alt'); await page.getByText('#FFFFFF', { exact: true }).waitFor(); await page.keyboard.up('Alt');
     }
@@ -263,6 +276,10 @@ try {
   assert.equal((await pixels((await output()).data)).width, 1600);
   await page.keyboard.press('Control+s');
   await page.waitForFunction(() => window.calls.some(c => c.command === 'screenshot_output' && c.args.action === 'save'));
+  await page.getByAltText('置顶截图').click({ button: 'right' });
+  await page.getByRole('button', { name: '添加到画板', exact: true }).click();
+  await page.waitForFunction(() => window.calls.some(c => c.command === 'screenshot_output' && c.args.action === 'canvas' && c.args.deliveryId));
+  await page.getByRole('button', { name: '添加到画板', exact: true }).waitFor({ state: 'detached' });
   await page.keyboard.press('Escape'); assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'plugin:window|close')));
   await page.goto(url + '?mode=settings'); const capture = page.getByRole('button', { name: '区域截图快捷键' });
   await capture.waitFor(); assert.equal(await capture.textContent(), 'F1');

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ArrowLeft, ChevronLeft, ChevronRight, FileText, Focus, MessageSquare, PanelLeft, PanelLeftClose, PanelRightClose, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, FileText, Focus, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, X, ZoomIn, ZoomOut } from "lucide-react";
 import { api } from "../lib/api";
 import type { Asset, GenJob } from "../lib/types";
 import { useCompatibleImagePath } from "../lib/useCompatibleImagePath";
@@ -9,6 +9,7 @@ import { useImageZoom } from "../lib/useImageZoom";
 import { userErrorMessage } from "../lib/userError";
 import { imageProviderLabel } from "../lib/genProviders";
 import { useVideoTranscriptPrice } from "../lib/videoTranscript";
+import { videoModelLabel } from "../lib/videoGeneration";
 import type { VideoTrimRequest } from "../lib/videoTrim";
 import { GenerationPanel } from "./GenerationPanel";
 import { AssetDetail } from "./AssetDetail";
@@ -21,7 +22,7 @@ import { useStore } from "../store";
 import "./CreationImagePreview.css";
 
 export function CreationImagePreview({ asset: originalAsset, projectId, job: providedJob, onClose, video, navigation,
-  workflowOrigin, onExpandWorkflowCard, parentNodeId, onCreateWorkflowFromAsset, openTranscript }: {
+  workflowOrigin, parentNodeId, onCreateWorkflowFromAsset, openTranscript }: {
   asset: Asset;
   projectId: string | null;
   job?: GenJob;
@@ -29,8 +30,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   openTranscript?: boolean;
   video?: Pick<ComponentProps<typeof VideoPlayer>, "path" | "sourceKey" | "frameTarget" | "onAddFrame" | "onAddFrameToCanvas" | "onSaveTrim">;
   navigation?: { index: number; count: number; assetIds?: readonly string[]; onIndexChange: (index: number) => void };
-  workflowOrigin?: { nodeId: string; title?: string; canExpand: boolean };
-  onExpandWorkflowCard?: (nodeId: string) => void;
+  workflowOrigin?: { nodeId: string; title?: string };
   parentNodeId?: string | null;
   onCreateWorkflowFromAsset?: (asset: Asset) => void;
 }) {
@@ -217,7 +217,8 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   }, [source, asset.id, asset.store_path, sourceJobId, contentMounted, followLatest]);
   const currentTurn = snapshot?.job.turns.find(turn => !!asset.store_path && turn.images.includes(asset.store_path));
   const detailTurn = currentTurn ?? snapshot?.job.turns.find(turn => turn.turnKey === snapshot.selectedTurnKey);
-  const modelLabel = detailTurn ? imageProviderLabel(detailTurn.provider || snapshot?.job.provider, entitlement, snapshot?.job.dreaminaModelVersion ?? null) : null;
+  const modelLabel = detailTurn?.videoOptions ? videoModelLabel(detailTurn.videoOptions.model_version)
+    : detailTurn && (!video || localVideo) ? imageProviderLabel(detailTurn.provider || snapshot?.job.provider, entitlement, snapshot?.job.dreaminaModelVersion ?? null) : null;
   const generationRatio = detailTurn?.ratio ?? (snapshot?.job.turns.length === 1 ? snapshot.job.lastRatio : null);
   const singleTurn = !video && detailTurn && snapshot?.job.turns.length === 1 && !snapshot.job.running && !detailTurn.error;
   const references = detailTurn?.refAssets?.length ? detailTurn.refAssets : snapshot?.job.refAssets ?? [];
@@ -231,7 +232,6 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   const selectedVideoView = videoAnalysis?.key === videoKey ? videoAnalysis.view : openTranscript ? "transcript" : null;
   const workspaceView = video ? selectedVideoView : null;
   const workspaceOpen = !!workspaceView;
-  const rightPanelTitle = video ? "会话" : "生成记录";
   const cloudAuth = useStore(state => state.cloudAuth);
   const transcriptOwner = cloudAuth?.cloud_available && cloudAuth.logged_in ? cloudAuth.user_id : null;
   const transcriptPrice = useVideoTranscriptPrice(video && contentMounted ? transcriptOwner : null);
@@ -320,7 +320,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   }
 
   return createPortal(<div ref={surfaceRef} className={`creation-image-preview canvas-tactical${video ? " is-video-preview" : ""}${workspaceOpen ? " is-video-analysis" : ""}${closing ? " is-closing" : ""}`}
-    role="dialog" aria-modal="true" aria-label={workspaceOpen ? "视频分析工作区" : video ? "视频与会话预览" : "图片与会话预览"}
+    role="dialog" aria-modal="true" aria-label={workspaceOpen ? "视频分析工作区" : video ? "视频与生成记录预览" : "图片与生成记录预览"}
     onPointerDownCapture={event => {
       blankPress.current = event.button === 0 && isBlank(event.target) ? { x: event.clientX, y: event.clientY, moved: false } : null;
       const panel = event.target instanceof Element && event.currentTarget.contains(event.target)
@@ -397,18 +397,46 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
         <button type="button" className="video-analysis-icon-button" onClick={close}
           aria-label="关闭视频分析" title="关闭视频分析"><X size={19} aria-hidden="true"/></button>
       </header>}
-      {!openTranscript && <section className={`creation-image-preview-conversation creation-image-preview-inspector ${!inspectorOpen ? "is-collapsed" : inspectorVisible ? "is-ready" : "is-loading"}${inspectorClosing ? " is-leaving" : ""}`}
-        aria-label={mediaDetail} aria-hidden={workspaceOpen || !inspectorVisible || !inspectorOpen || inspectorClosing} hidden={workspaceOpen}>
+      {!openTranscript && hasConversation && <section className={`creation-image-preview-conversation creation-image-preview-record ${!detailsOpen ? "is-collapsed" : conversationVisible ? "is-ready" : "is-loading"}${detailsClosing ? " is-leaving" : ""}`}
+        aria-label="生成记录" aria-hidden={workspaceOpen || !conversationVisible || !detailsOpen || detailsClosing} hidden={workspaceOpen}>
         <div className="creation-image-preview-conversation-plane" aria-hidden="true"/>
         <header className="creation-image-preview-conversation-head">
-          <h2>{mediaDetail}</h2>
-          <button type="button" onClick={toggleInspector} aria-label={`收起${mediaDetail}面板`} title={`收起${mediaDetail}`}><PanelLeftClose size={16}/></button>
+          <h2>生成记录</h2>
+          {!video && snapshot && snapshot.job.turns.length > 1 && <span>共 {snapshot.job.turns.length} 轮</span>}
+          <button type="button" onClick={toggleDetails} aria-label="收起生成记录面板" title="收起生成记录"><PanelLeftClose size={16}/></button>
         </header>
-        {contentMounted && <AssetDetail key={requestKey} panelOnly initialAsset={asset}
-          onReady={() => setInspectorKey(requestKey)}
-          onOpenVideoAnalysis={video ? selectAnalysisView : undefined}
-          videoAnalysisStatus={video ? videoAnalysisStatus : undefined}
-          selection={{ assetId: asset.id, onClose: close, onOpen: close, onNavigate: close }}/>}
+        {imageIntroduced && (workflowOrigin || snapshot) && <div className="creation-image-preview-record-source">
+          <span title={workflowOrigin?.title}>{workflowOrigin ? "画布生成卡" : video ? "当前视频" : "当前图片"}{modelLabel && ` · ${modelLabel}`}{generationRatio && ` · ${generationRatio}`}</span>
+        </div>}
+        <div className="creation-image-preview-history">
+          {imageIntroduced && contentMounted && (snapshot ? singleTurn ? <div className="creation-image-preview-parameters">
+            <h3>提示词</h3>
+            <p>{detailTurn.promptRaw?.trim() || detailTurn.prompt}</p>
+            {referencePaths.length > 0 && <>
+              <h3>参考图</h3>
+              <ul>{referencePaths.map((reference, i) => {
+                const resolved = references.find(ref => ref.store_path === reference);
+                return <li key={`${i}:${reference}`}><img src={convertFileSrc(resolved?.thumb_path ?? reference)} alt={resolved?.name ?? `参考图 ${i + 1}`} loading="lazy"/></li>;
+              })}</ul>
+            </>}
+          </div> : <GenerationPanel embedded readOnly followLatest={followLatest} hydratedAssets={[asset, ...snapshot.job.refAssets]}
+            previewOutput={video ? undefined : { path: asset.store_path ?? null, onSelect: path => void showOutput(path, true) }}
+            onAddVideoFrame={video?.onAddFrame} onSaveVideoTrim={video?.onSaveTrim ? saveVideoTrim : undefined}
+            snapshot={snapshot} /> : <div className="creation-image-preview-info">
+          {!job && !ready ? <p role="status">正在读取生成记录…</p> : ready?.error != null
+            ? <div className="creation-image-preview-error" role="alert"><p>{userErrorMessage(ready.error, "生成记录暂时无法读取，请重试。")}</p><button type="button" onClick={() => setRetry(value => value + 1)}>重试</button></div>
+            : <p>暂无生成记录</p>}
+          </div>)}
+        </div>
+        {!video && outputError?.originKey === originKey && <p className="creation-image-preview-action-note" role="alert">{outputError.message}</p>}
+        {!video && imageIntroduced && contentMounted && source && (source.sessionId ? <ImagePreviewContinuation key={requestKey}
+          asset={asset} job={source} sourceJobId={sourceJobId} parentNodeId={asset.id === originalAsset.id ? parentNodeId : null} enabled={!closing}
+          draft={{ value: drafts[requestKey] ?? "", onChange: value => setDrafts(previous => ({ ...previous, [requestKey]: value })) }}
+          onSent={(jobId, turnKey) => { setContinuation({ originKey, jobId, turnKey }); setFollowLatest(true); }}/>
+          : <div className="creation-image-preview-action-note">
+            <span>此图片未保存可续接的会话</span>
+            {!workflowOrigin && onCreateWorkflowFromAsset && <button type="button" onClick={() => runCanvasAction(() => onCreateWorkflowFromAsset(asset))}>基于此图新建生成卡</button>}
+          </div>)}
         <span className="creation-image-preview-panel-mark" aria-hidden="true"/>
       </section>}
       <section className="creation-image-preview-image" aria-label={video ? "播放视频" : "放大图片"}>
@@ -444,48 +472,18 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
           onRead={() => { analysisHeading.current?.focus({ preventScroll: true }); selectAnalysisView("transcript"); }}
           onSeek={time => setVideoSeek(previous => ({ key: transcriptKey, time, revision: (previous?.revision ?? 0) + 1 }))}/>}
       </section>}
-      {!openTranscript && hasConversation && <section className={`creation-image-preview-conversation ${!detailsOpen ? "is-collapsed" : conversationVisible ? "is-ready" : "is-loading"}${detailsClosing ? " is-leaving" : ""}`}
-        aria-label={video ? "独立会话面板" : "生成记录"} aria-hidden={workspaceOpen || !conversationVisible || !detailsOpen || detailsClosing} hidden={workspaceOpen}>
+      {!openTranscript && <section className={`creation-image-preview-conversation creation-image-preview-inspector ${!inspectorOpen ? "is-collapsed" : inspectorVisible ? "is-ready" : "is-loading"}${inspectorClosing ? " is-leaving" : ""}`}
+        aria-label={mediaDetail} aria-hidden={workspaceOpen || !inspectorVisible || !inspectorOpen || inspectorClosing} hidden={workspaceOpen}>
         <div className="creation-image-preview-conversation-plane" aria-hidden="true"/>
         <header className="creation-image-preview-conversation-head">
-          <h2>{rightPanelTitle}</h2>
-          {!video && snapshot && snapshot.job.turns.length > 1 && <span>共 {snapshot.job.turns.length} 轮</span>}
-          <button type="button" onClick={toggleDetails} aria-label={`收起${rightPanelTitle}面板`} title={`收起${rightPanelTitle}`}><PanelRightClose size={16}/></button>
+          <h2>{mediaDetail}</h2>
+          <button type="button" onClick={toggleInspector} aria-label={`收起${mediaDetail}面板`} title={`收起${mediaDetail}`}><PanelRightClose size={16}/></button>
         </header>
-        {!video && imageIntroduced && (workflowOrigin || snapshot) && <div className="creation-image-preview-record-source">
-          <span title={workflowOrigin?.title}>{workflowOrigin ? "画布生成卡" : "当前图片"}{modelLabel && ` · ${modelLabel}`}{generationRatio && ` · ${generationRatio}`}</span>
-          {workflowOrigin?.canExpand && onExpandWorkflowCard && <button type="button"
-            onClick={() => runCanvasAction(() => onExpandWorkflowCard(workflowOrigin.nodeId))}>在画布展开生成卡</button>}
-        </div>}
-        <div className="creation-image-preview-history">
-          {imageIntroduced && contentMounted && (snapshot ? singleTurn ? <div className="creation-image-preview-parameters">
-            <h3>提示词</h3>
-            <p>{detailTurn.promptRaw?.trim() || detailTurn.prompt}</p>
-            {referencePaths.length > 0 && <>
-              <h3>参考图</h3>
-              <ul>{referencePaths.map((reference, i) => {
-                const resolved = references.find(ref => ref.store_path === reference);
-                return <li key={`${i}:${reference}`}><img src={convertFileSrc(resolved?.thumb_path ?? reference)} alt={resolved?.name ?? `参考图 ${i + 1}`} loading="lazy"/></li>;
-              })}</ul>
-            </>}
-          </div> : <GenerationPanel embedded readOnly followLatest={followLatest} hydratedAssets={[asset, ...snapshot.job.refAssets]}
-            previewOutput={video ? undefined : { path: asset.store_path ?? null, onSelect: path => void showOutput(path, true) }}
-            onAddVideoFrame={video?.onAddFrame} onSaveVideoTrim={video?.onSaveTrim ? saveVideoTrim : undefined}
-            snapshot={snapshot} /> : <div className="creation-image-preview-info">
-          {!job && !ready ? <p role="status">{video ? "正在读取对话…" : "正在读取生成记录…"}</p> : ready?.error != null
-            ? <div className="creation-image-preview-error" role="alert"><p>{userErrorMessage(ready.error, video ? "对话详情暂时无法读取，请重试。" : "生成记录暂时无法读取，请重试。")}</p><button type="button" onClick={() => setRetry(value => value + 1)}>重试</button></div>
-            : <p>{video ? "暂无生成会话" : "暂无生成记录"}</p>}
-          </div>)}
-        </div>
-        {!video && outputError?.originKey === originKey && <p className="creation-image-preview-action-note" role="alert">{outputError.message}</p>}
-        {!video && imageIntroduced && contentMounted && source && (source.sessionId ? <ImagePreviewContinuation key={requestKey}
-          asset={asset} job={source} sourceJobId={sourceJobId} parentNodeId={asset.id === originalAsset.id ? parentNodeId : null} enabled={!closing}
-          draft={{ value: drafts[requestKey] ?? "", onChange: value => setDrafts(previous => ({ ...previous, [requestKey]: value })) }}
-          onSent={(jobId, turnKey) => { setContinuation({ originKey, jobId, turnKey }); setFollowLatest(true); }}/>
-          : <div className="creation-image-preview-action-note">
-            <span>此图片未保存可续接的会话</span>
-            {!workflowOrigin && onCreateWorkflowFromAsset && <button type="button" onClick={() => runCanvasAction(() => onCreateWorkflowFromAsset(asset))}>基于此图新建生成卡</button>}
-          </div>)}
+        {contentMounted && <AssetDetail key={requestKey} panelOnly initialAsset={asset}
+          onReady={() => setInspectorKey(requestKey)}
+          onOpenVideoAnalysis={video ? selectAnalysisView : undefined}
+          videoAnalysisStatus={video ? videoAnalysisStatus : undefined}
+          selection={{ assetId: asset.id, onClose: close, onOpen: close, onNavigate: close }}/>}
         <span className="creation-image-preview-panel-mark" aria-hidden="true"/>
       </section>}
     </div>
@@ -510,13 +508,13 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
           <button type="button" onClick={() => zoom.zoomBy(1.25)} disabled={zoom.scale >= 16} title="放大" aria-label="放大图片"><ZoomIn size={16}/></button>
           <button type="button" onClick={zoom.reset} title="适应画面" aria-label="适应画面"><Focus size={16}/></button>
           </>}
-          {inspectorVisible && <button ref={inspectorToggleRef} type="button" onClick={toggleInspector} aria-pressed={inspectorOpen && !inspectorClosing}
-            title={inspectorOpen && !inspectorClosing ? `收起${mediaDetail}` : `显示${mediaDetail}`} aria-label={inspectorOpen && !inspectorClosing ? `收起${mediaDetail}` : `显示${mediaDetail}`}><PanelLeft size={16}/></button>}
           {video && <button type="button" aria-label="打开转录文稿" title="转录文稿" onClick={() => selectAnalysisView("transcript")}><FileText size={16}/></button>}
           {hasConversation && conversationVisible && <button ref={detailsToggleRef} type="button" onClick={toggleDetails} aria-pressed={detailsOpen && !detailsClosing}
-            title={detailsOpen && !detailsClosing ? `收起${rightPanelTitle}` : `显示${rightPanelTitle}`} aria-label={detailsOpen && !detailsClosing ? `收起${rightPanelTitle}` : `显示${rightPanelTitle}`}>
-            <MessageSquare size={16}/>
+            title={detailsOpen && !detailsClosing ? "收起生成记录" : "显示生成记录"} aria-label={detailsOpen && !detailsClosing ? "收起生成记录" : "显示生成记录"}>
+            <PanelLeft size={16}/>
           </button>}
+          {inspectorVisible && <button ref={inspectorToggleRef} type="button" onClick={toggleInspector} aria-pressed={inspectorOpen && !inspectorClosing}
+            title={inspectorOpen && !inspectorClosing ? `收起${mediaDetail}` : `显示${mediaDetail}`} aria-label={inspectorOpen && !inspectorClosing ? `收起${mediaDetail}` : `显示${mediaDetail}`}><PanelRight size={16}/></button>}
         </div>
       </footer>
     </div>

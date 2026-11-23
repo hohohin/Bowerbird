@@ -515,6 +515,10 @@ impl Database {
     }
 
     pub(crate) fn insert_asset_with_auto_classification(&self, a: &Asset, automatic: bool) -> AppResult<()> {
+        self.insert_saved_asset(a, automatic, None)
+    }
+
+    pub(crate) fn insert_saved_asset(&self, a: &Asset, automatic: bool, annotation: Option<&str>) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         tx.execute(
@@ -547,6 +551,10 @@ impl Database {
         )?;
         // A manual drop must never become visible to the background classifier.
         if !automatic { tx.execute("DELETE FROM local_auto_classification_pending WHERE asset_id=?1", [&a.id])?; }
+        if let Some(payload) = annotation {
+            tx.execute("INSERT INTO analyses(id,asset_id,kind,payload,created_at) VALUES(?1,?2,'annotation',?3,strftime('%s','now'))",
+                rusqlite::params![ulid::Ulid::new().to_string(),a.id,payload])?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -786,7 +794,7 @@ impl Database {
             let conn = self.conn.lock().unwrap();
             let visible = super::material_catalog::catalog_visibility(false);
             let sql = format!("SELECT {ASSET_COLS_A} FROM assets a
-                WHERE a.phash IS NOT NULL AND a.library_hidden=0 AND {visible}");
+                WHERE a.phash IS NOT NULL AND a.library_hidden=0 AND a.source IS NOT 'annotation' AND {visible}");
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], asset_from_row)?.collect::<Result<Vec<_>, _>>()?;
             rows
@@ -1574,7 +1582,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, asset_id, kind, payload, provider, created_at FROM analyses \
-             WHERE asset_id = ?1 ORDER BY created_at DESC",
+             WHERE asset_id = ?1 ORDER BY created_at DESC, rowid DESC",
         )?;
         let rows = stmt.query_map(rusqlite::params![asset_id], |r| {
             Ok(Analysis {

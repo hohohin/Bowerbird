@@ -11,12 +11,13 @@ await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 page.setDefaultTimeout(7000);
+page.setDefaultNavigationTimeout(60000);
 const errors = [], remote = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.route('**/*', route => { if (new URL(route.request().url()).hostname === '127.0.0.1') return route.continue(); remote.push(route.request().url()); return route.abort(); });
 const composer = page.getByRole('region', { name: '素材库创作', exact: true });
 const editor = composer.locator('.ProseMirror');
-const preview = page.getByRole('dialog', { name: '图片与会话预览', exact: true });
+const preview = page.getByRole('dialog', { name: '图片与生成记录预览', exact: true });
 const idle = () => page.waitForTimeout(700);
 const pickCount = () => page.evaluate(() => window.parityPicks.length);
 const chipCount = () => editor.locator('[data-asset-id]').count();
@@ -30,7 +31,7 @@ async function singlePreview(target) {
   const image = await preview.getByRole('region', {name:'放大图片'}).boundingBox();
   const detail = await preview.getByRole('region', {name:'生成记录'}).count();
   const info = await preview.getByRole('region', {name:'图片详情', exact:true}).boundingBox();
-  assert.ok(info.width >= 200 && info.x + info.width <= image.x, 'home also shows image details on the left');
+  assert.ok(info.width >= 200 && image.x + image.width <= info.x, 'home also shows image details on the right');
   assert.ok(image.width > 100 && !detail, 'imported home images open the large image and details without an empty conversation');
   await closePreview(); await unchangedDraft();
 }

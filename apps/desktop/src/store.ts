@@ -191,7 +191,7 @@ type CanvasMenuSelection = {
   assets?: Asset[];
   imageOnly?: boolean;
   canAdjustLayer?: boolean;
-  generationActions?: { edit?: () => void; revise?: () => void; create?: () => void };
+  generationActions?: { pin?: () => void; revise?: () => void; create?: () => void };
   removeSelectionFromCanvas?: () => void;
   prepareProjectRemoval?: (assetIds: string[]) => Promise<void>;
   deletionTargets?: { item: CanvasDeletionTarget; group?: CanvasDeletionTarget & { count: number } };

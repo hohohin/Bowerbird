@@ -79,9 +79,7 @@ try {
   await page.screenshot({ path: `${output}/single-dark.png` });
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
   await page.screenshot({ path: `${output}/single-light.png` });
-  await record.getByRole('button', { name: '在画布展开生成卡' }).click();
-  await modal.waitFor({ state: 'detached' });
-  assert.equal(await page.evaluate(() => window.__expandedWorkflow), 'workflow-source');
+  assert.equal(await record.getByRole('button', { name: /在画布(展开|固定)生成卡/ }).count(), 0);
 
   await page.goto('http://127.0.0.1:17949/scripts/fixtures/creation-image-review/preview.html?group');
   await record.getByText(/改成低机位/).waitFor();

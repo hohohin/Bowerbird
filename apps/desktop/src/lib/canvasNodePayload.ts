@@ -1,4 +1,5 @@
 import type { CanvasNode } from "./types";
+import { isVideoPath } from "./videoGeneration.ts";
 
 type CanvasNodePayload = Record<string, unknown> & {
   snapshot?: { name: string; width?: number; height?: number };
@@ -30,4 +31,8 @@ export function canvasNodePayload(node: CanvasNode): CanvasNodePayload {
     parsedPayloads.set(node, payload);
   }
   return payload as CanvasNodePayload;
+}
+
+export function canvasOutputIsVideo(node: CanvasNode) {
+  return node.outputIsVideo ?? (/^(workflow-video|workflow-comfy):/.test(node.id) || isVideoPath(canvasNodePayload(node).snapshot?.name));
 }

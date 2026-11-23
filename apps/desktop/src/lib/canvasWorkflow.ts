@@ -321,6 +321,14 @@ export function newWorkflowNode(kind: WorkflowKind, x: number, y: number, provid
     provider, inputs: {}, outputs: {}, outputPorts: [], trigger: false, ...(kind === "agent" ? { chatProvider: "codex-local" as const } : {}), ...(kind === "trigger" ? { triggerCount: 1 } : {}) };
 }
 
+export function workflowCompletionOutput(node: WorkflowNode): WorkflowPort | undefined {
+  if (node.kind !== "trigger" && !node.textSource && !node.textTarget) return workflowOutputs(node)[0];
+}
+
+export function workflowCompletionTarget(node: WorkflowNode): boolean {
+  return node.kind !== "trigger" && node.kind !== "planner" && !node.textTarget;
+}
+
 export function workflowConnectionError(nodes: WorkflowNode[], fromId: string, portId: string, toId: string, inputId: string): string | null {
   const from = nodes.find(node => node.id === fromId), to = nodes.find(node => node.id === toId);
   if (!from || !to) return "连接的卡片已不存在";

@@ -96,7 +96,7 @@ try {
   await page.waitForFunction(() => !document.querySelector('.explore-capture-status'));
   const recordedVideo = history().getByRole('listitem').filter({ hasText: '海边短片.mp4' });
   await recordedVideo.getByRole('button', { name: '查看素材', exact: true }).click();
-  const videoPreview = page.getByRole('dialog', { name: '视频与会话预览', exact: true });
+  const videoPreview = page.getByRole('dialog', { name: '视频与生成记录预览', exact: true });
   await videoPreview.getByRole('button', { name: '打开转录文稿', exact: true }).waitFor();
   assert.equal(await history().count(), 0);
   assert.equal(await page.evaluate(() => window.store.getState().detailAssetId), null);
@@ -104,7 +104,7 @@ try {
   assert.equal((await calls('external_files_media')).at(-1).args.path, '/captured-video.mp4');
   const source = await videoPreview.locator('video').getAttribute('src');
   assert.equal(new URL(source, page.url()).pathname, '/src-tauri/tests/fixtures/media/fragmented.mp4');
-  await page.waitForFunction(() => document.querySelector('[aria-label="视频与会话预览"] video')?.readyState >= HTMLMediaElement.HAVE_METADATA);
+  await page.waitForFunction(() => document.querySelector('[aria-label="视频与生成记录预览"] video')?.readyState >= HTMLMediaElement.HAVE_METADATA);
   await videoPreview.getByRole('button', { name: '关闭预览', exact: true }).click();
   await videoPreview.waitFor({ state: 'hidden' });
   await page.waitForFunction(() => window.calls.filter(c => c.command === 'resize_source_browser').at(-1)?.args.visible === true);

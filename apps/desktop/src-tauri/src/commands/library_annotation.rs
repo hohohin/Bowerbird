@@ -1,16 +1,20 @@
 //! Replace an explicitly selected original while retaining its material identity.
 use std::{fs, io::{BufReader, Write}, path::Path};
 use image::ImageFormat;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::Deserialize;
 use serde_json::Value;
 use crate::{core::{external_files::fingerprint, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}, media};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Overwrite { pub asset_id: String, pub source_hash: String }
+pub struct Overwrite { pub asset_id: String, pub source_hash: String, pub annotation_id: Option<String> }
 
 fn changed() -> AppError { AppError::Other("原图片已变化，请重新打开后再保存".into()) }
+
+pub fn bytes_hash(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes).as_ref().iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 fn original_format(path: &Path) -> AppResult<ImageFormat> {
     let format = ImageFormat::from_path(path).map_err(|_| AppError::Other("此格式不能覆盖原文件，请保存到素材库".into()))?;
@@ -31,10 +35,14 @@ pub fn overwrite(paths: &LibraryPaths, db: &Database, request: &Overwrite, bytes
     let path = fs::canonicalize(stored)?;
     let mut record: Value = serde_json::from_str(annotation)?;
     let image = image::load_from_memory(bytes)?;
-    if record["source_asset_id"] != asset.id || record["source_store_path"] != stored
-        || record["schema_version"] != 1 || !record["shapes"].is_array()
+    let revision = request.annotation_id.as_deref();
+    if record["schema_version"] != 1 || !record["shapes"].is_array()
+        || (revision.is_none() && (record["source_asset_id"] != asset.id || record["source_store_path"] != stored))
         || record["image"]["width"] != image.width() || record["image"]["height"] != image.height() {
         return Err(AppError::Other("标注记录与原图片不一致，未覆盖".into()));
+    }
+    if revision.is_some() && (asset.source.as_deref() != Some("annotation") || paths.managed_file_root(&path).is_none()) {
+        return Err(changed());
     }
     if fingerprint(&path)? != request.source_hash { return Err(changed()); }
     let metadata = fs::metadata(&path)?;
@@ -48,8 +56,13 @@ pub fn overwrite(paths: &LibraryPaths, db: &Database, request: &Overwrite, bytes
     output.as_file().set_permissions(metadata.permissions())?;
     output.as_file().sync_all()?;
     let output_hash = fingerprint(output.path())?;
-    record["save_mode"] = "overwrite".into();
-    record["source_sha256"] = request.source_hash.clone().into();
+    if revision.is_some() {
+        record["save_mode"] = "revision".into();
+    } else {
+        record["save_mode"] = "overwrite".into();
+        record["source_sha256"] = request.source_hash.clone().into();
+        record.as_object_mut().expect("annotation record object").remove("editable");
+    }
     record["output_sha256"] = output_hash.clone().into();
     let thumbnail = paths.thumb_path(&ulid::Ulid::new().to_string());
     let result = (|| -> AppResult<()> {
@@ -64,6 +77,15 @@ pub fn overwrite(paths: &LibraryPaths, db: &Database, request: &Overwrite, bytes
         let current: String = tx.query_row("SELECT store_path FROM assets WHERE id=?1", [&asset.id], |r| r.get(0))?;
         if current != stored || fs::canonicalize(&current)? != path || fingerprint(&path)? != request.source_hash
             || fingerprint(backup.path())? != request.source_hash { return Err(changed()); }
+        if let Some(expected) = revision {
+            let latest = tx.query_row(
+                "SELECT id,payload FROM analyses WHERE asset_id=?1 AND kind='annotation' ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                [&asset.id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            ).optional()?.ok_or_else(changed)?;
+            let previous: Value = serde_json::from_str(&latest.1)?;
+            if latest.0 != expected || (!previous["editable"].is_object() && previous["save_mode"] != "revision")
+                || previous["save_mode"] == "overwrite" { return Err(changed()); }
+        }
         // Same original can have legacy identities or connected aliases. Refresh each,
         // without changing membership, manual descriptions, tags, or canvas instances.
         let ids = tx.prepare("SELECT id FROM assets WHERE store_path IN (?1,?2,?3)")?

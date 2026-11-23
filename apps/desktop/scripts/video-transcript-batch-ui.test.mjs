@@ -91,7 +91,7 @@ async function openBatch() {
   await dialog().waitFor();
 }
 
-const preview = () => page.getByRole('dialog', { name: '视频与会话预览', exact: true });
+const preview = () => page.getByRole('dialog', { name: '视频与生成记录预览', exact: true });
 const workspace = () => page.getByRole('dialog', { name: '视频分析工作区', exact: true });
 const transcript = () => workspace().getByRole('region', { name: '转录文稿', exact: true });
 
@@ -202,7 +202,7 @@ try {
   const projectVideo = page.locator('[data-asset-id="menu-video-p"]');
   await checkTranscriptMenu(projectVideo, 'menu-video-p', '转录 · 5 Bcoin');
   await openSharedPreview(() => projectVideo.press('Enter'), '/menu-video-p.mp4');
-  await preview().getByRole('region', { name: '独立会话面板', exact: true }).waitFor();
+  await preview().getByRole('region', { name: '生成记录', exact: true }).waitFor();
   await page.keyboard.press('Escape');
   await preview().waitFor({ state: 'hidden' });
 

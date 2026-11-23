@@ -29,6 +29,8 @@ test('path policy rejects escapes, secrets, generated data and binary files', ()
   for (const value of ['../PROJECT.md', '/etc/passwd', 'C:/secret', 'a\\b', 'a/../b', 'a//b', '%2e%2e/x', 'a.ts:secret', 'a\0b', 'a./b']) assert.equal(safePath(value), false, value);
   for (const value of ['.env.tos', 'apps/cloud/.env', '.git/config', 'apps/cloud/secrets.json', 'apps/desktop/target/src.rs', 'apps/desktop/.tmp/foo.ts', 'apps/a/x.db', 'apps/a/auth.json', 'apps/a/key.pem', 'assets/a.jpg']) assert.equal(allowedFile(value), false, value);
   assert.equal(allowedFile('apps/desktop/src-tauri/src/commands/projects.rs'), true);
+  assert.equal(allowedFile('GLOSSARY.md'), true);
+  assert.equal(allowedFile('unreviewed.md'), false);
 });
 
 test('credential filtering preserves line numbers and removes private key blocks', () => {
@@ -73,14 +75,16 @@ test('responses remain bounded for very long source lines', () => {
   assert.ok(result.lines[0].text.endsWith('[LINE TRUNCATED]'));
 });
 
-test('export includes reviewed untracked implementations and tests while excluding other untracked files', async t => {
+test('export includes the tracked glossary and reviewed untracked files while enforcing redaction and exclusions', async t => {
   const dir = await temporary(t);
   const root = path.join(dir, 'repo');
   await mkdir(root);
   const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe', windowsHide: true });
   git('init');
   await writeFile(path.join(root, 'PROJECT.md'), 'old');
-  git('add', 'PROJECT.md');
+  await writeFile(path.join(root, 'GLOSSARY.md'), '# 术语\nAPI_KEY=abcdefghijklmnop\n素材');
+  await writeFile(path.join(root, 'unreviewed.md'), 'private documentation');
+  git('add', 'PROJECT.md', 'GLOSSARY.md', 'unreviewed.md');
   git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture');
   await writeFile(path.join(root, 'PROJECT.md'), 'current edit');
   await writeFile(path.join(root, '.env'), 'password=private');
@@ -101,8 +105,12 @@ test('export includes reviewed untracked implementations and tests while excludi
   const out = path.join(dir, 'snapshot.json');
   const report = await exportSnapshot(root, out);
   const snapshot = validateSnapshot(JSON.parse(await readFile(out, 'utf8')));
-  assert.equal(report.exportedFiles, 1 + reviewFiles.length);
+  assert.equal(report.exportedFiles, 2 + reviewFiles.length);
   assert.equal(snapshot.files.find(file => file.path === 'PROJECT.md').content, 'current edit');
+  assert.deepEqual(callTool(snapshot, 'read_file', { path: 'GLOSSARY.md' }).lines.map(line => line.text), [
+    '# 术语', '[REDACTED: potential credential]', '素材',
+  ]);
+  assert.throws(() => callTool(snapshot, 'read_file', { path: 'unreviewed.md' }));
   for (const file of reviewFiles) {
     const result = callTool(snapshot, 'read_file', { path: file });
     assert.equal(result.lines[0].text, 'reviewed source');

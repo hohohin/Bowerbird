@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { annotationTextLayout, finishTextShape, type AnnotationTool, type DrawShape } from "../lib/annotation";
+import { isImeKeyEvent } from "../lib/isEditableKeyTarget";
 import "./AnnotationTextEditor.css";
 
 const FONTS = [
@@ -42,7 +43,7 @@ export function AnnotationTextEditor<T extends AnnotationTool>({ shape, width, h
       <textarea ref={input} aria-label={label} value={source}
         onChange={e => update({ textSource: e.target.value })}
         onKeyDown={e => {
-          if (e.nativeEvent.isComposing) return;
+          if (isImeKeyEvent(e.nativeEvent)) return;
           if (e.key === "Escape") { e.stopPropagation(); onCancel(); }
           if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onCommit(); }
         }}

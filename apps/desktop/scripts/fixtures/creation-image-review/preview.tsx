@@ -140,8 +140,8 @@ function Review() {
     </section>
     {shown && <CreationImagePreview key={`${group ? "group" : shown.id}:${version}:${showHistory}`} asset={showHistory ? shown : { ...shown, generation_session_id: null }} projectId="review-project" job={showHistory && !deferred && !group ? job : undefined}
       navigation={group ? { index: assets.indexOf(shown), count: assets.length, assetIds: assets.map(asset => asset.id), onIndexChange: index => setShown(assets[index]) } : undefined}
-      workflowOrigin={showHistory && singleTurnPreview ? { nodeId: "workflow-source", title: "花影生图", canExpand: true } : undefined}
-      onExpandWorkflowCard={id => { host.__expandedWorkflow = id; }} onClose={() => setShown(null)}/>}
+      workflowOrigin={showHistory && singleTurnPreview ? { nodeId: "workflow-source", title: "花影生图" } : undefined}
+      onClose={() => setShown(null)}/>}
   </main>;
 }
 

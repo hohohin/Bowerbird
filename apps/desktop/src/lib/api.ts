@@ -311,7 +311,7 @@ export const api = {
     fileName: string;
     projectId?: string | null;
     annotationJson: string;
-    overwrite?: { assetId: string; sourceHash: string };
+    overwrite?: { assetId: string; sourceHash: string; annotationId?: string };
   }) =>
     invoke<Asset>("save_annotated_image", {
       dataUrl: req.dataUrl,
@@ -331,6 +331,7 @@ export const api = {
     }),
   // 读本地图片为 data URL（标注面板 canvas 导出用，规避 asset 协议跨域污染画布）。
   readImageDataUrl: (path: string) => invoke<string>("read_image_data_url", { path }),
+  readAnnotationImageWithHash: (path: string) => invoke<{ url: string; sha256: string }>("read_image_data_url", { path, withHash: true }),
   layerWorkspaceAssetIds: () => invoke<string[]>("layer_workspace_asset_ids"),
   layerExportPsd: (path: string, base64: string) => invoke<void>("layer_export_psd", { path, base64 }),
   layerExportFontNames: (fonts: string[]) => invoke<Record<string, string>>("layer_export_font_names", { fonts }),

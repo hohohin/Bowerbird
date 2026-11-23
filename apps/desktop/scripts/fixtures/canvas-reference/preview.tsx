@@ -40,10 +40,11 @@ const sourceLibrary = new URLSearchParams(location.search).has("source-library")
 const canvasLibrary = new URLSearchParams(location.search).has("canvas-library");
 const strictCanvas = new URLSearchParams(location.search).has("strict-canvas");
 const detailRoute = new URLSearchParams(location.search).has("detail-route");
-let canvasExists = !strictCanvas;
+let canvasExists = !strictCanvas || !!sessionStorage.getItem("reference-fixture");
 w.store = useStore;
 const callbacks = new Map();
 const listeners = new Map();
+const annotationSnapshots = new Map<string, { id: string; dataUrl: string; meta: any }>();
 const project = { id: "p", name: "引用布局合成验收", kind: "blank", workspace_path: "blank:p", asset_count: 5,
   title_source: "manual", created_at: 1, updated_at: 1 };
 if (new URLSearchParams(location.search).has("provisional") && !sessionStorage.getItem("reference-fixture")) Object.assign(project, { provisional: true, title_source: "default" });
@@ -398,10 +399,31 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "save_annotated_image") {
       if (w.failDraftSave) throw "模拟草稿保存失败";
-      const asset = { id: `draft-${assets.length}`, name: args.fileName, ext: "png", width: 1600, height: 1200,
-        store_path: args.dataUrl, source: "annotation" };
-      assets.push(asset);
+      const meta = JSON.parse(args.annotationJson);
+      const bytes = await (await fetch(args.dataUrl)).arrayBuffer();
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      meta.output_sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+      const geometry = { width: meta.image.width, height: meta.image.height, thumb_path: args.dataUrl };
+      let asset;
+      if (args.overwrite) {
+        asset = assets.find(item => item.id === args.overwrite.assetId);
+        const previous = annotationSnapshots.get(args.overwrite.assetId);
+        if (!asset || !previous || previous.meta.output_sha256 !== args.overwrite.sourceHash || previous.id !== args.overwrite.annotationId) {
+          throw "原图片已变化，请重新打开后再保存";
+        }
+        meta.save_mode = "revision";
+        Object.assign(asset, geometry);
+      } else {
+        asset = { id: `draft-${assets.length}`, name: args.fileName, ext: "png", ...geometry,
+          store_path: args.dataUrl, source: "annotation" };
+        assets.push(asset);
+      }
+      annotationSnapshots.set(asset.id, { id: crypto.randomUUID(), dataUrl: args.dataUrl, meta });
       return asset;
+    }
+    if (command === "list_analyses_by_asset") {
+      const entry = annotationSnapshots.get(args.assetId);
+      return entry ? [{ id: entry.id, asset_id: args.assetId, kind: "annotation", payload: JSON.stringify(entry.meta) }] : [];
     }
     if (command === "import_image_bytes" && args.source === "workflow-template") {
       const asset = { ...assets[0], id: `template-${assets.length}`, name: args.fileName, store_path: args.dataUrl, source: args.source };
@@ -426,7 +448,10 @@ w.__TAURI_INTERNALS__ = {
       if (args.overwrite) Object.assign(original, asset); else assets.push(asset);
       return asset;
     }
-    if (command === "read_image_data_url") return w.templateImageData ?? args.path;
+    if (command === "read_image_data_url") {
+      const asset = assets.find(item => item.store_path === args.path && annotationSnapshots.has(item.id));
+      return asset ? annotationSnapshots.get(asset.id)?.dataUrl : w.templateImageData ?? args.path;
+    }
     if (command === "project_canvas_ensure") {
       if (strictCanvas) await new Promise(resolve => setTimeout(resolve, 150));
       canvasExists = true;

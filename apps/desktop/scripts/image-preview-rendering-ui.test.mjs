@@ -46,7 +46,7 @@ try {
     assert.equal(await inspector.getByRole('tablist').count(), 0);
     assert.equal(await inspector.getByText('生成来源', { exact: true }).count(), 0);
     assert.equal(await inspector.getByRole('button', { name: '回看所属创作', exact: true }).count(), 0);
-    assert.equal(historyReads, 1, 'only the right conversation reads generation history');
+    assert.equal(historyReads, 1, 'the generation record is the only panel that reads history');
     assert.deepEqual(dark.layers, ['creation-image-preview-conversation-plane', 'creation-image-preview-conversation-plane']);
     assert.deepEqual(light.layers, dark.layers, 'both themes keep glass only on the two reading surfaces');
     assert.match(await inspector.innerText(), /尺寸/);

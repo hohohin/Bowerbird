@@ -2,6 +2,7 @@
 import "./components/LocalFileWorkspace.css";
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { useLocalFileMode } from "./lib/localFileMode";
 import { PreservedWorkspace } from "./components/PreservedWorkspace";
 import { OPEN_LOCAL_FILES } from "./lib/externalFiles";
@@ -63,7 +64,7 @@ import {
   resolveWorkspaceProjectId,
   shouldDiscardCreativeTarget,
 } from "./lib/workspaceRoute";
-import type { AuthSnapshot, CodexChunk, CodexHealth, DreaminaHealth, JimengOrphanTask } from "./lib/types";
+import type { AnnotationMeta, AuthSnapshot, CodexChunk, CodexHealth, DreaminaHealth, JimengOrphanTask } from "./lib/types";
 import "./components/TacticalProjection.css";
 import "./components/TacticalDialogs.css";
 import "./components/CanvasSecondaryTactical.css";
@@ -75,6 +76,14 @@ import "./components/IndustrialCanvas.css";
 import "./components/IndustrialMenus.css";
 
 let refreshVersion = 0;
+
+type ScreenshotCanvasRequest = { requestId: string; dataUrl: string; meta: AnnotationMeta; fileName: string };
+type ScreenshotCanvasReceipt = {
+  save?: (dataUrl: string, meta: AnnotationMeta, fileName: string) => Promise<void>;
+  savedToLibrary: boolean;
+  pending?: Promise<void>;
+  completed?: boolean;
+};
 
 function LibraryLoadingState() {
   return (
@@ -471,6 +480,48 @@ function App() {
       unlisten?.();
     };
   }, [reloadProjects]);
+
+  useEffect(() => {
+    let alive = true;
+    let unlisten: UnlistenFn | undefined;
+    const receipts = new Map<string, ScreenshotCanvasReceipt>();
+    void listen<ScreenshotCanvasRequest>("screenshot://canvas", async ({ payload }) => {
+      if (!alive) return;
+      const { requestId, dataUrl, meta, fileName } = payload;
+      let receipt = receipts.get(requestId);
+      if (!receipt) {
+        const save = useStore.getState().prepareCanvasAnnotation?.() ?? undefined;
+        receipt = { save, savedToLibrary: !save };
+        receipts.set(requestId, receipt);
+        if (receipts.size > 64) {
+          const entries = [...receipts];
+          const oldest = entries.find(([, value]) => value.completed)
+            ?? entries.find(([id, value]) => id !== requestId && !value.pending);
+          if (oldest) receipts.delete(oldest[0]);
+        }
+      }
+      const current = receipt;
+      let error: string | null = null;
+      if (!current.completed) {
+        current.pending ??= (async () => {
+          if (current.save) {
+            await current.save(dataUrl, meta, fileName);
+            notifySuccess("截图已添加到画板");
+          } else {
+            await api.saveAnnotatedImage({ dataUrl, fileName, annotationJson: JSON.stringify(meta) });
+            notifySuccess("当前未打开画板，截图已保存到素材库");
+          }
+          current.completed = true;
+          current.save = undefined;
+        })().finally(() => { current.pending = undefined; });
+        try { await current.pending; }
+        catch (cause) { error = userErrorMessage(cause, "截图交付失败，请重试。"); }
+      }
+      // A timed-out caller may already have closed. Keep the receipt for its retry.
+      void invoke("screenshot_canvas_result", { requestId, error, savedToLibrary: current.savedToLibrary }).catch(() => {});
+    }, { target: "main" }).then(off => { if (alive) unlisten = off; else off(); });
+    return () => { alive = false; unlisten?.(); };
+  }, []);
 
   // 用途（preset）CRUD 后后端 emit `presets://changed`，刷新创作板下拉。
   useEffect(() => {

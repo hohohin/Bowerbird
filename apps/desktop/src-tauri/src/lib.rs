@@ -514,6 +514,7 @@ pub fn run() {
             commands::screenshot::screenshot_session,
             commands::screenshot::screenshot_show,
             commands::screenshot::screenshot_output,
+            commands::screenshot::screenshot_canvas_result,
             commands::screenshot::screenshot_paste,
             commands::screenshot::screenshot_set_shortcuts,
             commands::screenshot::screenshot_shortcut_status,

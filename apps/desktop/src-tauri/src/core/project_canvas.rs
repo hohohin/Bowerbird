@@ -292,6 +292,8 @@ pub struct CanvasNode {
     pub kind: CreativeNodeKind,
     pub asset_id: Option<String>,
     pub role: Option<CreativeNodeRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_is_video: Option<bool>,
     pub payload_json: String,
     pub x: f64,
     pub y: f64,
@@ -678,10 +680,21 @@ pub(super) fn restore_canvas_conversations(conn: &rusqlite::Connection, project_
             node.payload_json = serde_json::to_string(&payload)?;
         }
     }
-    let mut stmt = conn.prepare("SELECT DISTINCT json_extract(n.payload_json,'$.execution.job_id'),g.conversation_id FROM canvas_nodes n JOIN assets a ON a.id=n.asset_id JOIN generation_conversations g ON g.session_id=a.generation_session_id WHERE n.project_id=?1 AND n.kind='asset' AND n.role='output'")?;
-    let conversations = stmt.query_map([project_id], |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)))?
-        .filter_map(|row| match row { Ok((Some(job), conversation)) => Some(Ok((job, conversation))), Ok(_) => None, Err(error) => Some(Err(error)) })
-        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+    let mut stmt = conn.prepare("SELECT n.id,a.ext,json_extract(n.payload_json,'$.execution.job_id'),g.conversation_id FROM canvas_nodes n JOIN assets a ON a.id=n.asset_id LEFT JOIN generation_conversations g ON g.session_id=a.generation_session_id WHERE n.project_id=?1 AND n.kind='asset' AND n.role='output'")?;
+    let mut outputs = std::collections::HashMap::new();
+    let mut conversations = std::collections::HashMap::new();
+    let mut rows = stmt.query([project_id])?;
+    while let Some(row) = rows.next()? {
+        if let Some(ext) = row.get::<_, Option<String>>(1)? {
+            outputs.insert(row.get::<_, String>(0)?, crate::media::probe::is_video(&ext));
+        }
+        if let (Some(job), Some(conversation)) = (row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?) {
+            conversations.insert(job, conversation);
+        }
+    }
+    for node in nodes.iter_mut() {
+        node.output_is_video = outputs.get(&node.id).copied();
+    }
     for node in nodes.iter_mut().filter(|node| node.kind == CreativeNodeKind::Prompt) {
         let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
         if payload["conversation_id"].as_str().is_some() { continue; }
@@ -734,6 +747,7 @@ fn node_from_row(row: &Row<'_>) -> rusqlite::Result<CanvasNode> {
             .get::<_, Option<String>>(5)?
             .map(node_role_from_sql)
             .transpose()?,
+        output_is_video: None,
         payload_json: row.get(6)?,
         x: row.get(7)?,
         y: row.get(8)?,
@@ -2270,7 +2284,7 @@ impl Database {
         } else if let Some(source) = owner {
             let rect = placement::workflow_rect(source);
             let mut excluded = vec![prompt_node_id.as_str()];
-            let x = if placement::image_workflow_can_replace(source, &workflow, &existing_canvas) {
+            let x = if placement::generation_workflow_can_replace(source, &workflow, &existing_canvas) {
                 excluded.extend(source["id"].as_str());
                 rect.x
             } else { rect.x + rect.width + 64.0 };
@@ -2632,29 +2646,36 @@ impl Database {
         let owner = placement::generation_source(&workflow, job_id, &prompt_node_id);
         let source = placement::source(&workflow, job_id, false).map(placement::workflow_rect);
         let mut excluded = vec![prompt_node_id.as_str()];
-        let snapshot = owner.filter(|node| node["kind"] == "generation" && node["generation"]["media"] != "video")
+        let snapshot = owner.filter(|node| matches!(node["kind"].as_str(), Some("generation" | "comfy-video")))
             .filter(|node| node["activeSessionNodeId"].as_str().is_none_or(|id| id == prompt_node_id))
             .filter(|_| !assets.is_empty())
             .map(|_| project_canvas_snapshot_tx(&tx, project_id)).transpose()?;
         let first_gallery = owner.zip(snapshot.as_ref()).and_then(|(node, snapshot)| {
-            if !placement::image_workflow_can_replace(node, &workflow, snapshot) { return None; }
+            if !placement::generation_workflow_can_replace(node, &workflow, snapshot) { return None; }
             let output_ids: std::collections::HashSet<_> = assets.iter()
                 .map(|asset| projection_id("gen-output", job_id, turn_key, &asset.id)).collect();
             let already_delivered = snapshot.nodes.iter().any(|entry| output_ids.contains(&entry.id));
-            let (anchor, has_product) = placement::image_workflow_history(node, snapshot);
-            (!already_delivered && !has_product).then_some((node, anchor.map_or(prompt_node_id.as_str(), |anchor| anchor.id.as_str())))
+            let (anchor, has_product) = placement::generation_workflow_history(node, snapshot);
+            let video = node["kind"] == "comfy-video" || node["generation"]["media"] == "video";
+            (!already_delivered && !has_product).then_some((node, if video { prompt_node_id.as_str() } else {
+                anchor.map_or(prompt_node_id.as_str(), |anchor| anchor.id.as_str())
+            }, video))
         });
-        if let Some((node, anchor)) = first_gallery {
+        if let Some((node, anchor, _)) = first_gallery {
             excluded.extend(node["id"].as_str());
             excluded.push(anchor);
         }
         let mut occupied = placement::obstacles(&tx, project_id, &workflow, &excluded)?;
         let sizes: Vec<_> = assets.iter().map(|asset| (190.0, asset_node_height(&asset_snapshot(asset)))).collect();
         let slots = placement::grid(&sizes);
-        let start = if let Some((node, anchor)) = first_gallery {
+        let start = if let Some((node, anchor, video)) = first_gallery {
             let source = placement::workflow_rect(node);
-            let height = sizes[0].1 * 260.0 / sizes[0].0;
-            let at = placement::near(placement::Rect { x: source.x, y: source.y, width: 260.0, height }, &occupied, source.x);
+            let at = if video {
+                (source.x, source.y)
+            } else {
+                let height = sizes[0].1 * 260.0 / sizes[0].0;
+                placement::near(placement::Rect { x: source.x, y: source.y, width: 260.0, height }, &occupied, source.x)
+            };
             tx.execute("UPDATE canvas_nodes SET x=?2,y=?3 WHERE id=?1", params![anchor, at.0, at.1])?;
             at
         } else {
@@ -3971,6 +3992,67 @@ mod tests {
             job_id:"job2".into(), turn_key:"second".into(), generation_conversation_id:"conversation2".into(), ..input
         }).unwrap();
         assert_eq!(position(&next.prompt_node_id), (520.0, 480.0));
+    }
+
+    #[test]
+    fn first_workflow_video_replaces_source_without_moving_old_image_or_replayed_video() {
+        let db = db(); materialize(&db, "p1");
+        db.create_creative_thread(&NewCreativeThread {
+            id: "t1".into(), project_id: "p1".into(), title: "workflow".into(), origin: CreativeThreadOrigin::Direct,
+        }).unwrap();
+        let save = |document: &serde_json::Value| {
+            db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p1',1,?1) ON CONFLICT(project_id) DO UPDATE SET document_json=excluded.document_json", [document.to_string()]).unwrap();
+        };
+        let mut doc = serde_json::json!({"schema_version":1,"nodes":[{"id":"card","kind":"generation","x":100,"y":200,
+            "sessionNodeIds":["gen-prompt:job-image:one:0"],"activeSessionNodeId":"gen-prompt:job-image:one:0"}],
+            "runs":[{"steps":{"card":{"jobId":"job-image"}}}]});
+        save(&doc);
+        db.conn.lock().unwrap().execute_batch("INSERT INTO assets(id,name,ext,store_path,width,height,created_at) VALUES
+            ('image','old image','png','/still.png',190,150,1),('video','first video','mp4','/first.mp4',1920,1080,2),
+            ('next-video','next video','mp4','/next.mp4',1920,1080,3)").unwrap();
+        let image = ProjectGenerationTurnInput { project_id:"p1".into(),thread_id:"t1".into(),generation_conversation_id:"old-image".into(),
+            job_id:"job-image".into(),turn_key:"one".into(),prompt:"image".into(),applied_prompt:"image".into(),provider:"test".into(),
+            provider_session_id:None,ratio:None,visual_profile:None,references:vec![],reference_node_ids:vec![],parent_node_id:None,
+            parent_asset_path:None,relation:None,retry_anchor_node_id:None };
+        let image_prompt = db.begin_project_generation_turn(&image).unwrap().prompt_node_id;
+        let image_id = db.complete_project_generation_turn("p1", "t1", "job-image", "one", None, &[db.get_asset("image").unwrap().unwrap()]).unwrap().remove(0);
+        let position = |id: &str| { let node = db.get_canvas_node(id).unwrap().unwrap(); (node.x, node.y) };
+        let old_position = position(&image_prompt);
+
+        let video = ProjectGenerationTurnInput { job_id: "job-video".into(), turn_key: "two".into(), generation_conversation_id: "first-video".into(), ..image };
+        doc["nodes"][0]["generation"]["media"] = "video".into();
+        doc["nodes"][0]["x"] = 240.into();
+        doc["nodes"][0]["y"] = 330.into();
+        doc["nodes"][0]["activeSessionNodeId"] = "gen-prompt:job-video:two:0".into();
+        doc["nodes"][0]["sessionNodeIds"].as_array_mut().unwrap().push("gen-prompt:job-video:two:0".into());
+        doc["runs"].as_array_mut().unwrap().push(serde_json::json!({"steps":{"card":{"jobId":"job-video"}}}));
+        save(&doc);
+        let video_prompt = db.begin_project_generation_turn(&video).unwrap().prompt_node_id;
+        let assets = [db.get_asset("video").unwrap().unwrap()];
+        let video_id = db.complete_project_generation_turn("p1", "t1", "job-video", "two", None, &assets).unwrap().remove(0);
+        assert_eq!(position(&video_id), (240.0, 330.0));
+        assert_eq!(position(&video_prompt), (240.0, 330.0));
+        assert_eq!(position(&image_prompt), old_position);
+        assert_eq!(position(&image_id), old_position);
+        let canvas = db.project_canvas_snapshot("p1").unwrap();
+        assert_eq!(canvas.nodes.iter().find(|node| node.id == video_id).unwrap().output_is_video, Some(true));
+        assert_eq!(canvas.nodes.iter().find(|node| node.id == image_id).unwrap().output_is_video, Some(false));
+
+        db.conn.lock().unwrap().execute("UPDATE canvas_nodes SET x=920,y=880 WHERE id IN (?1,?2)", params![video_prompt, video_id]).unwrap();
+        db.complete_project_generation_turn("p1", "t1", "job-video", "two", None, &assets).unwrap();
+        assert_eq!(position(&video_id), (920.0, 880.0));
+        assert_eq!(position(&video_prompt), (920.0, 880.0));
+
+        let next = ProjectGenerationTurnInput { job_id: "job-next".into(), turn_key: "three".into(), generation_conversation_id: "next-video".into(), ..video };
+        doc["nodes"][0]["activeSessionNodeId"] = "gen-prompt:job-next:three:0".into();
+        doc["nodes"][0]["sessionNodeIds"].as_array_mut().unwrap().push("gen-prompt:job-next:three:0".into());
+        doc["runs"].as_array_mut().unwrap().push(serde_json::json!({"steps":{"card":{"jobId":"job-next"}}}));
+        save(&doc);
+        db.begin_project_generation_turn(&next).unwrap();
+        let next_id = db.complete_project_generation_turn("p1", "t1", "job-next", "three", None, &[db.get_asset("next-video").unwrap().unwrap()]).unwrap().remove(0);
+        assert!(position(&next_id).0 > 240.0);
+        assert_eq!(position(&video_id), (920.0, 880.0));
+        assert_eq!(position(&image_prompt), old_position);
     }
 
     #[test]

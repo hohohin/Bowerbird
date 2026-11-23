@@ -11,7 +11,7 @@ import { voiceApi } from "./voice";
 import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey, type VoiceCardRequest } from "./voiceCard";
 import { api } from "./api";
 import type { Asset, CanvasNode, ProjectCanvasSnapshot } from "./types";
-import { placeWorkflowOutput } from "./canvasOutputPlacement";
+import { firstWorkflowVideoOutputPoint, placeWorkflowOutput } from "./canvasOutputPlacement";
 import { assetPayloadJson, canvasAssetNodeSize, createCanvasAssetSnapshot } from "./creativeCanvas";
 import { DEFAULT_VIDEO_OPTIONS, isVideoPath, resolveVideoOptions, videoInputError } from "./videoGeneration";
 import { profileExtractionIssue, profileInputKey, workflowGenerationProvider, workflowProviderIssue } from "./workflowProviderIssue";
@@ -38,7 +38,7 @@ import { contentTableRows } from "./contentTable";
 import { cloudAgentProfilePrompt } from "./workflowAgentProfile";
 
 import { agentOutputTargets, agentTextWriters, agentWriterValue, routeAgentOutputs } from "./workflowAgentOutputs";
-import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots, workflowBindingKey, workflowDisconnectId, filterDisconnectedReferences, generationReferencePreviewOrder, h3RunReferences } from "./canvasWorkflow";
+import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots, workflowBindingKey, workflowDisconnectId, filterDisconnectedReferences, generationReferencePreviewOrder, h3RunReferences, workflowCompletionOutput, workflowCompletionTarget, workflowConnectionError } from "./canvasWorkflow";
 import { readDismissedNotices, dismissNotices } from "./dismissedNotices";
 import { ConfirmedDshTurnFailure, WorkflowInputError, WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
@@ -711,6 +711,58 @@ export class CanvasWorkflowController {
     if (!source.nodeId || this.document.nodes.find(node => node.id === source.nodeId)?.outputs[source.portId ?? ""]) await this.start(writer.id, true);
   }
 
+  private observePendingCompletion(binding: WorkflowInput, source: WorkflowNode | undefined, canvasNodes: CanvasNode[]) {
+    // The workflow step may have already handed off the image render.
+    const pending = source?.kind === "generation" && source.outputs.image?.nodeIds?.[0];
+    if (pending && submittedTurnState(pending, canvasNodes) === "pending") binding.pendingCompletionSession = pending;
+  }
+
+  /** A winding drag creates an independent trigger and both control wires together. */
+  async connectCompletionTrigger(sourceId: string, targetId: string, point: { x: number; y: number },
+    onEdited?: (before: CanvasWorkflow, after: CanvasWorkflow) => void) {
+    return this.withResource("canvas", async () => {
+      await this.flush();
+      if (sourceId === targetId) throw new Error("不能连接卡片自身");
+      const sourceBeforeRead = this.document.nodes.find(node => node.id === sourceId);
+      if (!sourceBeforeRead || !workflowCompletionOutput(sourceBeforeRead)) throw new Error("请选择能完成运行的来源卡片");
+      const knownTarget = this.document.nodes.find(node => node.id === targetId);
+      const needsSessions = sourceBeforeRead.kind === "generation"
+        && (sourceBeforeRead.outputs.image?.nodeIds?.length || sourceBeforeRead.activeSessionNodeId);
+      let canvasNodes = needsSessions ? (await api.projectCanvasGet(this.projectId)).nodes
+        : knownTarget ? [] : await api.projectCanvasVisibleNodes(this.projectId, [targetId]);
+      let source = this.document.nodes.find(node => node.id === sourceId);
+      const turn = source?.kind === "generation" && source.outputs.image?.nodeIds?.[0];
+      // A source can hand off a render while the target or previous turn is read.
+      if (turn && turn !== sourceBeforeRead.outputs.image?.nodeIds?.[0] && !canvasNodes.some(node => node.id === turn)) {
+        canvasNodes = (await api.projectCanvasGet(this.projectId)).nodes;
+        source = this.document.nodes.find(node => node.id === sourceId);
+      }
+      const output = source && workflowCompletionOutput(source);
+      if (!source || !output) throw new Error("请选择能完成运行的来源卡片");
+      const nativeTarget = canvasNodes.find(node => node.id === targetId && node.kind === "note" && node.hiddenAt == null
+        && ["text", "images"].includes(readCanvasNote(node).note_type));
+      const nodes = this.document.nodes;
+      const existing = nodes.find(node => node.id === targetId || nativeTarget && node.textSource === targetId);
+      const target = existing ?? (nativeTarget && { ...newWorkflowNode("text", nativeTarget.x, nativeTarget.y, ""), textSource: targetId });
+      if (!target || !workflowCompletionTarget(target)) throw new Error("请选择能运行的接收卡片");
+      const binding: WorkflowInput = { nodeId: source.id, portId: output.id, autoConnect: crypto.randomUUID() };
+      this.observePendingCompletion(binding, source, canvasNodes);
+      const trigger: WorkflowNode = { ...newWorkflowNode("trigger", point.x, point.y, ""), triggerMode: "completion",
+        inputs: { completion: [binding] } };
+      const candidates = [...nodes, ...(!existing ? [target] : []), trigger];
+      const error = workflowConnectionError(candidates, trigger.id, "signal", target.id, "signal");
+      if (error) throw new Error(error);
+      const previous = this.document;
+      const before = structuredClone(previous);
+      const write = this.edit(candidates.map(node => node.id === target.id ? { ...node,
+        inputs: { ...node.inputs, signal: [...(node.inputs.signal ?? []), { nodeId: trigger.id, portId: "signal", autoConnect: crypto.randomUUID() }] } } : node));
+      const after = this.document;
+      if (after !== previous) onEdited?.(before, after);
+      await write;
+      return { before, after, createdNodeIds: [trigger.id] };
+    });
+  }
+
   /** A single gesture produces one durable edit, even when it carries several content types. */
   async connectAutomatic(outputs: AutomaticOutput[], target: { nodeId?: string; canvasNodeId?: string; cellId?: string },
     options: { createNodes?: WorkflowNode[]; connectionId?: string; onEdited?: (before: CanvasWorkflow, after: CanvasWorkflow) => void } = {}) {
@@ -767,10 +819,7 @@ export class CanvasWorkflowController {
           if (session && current.some(input => input.canvasNodeId && sessionAliases?.get(input.canvasNodeId) === session)) continue;
           if (receiver.kind === "trigger") {
             const source = nodes.find(node => node.id === binding.nodeId);
-            // With no listener at submission time, the workflow step already published
-            // a prompt identity and finished. Observe that exact outstanding render.
-            const pending = source?.kind === "generation" && source.outputs.image?.nodeIds?.[0];
-            if (pending && submittedTurnState(pending, canvasNodes) === "pending") binding.pendingCompletionSession = pending;
+            this.observePendingCompletion(binding, source, canvasNodes);
             addedCompletions.push(binding);
           }
           inputs[item.inputId] = [...current, binding];
@@ -1812,7 +1861,9 @@ export class CanvasWorkflowController {
         const snapshot = createCanvasAssetSnapshot(asset, resultId);
         const { width, height } = canvasAssetNodeSize(snapshot, 280);
         const current = this.document.nodes.find(item => item.id === node.id) ?? node;
-        const position = placeWorkflowOutput(canvas, this.layoutNodes(), current, { width, height });
+        const layout = this.layoutNodes();
+        const position = firstWorkflowVideoOutputPoint(canvas, { ...this.document, nodes: layout }, current)
+          ?? placeWorkflowOutput(canvas, layout, current, { width, height });
         await api.projectCanvasNodeCreate({ id: resultId, projectId: this.projectId, threadId: run.threadId,
           kind: "asset", assetId: asset.id, role: "output", payloadJson: JSON.stringify({ ...JSON.parse(assetPayloadJson(snapshot)), workflow_source: node.id }),
           ...position, width, height, zIndex: Math.max(0, ...canvas.nodes.map(item => item.zIndex)) + 1, positionLocked: false });
@@ -2863,10 +2914,22 @@ export class CanvasWorkflowController {
           }];
           const next = loop.index + 1 < loop.items.length;
           const index = next ? loop.index + 1 : loop.index;
-          const steps = { ...current.steps, [loop.nodeId]: { status: "done" as const, detail: next ? `第 ${index + 1} / ${loop.items.length} 项` : `已完成 ${completed.length} / ${loop.items.length - (loop.startIndex ?? 0)} 项` } };
+          const triggers = () => next || current.completionRecoveryOnly ? [] : workflowCompletionTriggers(this.document.nodes, loop.nodeId);
+          if (triggers().length) {
+            // Image steps can finish submitting before the images themselves are ready.
+            const sessions = completed.flatMap(item => Object.values(item.outputs).flatMap(Object.values)).filter(value => value.nodeIds?.length);
+            const owner = nodes.find(node => node.id === loop.nodeId)!;
+            currentId = loop.nodeId;
+            if (sessions.length && !await this.resolveInputGenerations(runId, owner, structuredClone(sessions), halted)) break;
+            currentId = "";
+          }
+          const latest = this.run(runId);
+          const steps = { ...latest.steps, [loop.nodeId]: { status: "done" as const, detail: next ? `第 ${index + 1} / ${loop.items.length} 项` : `已完成 ${completed.length} / ${loop.items.length - (loop.startIndex ?? 0)} 项` } };
           if (next) for (const id of loop.bodyIds) steps[id] = { status: "pending" };
+          const completedTriggers = triggers();
           // Persist the completed item and the next cursor together, before any new submission.
-          await this.saveRun({ ...current, loop: { ...loop, index, completed }, steps }, this.document.nodes.map(node =>
+          await this.saveRun({ ...latest, loop: { ...loop, index, completed }, steps,
+            ...(completedTriggers.length ? { triggerQueue: [...(latest.triggerQueue ?? []), ...completedTriggers.map(trigger => trigger.id)] } : {}) }, this.document.nodes.map(node =>
             node.id === loop.nodeId ? { ...node, outputs: workflowLoopOutputs(loop.items![index], index) }
               : next && loop.bodyIds.includes(node.id) ? { ...node, outputs: {}, ...(node.kind === "generation" ? { activeSessionNodeId: null } : {}) } : node));
           if (next) for (const id of loop.bodyIds) attempted.delete(id);

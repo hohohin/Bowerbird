@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ClipboardCopy, FileText, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, ScanSearch, Scan, Trash2, Ungroup } from "lucide-react";
+import { ClipboardCopy, FileText, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, Pin, ScanSearch, Scan, Trash2, Ungroup } from "lucide-react";
 import { useStore } from "../store";
 import { understandEngineUsable } from "../lib/entitlement";
 import { api } from "../lib/api";
@@ -41,6 +41,7 @@ const ICONS = {
   "scan-search": <ScanSearch size={13} />,
   scan: <Scan size={13} />,
   board: <LayoutDashboard size={13} />,
+  pin: <Pin size={13} />,
   clipboard: <ClipboardCopy size={13} />,
   message: <MessageSquare size={13} />,
   "file-text": <FileText size={13} />,
@@ -167,7 +168,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
     generationCount: groupIds?.length ?? 0, generationCheck, hasGenerationGroup: !!menu.generationGroup, canvasImagesPending,
     canvas: canvas && { nodeCount: canvas.nodeIds.length, canRemove: !!removeFromCanvas, itemTarget: !!deletionTargets?.item,
       groupCount: deletionTargets?.group?.count, canUngroup: !!menu.ungroupCanvasFolder,
-      generationActions: canvas.generationActions && { edit: !!canvas.generationActions.edit, revise: !!canvas.generationActions.revise,
+      generationActions: canvas.generationActions && { pin: !!canvas.generationActions.pin, revise: !!canvas.generationActions.revise,
         create: !!canvas.generationActions.create } },
     file: file && { local: !!file.localPaths, entries: entries && { available: entries.available, canRemoveReferences: !!entries.removeReferences } },
     describe: { queued: describingId === assetId || describeQueue.some(item => item.assetId === assetId),
@@ -258,7 +259,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
       case "remove-references": close(); entries?.removeReferences?.(); break;
       case "remove-from-canvas": removeFromCanvas?.(); close(); break;
       case "ungroup": close(); menu.ungroupCanvasFolder?.(); break;
-      case "edit-generation-card": close(); canvas?.generationActions?.edit?.(); break;
+      case "pin-generation-card": close(); canvas?.generationActions?.pin?.(); break;
       case "continue-image-generation": close(); canvas?.generationActions?.revise?.(); break;
       case "create-image-generation-card": close(); canvas?.generationActions?.create?.(); break;
       case "remove-from-project": removeFromProject(targetIds); break;

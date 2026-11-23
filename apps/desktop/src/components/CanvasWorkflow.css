@@ -5,6 +5,14 @@
 .workflow-card header strong { align-self:stretch; flex:1; font-size:13px; color:var(--bb-ink); }
 .workflow-card button { display:inline-flex; align-items:center; justify-content:center; gap:4px; }
 .workflow-card button:disabled { opacity:.4; cursor:not-allowed; }
+html[data-theme] .canvas-tactical .workflow-card[data-workflow-peek] > .canvas-tactical-card-shell { box-shadow:var(--hud-shadow-active); }
+.workflow-card[data-workflow-peek] > header { cursor:default; }
+.workflow-peek-bridge { position:absolute; inset:0; pointer-events:none; }
+.workflow-peek-bridge::after { content:""; position:absolute; left:100%; top:0; bottom:0; width:12px; pointer-events:auto; }
+.workflow-card > header > .workflow-generation-pin { width:30px; height:30px; flex:none; }
+.workflow-card > header > .workflow-generation-pin[aria-pressed="true"] { color:var(--bb-blue); background:var(--bb-popover-hover); }
+.workflow-card > header > .workflow-completion-drag { cursor:grab; touch-action:none; }
+.workflow-card > header > .workflow-completion-drag:active { cursor:grabbing; }
 .workflow-card-body { padding:12px 16px; }
 .workflow-agent-chat-controls { margin-bottom:8px; }
 html[data-theme] .canvas-tactical .workflow-card footer.workflow-agent-run-footer { margin-top:4px; justify-content:flex-end; background:none; }

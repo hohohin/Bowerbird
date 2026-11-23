@@ -32,7 +32,7 @@ try {
   },{audio,dir});
   await page.reload(); await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();await install();
   await page.locator('[data-canvas-node-id="audio-source-clip"]').click();
-  const preview=page.getByRole('dialog',{name:'视频与会话预览',exact:true});
+  const preview=page.getByRole('dialog',{name:'视频与生成记录预览',exact:true});
   await preview.waitFor();await page.waitForFunction(()=>document.querySelector('.creation-image-preview video')?.readyState>=2);
   await page.evaluate(()=>{window.failNodeSave=true;});
   await preview.getByRole('button',{name:'提取视频音轨',exact:true}).click();await page.getByRole('menuitem',{name:'添加到画板',exact:true}).click();
