@@ -11,6 +11,7 @@ import { focusTextTail, readTextSelection } from "./textBlockTransforms";
 import { EditorKit } from './text-editor/plate/components/editor/editor-kit';
 import { FixedToolbar } from './text-editor/plate/ui/fixed-toolbar';
 import { FixedToolbarButtons } from './text-editor/plate/ui/fixed-toolbar-buttons';
+import type { InsertSourceAction } from './text-editor/plate/ui/insert-toolbar-button';
 import { TooltipProvider } from './text-editor/plate/primitives/tooltip';
 import { TextEditorServices } from './text-editor/TextEditorServices';
 import { TextMediaContext, TextMediaElement } from './text-editor/TextMediaElements';
@@ -24,6 +25,7 @@ interface Props {
   agent?: { projectId?: string };
   toolbarStart?: ReactNode;
   toolbarEnd?: ReactNode;
+  insertSource?: InsertSourceAction;
   value: DocumentValue;
   media: DocumentMedia[];
   onChange(value: DocumentValue): void;
@@ -53,7 +55,7 @@ function DiscussionChanges({ onChange }: { onChange(value: Value): void }) {
   return null;
 }
 
-export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextPlateEditor({ value, media, onChange, onDropAssets, toolbarStart, toolbarEnd, agent }, ref) {
+export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextPlateEditor({ value, media, onChange, onDropAssets, toolbarStart, toolbarEnd, insertSource, agent }, ref) {
   const [initialValue] = useState(() => plateValue(value));
   const editor = usePlateEditor({
     plugins: [...EditorKit.filter(plugin => plugin.key !== 'fixed-toolbar').map(plugin => plugin.key === 'discussion' ? discussionPlugin.extend({ options: { discussions: value.discussions ?? [] } }) : plugin), createPlatePlugin({ key: "raw", node: { isElement: true, component: RawElement } })],
@@ -111,7 +113,7 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
   const content = <div className="text-plate-ui text-plate-shell">
     <div className="text-plate-toolbar">
       {(toolbarStart || toolbarEnd) && <div className="text-document-format text-plate-document-actions">{toolbarStart}<span className="text-plate-toolbar-spacer"/>{toolbarEnd}</div>}
-      <FixedToolbar aria-label="文字格式"><FixedToolbarButtons/></FixedToolbar>
+      <FixedToolbar aria-label="文字格式"><FixedToolbarButtons insertSource={insertSource}/></FixedToolbar>
     </div>
     <PlateContainer className="text-plate-container">
     <PlateContent ref={bodyRef} className="text-document-body" aria-label="文档正文" spellCheck={false} placeholder="开始写作…"

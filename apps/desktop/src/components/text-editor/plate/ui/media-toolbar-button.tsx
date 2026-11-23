@@ -2,22 +2,9 @@
 'use client';
 
 import * as React from 'react';
-
-import type { DropdownMenuProps } from '@radix-ui/react-dropdown-menu';
-
-import { PlaceholderPlugin } from '@platejs/media/react';
-import {
-  AudioLinesIcon,
-  FileUpIcon,
-  FilmIcon,
-  ImageIcon,
-  LinkIcon,
-} from 'lucide-react';
 import { isUrl, KEYS } from 'platejs';
 import { useEditorRef } from 'platejs/react';
 import { notifyError } from '@/lib/notify';
-import { useFilePicker } from 'use-file-picker';
-
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,149 +14,31 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/text-editor/plate/primitives/alert-dialog';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/text-editor/plate/primitives/dropdown-menu';
-import { Input } from '@/components/text-editor/plate/primitives/input';
+} from '../primitives/alert-dialog';
+import { Input } from '../primitives/input';
 
-import {
-  ToolbarSplitButton,
-  ToolbarSplitButtonPrimary,
-  ToolbarSplitButtonSecondary,
-} from './toolbar';
-
-const MEDIA_CONFIG: Record<
-  string,
-  {
-    accept: string[];
-    icon: React.ReactNode;
-    title: string;
-    tooltip: string;
-  }
-> = {
-  [KEYS.audio]: {
-    accept: ['audio/*'],
-    icon: <AudioLinesIcon className="size-4" />,
-    title: '插入音频',
-    tooltip: '音频',
-  },
-  [KEYS.file]: {
-    accept: ['*'],
-    icon: <FileUpIcon className="size-4" />,
-    title: '插入附件',
-    tooltip: '附件',
-  },
-  [KEYS.img]: {
-    accept: ['image/*'],
-    icon: <ImageIcon className="size-4" />,
-    title: '插入图片',
-    tooltip: '图片',
-  },
-  [KEYS.video]: {
-    accept: ['video/*'],
-    icon: <FilmIcon className="size-4" />,
-    title: '插入视频',
-    tooltip: '视频',
-  },
+const mediaTitles = {
+  [KEYS.audio]: '插入音频',
+  [KEYS.file]: '插入附件',
+  [KEYS.img]: '插入图片',
+  [KEYS.video]: '插入视频',
 };
 
-export function MediaToolbarButton({
-  nodeType,
-  ...props
-}: DropdownMenuProps & { nodeType: string }) {
-  const currentConfig = MEDIA_CONFIG[nodeType];
+export type MediaNodeType = keyof typeof mediaTitles;
 
-  const editor = useEditorRef();
-  const [open, setOpen] = React.useState(false);
-  const [dialogOpen, setDialogOpen] = React.useState(false);
-
-  const { openFilePicker } = useFilePicker({
-    accept: currentConfig.accept,
-    multiple: true,
-    onFilesSelected: ({ plainFiles: updatedFiles }) => {
-      editor.getTransforms(PlaceholderPlugin).insert.media(updatedFiles);
-    },
-  });
-
-  return (
-    <>
-      <ToolbarSplitButton
-        aria-label={currentConfig.title}
-        onClick={() => {
-          openFilePicker();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            setOpen(true);
-          }
-        }}
-        pressed={open}
-      >
-        <ToolbarSplitButtonPrimary>
-          {currentConfig.icon}
-        </ToolbarSplitButtonPrimary>
-
-        <DropdownMenu
-          open={open}
-          onOpenChange={setOpen}
-          modal={false}
-          {...props}
-        >
-          <DropdownMenuTrigger asChild>
-            <ToolbarSplitButtonSecondary />
-          </DropdownMenuTrigger>
-
-          <DropdownMenuContent
-            onClick={(e) => e.stopPropagation()}
-            align="start"
-            alignOffset={-32}
-          >
-            <DropdownMenuGroup>
-              <DropdownMenuItem onSelect={() => openFilePicker()}>
-                {currentConfig.icon}
-                从电脑上传
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setDialogOpen(true)}>
-                <LinkIcon />
-                使用链接插入
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </ToolbarSplitButton>
-
-      <AlertDialog
-        open={dialogOpen}
-        onOpenChange={(value) => {
-          setDialogOpen(value);
-        }}
-      >
-        <AlertDialogContent className="gap-6">
-          <MediaUrlDialogContent
-            currentConfig={currentConfig}
-            nodeType={nodeType}
-            setOpen={setDialogOpen}
-          />
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
-  );
+export function MediaUrlDialog({ nodeType, close }: { nodeType: MediaNodeType; close(): void }) {
+  return <AlertDialog open onOpenChange={value => { if (!value) close(); }}>
+    <AlertDialogContent className="gap-6">
+      <MediaUrlDialogContent nodeType={nodeType} close={close}/>
+    </AlertDialogContent>
+  </AlertDialog>;
 }
-
 function MediaUrlDialogContent({
-  currentConfig,
   nodeType,
-  setOpen,
+  close,
 }: {
-  currentConfig: (typeof MEDIA_CONFIG)[string];
-  nodeType: string;
-  setOpen: (value: boolean) => void;
+  nodeType: MediaNodeType;
+  close(): void;
 }) {
   const editor = useEditorRef();
   const [url, setUrl] = React.useState('');
@@ -177,19 +46,19 @@ function MediaUrlDialogContent({
   const embedMedia = React.useCallback(() => {
     if (!isUrl(url)) return notifyError('请输入有效的媒体链接。', '请输入有效的媒体链接。');
 
-    setOpen(false);
+    close();
     editor.tf.insertNodes({
       children: [{ text: '' }],
       name: nodeType === KEYS.file ? url.split('/').pop() : undefined,
       type: nodeType,
       url,
     });
-  }, [url, editor, nodeType, setOpen]);
+  }, [url, editor, nodeType, close]);
 
   return (
     <>
       <AlertDialogHeader>
-        <AlertDialogTitle>{currentConfig.title}</AlertDialogTitle>
+        <AlertDialogTitle>{mediaTitles[nodeType]}</AlertDialogTitle>
       </AlertDialogHeader>
 
       <AlertDialogDescription className="group relative w-full">

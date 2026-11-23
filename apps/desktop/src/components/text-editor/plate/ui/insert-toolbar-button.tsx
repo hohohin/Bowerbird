@@ -1,270 +1,98 @@
 // Adapted from Plate (MIT). See LICENSE.md in this directory tree.
 'use client';
 
-import * as React from 'react';
-
-import type { DropdownMenuProps } from '@radix-ui/react-dropdown-menu';
-
-import {
-  CalendarIcon,
-  ChevronRightIcon,
-  Code2,
-  Columns3Icon,
-  FileCodeIcon,
-  FilmIcon,
-  Heading1Icon,
-  Heading2Icon,
-  Heading3Icon,
-  ImageIcon,
-  Link2Icon,
-  ListIcon,
-  ListOrderedIcon,
-  MinusIcon,
-  PenToolIcon,
-  PilcrowIcon,
-  PlusIcon,
-  QuoteIcon,
-  RadicalIcon,
-  SquareIcon,
-  SuperscriptIcon,
-  TableIcon,
-  TableOfContentsIcon,
-} from 'lucide-react';
+import { AudioLinesIcon, FileUpIcon, FilmIcon, ImageIcon, LinkIcon, PlusIcon, SlashIcon } from 'lucide-react';
+import { useRef, useState } from 'react';
 import { KEYS } from 'platejs';
-import { type PlateEditor, useEditorRef } from 'platejs/react';
+import { useEditorRef } from 'platejs/react';
+import { PlaceholderPlugin } from '@platejs/media/react';
+import { useFilePicker } from 'use-file-picker';
 
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from '@/components/text-editor/plate/primitives/dropdown-menu';
-import {
-  insertBlock,
-  insertInlineElement,
-} from '@/components/text-editor/plate/components/editor/transforms';
+} from '../primitives/dropdown-menu';
+import { insertInlineElement } from '../components/editor/transforms';
+import { MediaUrlDialog, type MediaNodeType } from './media-toolbar-button';
+import { openTextSlashMenu } from './slash-node';
+import { ToolbarButton } from './toolbar';
 
-import { ToolbarButton, ToolbarMenuGroup } from './toolbar';
+export interface InsertSourceAction {
+  label: string;
+  disabled?: boolean;
+  run(): void;
+}
 
-type Group = {
-  group: string;
-  items: Item[];
-};
+const mediaLinks = [
+  [KEYS.img, '图片', ImageIcon],
+  [KEYS.audio, '音频', AudioLinesIcon],
+  [KEYS.video, '视频', FilmIcon],
+  [KEYS.file, '附件', FileUpIcon],
+] as const;
 
-type Item = {
-  icon: React.ReactNode;
-  value: string;
-  onSelect: (editor: PlateEditor, value: string) => void;
-  focusEditor?: boolean;
-  label?: string;
-};
-
-const groups: Group[] = [
-  {
-    group: '基础块',
-    items: [
-      {
-        icon: <PilcrowIcon />,
-        label: '正文',
-        value: KEYS.p,
-      },
-      {
-        icon: <Heading1Icon />,
-        label: '标题 1',
-        value: 'h1',
-      },
-      {
-        icon: <Heading2Icon />,
-        label: '标题 2',
-        value: 'h2',
-      },
-      {
-        icon: <Heading3Icon />,
-        label: '标题 3',
-        value: 'h3',
-      },
-      {
-        icon: <TableIcon />,
-        label: '表格',
-        value: KEYS.table,
-      },
-      {
-        icon: <FileCodeIcon />,
-        label: 'Code',
-        value: KEYS.codeBlock,
-      },
-      {
-        icon: <QuoteIcon />,
-        label: '引用',
-        value: KEYS.blockquote,
-      },
-      {
-        icon: <MinusIcon />,
-        label: '分割线',
-        value: KEYS.hr,
-      },
-    ].map((item) => ({
-      ...item,
-      onSelect: (editor, value) => {
-        insertBlock(editor, value);
-      },
-    })),
-  },
-  {
-    group: 'Lists',
-    items: [
-      {
-        icon: <ListIcon />,
-        label: '无序列表',
-        value: KEYS.ul,
-      },
-      {
-        icon: <ListOrderedIcon />,
-        label: '有序列表',
-        value: KEYS.ol,
-      },
-      {
-        icon: <SquareIcon />,
-        label: '待办列表',
-        value: KEYS.listTodo,
-      },
-      {
-        icon: <ChevronRightIcon />,
-        label: '折叠列表',
-        value: KEYS.toggle,
-      },
-    ].map((item) => ({
-      ...item,
-      onSelect: (editor, value) => {
-        insertBlock(editor, value);
-      },
-    })),
-  },
-  {
-    group: '媒体',
-    items: [
-      {
-        icon: <ImageIcon />,
-        label: '图片',
-        value: KEYS.img,
-      },
-      {
-        icon: <FilmIcon />,
-        label: '嵌入',
-        value: KEYS.mediaEmbed,
-      },
-    ].map((item) => ({
-      ...item,
-      onSelect: (editor, value) => {
-        insertBlock(editor, value);
-      },
-    })),
-  },
-  {
-    group: '高级块',
-    items: [
-      {
-        icon: <TableOfContentsIcon />,
-        label: '目录',
-        value: KEYS.toc,
-      },
-      {
-        icon: <Columns3Icon />,
-        label: '三栏',
-        value: 'action_three_columns',
-      },
-      {
-        focusEditor: false,
-        icon: <RadicalIcon />,
-        label: '公式',
-        value: KEYS.equation,
-      },
-      {
-        icon: <PenToolIcon />,
-        label: 'Excalidraw',
-        value: KEYS.excalidraw,
-      },
-      {
-        icon: <Code2 />,
-        label: '代码绘图',
-        value: KEYS.codeDrawing,
-      },
-    ].map((item) => ({
-      ...item,
-      onSelect: (editor, value) => {
-        insertBlock(editor, value);
-      },
-    })),
-  },
-  {
-    group: '行内元素',
-    items: [
-      {
-        icon: <Link2Icon />,
-        label: '链接',
-        value: KEYS.link,
-      },
-      {
-        focusEditor: true,
-        icon: <CalendarIcon />,
-        label: '日期',
-        value: KEYS.date,
-      },
-      {
-        focusEditor: true,
-        icon: <SuperscriptIcon />,
-        label: '脚注',
-        value: 'action_footnote',
-      },
-      {
-        focusEditor: false,
-        icon: <RadicalIcon />,
-        label: '行内公式',
-        value: KEYS.inlineEquation,
-      },
-    ].map((item) => ({
-      ...item,
-      onSelect: (editor, value) => {
-        insertInlineElement(editor, value);
-      },
-    })),
-  },
-];
-
-export function InsertToolbarButton(props: DropdownMenuProps) {
+export function InsertToolbarButton({ source }: { source?: InsertSourceAction }) {
   const editor = useEditorRef();
-  const [open, setOpen] = React.useState(false);
+  const afterClose = useRef<(() => void) | null>(null);
+  const [mediaUrl, setMediaUrl] = useState<MediaNodeType>();
+  const onFilesSelected = ({ plainFiles }: { plainFiles: FileList }) => {
+    if (!editor.selection) {
+      const end = editor.api.end([]);
+      if (end) editor.tf.select(end);
+    }
+    editor.getTransforms(PlaceholderPlugin).insert.media(plainFiles);
+  };
+  const images = useFilePicker({ accept: ['image/*'], multiple: true, onFilesSelected });
+  const audiovisual = useFilePicker({ accept: ['audio/*', 'video/*'], multiple: true, onFilesSelected });
+  const attachments = useFilePicker({ accept: ['*'], multiple: true, onFilesSelected });
 
-  return (
-    <DropdownMenu open={open} onOpenChange={setOpen} modal={false} {...props}>
+  return <>
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <ToolbarButton pressed={open} tooltip="插入" isDropdown>
-          <PlusIcon />
-        </ToolbarButton>
+        <ToolbarButton tooltip="插入素材"><PlusIcon /><span className="text-plate-format-caption">插入素材</span></ToolbarButton>
       </DropdownMenuTrigger>
-
-      <DropdownMenuContent
-        className="flex max-h-[500px] min-w-0 flex-col overflow-y-auto"
-        align="start"
-      >
-        {groups.map(({ group, items: nestedItems }) => (
-          <ToolbarMenuGroup key={group} label={group}>
-            {nestedItems.map(({ icon, label, value, onSelect }) => (
-              <DropdownMenuItem
-                key={value}
-                className="min-w-[180px]"
-                onSelect={() => {
-                  onSelect(editor, value);
-                  editor.tf.focus();
-                }}
-              >
-                {icon}
-                {label}
-              </DropdownMenuItem>
-            ))}
-          </ToolbarMenuGroup>
-        ))}
+      <DropdownMenuContent align="start" onCloseAutoFocus={event => {
+        if (!afterClose.current) return;
+        event.preventDefault();
+        const action = afterClose.current;
+        afterClose.current = null;
+        action();
+      }}>
+        {source && <DropdownMenuItem disabled={source.disabled} onSelect={source.run}><ImageIcon />{source.label}</DropdownMenuItem>}
+        <DropdownMenuItem onSelect={images.openFilePicker}><ImageIcon />选择本地图片</DropdownMenuItem>
+        <DropdownMenuItem onSelect={audiovisual.openFilePicker}><FilmIcon />选择本地音视频</DropdownMenuItem>
+        <DropdownMenuItem onSelect={attachments.openFilePicker}><FileUpIcon />选择本地附件</DropdownMenuItem>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger><LinkIcon />通过链接插入媒体</DropdownMenuSubTrigger>
+          <DropdownMenuPortal>
+            <DropdownMenuSubContent>
+              {mediaLinks.map(([type, label, Icon]) => <DropdownMenuItem key={type} onSelect={() => {
+                afterClose.current = () => setMediaUrl(type);
+              }}><Icon />{label}</DropdownMenuItem>)}
+            </DropdownMenuSubContent>
+          </DropdownMenuPortal>
+        </DropdownMenuSub>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => {
+          afterClose.current = () => {
+            if (!editor.selection) {
+              const end = editor.api.end([]);
+              if (end) editor.tf.select(end);
+            }
+            insertInlineElement(editor, KEYS.link);
+          };
+        }}><LinkIcon />插入链接</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => {
+          afterClose.current = () => openTextSlashMenu(editor);
+        }}><SlashIcon />插入其他块…</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
+    {mediaUrl && <MediaUrlDialog nodeType={mediaUrl} close={() => setMediaUrl(undefined)} />}
+  </>;
 }

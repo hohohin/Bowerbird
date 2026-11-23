@@ -69,6 +69,7 @@ type InlineComboboxProps = {
   filter?: FilterFn | false;
   hideWhenNoValue?: boolean;
   showTrigger?: boolean;
+  preserveOnCancel?: boolean;
   value?: string;
   setValue?: (value: string) => void;
 };
@@ -78,6 +79,7 @@ const InlineCombobox = ({
   element,
   filter = defaultFilter,
   hideWhenNoValue = false,
+  preserveOnCancel = true,
   setValue: setValueProp,
   showTrigger = true,
   trigger,
@@ -148,7 +150,7 @@ const InlineCombobox = ({
     autoFocus: isCreator,
     ref: inputRef,
     onCancelInput: (cause) => {
-      if (cause !== 'backspace') {
+      if (preserveOnCancel && cause !== 'backspace') {
         editor.tf.insertText(trigger + value, {
           at: insertPointRef.current?.current ?? undefined,
         });
@@ -221,6 +223,7 @@ const InlineCombobox = ({
 
 const InlineComboboxInput = ({
   className,
+  onKeyDown,
   ref: propRef,
   ...props
 }: React.HTMLAttributes<HTMLInputElement> & {
@@ -254,7 +257,7 @@ const InlineComboboxInput = ({
           className="invisible overflow-hidden text-nowrap"
           aria-hidden="true"
         >
-          {value || '\u200B'}
+          {value || '\u00A0'}
         </span>
 
         <Combobox
@@ -267,6 +270,15 @@ const InlineComboboxInput = ({
           autoSelect
           {...inputProps}
           {...props}
+          onKeyDown={(event) => {
+            onKeyDown?.(event);
+            if (event.defaultPrevented || event.nativeEvent.isComposing) return;
+            inputProps.onKeyDown?.(event);
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
         />
       </span>
     </>

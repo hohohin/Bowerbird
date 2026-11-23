@@ -12,7 +12,7 @@ try {
  assert.equal(await page.getByRole('button',{name:'源码',exact:true}).count(),0);
  assert.equal(await page.locator('.text-workspace-library').getAttribute('aria-hidden'),'false');
  const toolbar=page.locator('.text-plate-toolbar');
- for(const name of ['返回','保存到文件夹','保存到项目','添加到生成对话框']) assert.equal(await toolbar.getByRole('button',{name,exact:true}).count(),1);
+ for(const name of ['返回','保存到','添加到生成对话框']) assert.equal(await toolbar.getByRole('button',{name,exact:true}).count(),1);
  await toolbar.getByRole('textbox',{name:'文档名称'}).fill('改名后的文档');
  const writing=page.locator('.text-workspace-writing');
  const library=await page.locator('.text-workspace-library').boundingBox();
@@ -30,7 +30,9 @@ try {
  const after=await writing.boundingBox();assert(after.x>before.x+300);assert(middle.x>before.x && middle.x<after.x);
  const back=await toolbar.getByRole('button',{name:'返回',exact:true}).boundingBox();
  const handle=await page.getByRole('separator',{name:'调整素材库宽度'}).boundingBox();assert(handle.x+handle.width<=back.x || handle.y>=back.y+back.height);
- await toolbar.getByRole('button',{name:'保存到项目',exact:true}).click();await page.getByRole('button',{name:'秋日短片',exact:true}).click();
+ await toolbar.getByRole('button',{name:'保存到',exact:true}).click();
+ await toolbar.getByRole('button',{name:'保存到项目',exact:true}).click();
+ await toolbar.getByRole('group',{name:'选择项目'}).getByRole('button',{name:'秋日短片',exact:true}).click();
  await page.waitForFunction(()=>window.calls.some(c=>c.command==='create_text_document'&&c.args.input.title==='改名后的文档'));
  await mkdir('.tmp/text-workspace-layout',{recursive:true});
  for(const width of [1440,900]) {await page.setViewportSize({width,height:900});for(const theme of ['light','dark']) {await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);await page.screenshot({path:`.tmp/text-workspace-layout/${theme}-${width}.png`});}}

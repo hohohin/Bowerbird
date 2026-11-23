@@ -8,7 +8,7 @@
 .text-workspace :where(.text-workspace-writing) input, .text-workspace :where(.text-workspace-writing) textarea { font:inherit; color:var(--bb-ink); background:transparent; }
 .text-workspace svg { flex-shrink:0; }
 .text-workspace .text-workspace-icon { width:34px; height:34px; padding:0; flex-shrink:0; }
-.text-workspace-name { display:flex; align-items:center; gap:6px; min-width:0; margin-right:12px; }
+.text-workspace-name { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; margin-right:12px; }
 .text-workspace-name input { border:0; font-size:14px; width:130px; max-width:130px; min-width:70px; }
 .text-workspace-recent { white-space:nowrap; flex-shrink:0; }
 .text-workspace-autosave { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; color:var(--bb-muted); font-size:11px; white-space:nowrap; }
@@ -18,7 +18,9 @@
 .text-workspace-recent-title { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .text-workspace-recents time { font-size:11px; flex-shrink:0; color:var(--bb-muted); }
 .text-workspace-recents p { padding:8px; font-size:12px; color:var(--bb-muted); }
-.text-workspace-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; margin-left:auto; }
+.text-workspace-actions { position:relative; display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; margin-left:auto; }
+.text-workspace-save-wide { display:flex; gap:6px; }
+.text-workspace .text-workspace-actions .text-workspace-save-compact { display:none; }
 .text-workspace-actions button { font-size:13px; white-space:nowrap; }
 .text-workspace-actions .text-workspace-primary { color:var(--bb-blue); font-weight:600; margin-left:10px; }
 .text-workspace-action { position:relative; }
@@ -50,3 +52,10 @@
 .text-workspace-layout.is-library-resizing .text-workspace-writing { transition:none; }
 @media(prefers-reduced-motion:reduce) { .text-workspace-writing { transition:none; } }
 @media(max-width:1000px) { .text-workspace-name input { width:100px; min-width:60px; } .text-workspace-actions button { font-size:12px; padding:5px 6px; } .text-workspace-actions .text-workspace-primary { margin-left:0; } .text-workspace-writing .text-document-body { padding-right:32px; } }
+@container plate-editor (max-width:850px) {
+  .text-workspace-save-wide { display:none; }
+  .text-workspace-action { position:static; }
+  .text-workspace .text-workspace-actions button.text-workspace-save-compact { display:inline-flex; }
+  .text-workspace .text-workspace-actions .text-workspace-destinations.text-workspace-save-compact { display:flex; }
+  .text-workspace-actions .text-workspace-primary { margin-left:0; }
+}

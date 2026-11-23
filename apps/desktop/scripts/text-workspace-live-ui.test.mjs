@@ -16,6 +16,10 @@ page.setDefaultTimeout(10000);
 await page.route('**/*', route => { if (new URL(route.request().url()).hostname !== '127.0.0.1') { remote.push(route.request().url()); return route.abort(); } return route.continue(); });
 await page.route('**/fixture/reference.png*', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect width="400" height="200" fill="#95b4ac"/></svg>' }));
 const button = name => page.getByRole('button', { name, exact: true });
+async function openDestination(label) {
+  if (!await button(label).isVisible()) await button('保存到').click();
+  await button(label).click();
+}
 const projectDestination = name => page.getByRole('group', { name: '选择项目' }).getByRole('button', { name, exact: true });
 const catalog = page.locator('.text-workspace .library-catalog');
 const card = id => catalog.locator(`.folder-media-card[data-asset-id="${id}"]`);
@@ -91,7 +95,7 @@ try {
   assert.equal(await modal.evaluate((panel, first) => document.activeElement !== first && panel.contains(document.activeElement), firstControl), true, 'reverse Tab stays inside the modal');
   await page.keyboard.press('Tab');
   assert.equal(await page.evaluate(first => document.activeElement === first, firstControl), true, 'last control wraps to first');
-  await button('保存到文件夹').click();
+  await openDestination('保存到文件夹');
   await page.keyboard.press('Escape');
   assert.equal(await page.getByRole('group', { name: '选择文件夹' }).count(), 0, 'Escape dismisses only the top menu');
   assert.equal(await editor.count(), 1);
@@ -250,19 +254,19 @@ try {
   }
   assert.ok(markdown.indexOf('data-bowerbird-asset="img1"') < markdown.indexOf('桌面上'), 'delayed image must insert at original caret');
   assert.equal((markdown.match(/data-bowerbird-asset/g) || []).length, 1);
-  await button('保存到文件夹').click(); await button('创作笔记').click();
+  await openDestination('保存到文件夹'); await button('创作笔记').click();
   await page.getByRole('status').filter({ hasText: '已保存到' }).waitFor();
-  await button('保存到文件夹').click(); await button('创作笔记').click();
+  await openDestination('保存到文件夹'); await button('创作笔记').click();
   let calls = await page.evaluate(() => window.calls.filter(call => call.command === 'create_text_document'));
   assert.equal(calls[0].args.input.destination.folderId, 'f');
   assert.equal(calls[0].args.input.requestId, calls[1].args.input.requestId, 'unchanged repeat save uses same idempotency identity');
   await page.evaluate(() => { window.saveError = true; });
   await replaceBody('保存失败仍保留');
-  await button('保存到项目').click(); await projectDestination('秋日短片').click();
+  await openDestination('保存到项目'); await projectDestination('秋日短片').click();
   await page.getByRole('alert').filter({ hasText: '目录暂时无法写入' }).waitFor();
   assert.equal((await editor.locator('[data-slate-string]').allTextContents()).join('').trim(), '保存失败仍保留');
   await page.evaluate(() => { window.saveError = false; window.saveDelay = 300; });
-  await button('保存到项目').click(); await projectDestination('秋日短片').click();
+  await openDestination('保存到项目'); await projectDestination('秋日短片').click();
   await replaceBody('保存期间继续编辑');
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
   assert.equal((await editor.locator('[data-slate-string]').allTextContents()).join('').trim(), '保存期间继续编辑');
@@ -271,12 +275,12 @@ try {
   assert.equal(calls[3].args.input.destination.projectId, 'p');
   await page.evaluate(() => { window.saveError = true; window.saveDelay = 250; });
   await replaceBody('关闭后重试');
-  await button('保存到文件夹').click(); await button('创作笔记').click();
+  await openDestination('保存到文件夹'); await button('创作笔记').click();
   await button('返回').click();
   await page.waitForTimeout(300);
   await button('放大编辑').click(); await editor.waitFor();
   await page.evaluate(() => { window.saveError = false; window.saveDelay = 0; });
-  await button('保存到文件夹').click(); await button('创作笔记').click();
+  await openDestination('保存到文件夹'); await button('创作笔记').click();
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
   calls = await page.evaluate(() => window.calls.filter(call => call.command === 'create_text_document'));
   assert.equal(calls[calls.length - 2].args.input.requestId, calls[calls.length - 1].args.input.requestId, 'failed save keeps identity across close/reopen');
@@ -305,13 +309,13 @@ try {
   await page.waitForTimeout(300); await button('放大编辑').click();
   assert.equal(await page.getByRole('alert').count(), 0, 'closed-session failure does not leak into a reopened editor');
   await replaceBody('重载后重试');
-  await button('保存到文件夹').click(); await button('创作笔记').click();
+  await openDestination('保存到文件夹'); await button('创作笔记').click();
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
   const reloadRequestId = await page.evaluate(() => window.calls.filter(call => call.command === 'create_text_document').at(-1).args.input.requestId);
   if (coverage) { coverageChunks.push(...await page.coverage.stopJSCoverage()); await page.coverage.startJSCoverage({ resetOnNavigation: false }); }
   await page.reload(); await editor.waitFor();
   await replaceBody('重载后重试');
-  await button('保存到文件夹').click(); await button('创作笔记').click();
+  await openDestination('保存到文件夹'); await button('创作笔记').click();
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
   assert.equal(await page.evaluate(() => window.calls.find(call => call.command === 'create_text_document').args.input.requestId), reloadRequestId, 'same snapshot retains retry identity across page reload');
   await page.evaluate(async () => window.store.setState({ projects: await window.__TAURI_INTERNALS__.invoke('list_projects', {}) }));

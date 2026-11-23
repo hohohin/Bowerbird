@@ -1,4 +1,4 @@
-.text-plate-shell { display:flex; flex-direction:column; min-height:0; height:100%; }
+.text-plate-shell { display:flex; flex-direction:column; min-height:0; height:100%; container:plate-editor / inline-size; }
 .text-plate-container { position:relative; display:flex; flex-direction:column; flex:1; min-height:0; }
 .text-plate-toolbar { flex-shrink:0; background:var(--bb-surface); border-bottom:1px solid var(--bb-line); }
 .text-plate-toolbar .text-document-format { border:0; }
@@ -13,6 +13,19 @@
 .text-segment-agent:hover { color:var(--bb-blue); }
 .text-plate-ui [role=menuitem], .text-plate-ui [role=option] { cursor:pointer; }
 .text-plate-ui [role=menuitem]:focus-visible, .text-plate-ui [role=option][data-selected=true] { outline-color:var(--bb-blue); }
-.text-plate-toolbar [role=toolbar] > div { flex-wrap:nowrap; width:max-content; min-width:100%; }
-.text-plate-toolbar [role=toolbar] { scrollbar-width:thin; }
+.text-plate-format-actions { display:flex; flex-wrap:wrap; align-items:center; gap:5px; width:100%; min-width:0; padding:4px 10px; }
+.text-plate-format-group { display:flex; flex-wrap:wrap; align-items:center; gap:2px; min-width:0; }
+.text-plate-format-group + .text-plate-format-group { padding-left:6px; border-left:1px solid var(--bb-line); }
+.text-plate-format-group.text-plate-format-output { margin-left:auto; padding-left:0; border:0; }
+.text-plate-format-toolbar .text-plate-format-group button { gap:5px; padding-inline:6px; font-size:12px; white-space:nowrap; border-radius:0; }
+.text-plate-format-toolbar .text-plate-format-group .text-plate-block-type { min-width:64px; }
+.text-plate-ui .text-plate-format-agent { color:var(--bb-blue); }
+.text-plate-ui.text-plate-selection-popover { width:min(232px,calc(100vw - 24px)); padding:4px; border-radius:0; }
+.text-plate-selection-tools, .text-plate-selection-local { flex-wrap:wrap; gap:2px; }
+.text-plate-selection-local { margin-top:4px; padding-top:4px; border-top:1px solid var(--bb-line); }
+@container plate-editor (max-width:510px) {
+  .text-plate-format-actions { padding-inline:5px; gap:3px; }
+  .text-plate-format-group + .text-plate-format-group { padding-left:3px; }
+  .text-plate-format-toolbar .text-plate-format-caption { display:none; }
+}
 .text-plate-shell .text-document-body { padding-left:max(96px,calc((100% - 744px)/2)); }

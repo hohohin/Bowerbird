@@ -67,6 +67,7 @@ try {
   await page.waitForFunction(() => window.snapshots.get('md').text.includes('重开后继续编辑'));
   await page.getByRole('button', { name: '正文', exact: true }).click();
   await page.getByRole('button', { name: '插入素材', exact: true }).click();
+  await page.getByRole('menuitem', { name: '从电脑连接素材原件', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.text-document-block figure').length === 3);
   await page.getByRole('textbox', { name: '素材说明', exact: true }).first().fill('配色参考');
   const waveform = page.locator('.text-document-block [data-audio-preview]');

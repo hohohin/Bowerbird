@@ -20,7 +20,7 @@ export function ExportToolbarButton(props: DropdownMenuProps) {
     finally { setBusy(false); }
   }
   return <DropdownMenu open={open} onOpenChange={setOpen} modal={false} {...props}>
-    <DropdownMenuTrigger asChild><ToolbarButton disabled={busy} pressed={open} tooltip="导出" isDropdown><ArrowDownToLineIcon className="size-4"/></ToolbarButton></DropdownMenuTrigger>
-    <DropdownMenuContent align="start">{formats.map(([format, label]) => <DropdownMenuItem key={format} onSelect={() => { void save(format); }}>导出 {label}</DropdownMenuItem>)}</DropdownMenuContent>
+    <DropdownMenuTrigger asChild><ToolbarButton disabled={busy} pressed={open} tooltip="导出" isDropdown><ArrowDownToLineIcon className="size-4"/><span className="text-plate-format-caption">导出</span></ToolbarButton></DropdownMenuTrigger>
+    <DropdownMenuContent align="end">{formats.map(([format, label]) => <DropdownMenuItem key={format} onSelect={() => { void save(format); }}>导出 {label}</DropdownMenuItem>)}</DropdownMenuContent>
   </DropdownMenu>;
 }

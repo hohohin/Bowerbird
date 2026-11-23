@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Plus, RotateCcw, Save } from "lucide-react";
+import { RotateCcw, Save } from "lucide-react";
 import type { Asset } from "../lib/types";
 import type { DocumentMedia, DocumentValue } from "../lib/documentTypes";
 import { api } from "../lib/api";
@@ -170,6 +170,7 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
   }
   async function insertFiles() {
     if (inserting) return;
+    const insertion = plate.current?.reserveInsertion();
     setInserting(true);
     try {
       const selected = await open({ multiple: true, directory: false, filters: [{ name: "图片、音频和视频", extensions: ["png", "jpg", "jpeg", "webp", "gif", "avif", "bmp", "wav", "mp3", "flac", "m4a", "ogg", "mp4", "mov", "webm", "m4v", "mkv"] }] });
@@ -178,9 +179,9 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
       const inserted = await api.importFiles(paths);
       if (!mounted.current) return;
       const items = await attachAssets(inserted.map(item => item.id));
-      if (mounted.current) plate.current?.insertMedia(items);
+      if (mounted.current) insertion?.insert(items);
     } catch (reason) { if (mounted.current) setError(userErrorMessage(reason, "素材暂时无法插入，请检查原文件后重试。")); }
-    finally { if (mounted.current) setInserting(false); }
+    finally { insertion?.cancel(); if (mounted.current) setInserting(false); }
   }
 
   return <section className="text-document-editor" data-text-document-editor onKeyDown={event => {
@@ -189,7 +190,6 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
   }}>
     <div className="text-document-toolbar">
       {!stateChoice && draft?.base.format === "markdown" && <div className="text-document-modes"><button aria-pressed={draft.mode === "body"} onClick={() => switchMode("body")}>正文</button><button aria-pressed={draft.mode === "source"} onClick={() => switchMode("source")}>源码</button></div>}
-      {!stateChoice && draft && draft.base.format !== "text" && <button title="插入已有素材的原文件引用" disabled={draft.mode !== "body" || inserting} onClick={() => void insertFiles()}><Plus size={14}/>插入素材</button>}
       <span className="text-document-save-state">{dirty ? "磁盘原件 · 有未保存更改" : "磁盘原件 · 手动保存"}</span>
       <button aria-label="重新读取原文件" title="重新读取原文件" disabled={saving || !!stateChoice} onClick={() => void reload()}><RotateCcw size={14}/></button>
       <button disabled={!dirty || saving || !!stateChoice} onClick={() => void save()}><Save size={14}/>{saving ? "保存中…" : "保存"}</button>
@@ -200,6 +200,7 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
     {stateChoice ? <TextDocumentStateChoice saving={recovering} onOpenLatest={openLatest} onSaveDraft={() => void keepRichDraft()}/>
       : !draft ? <div className="text-document-loading">{error ? "" : "正在读取文本…"}</div> : draft.base.format === "text" ? <textarea className="text-document-source is-plain" aria-label="文本内容" value={draft.text} onChange={event => changeText(event.target.value)} />
       : draft.mode === "source" ? <textarea className="text-document-source" aria-label="Markdown 源码" value={draft.text} spellCheck={false} onChange={event => changeText(event.target.value)} />
-      : <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={attachAssets} />}
+      : <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={attachAssets}
+          insertSource={{ label: "从电脑连接素材原件", disabled: inserting, run: () => void insertFiles() }} />}
   </section>;
 }

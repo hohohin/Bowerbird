@@ -31,18 +31,6 @@ export const Toolbar = React.forwardRef<HTMLDivElement, React.ComponentPropsWith
   );
 });
 
-export function ToolbarToggleGroup({
-  className,
-  ...props
-}: React.ComponentProps<typeof ToolbarPrimitive.ToolbarToggleGroup>) {
-  return (
-    <ToolbarPrimitive.ToolbarToggleGroup
-      className={cn('flex items-center', className)}
-      {...props}
-    />
-  );
-}
-
 export function ToolbarLink({
   className,
   ...props
@@ -69,7 +57,7 @@ export function ToolbarSeparator({
 
 // From toggleVariants
 const toolbarButtonVariants = cva(
-  "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium text-sm outline-none transition-[color,box-shadow] hover:bg-muted hover:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-checked:bg-accent aria-checked:text-accent-foreground aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium text-sm outline-none transition-[color,box-shadow] hover:bg-muted hover:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-pressed:bg-accent aria-pressed:text-accent-foreground aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     defaultVariants: {
       size: 'default',
@@ -90,37 +78,12 @@ const toolbarButtonVariants = cva(
   }
 );
 
-const dropdownArrowVariants = cva(
-  cn(
-    'inline-flex items-center justify-center rounded-r-md font-medium text-foreground text-sm transition-colors disabled:pointer-events-none disabled:opacity-50'
-  ),
-  {
-    defaultVariants: {
-      size: 'sm',
-      variant: 'default',
-    },
-    variants: {
-      size: {
-        default: 'h-9 w-6',
-        lg: 'h-10 w-8',
-        sm: 'h-8 w-4',
-      },
-      variant: {
-        default:
-          'bg-transparent hover:bg-muted hover:text-muted-foreground aria-checked:bg-accent aria-checked:text-accent-foreground',
-        outline:
-          'border border-input border-l-0 bg-transparent hover:bg-accent hover:text-accent-foreground',
-      },
-    },
-  }
-);
-
 type ToolbarButtonProps = {
   isDropdown?: boolean;
   pressed?: boolean;
 } & Omit<
-  React.ComponentPropsWithoutRef<typeof ToolbarToggleItem>,
-  'asChild' | 'value'
+  React.ComponentPropsWithoutRef<typeof ToolbarPrimitive.Button>,
+  'asChild'
 > &
   VariantProps<typeof toolbarButtonVariants>;
 
@@ -133,150 +96,22 @@ export const ToolbarButton = withTooltip(React.forwardRef<HTMLButtonElement, Too
   variant,
   ...props
 }, ref) {
-  return typeof pressed === 'boolean' ? (
-    <ToolbarToggleGroup disabled={props.disabled} value="single" type="single">
-      <ToolbarToggleItem
-        ref={ref}
-        className={cn(
-          toolbarButtonVariants({
-            size,
-            variant,
-          }),
-          isDropdown && 'justify-between gap-1 pr-1',
-          className
-        )}
-        value={pressed ? 'single' : ''}
-        {...props}
-      >
-        {isDropdown ? (
-          <>
-            <div className="flex flex-1 items-center gap-2 whitespace-nowrap">
-              {children}
-            </div>
-            <div>
-              <ChevronDown
-                className="size-3.5 text-muted-foreground"
-                data-icon
-              />
-            </div>
-          </>
-        ) : (
-          children
-        )}
-      </ToolbarToggleItem>
-    </ToolbarToggleGroup>
-  ) : (
+  return (
     <ToolbarPrimitive.Button
       ref={ref}
+      aria-pressed={pressed}
       className={cn(
-        toolbarButtonVariants({
-          size,
-          variant,
-        }),
-        isDropdown && 'pr-1',
+        toolbarButtonVariants({ size, variant }),
+        isDropdown && 'justify-between gap-1 pr-1',
         className
       )}
       {...props}
     >
       {children}
+      {isDropdown && <ChevronDown className="size-3.5 text-muted-foreground" data-icon />}
     </ToolbarPrimitive.Button>
   );
 }));
-
-export const ToolbarSplitButton = React.forwardRef<HTMLButtonElement, React.ComponentPropsWithoutRef<typeof ToolbarButton>>(function ToolbarSplitButton({
-  className,
-  ...props
-}, ref) {
-  return (
-    <ToolbarButton
-      ref={ref}
-      className={cn('group flex gap-0 px-0 hover:bg-transparent', className)}
-      {...props}
-    />
-  );
-});
-
-type ToolbarSplitButtonPrimaryProps = Omit<
-  React.ComponentPropsWithoutRef<typeof ToolbarToggleItem>,
-  'value'
-> &
-  VariantProps<typeof toolbarButtonVariants>;
-
-export const ToolbarSplitButtonPrimary = React.forwardRef<HTMLSpanElement, ToolbarSplitButtonPrimaryProps>(function ToolbarSplitButtonPrimary({
-  children,
-  className,
-  size = 'sm',
-  variant,
-  ...props
-}, ref) {
-  return (
-    <span
-      ref={ref}
-      className={cn(
-        toolbarButtonVariants({
-          size,
-          variant,
-        }),
-        'rounded-r-none',
-        'group-data-[pressed=true]:bg-accent group-data-[pressed=true]:text-accent-foreground',
-        className
-      )}
-      {...props}
-    >
-      {children}
-    </span>
-  );
-});
-
-export const ToolbarSplitButtonSecondary = React.forwardRef<HTMLSpanElement, React.ComponentPropsWithoutRef<'span'> &
-  VariantProps<typeof dropdownArrowVariants>>(function ToolbarSplitButtonSecondary({
-  className,
-  size,
-  variant,
-  ...props
-}, ref) {
-  const handleClick = React.useCallback(
-    (event: React.MouseEvent<HTMLSpanElement>) => {
-      event.stopPropagation();
-    },
-    []
-  );
-
-  return (
-    <span
-      ref={ref}
-      className={cn(
-        dropdownArrowVariants({
-          size,
-          variant,
-        }),
-        'group-data-[pressed=true]:bg-accent group-data-[pressed=true]:text-accent-foreground',
-        className
-      )}
-      onClick={handleClick}
-      role="button"
-      {...props}
-    >
-      <ChevronDown className="size-3.5 text-muted-foreground" data-icon />
-    </span>
-  );
-});
-
-export const ToolbarToggleItem = React.forwardRef<HTMLButtonElement, React.ComponentPropsWithoutRef<typeof ToolbarPrimitive.ToggleItem> &
-  VariantProps<typeof toolbarButtonVariants>>(function ToolbarToggleItem({
-  className,
-  size = 'sm',
-  variant,
-  ...props
-}, ref) {
-  return (
-    <ToolbarPrimitive.ToggleItem
-      ref={ref}
-      className={cn(toolbarButtonVariants({ size, variant }), className)}
-      {...props}
-    />
-  );
-});
 
 export function ToolbarGroup({
   children,

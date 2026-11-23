@@ -135,7 +135,7 @@ export function FontSizeToolbarButton() {
           />
         </PopoverAnchor>
         <PopoverContent
-          className="w-10 px-px py-1"
+          className="ignore-click-outside/toolbar text-plate-selection-child w-10 px-px py-1"
           onEscapeKeyDown={() => { bookmark.current?.unref(); bookmark.current = null; setIsFocused(false); editor.tf.focus(); }}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onCloseAutoFocus={(e) => e.preventDefault()}
