@@ -77,7 +77,7 @@ try {
       inputs: { image: [{ nodeId: generator.id, portId: "image", autoConnect: "downstream" }], text: [] } };
     sessionStorage.setItem("workflow-p", JSON.stringify({ revision: 1, document: { version: 1, nodes: [generator, downstream] } }));
     const group = "workflow:" + JSON.stringify(["p", generator.id]);
-    const session = { ...base, id: "generation-session", kind: "prompt", assetId: null, role: null, x: 450, y: 180, width: 260, height: 150,
+    const session = { ...base, id: "generation-session", kind: "prompt", assetId: null, role: null, x: 450, y: 180, width: 274, height: 150,
       payloadJson: JSON.stringify({ schema_version: 1, job_id: "job", turn_key: "first-turn", text: "生成一只鸟",
         workflow_generation_group: group, status: "running", provider: "codex" }) };
     snapshot.nodes = [{ ...base, x: 20, y: 195, zIndex: 2_500_000 }, session];
@@ -339,6 +339,76 @@ try {
   await media.hover();
   await origin.waitFor();
   assert.ok((await origin.boundingBox()).x + (await origin.boundingBox()).width <= (await media.boundingBox()).x);
+
+  const resize = media.getByRole("button", { name: "调整素材大小", exact: true });
+  assert.equal(await resize.evaluate(el => getComputedStyle(el).opacity), "1", "hover reveals the shared lower-right square");
+  await page.mouse.move(blank.x, blank.y);
+  await origin.waitFor({ state: "detached" });
+  await media.evaluate(() => document.activeElement.blur());
+  assert.equal(await resize.evaluate(el => getComputedStyle(el).opacity), "0", "the square is hidden while idle");
+  const previousSize = await media.boundingBox();
+  assert.equal(previousSize.width, 274, "retain the existing non-default anchor width");
+  const readStoredSize = () => page.evaluate(() => {
+    const { width, height } = window.snapshot().nodes.find(node => node.id === "generation-session");
+    return { width, height };
+  });
+  const writeCount = () => page.evaluate(() => window.calls.filter(call => call.command === "project_canvas_node_update"
+    && call.args.nodeId === "generation-session").length);
+  const stored = await readStoredSize();
+  const writes = await writeCount();
+  assert.notEqual(previousSize.height, stored.height, "visible height comes from the selected result ratio");
+  // A click must neither write the derived height nor open the preview.
+  await resize.click();
+  assert.equal(await writeCount(), writes);
+  assert.deepEqual(await readStoredSize(), stored);
+  assert.equal(await preview.count(), 0);
+
+  async function startResize(width, height) {
+    const handle = await resize.boundingBox();
+    const x = handle.x + handle.width / 2, y = handle.y + handle.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + width, y + height, { steps: 4 });
+  }
+  const ratio = previousSize.height / previousSize.width;
+  const assertResized = async (increase) => {
+    const rect = await media.boundingBox();
+    assert.equal(rect.x, previousSize.x);
+    assert.equal(rect.y, previousSize.y);
+    assert.ok(Math.abs(rect.width - previousSize.width - increase) < 1);
+    assert.ok(Math.abs(rect.height - rect.width * ratio) < 1);
+  };
+  await startResize(72, 30);
+  await assertResized(72);
+  await page.waitForTimeout(220);
+  assert.equal(await peek.count(), 0, "resizing does not mount a generator Peek");
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await assertResized(0);
+  assert.equal(await writeCount(), writes);
+  assert.deepEqual(await readStoredSize(), stored);
+
+  await startResize(85, 30);
+  await page.mouse.up();
+  await assertResized(85);
+  await page.waitForFunction(() => window.snapshot().nodes.find(node => node.id === "generation-session")?.width === 359);
+  assert.equal(await preview.count(), 0);
+  assert.equal(await resize.evaluate(el => el === document.activeElement), true);
+  await page.keyboard.press(`${modifier}+z`);
+  await page.waitForFunction(expected => {
+    const node = window.snapshot().nodes.find(node => node.id === "generation-session");
+    return node?.width === expected.width && node.height === expected.height;
+  }, stored);
+  await assertResized(0);
+
+  await startResize(95, 46);
+  await page.mouse.up();
+  await page.waitForFunction(() => window.snapshot().nodes.find(node => node.id === "generation-session")?.width === 369);
+  await captureThemes("resized-generated-material");
+  await page.evaluate(() => window.save());
+  await page.reload();
+  await image.waitFor();
+  await assertResized(95);
   await page.evaluate(() => {
     const snapshot = window.snapshot();
     snapshot.view = { ...snapshot.view, zoom: 0.3 };
@@ -351,7 +421,7 @@ try {
   await page.waitForTimeout(200);
   assert.equal(await origin.count(), 0, "zoom below 35% keeps the editor hidden");
   assert.deepEqual(errors, []);
-  console.log("PASS original placement, live wires, hover bridge, Peek animation and reduced motion, high layers, anchor drag/undo, pinning and exact continuation");
+  console.log("PASS original placement, live wires, hover bridge, Peek animation and reduced motion, high layers, anchor drag/undo, pinning, generated material resize/cancel/undo/reload and exact continuation");
 } catch (error) {
   console.error("Canvas fixture", await page.evaluate(() => ({
     path: location.pathname,

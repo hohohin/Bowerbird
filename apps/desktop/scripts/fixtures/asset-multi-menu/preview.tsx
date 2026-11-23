@@ -44,8 +44,8 @@ w.__TAURI_INTERNALS__ = {
 };
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (_event: string, id: number) => callbacks.delete(id) };
 useStore.setState({ assets: assets as any, activeProjectId: null, mode: "browse", projects: [{ id: "p1", name: "项目", kind: "blank" }] as any,
-  cloudAuth: { cloud_available: true, logged_in: true } as any,
-  cloudEntitlement: { tier: "free", balances: { daily: 5, sub: 0, topup: 0 }, policy: { can_use_byo: false, can_use_cloud: true } } as any,
+  cloudAuth: { cloud_available: true, logged_in: true, user_id: "fixture-user" } as any,
+  cloudEntitlement: { user_id: "fixture-user", tier: "free", balances: { daily: 5, sub: 0, topup: 0 }, policy: { can_use_byo: false, can_use_cloud: true } } as any,
   reloadProjects: async () => {}, runDescribe: (id, instruction, provider) => { w.describe.push({ id, instruction, provider }); },
 });
 w.fixtureStore = useStore;

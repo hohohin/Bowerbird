@@ -87,6 +87,7 @@
   font-size: 11px;
   pointer-events: none;
 }
+.canvas-prompt-node.is-image-only:has(> .canvas-resize-handle) > :is(.canvas-generation-stage,.canvas-conversation-failure) { right: 22px; }
 .canvas-node:has(> .canvas-generation-revision),
 .canvas-prompt-node.is-image-only:has(> .canvas-generation-revision) { overflow: visible; }
 .canvas-generation-revision {

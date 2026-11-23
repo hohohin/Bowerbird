@@ -1,10 +1,9 @@
-use std::{fs, path::{Path, PathBuf}, process::Stdio, sync::Arc, time::{Duration, Instant}};
+use std::{fs, path::{Path, PathBuf}, sync::Arc};
 use rusqlite::{params, OptionalExtension};
 use tauri::{AppHandle, Emitter, State};
 use crate::{core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}, media::{self, tools::{self, Tool}}};
 
-// A second edit must not encode against a source another edit is replacing.
-static TRIM_QUEUE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+use super::media_trim::{self, TRIM_QUEUE};
 
 #[tauri::command]
 pub async fn trim_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>,
@@ -24,11 +23,7 @@ struct Scratch(PathBuf);
 impl Drop for Scratch { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
 
 fn validate_range(start: f64, end: f64, duration: f64) -> AppResult<()> {
-    if !start.is_finite() || !end.is_finite() || !duration.is_finite() || start < 0.0
-        || end <= start || end > duration + 0.001 || duration <= 0.0 {
-        return Err(AppError::Media("入点和出点无效：需要 0 ≤ 入点 < 出点 ≤ 视频时长".into()));
-    }
-    Ok(())
+    media_trim::validate_range(start, end, Some(duration), "视频")
 }
 
 fn encode(source: &Path, output: &Path, log: &Path, start: f64, end: f64) -> AppResult<()> {
@@ -46,22 +41,7 @@ fn encode(source: &Path, output: &Path, log: &Path, start: f64, end: f64) -> App
     if matches!(output.extension().and_then(|v| v.to_str()), Some("mp4" | "mov" | "m4v")) {
         command.args(["-movflags", "+faststart"]);
     }
-    let mut child = command.arg(output).stdout(Stdio::null()).stderr(fs::File::create(log)?).spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(300);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(_)) => {
-                let message = fs::read_to_string(log).unwrap_or_default();
-                return Err(AppError::Media(format!("视频裁剪失败：{}", message.chars().take(4000).collect::<String>())));
-            }
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(40)),
-            result => {
-                let _ = child.kill(); let _ = child.wait();
-                return Err(AppError::Media(format!("视频裁剪超时或进程异常：{result:?}")));
-            }
-        }
-    }
+    media_trim::run_encoder(command.arg(output), log, "视频")
 }
 
 fn trim(db: &Database, paths: &LibraryPaths, source: &str, start: f64, end: f64,

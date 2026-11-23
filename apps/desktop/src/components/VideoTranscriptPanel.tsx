@@ -24,7 +24,7 @@ function SavedVideoDescription({ assetId }: { assetId: string }) {
   </section>;
 }
 
-export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSeconds, onSeek, view, onRead, price }: {
+export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSeconds, onSeek, view, onRead, price, mediaKind = "video" }: {
   assetId: string;
   sourceKey: string;
   active: boolean;
@@ -33,6 +33,7 @@ export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSecon
   view: VideoAnalysisView;
   onRead: () => void;
   price: ReturnType<typeof useVideoTranscriptPrice>;
+  mediaKind?: "video" | "audio";
 }) {
   const auth = useStore(state => state.cloudAuth);
   const owner = auth?.logged_in ? auth.user_id : null;
@@ -41,8 +42,10 @@ export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSecon
   const balances = entitlement?.offline_state === "fresh" ? entitlement.balances : null;
   const balance = balances ? balances.daily + balances.sub + balances.topup : null;
   const insufficient = price.credits !== null && balance !== null && balance < price.credits;
-  const overLimit = durationSeconds != null && Number.isFinite(durationSeconds) && price.maxDurationMs != null
-    && durationSeconds * 1000 > price.maxDurationMs;
+  const mediaLabel = mediaKind === "audio" ? "音频" : "视频";
+  const durationLimit = price.maxDurationMs ?? (mediaKind === "audio" ? 7_200_000 : undefined);
+  const overLimit = durationSeconds != null && Number.isFinite(durationSeconds) && durationLimit != null
+    && durationSeconds * 1000 > durationLimit;
   const [startError, setStartError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [refreshingTiming, setRefreshingTiming] = useState(false);
@@ -160,26 +163,29 @@ export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSecon
       </div>}
     </>;
   } else if (transcript?.status === "no_audio" || transcript?.status === "no_speech") {
-    content = <p role="status">{transcript.status === "no_audio" ? "此视频没有音轨。" : "未识别到语音。"}</p>;
+    const noAudio = mediaKind === "audio" ? "此音频没有可用音轨。" : "此视频没有音轨。";
+    content = <p role="status">{transcript.status === "no_audio" ? noAudio : "未识别到语音。"}</p>;
   } else {
     let action;
     if (transcript?.cloudPending) {
       action = owner ? <button type="button" className="app-button-primary" onClick={() => void start(true)}>恢复原任务</button>
         : <p>请登录原 Bowerbird 账号后恢复。</p>;
+    } else if (mediaKind === "audio" && overLimit) {
+      action = <p role="status">音频时长超过转录上限，请先裁剪后重试。</p>;
     } else if (!owner && auth?.cloud_available) {
       action = <p>请先登录 Bowerbird 账号。</p>;
     } else if (price.loading || priceNeedsRefresh) {
       action = <p role="status">正在读取转录价格…</p>;
     } else if (price.credits === null) {
       const message = price.connectionError ? "暂时无法连接转录服务。"
-        : price.reason === "pilot_exhausted" ? "本次试转录名额已使用。" : "视频转录服务暂不可用。";
+        : price.reason === "pilot_exhausted" ? "本次试转录名额已使用。" : `${mediaLabel}转录服务暂不可用。`;
       action = <>
         <p role="status">{message}</p>
         {(price.connectionError || price.unavailable) &&
           <button type="button" onClick={() => { focusPanel(); refreshPrice(); }}>刷新服务状态</button>}
       </>;
     } else if (overLimit) {
-      action = <p role="status">视频时长超过转录上限，请先裁剪后重试。</p>;
+      action = <p role="status">{mediaLabel}时长超过转录上限，请先裁剪后重试。</p>;
     } else {
       action = <>
         <p>将完整音轨发送至 Bowerbird Cloud，文稿保存在素材库。</p>
@@ -198,7 +204,7 @@ export function VideoTranscriptPanel({ assetId, sourceKey, active, durationSecon
     </>;
   }
   return <div ref={panel} className="video-transcript-panel" tabIndex={-1}>
-    {view === "analysis" && <SavedVideoDescription key={`${assetId}:${sourceKey}`} assetId={assetId}/>}
+    {view === "analysis" && mediaKind === "video" && <SavedVideoDescription key={`${assetId}:${sourceKey}`} assetId={assetId}/>}
     {content}
   </div>;
 }

@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use tokio::io::AsyncReadExt;
 
 const MAX_DURATION_MS: u64 = 7_200_000;
-pub(super) const PRICE_CHANGED: &str = "视频转录价格已变化，请重新核对报价";
-pub(super) const UNAVAILABLE: &str = "视频转录服务暂未开放";
+const CLOUD_PRICE_CHANGED: &str = "视频转录价格已变化，请重新核对报价";
+pub(super) const PRICE_CHANGED: &str = "转录价格已变化，请重新核对报价";
+pub(super) const UNAVAILABLE: &str = "转录服务暂未开放";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,12 +32,12 @@ impl Capabilities {
     fn from_response(value: Value) -> AppResult<Self> {
         let available = value["available"]
             .as_bool()
-            .ok_or_else(|| invalid("无法读取视频转录服务状态"))?;
+            .ok_or_else(|| invalid("无法读取转录服务状态"))?;
         let credits = value["credits"].as_i64().filter(|credits| *credits > 0);
         let max_duration_ms = value["max_duration_ms"]
             .as_u64()
             .filter(|duration| (1..=MAX_DURATION_MS).contains(duration))
-            .ok_or_else(|| invalid("视频转录服务时长配置无效"))?;
+            .ok_or_else(|| invalid("转录服务时长配置无效"))?;
         let reason = (!available && value["reason"].as_str() == Some("pilot_exhausted"))
             .then_some(CapabilityReason::PilotExhausted);
         Ok(Self {
@@ -134,7 +135,7 @@ impl Service<'_> {
             .auth
             .send_authorized_for_user(
                 self.cloud.http().post(endpoint).json(&body),
-                "视频转录 Cloud 请求失败",
+                "Cloud 转录请求失败",
                 self.owner,
             )
             .await?;
@@ -151,7 +152,7 @@ impl Service<'_> {
             .request(json!({"action":"file-speech-capabilities"}))
             .await?;
         if !status.is_success() {
-            return Err(error_response(&value, "读取视频转录报价失败，请刷新后重试"));
+            return Err(error_response(&value, "读取转录报价失败，请刷新后重试"));
         }
         Capabilities::from_response(value)
     }
@@ -178,7 +179,7 @@ impl Service<'_> {
         match (status.as_u16(), code) {
             (409, "invalid_request")
                 if value.pointer("/error/message").and_then(Value::as_str)
-                    == Some(PRICE_CHANGED) =>
+                    == Some(CLOUD_PRICE_CHANGED) =>
             {
                 Ok(Preparation::Rejected(invalid(PRICE_CHANGED)))
             }
@@ -188,11 +189,11 @@ impl Service<'_> {
             | (402, "insufficient_credits")
             | (403, "forbidden") => Ok(Preparation::Rejected(error_response(
                 &value,
-                "视频转录请求未通过，请重新核对报价",
+                "转录请求未通过，请重新核对报价",
             ))),
             _ => Err(error_response(
                 &value,
-                "视频转录提交结果未确认，请按原任务恢复",
+                "转录提交结果未确认，请按原任务恢复",
             )),
         }
     }

@@ -4308,22 +4308,31 @@ export function CanvasWorkspace({
     if (updated.width !== node.width || updated.height !== node.height) persistGraphNodeGeometry(updated);
   }
 
-  function resizeCanvasNote(nodeId: string, size: { width: number; height: number; x?: number; y?: number }, finished: boolean, cancelled = false) {
+  function resizeCanvasGraphNode(nodeId: string, size: { width: number; height: number; x?: number; y?: number }, finished: boolean, cancelled = false) {
     const node = graphNodesRef.current.find(candidate => candidate.id === nodeId);
     if (!node) return;
-    if (!resizeBaselineRef.current.has(nodeId)) resizeBaselineRef.current.set(nodeId, { graph: node });
-    const updated = { ...node, ...size };
-    graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
-    setGraphNodes(graphNodesRef.current);
+    const baseline = resizeBaselineRef.current.get(nodeId)?.graph ?? node;
+    if (!resizeBaselineRef.current.has(nodeId)) {
+      resizeBaselineRef.current.set(nodeId, { graph: baseline });
+      clearTimeout(peekIntent.current);
+      cancelConversationImageClick();
+    }
+    const updated = cancelled ? { ...node, x: baseline.x, y: baseline.y, width: baseline.width, height: baseline.height }
+      : { ...node, ...size, height: node.kind === "prompt" && size.width === baseline.width ? baseline.height : size.height };
+    if (canvasGeometryDiffers(node, updated)) {
+      graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
+      setGraphNodes(graphNodesRef.current);
+    }
     setActiveDragId(finished ? null : nodeId);
     if (finished) {
-      const baseline = resizeBaselineRef.current.get(nodeId)?.graph;
       resizeBaselineRef.current.delete(nodeId);
-      if (!cancelled) {
-        if (baseline) pushGeometryUndo([], [baseline]);
+      if (!cancelled && (updated.kind === "note" || canvasGeometryDiffers(baseline, updated))) {
+        pushGeometryUndo([], [baseline]);
         persistGraphNodeGeometry(updated);
-        const value = readCanvasNote(updated);
-        if (value.note_type === "section" && !value.workflow_container && !value.artboard) updateCanvasNote(nodeId, { ...value, member_ids: claimSectionMembers(updated, nodeId) }, undefined, "layout");
+        if (updated.kind === "note") {
+          const value = readCanvasNote(updated);
+          if (value.note_type === "section" && !value.workflow_container && !value.artboard) updateCanvasNote(nodeId, { ...value, member_ids: claimSectionMembers(updated, nodeId) }, undefined, "layout");
+        }
       }
     }
   }
@@ -5930,9 +5939,11 @@ export function CanvasWorkspace({
   function closeCreationPreview() { setPreviewMember(null); creationImage.close(); }
   const lightboxPath = canvasLightbox?.images[canvasLightbox.index];
   const lightboxAssetId = canvasLightbox?.assetIds?.[canvasLightbox.index];
-  const lightboxVideo = lightboxPath && isVideoPath(lightboxPath)
+  const lightboxMedia = lightboxPath && (isVideoPath(lightboxPath) || isAudioPath(lightboxPath))
     ? (lightboxAssetId ? assetById.get(lightboxAssetId) : [...assetById.values()].find(asset => asset.store_path === lightboxPath))
     : undefined;
+  const lightboxVideo = isVideoPath(lightboxPath) ? lightboxMedia : undefined;
+  const lightboxAudio = isAudioPath(lightboxPath) ? lightboxMedia : undefined;
   const lightboxVideoJob = lightboxVideo && lightboxPath
     ? Object.values(genJobs).find(job => job.turns.some(turn => turn.images.includes(lightboxPath)))
     : undefined;
@@ -6407,7 +6418,7 @@ export function CanvasWorkspace({
                   {["top", "bottom", "left", "right"].map(edge => <div key={edge} className={`canvas-section-edge ${edge}`} />)}
                   {selected && !value.workflow_container && ([["nw", "左上角"], ["ne", "右上角"], ["sw", "左下角"], ["se", "右下角"]] as const).map(([corner, label]) => (
                     <CanvasResizeHandle key={corner} label={`调整${value.artboard ? "画板" : "分区"}大小（${label}）`} corner={corner} size={node} position={{ x: node.x, y: node.y }} zoom={zoomRef.current} getZoom={readCanvasZoom}
-                      minimum={{ width: 120, height: 80 }} onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} />
+                      minimum={{ width: 120, height: 80 }} onResize={(size, finished, cancelled) => resizeCanvasGraphNode(node.id, size, finished, cancelled)} />
                   ))}
                 </> : value.note_type === "document" ? <CanvasDocumentCard value={value} editing={documentEditor?.nodeId === node.id}
                   onEdit={openDocument}
@@ -6456,7 +6467,7 @@ export function CanvasWorkspace({
                   onConnectCell={!workflowInteractive ? undefined : (cellId, x, y, keyboard) => workflowRef.current?.connectCell(node.id, cellId, x, y, keyboard)}
                   onInput={!workflowInteractive ? undefined : (cellId, disconnect, type, point, keyboard) => workflowRef.current?.inputText(node.id, cellId, disconnect, type, point, keyboard)}
                   inputLocked={workflowRef.current?.isLocked(node.id)}
-                  onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} onSelect={() => setSelectedCanvasNodeIds(new Set([node.id]))}
+                  onResize={(size, finished, cancelled) => resizeCanvasGraphNode(node.id, size, finished, cancelled)} onSelect={() => setSelectedCanvasNodeIds(new Set([node.id]))}
                   onChange={(next, size, history) => updateCanvasNote(node.id, next, size, history)} />}
               </div>;
             })}
@@ -6610,6 +6621,15 @@ export function CanvasWorkspace({
                   {imageOnly && failureKey && <span className={`canvas-conversation-failure${acknowledged ? " is-acknowledged" : ""}`}><button type="button"
                     onPointerDown={event => { event.stopPropagation(); cancelConversationImageClick(); }}
                     onClick={event => { event.stopPropagation(); if (!consumeSuppressedNodeClick(event)) openConversation(); }}>{acknowledged ? "查看会话详情" : "本轮生成失败 · 查看详情"}</button>{!acknowledged && dismissFailureButton(failureKey)}</span>}
+                  {imageOnly && (shownImage?.storePath || shownImage?.thumbPath) && <CanvasResizeHandle label="调整素材大小"
+                    size={nodeRect(node)} zoom={zoomRef.current} getZoom={readCanvasZoom} minimum={{ width: 96, height: 32 }}
+                    constrain={(start, delta) => {
+                      const ratio = start.height / start.width;
+                      const change = Math.abs(delta.width) >= Math.abs(delta.height / ratio) ? delta.width : delta.height / ratio;
+                      if (!change) return start;
+                      const width = Math.max(96, 32 / ratio, start.width + change);
+                      return { width, height: width * ratio };
+                    }} onResize={(size, finished, cancelled) => resizeCanvasGraphNode(node.id, size, finished, cancelled)} />}
                   {!imageOnly && !previewUrl && <section className="canvas-prompt-content"><ReadonlyPrompt prompt={summary.text} references={promptReferences(latest)} /></section>}
                 </div>
               );
@@ -6698,7 +6718,7 @@ export function CanvasWorkspace({
                   role="group"
                   data-frequent-asset-id={node.kind === "asset" ? node.asset.assetId ?? undefined : undefined}
                   tabIndex={0}
-                  aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "单击查看，双击添加引用" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
+                  aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "单击查看，双击添加引用" : isAudioPath(node.asset.storePath) ? "点击查看音频详情" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
                   aria-expanded={node.kind === "folder" ? expanded : undefined}
                   data-canvas-filter={node.kind === "asset" ? materialFilterState(node.asset) : undefined}
                   className={`canvas-node generation-group is-${node.kind} ${node.kind === "asset" && isVideoPath(node.asset.storePath) ? "is-video" : ""} ${expanded ? "is-expanded" : ""} ${!showAssetNames ? "is-name-hidden" : ""} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
@@ -6748,7 +6768,7 @@ export function CanvasWorkspace({
                       <GenerationGroupControls index={galleryIndex} count={gallery.length} onSelect={index => {
                         setConversationImageSelection(previous => ({ ...previous, [node.id]: { newest: gallery[gallery.length - 1].id, selected: gallery[index].id } }));
                       }} />
-                      {isAudioPath(node.asset.storePath) && node.asset.assetId && node.asset.storePath ? <AudioWaveform className="canvas-audio-waveform" assetId={node.asset.assetId} path={node.asset.storePath} name={node.asset.name} version={node.asset.storePath} onWavePointerDown={event => beginNodeDrag(event, node)} /> : isVideoPath(node.asset.storePath) ? <VideoPoster path={node.asset.storePath} poster={node.asset.thumbPath} alt={node.asset.name} draggable={false} /> : path ? (
+                      {isAudioPath(node.asset.storePath) && node.asset.assetId && node.asset.storePath ? <AudioWaveform className="canvas-audio-waveform" assetId={node.asset.assetId} path={node.asset.storePath} name={node.asset.name} version={videoSourceKey(assetById.get(node.asset.assetId)) ?? node.asset.storePath} onWavePointerDown={event => beginNodeDrag(event, node)} /> : isVideoPath(node.asset.storePath) ? <VideoPoster path={node.asset.storePath} poster={node.asset.thumbPath} alt={node.asset.name} draggable={false} /> : path ? (
                         <CanvasImage path={node.asset.storePath} thumbPath={node.asset.thumbPath} sourceWidth={node.asset.width} sourceHeight={node.asset.height} alt={node.asset.name} draggable={false} />
                       ) : (
                         <div className="canvas-node-placeholder">{node.asset.name.slice(0, 1)}</div>
@@ -6785,7 +6805,7 @@ export function CanvasWorkspace({
                               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
                               onClick={(event) => { if (!consumeSuppressedNodeClick(event)) activateCanvasMaterial(groupedAssetNode(asset, node, index)); }}
                               onContextMenu={(event) => openCanvasAssetContextMenu(event, node, asset)}>
-                              {isAudioPath(asset.storePath) && asset.assetId && asset.storePath ? <AudioWaveform className="canvas-audio-waveform" assetId={asset.assetId} path={asset.storePath} name={asset.name} version={asset.storePath} /> : isVideoPath(asset.storePath) ? <VideoPoster path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} /> : assetPath ? <CanvasImage path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height} alt="" draggable={false} />
+                              {isAudioPath(asset.storePath) && asset.assetId && asset.storePath ? <AudioWaveform className="canvas-audio-waveform" assetId={asset.assetId} path={asset.storePath} name={asset.name} version={videoSourceKey(assetById.get(asset.assetId)) ?? asset.storePath} /> : isVideoPath(asset.storePath) ? <VideoPoster path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} /> : assetPath ? <CanvasImage path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height} alt="" draggable={false} />
                                 : <span className="canvas-folder-asset-placeholder">{asset.name.slice(0, 1)}</span>}
                               {showAssetNames && <span className="canvas-folder-asset-name">{asset.name}</span>}
                             </Member>;
@@ -7030,7 +7050,7 @@ export function CanvasWorkspace({
             setDocumentPromptLoad({ ...prompt, id: canvasId("document-prompt") });
             setSelectedChatId(null); useStore.getState().setBoardActive(true); documentEditorSession.current++; setDocumentEditor(null);
           }}/></Suspense>}
-        {creationImagePreview && (isVideoPath(creationImagePreview.asset.store_path)
+        {creationImagePreview && (isVideoPath(creationImagePreview.asset.store_path) || isAudioPath(creationImagePreview.asset.store_path)
           ? <LibraryVideoPreview asset={creationImagePreview.asset} job={creationImagePreview.job} path={creationImagePreview.asset.store_path!} sourceKey={videoSourceKey(creationImagePreview.asset)} projectId={projectId ?? null} onClose={creationImage.close}/>
           : <CreationImagePreview asset={currentPreviewAsset ?? creationImagePreview.asset} projectId={projectId}
               job={currentPreviewImage ? outputJob(currentPreviewImage) : creationImagePreview.job}
@@ -7047,7 +7067,11 @@ export function CanvasWorkspace({
                   onIndexChange: index => { const image = previewGallery[index]; if (image) setPreviewMember({ openedId: previewOpenedId, nodeId: image.id }); } }
                 : undefined} />)}
         {canvasLightbox && (
-          lightboxPath && lightboxVideo ? <CreationImagePreview asset={lightboxVideo} projectId={projectId} job={lightboxVideoJob}
+          lightboxPath && lightboxAudio ? <LibraryVideoPreview asset={lightboxAudio} path={lightboxPath}
+            sourceKey={videoSourceKey(lightboxAudio)} projectId={projectId} onClose={() => setCanvasLightbox(null)}
+            navigation={{ index: canvasLightbox.index, count: canvasLightbox.images.length,
+              onIndexChange: index => setCanvasLightbox(current => current ? { ...current, index } : null) }}/>
+          : lightboxPath && lightboxVideo ? <CreationImagePreview asset={lightboxVideo} projectId={projectId} job={lightboxVideoJob}
             workflowOrigin={lightboxOrigin ? { nodeId: lightboxOrigin.id, title: workflow?.document.cardNames?.[lightboxOrigin.id] } : undefined}
             onClose={() => setCanvasLightbox(null)} video={{ path: lightboxPath, sourceKey: videoSourceKey(lightboxVideo), onAddFrame: addVideoFrame, onSaveTrim: saveVideoTrim }}
             navigation={{ index: canvasLightbox.index, count: canvasLightbox.images.length,

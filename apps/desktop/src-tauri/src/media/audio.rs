@@ -8,10 +8,10 @@ use std::{
     path::Path,
 };
 use symphonia::core::{
-    audio::SampleBuffer,
-    codecs::{DecoderOptions, CODEC_TYPE_NULL},
+    audio::{AudioBufferRef, SampleBuffer},
+    codecs::{DecoderOptions, CODEC_TYPE_MP3, CODEC_TYPE_NULL},
     errors::Error as DecodeError,
-    formats::FormatOptions,
+    formats::{FormatOptions, FormatReader},
     io::MediaSourceStream,
     meta::MetadataOptions,
     probe::Hint,
@@ -26,6 +26,24 @@ pub fn is_audio(ext: &str) -> bool {
 pub fn decode(path: &Path) -> AppResult<Waveform> {
     decode_inner(path).map_err(|error| AppError::Media(format!("无法读取音频波形：{error:#}")))
 }
+
+pub(crate) fn duration(path: &Path) -> AppResult<f64> {
+    let (frames, sample_rate, _) = read_frames(path, |_| Ok(()))
+        .map_err(|error| AppError::Media(format!("无法读取音频时长：{error:#}")))?;
+    Ok(frames as f64 / sample_rate as f64)
+}
+
+pub(crate) fn mp3_gapless_duration(path: &Path) -> Option<f64> {
+    let format = open_gapless_format(path, File::open(path).ok()?).ok()?;
+    let params = &format.default_track()?.codec_params;
+    if params.codec != CODEC_TYPE_MP3 || params.delay.is_none() || params.padding.is_none() {
+        return None;
+    }
+    let frames = params.n_frames?;
+    let rate = params.sample_rate?;
+    (frames > 0 && rate > 0).then(|| frames as f64 / f64::from(rate))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Waveform {
@@ -123,23 +141,32 @@ impl Overview {
 }
 
 fn decode_inner(path: &Path) -> Result<Waveform> {
-    let file = File::open(path)?;
-    let length = file.metadata()?.len();
-    let mut source = file;
-    let mut header = [0u8; 12];
-    source.read_exact(&mut header)?;
-    source.seek(SeekFrom::Start(0))?;
-    let is_wave = &header[..4] == b"RIFF" && &header[8..] == b"WAVE";
-    if is_wave {
-        let declared = u32::from_le_bytes(header[4..8].try_into()?) as u64 + 8;
-        ensure!(declared <= length, "truncated WAVE container");
-    }
+    let mut overview = Overview::new();
+    let mut buffer: Option<SampleBuffer<f32>> = None;
+    let mut buffer_capacity = 0;
+    let (_, sample_rate, channels) = read_frames(path, |decoded| {
+        let spec = *decoded.spec();
+        if buffer_capacity < decoded.capacity() {
+            buffer_capacity = decoded.capacity();
+            buffer = Some(SampleBuffer::new(buffer_capacity as u64, spec));
+        }
+        let buffer = buffer.as_mut().context("empty decoded block")?;
+        buffer.copy_interleaved_ref(decoded);
+        for frame in buffer.samples().chunks_exact(spec.channels.count()) {
+            overview.frame(frame)?;
+        }
+        Ok(())
+    })?;
+    overview.finish(sample_rate, channels)
+}
+
+fn open_gapless_format(path: &Path, source: File) -> Result<Box<dyn FormatReader>> {
     let stream = MediaSourceStream::new(Box::new(source), Default::default());
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|v| v.to_str()) {
         hint.with_extension(ext);
     }
-    let mut format = symphonia::default::get_probe()
+    Ok(symphonia::default::get_probe()
         .format(
             &hint,
             stream,
@@ -149,7 +176,24 @@ fn decode_inner(path: &Path) -> Result<Waveform> {
             },
             &MetadataOptions::default(),
         )?
-        .format;
+        .format)
+}
+
+fn read_frames(
+    path: &Path,
+    mut consume: impl FnMut(AudioBufferRef<'_>) -> Result<()>,
+) -> Result<(u64, u32, usize)> {
+    let mut source = File::open(path)?;
+    let length = source.metadata()?.len();
+    let mut header = [0u8; 12];
+    source.read_exact(&mut header)?;
+    source.seek(SeekFrom::Start(0))?;
+    let is_wave = &header[..4] == b"RIFF" && &header[8..] == b"WAVE";
+    if is_wave {
+        let declared = u32::from_le_bytes(header[4..8].try_into()?) as u64 + 8;
+        ensure!(declared <= length, "truncated WAVE container");
+    }
+    let mut format = open_gapless_format(path, source)?;
     let track = format
         .tracks()
         .iter()
@@ -159,11 +203,9 @@ fn decode_inner(path: &Path) -> Result<Waveform> {
     let expected_frames = is_wave.then_some(track.codec_params.n_frames).flatten();
     let mut decoder =
         symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
-    let mut overview = Overview::new();
+    let mut frames = 0;
     let mut sample_rate = 0;
     let mut channels = 0;
-    let mut buffer: Option<SampleBuffer<f32>> = None;
-    let mut buffer_capacity = 0;
     loop {
         let packet = match format.next_packet() {
             Ok(packet) => packet,
@@ -190,20 +232,14 @@ fn decode_inner(path: &Path) -> Result<Waveform> {
         );
         sample_rate = spec.rate;
         channels = count;
-        if buffer_capacity < decoded.capacity() {
-            buffer_capacity = decoded.capacity();
-            buffer = Some(SampleBuffer::new(buffer_capacity as u64, spec));
-        }
-        let buffer = buffer.as_mut().context("empty decoded block")?;
-        buffer.copy_interleaved_ref(decoded);
-        for frame in buffer.samples().chunks_exact(channels) {
-            overview.frame(frame)?;
-        }
+        frames += decoded.frames() as u64;
+        consume(decoded)?;
     }
     if let Some(expected) = expected_frames {
-        ensure!(overview.total == expected, "truncated WAVE audio data");
+        ensure!(frames == expected, "truncated WAVE audio data");
     }
-    overview.finish(sample_rate, channels)
+    ensure!(frames > 0 && sample_rate > 0, "audio has no decoded frames");
+    Ok((frames, sample_rate, channels))
 }
 
 #[cfg(test)]

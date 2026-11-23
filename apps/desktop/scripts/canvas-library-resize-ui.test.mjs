@@ -207,7 +207,7 @@ try {
   await settle();
   await assertGrid();
   await dragTo(620);
-  for (const name of ['全部素材', '引用布局合成验收', '文件夹']) {
+  for (const name of ['全部素材', '引用布局合成验收', '全部文件夹素材']) {
     await selectSource(name);
     await panel.locator('.folder-media-card').first().waitFor();
     await settle();

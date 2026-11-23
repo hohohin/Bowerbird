@@ -12,23 +12,29 @@ const errors = []; page.on('pageerror', error => errors.push(error.message));
 const row = id => page.locator(`[data-collection-id="${id}"]`);
 const card = id => page.locator(`[data-connection-entry="${id}"] .folder-media-card`);
 const active = async id => page.waitForFunction(id => document.querySelector(`[data-collection-id="${id}"]`)?.getAttribute('aria-selected') === 'true', id);
+const allFolders = () => page.getByRole('button', { name: '全部文件夹素材', exact: true });
+const section = id => page.locator(`[data-catalog-section="${id}"]`);
 const menu = name => page.getByRole('menuitem', { name, exact: true });
 const dialog = () => page.getByRole('dialog');
 async function navigate(id) { await row(id).click(); await active(id); await page.waitForTimeout(120); }
 async function context(id) { await card(id).click({ button: 'right' }); await page.getByRole('menu').waitFor(); }
+async function scrollToSection(id) {
+  await section(id).evaluate(el => { el.closest('.catalog-scroller').scrollTop = el.offsetTop; });
+  await section(id).locator('.catalog-section-heading').waitFor();
+}
 async function checkTreeIndent() {
   const [root, second, child, empty, nested] = await Promise.all(['root', 'second', 'child', 'empty', 'nested'].map(async id =>
     (await row(id).locator('.catalog-tree-name').boundingBox()).x));
   assert.equal(root, second, 'root names align with and without an expand arrow');
   assert.equal(child, empty, 'sibling names align with and without an expand arrow');
-  assert.ok(child > root, 'child names are indented');
-  assert.equal(nested - child, child - root, 'each level adds the same indent');
-  assert.equal(await page.locator('.catalog-tree-icon').count(), 0, 'tree rows omit decorative folder icons');
+  assert.ok(nested > child, 'child names are indented according to depth');
+  for (const id of ['root', 'second', 'offline']) assert.equal(await row(id).locator('[data-folder-glyph]').count(), 1);
+  for (const id of ['child', 'empty', 'nested']) assert.equal(await row(id).locator('[data-folder-glyph]').count(), 0);
 }
 try {
   await mkdir('.tmp/connected-collections', { recursive: true });
   await page.goto('http://127.0.0.1:17951/scripts/fixtures/connected-collections/preview.html');
-  await page.getByRole('tab', { name: '文件夹', exact: true }).click();
+  await allFolders().click();
   await card('root-0').waitFor();
   await checkTreeIndent();
   await checkContextLookup(page, index => card(`root-${index}`), page.getByRole('button', { name: '取消选择', exact: true }),
@@ -56,16 +62,13 @@ try {
   await plus.focus();
   assert.equal(await plus.evaluate(el => getComputedStyle(el.parentElement).opacity), '1');
   await plus.press('Enter'); await page.getByRole('dialog', { name: '新建文件夹', exact: true }).waitFor(); await page.keyboard.press('Escape');
-  const heading = page.locator('.catalog-sidebar-heading');
+  const heading = page.locator('.library-folder-heading');
   const rootPlus = heading.getByRole('button', { name: '新建文件夹', exact: true });
-  assert.equal(await rootPlus.evaluate(el => getComputedStyle(el).opacity), '0');
-  await heading.hover();
-  assert.equal(await rootPlus.evaluate(el => getComputedStyle(el).opacity), '1');
+  assert.equal(await rootPlus.isVisible(), true);
   await page.mouse.move(1270, 0);
-  await navigate('empty');
+  await scrollToSection('empty');
   await card('second-0').waitFor();
-  await active('empty');
-  const empty = page.locator('[data-catalog-section="empty"]');
+  const empty = section('empty');
   assert.equal((await empty.boundingBox()).height, 40);
   assert.equal((await page.locator('[data-catalog-section="second"]').boundingBox()).y - (await empty.boundingBox()).y, 40);
   assert.equal(await empty.locator('.catalog-section-title').textContent(), '空集合');
@@ -74,10 +77,12 @@ try {
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await page.setViewportSize({ width: 900, height: 840 });
   await page.waitForTimeout(200);
-  await navigate('empty');
+  await scrollToSection('empty');
   assert.equal((await empty.boundingBox()).height, 40);
   await checkTreeIndent();
   await page.screenshot({ path: '.tmp/connected-collections/compact-empty-light.png' });
+  await navigate('empty');
+  assert.deepEqual(await page.locator('[data-catalog-section]').evaluateAll(items => items.map(item => item.dataset.catalogSection)), ['empty']);
   await page.setViewportSize({ width: 1280, height: 840 });
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await navigate('offline');
@@ -105,9 +110,11 @@ try {
   assert.equal(await page.evaluate(() => window.requests.find(r => r.command === 'create_connected_collection').args.parentId), 'child');
   await navigate('root'); await row('root').getByRole('button', { name: '收起素材目录' }).click();
   assert.equal(await row('nested').count(), 0);
-  await page.locator('.catalog-scroller').evaluate(el => { const section = el.querySelector('[data-catalog-section="nested"]'); el.scrollTop = section.offsetTop; });
-  await active('nested'); await row('nested').waitFor();
-  assert.equal(await page.locator('.catalog-section-heading.is-pinned .catalog-section-title').textContent(), '晨间');
+  await scrollToSection('nested');
+  assert.equal(await row('nested').count(), 0);
+  assert.equal(await section('nested').locator('.catalog-section-title').textContent(), '晨间');
+  await row('root').getByRole('button', { name: '展开素材目录' }).click();
+  await row('nested').waitFor();
   await navigate('offline'); await page.getByRole('button', { name: '重新定位', exact: true }).click();
   assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'relocate_folder').length), 0);
   await row('second').click({ button: 'right' }); await menu('断开连接').click();
@@ -119,12 +126,13 @@ try {
   await page.getByRole('button', { name: '建立连接', exact: true }).click();
   await page.getByRole('treeitem', { name: '新连接', exact: true }).waitFor();
   const connected = await page.evaluate(() => window.folders.find(f => f.name === '新连接')?.id); await active(connected);
-  await navigate('offline');
+  await allFolders().click();
+  await scrollToSection('offline');
   const connectedSection = page.locator(`[data-catalog-section="${connected}"]`);
   assert.equal(await connectedSection.locator('.catalog-section-title').textContent(), '新连接');
   assert.equal((await connectedSection.boundingBox()).y - (await page.locator('[data-catalog-section="offline"]').boundingBox()).y, 40);
-  for (const kind of ['tags', 'all', 'collections']) {
-    await page.evaluate(kind => window.mode.getState().setCatalogView(kind), kind);
+  for (const key of ['e', 'q']) {
+    await page.keyboard.press(key);
     await page.waitForTimeout(150);
     assert.equal(await page.locator('.local-file-workspace').count(), 0);
     assert.equal(await page.getByRole('button', { name: '打开系统文件浏览器', exact: true }).count(), 0);
@@ -160,33 +168,28 @@ try {
   await rootPlus.click();
   await dialog().getByRole('textbox').fill('默认目录');
   await dialog().getByText('保存位置 /fixture/BowerbirdLibrary/默认目录').waitFor();
+  assert.equal(await dialog().getByRole('button', { name: '更改父目录' }).count(), 0);
   const beforePick = await page.evaluate(() => window.requests.filter(r => r.command === 'plugin:dialog|open').length);
   await dialog().getByRole('button', { name: '保存', exact: true }).click();
   await dialog().waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'plugin:dialog|open').length), beforePick);
   assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'create_connected_collection').at(-1).args.path), null);
-  await heading.hover();
-  await rootPlus.click();
-  await dialog().getByRole('textbox').fill('自选目录');
-  await page.evaluate(() => { window.picker = '/fixture/elsewhere'; });
-  await dialog().getByRole('button', { name: '更改父目录' }).click();
-  await dialog().getByText('保存位置 /fixture/elsewhere/自选目录').waitFor();
-  await page.evaluate(() => { window.picker = null; });
-  await dialog().getByRole('button', { name: '更改父目录' }).click();
-  await dialog().getByRole('button', { name: '保存', exact: true }).click();
-  await dialog().waitFor({ state: 'hidden' });
-  assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'create_connected_collection').at(-1).args.path), '/fixture/elsewhere');
   await navigate('root');
   await card('root-0').click({ modifiers: ['Control'] });
   await page.locator('.catalog-selection').getByRole('button', { name: '添加到文件夹', exact: true }).click();
   await dialog().getByText('新建文件夹', { exact: true }).click();
   await dialog().getByLabel('文件夹名称').fill('内联目录');
   await dialog().getByText('保存位置 /fixture/BowerbirdLibrary/内联目录').waitFor();
+  await page.evaluate(() => { window.picker = '/fixture/elsewhere'; });
+  await dialog().getByRole('button', { name: '更改父目录' }).click();
+  await dialog().getByText('保存位置 /fixture/elsewhere/内联目录').waitFor();
+  await page.evaluate(() => { window.picker = null; });
+  await dialog().getByRole('button', { name: '更改父目录' }).click();
   await dialog().getByRole('button', { name: '添加', exact: true }).click();
   await dialog().waitFor({ state: 'hidden' });
-  assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'create_connected_collection').at(-1).args.path), null);
+  assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'create_connected_collection').at(-1).args.path), '/fixture/elsewhere');
   await page.reload();
-  await page.getByRole('tab', { name: '文件夹', exact: true }).click();
+  await allFolders().click();
   await navigate('child');
   for (const id of ['ref-one', 'ref-two']) await card(id).click({ modifiers: ['Control'] });
   await context('ref-one');

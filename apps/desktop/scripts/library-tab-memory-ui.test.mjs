@@ -57,7 +57,7 @@ try {
   assert.equal(await page.evaluate(() => window.store.getState().activeProjectId), "p");
   await button(panel, "回到当前项目").click();
   assert.equal(await button(panel, "山野品牌 1").getAttribute("aria-current"), "true");
-  await button(panel, "文件夹").click();
+  await button(panel, "全部文件夹素材").click();
   await button(panel, "收起侧栏").click();
   await page.locator(".canvas-stage").focus();
   await page.keyboard.press("Tab");
@@ -65,7 +65,7 @@ try {
   await page.locator(".canvas-stage").focus();
   await page.keyboard.press("Tab");
   await button(panel, "展开侧栏").click();
-  assert.equal(await button(panel, "文件夹").getAttribute("aria-current"), "true");
+  assert.equal(await button(panel, "全部文件夹素材").getAttribute("aria-current"), "true");
   await page.screenshot({ path: `${output}/canvas.png` });
 
   await goHome();
@@ -79,10 +79,10 @@ try {
   await toggle(right, "标签模式");
   await page.keyboard.press("q");
   assert.equal(await button(right, "秋日海报 2").getAttribute("aria-current"), "true");
-  await button(right, "文件夹").click();
+  await button(right, "全部文件夹素材").click();
   await button(left, "展开侧栏").click();
   await toggle(left, "标签模式");
-  assert.equal(await button(right, "文件夹").getAttribute("aria-current"), "true");
+  assert.equal(await button(right, "全部文件夹素材").getAttribute("aria-current"), "true");
   await left.locator(".catalog-scroller [data-asset-id]").first().waitFor();
   await page.waitForFunction(() => {
     const view = document.querySelector('[data-library-pane="home-left"] .catalog-scroller');

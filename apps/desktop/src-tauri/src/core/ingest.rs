@@ -264,6 +264,33 @@ pub fn ingest_generated_with_visibility(
     source_tag: &str,
     library_hidden: bool,
 ) -> AppResult<Asset> {
+    persist_generated(paths, db, source, session_id, source_tag, library_hidden, None)
+}
+
+pub(crate) struct GeneratedAudioClip<'a> {
+    pub name: String,
+    pub duration: f64,
+    pub project_id: Option<&'a str>,
+}
+
+pub(crate) fn ingest_generated_audio_clip(
+    paths: &LibraryPaths,
+    db: &Database,
+    source: &Path,
+    clip: GeneratedAudioClip<'_>,
+) -> AppResult<Asset> {
+    persist_generated(paths, db, source, None, "audio-trim", false, Some(clip))
+}
+
+fn persist_generated(
+    paths: &LibraryPaths,
+    db: &Database,
+    source: &Path,
+    session_id: Option<&str>,
+    source_tag: &str,
+    library_hidden: bool,
+    clip: Option<GeneratedAudioClip<'_>>,
+) -> AppResult<Asset> {
     let meta = media::probe::probe(source)?;
     let id = Ulid::new().to_string();
     let name = source
@@ -273,10 +300,17 @@ pub fn ingest_generated_with_visibility(
         .to_string();
 
     let store_path = paths.asset_store_path(&id, &meta.ext)?;
-    fs::create_dir_all(store_path.parent().unwrap())?;
-    fs::copy(source, &store_path)?;
+    let parent = store_path.parent().unwrap();
+    fs::create_dir_all(parent)?;
+    let staged = clip.map(|clip| -> AppResult<_> {
+        let mut staged = tempfile::Builder::new().prefix(".audio-trim-").suffix(".tmp").tempfile_in(parent)?;
+        std::io::copy(&mut fs::File::open(source)?, staged.as_file_mut())?;
+        staged.as_file().sync_all()?;
+        Ok((clip, staged))
+    }).transpose()?;
+    if staged.is_none() { fs::copy(source, &store_path)?; }
 
-    let mut decoded = image::open(&store_path).ok();
+    let mut decoded = if staged.is_some() { None } else { image::open(&store_path).ok() };
 
     let thumb_path = if media::probe::is_video(&meta.ext) {
         let p = paths.thumb_path(&id);
@@ -312,7 +346,7 @@ pub fn ingest_generated_with_visibility(
     };
 
     let now = Utc::now().timestamp();
-    let asset = Asset {
+    let mut asset = Asset {
         id: id.clone(),
         name,
         ext: Some(meta.ext),
@@ -335,7 +369,25 @@ pub fn ingest_generated_with_visibility(
         reference_count: 0,
         library_hidden,
     };
-    db.insert_asset(&asset)?;
+    if let Some((clip, staged)) = staged {
+        asset.name = clip.name;
+        asset.origin_path = None;
+        asset.duration = Some(clip.duration);
+        asset.file_mtime = staged.as_file().metadata().and_then(|value| value.modified()).ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok()).map(|value| value.as_secs() as i64);
+        let mut published = false;
+        let saved = db.insert_saved_asset_for_project(&asset, false, None, clip.project_id, || {
+            staged.persist_noclobber(&store_path).map_err(|error| error.error)?;
+            published = true;
+            Ok(())
+        });
+        if let Err(error) = saved {
+            if published { let _ = fs::remove_file(&store_path); }
+            return Err(error);
+        }
+    } else {
+        db.insert_asset(&asset)?;
+    }
     link_colors(db, &asset.id, asset.colors.as_deref());
     Ok(asset)
 }

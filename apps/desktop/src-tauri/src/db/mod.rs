@@ -1,8 +1,7 @@
-//! SQLite 访问层。`Database` 持有单连接（Mutex 保护）。
-//! Phase 0：单连接够用；后续若成瓶颈再换 r2d2 连接池。
+//! SQLite 访问层。磁盘库的前台浏览从独立的 WAL 只读连接读取。
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
@@ -15,6 +14,8 @@ mod classification_presets;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
 
 pub struct Database {
+    // Close the reader before the writer so it does not hold the WAL open at shutdown.
+    browser: Option<Mutex<Connection>>,
     pub conn: Mutex<Connection>,
 }
 
@@ -27,21 +28,37 @@ impl Database {
         conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         // WAL 提升并发读；外键约束开。
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        let browser = conn
+            .path()
+            .filter(|path| !path.is_empty())
+            .map(|path| Self::read_only_connection(Path::new(path)))
+            .transpose()?
+            .map(Mutex::new);
         Ok(Self {
+            browser,
             conn: Mutex::new(conn),
         })
     }
 
     pub fn open_read_only(path: &Path) -> AppResult<Self> {
+        Ok(Self {
+            browser: None,
+            conn: Mutex::new(Self::read_only_connection(path)?),
+        })
+    }
+
+    fn read_only_connection(path: &Path) -> AppResult<Connection> {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        Ok(conn)
+    }
+
+    pub(crate) fn browser_connection(&self) -> MutexGuard<'_, Connection> {
+        self.browser.as_ref().unwrap_or(&self.conn).lock().unwrap()
     }
 
     /// 内存库（用于测试 / 临时会话）。
@@ -107,13 +124,34 @@ mod tests {
         conn.busy_timeout(Duration::ZERO).unwrap();
         let writer = Database::from_connection(conn).unwrap();
         let reader = Database::open_read_only(&path).unwrap();
-        for db in [writer, reader] {
-            let conn = db.conn.lock().unwrap();
+        let check_timeout = |conn: &Connection| {
             let timeout_ms: i64 = conn
                 .pragma_query_value(None, "busy_timeout", |row| row.get(0))
                 .unwrap();
             assert_eq!(timeout_ms, 5000);
-        }
+        };
+        check_timeout(&writer.conn.lock().unwrap());
+        check_timeout(&writer.browser_connection());
+        check_timeout(&reader.browser_connection());
+        assert!(writer
+            .browser_connection()
+            .is_readonly(rusqlite::DatabaseName::Main)
+            .unwrap());
+    }
+
+    #[test]
+    fn memory_browser_reuses_the_existing_connection() {
+        let db = Database::open_in_memory().unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute_batch("CREATE TABLE fixture(id); INSERT INTO fixture VALUES(7)")
+            .unwrap();
+        let number: i64 = db
+            .browser_connection()
+            .query_row("SELECT id FROM fixture", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(number, 7);
     }
 
     #[test]

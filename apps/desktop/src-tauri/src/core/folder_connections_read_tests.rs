@@ -4,7 +4,10 @@ use std::time::Instant;
 struct ReadFixture { db: Database, temp: tempfile::TempDir }
 impl ReadFixture {
     fn new(current: usize, other: usize, history: usize) -> Self {
-        let db = Database::open_in_memory().unwrap();
+        Self::with_db(Database::open_in_memory().unwrap(), current, other, history)
+    }
+
+    fn with_db(db: Database, current: usize, other: usize, history: usize) -> Self {
         db.migrate().unwrap();
         let temp = tempfile::tempdir().unwrap();
         db.create_project("scope", "scope", "blank:scope", "blank:scope", "blank").unwrap();
@@ -39,6 +42,95 @@ impl ReadFixture {
         }
         Self { db, temp }
     }
+}
+
+#[test]
+fn wal_folder_browsing_reads_committed_pages_during_a_writer_transaction() {
+    use std::{sync::{mpsc, Arc}, thread, time::Duration};
+
+    let dir = tempfile::tempdir().unwrap();
+    let f = ReadFixture::with_db(Database::open(&dir.path().join("library.db")).unwrap(), 2, 0, 0);
+    let db = Arc::new(f.db);
+    let mut writer = db.conn.lock().unwrap();
+    let tx = writer.transaction().unwrap();
+    tx.execute("UPDATE connected_entries SET name='uncommitted' WHERE id='e-00000'", []).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let reader = Arc::clone(&db);
+    let task = thread::spawn(move || {
+        let result: AppResult<_> = (|| {
+            let filter = ConnectionFilter { grouped: true, ..Default::default() };
+            let folders = reader.connection_folders_filtered(None, None, &filter)?;
+            let ids = reader.connection_entry_ids_in_scope(Some("current"), None, None, 0, 60, &filter, true)?;
+            let mut entries = reader.visible_connection_entries(&ids)?;
+            reader.connection_entry_groups(&mut entries, None, None, &filter)?;
+            Ok((folders, entries))
+        })();
+        sender.send(result).unwrap();
+    });
+    let result = receiver.recv_timeout(Duration::from_secs(3));
+    tx.commit().unwrap();
+    drop(writer);
+    task.join().unwrap();
+    let (folders, entries) = result.expect("browser queries must finish while awaiting the writer's commit").unwrap();
+    assert_eq!(folders.iter().find(|folder| folder.id == "current").unwrap().count, 2);
+    assert_eq!(entries[0].name, "00000.csv");
+    assert_eq!(db.visible_connection_entries(&["e-00000".into()]).unwrap()[0].name, "uncommitted");
+}
+
+#[test]
+#[ignore = "isolated comparison of SQLite connection mutex wait"]
+fn compare_browser_lock_wait_under_active_writer() {
+    use std::{sync::{mpsc, Arc}, thread, time::Duration};
+
+    let dir = tempfile::tempdir().unwrap();
+    let f = ReadFixture::with_db(Database::open(&dir.path().join("library.db")).unwrap(), 2, 0, 0);
+    let db = Arc::new(f.db);
+    let hold = Duration::from_millis(75);
+    for separated in [false, true] {
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let mut writer = db.conn.lock().unwrap();
+            let tx = writer.transaction().unwrap();
+            tx.execute("UPDATE connected_entries SET name='updated' WHERE id='e-00000'", []).unwrap();
+            let (ready, started) = mpsc::channel();
+            let reader = Arc::clone(&db);
+            let task = thread::spawn(move || {
+                let start = Instant::now();
+                ready.send(()).unwrap();
+                let conn = if separated { reader.browser_connection() } else { reader.conn.lock().unwrap() };
+                let lock_wait_us = start.elapsed().as_micros();
+                conn.query_row("SELECT name FROM connected_entries WHERE id='e-00000'", [], |row| row.get::<_, String>(0)).unwrap();
+                lock_wait_us
+            });
+            started.recv_timeout(Duration::from_secs(3)).unwrap();
+            thread::sleep(hold);
+            tx.rollback().unwrap();
+            drop(writer);
+            samples.push(task.join().unwrap());
+        }
+        samples.sort_unstable();
+        println!("folder-lock separated={separated} writer_hold_ms={} median_us={}", hold.as_millis(), samples[2]);
+    }
+}
+
+#[test]
+fn ordinary_folder_page_skips_group_join_but_manual_merges_still_group() {
+    use rusqlite::hooks::{AuthContext, Authorization};
+
+    let f = ReadFixture::new(2, 0, 0);
+    let filter = ConnectionFilter { grouped: true, ..Default::default() };
+    let mut entries = f.db.visible_connection_entries(&["e-00001".into()]).unwrap();
+    f.db.browser_connection().authorizer(Some(|context: AuthContext<'_>| {
+        if context.accessor == Some("group_entries") { Authorization::Deny } else { Authorization::Allow }
+    }));
+    f.db.connection_entry_groups(&mut entries, None, None, &filter).unwrap();
+    assert!(entries[0].group.is_empty());
+    f.db.browser_connection().authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+
+    f.db.conn.lock().unwrap().execute_batch("INSERT INTO generation_gallery_merges(source_key,group_key)
+        VALUES('asset:a-00000','manual:fixture'),('asset:a-00001','manual:fixture')").unwrap();
+    f.db.connection_entry_groups(&mut entries, None, None, &filter).unwrap();
+    assert_eq!(entries[0].group.iter().map(|entry| entry.id.as_str()).collect::<Vec<_>>(), ["e-00000", "e-00001"]);
 }
 
 // Frozen pre-optimization query shape: retain a comparable baseline without

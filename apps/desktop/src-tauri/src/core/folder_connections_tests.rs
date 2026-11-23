@@ -976,6 +976,70 @@ fn unchanged_scan_does_not_rewrite_entries_or_report_catalog_changes() {
 }
 
 #[test]
+#[ignore = "isolated directory rescan benchmark"]
+fn connection_rescan_performance() {
+    let mut f = Fixture::new();
+    f.db = Database::open(&f.paths.db).unwrap();
+    f.db.migrate().unwrap();
+    for index in 0..1000 {
+        fs::File::create(f.source.join(format!("{index}.mp4"))).unwrap()
+            .set_len(4096 + index).unwrap();
+    }
+    let root = f.connect(&f.source);
+    assert_eq!(f.db.every_entry_id(Some(&root)).unwrap().len(), 1001);
+    let mut samples = Vec::new();
+    for _ in 0..7 {
+        let start = std::time::Instant::now();
+        f.db.scan_connection_changes(&f.paths, &root, None, |changed| assert!(!changed)).unwrap();
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!("unchanged scan of 1001 files: {:.2} ms median; samples {samples:.2?}", samples[3]);
+}
+
+#[test]
+fn scan_notices_same_second_edits_in_the_original_and_reference_folders_only() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let f = Fixture::new();
+    let source = f.source.join("one.png");
+    let write_stamp = |nanos| fs::File::options().write(true).open(&source).unwrap()
+        .set_modified(UNIX_EPOCH + Duration::new(1_746_000_000, nanos)).unwrap();
+    // Keep the exact same dimensions and length, with distinct image bytes.
+    let encode = |color| {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb(color)))
+            .write_to(&mut out, image::ImageFormat::Png).unwrap();
+        let mut bytes = out.into_inner();
+        bytes.resize(1024, 0);
+        bytes
+    };
+    fs::write(&source, encode([20, 40, 60])).unwrap();
+    write_stamp(100_000_000);
+    let root = f.connect(&f.source);
+    let destination = f.connect(&f.target);
+    let unrelated_path = f._temp.path().join("unrelated");
+    fs::create_dir(&unrelated_path).unwrap();
+    f.connect(&unrelated_path);
+    let before = f.entries(&root).pop().unwrap();
+    f.db.create_material_references(&f.paths, &[before.asset_id.clone()], &destination).unwrap();
+
+    fs::write(&source, encode([200, 180, 160])).unwrap();
+    write_stamp(800_000_000);
+    let mut changes = HashSet::new();
+    f.db.scan_connection_cooperatively(&f.paths, &root, None, |change| match change {
+        ScanChange::Tick => (),
+        ScanChange::Root => panic!("a file edit must not invalidate its entire root"),
+        ScanChange::Folder(folder) => { changes.insert(folder.to_owned()); }
+        ScanChange::Folders(folders) => changes.extend(folders.iter().cloned()),
+    }, || false).unwrap();
+    let after = f.entries(&root).pop().unwrap();
+    assert_eq!(after.asset_id, before.asset_id);
+    assert_ne!(after.version, before.version);
+    assert_eq!(changes, HashSet::from([root, destination]));
+}
+
+#[test]
 fn scan_reports_offline_and_restore_once_without_discarding_cached_entries() {
     let f = Fixture::new();
     let root = f.connect(&f.source);

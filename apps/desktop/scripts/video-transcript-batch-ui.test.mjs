@@ -123,8 +123,8 @@ async function openSharedPreview(action, path) {
 try {
   await page.goto(`${base}scripts/fixtures/catalog-paging/preview.html?navigation&home`);
   await page.waitForFunction(() => window.store && window.__TAURI_INTERNALS__?.invoke);
-  const navigation = page.getByRole('tablist', { name: '素材视图切换条', exact: true });
-  await navigation.getByRole('tab', { name: '全部素材', exact: true }).click();
+  const navigation = page.getByRole('complementary', { name: '素材库导航', exact: true });
+  await navigation.getByRole('button', { name: '全部素材', exact: true }).click();
   await installMock();
   await page.waitForFunction(() => window.transcriptCalls.some(call => call.command === 'video_transcript_capabilities'));
   const entry = page.getByRole('button', { name: '批量转录视频', exact: true });
@@ -192,8 +192,9 @@ try {
   await dialog().getByText('需要重新核对音轨和费用，剩余视频未提交。', { exact: true }).waitFor();
   assert.deepEqual(await page.evaluate(() => window.transcriptCalls.filter(call => call.command === 'video_transcript_start').map(call => call.args.assetId)), ['global-long']);
   await dialog().getByRole('button', { name: '关闭', exact: true }).click();
-  await navigation.getByRole('tab', { name: '项目素材', exact: true }).click();
-  await page.getByRole('button', { name: '查看项目素材 项目A', exact: true }).click();
+  const projects = navigation.getByRole('button', { name: '项目', exact: true });
+  if (await projects.getAttribute('aria-expanded') !== 'true') await projects.click();
+  await navigation.getByRole('button', { name: '项目A', exact: true }).click();
   await openBatch();
   await dialog().getByRole('button', { name: '选择新的范围', exact: true }).click();
   await dialog().getByText('项目内视频 · 项目A', { exact: true }).waitFor();

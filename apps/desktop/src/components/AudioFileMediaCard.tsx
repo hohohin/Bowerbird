@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Music2 } from "lucide-react";
 import { AudioWaveform } from "./AudioWaveform";
 import type { FileMediaCardProps } from "./FileMediaCard";
@@ -8,17 +8,28 @@ import "./AudioFileMediaCard.css";
 
 export function AudioFileMediaCard({ entry, assetId, expectedVersion, selected, revision, onActivate, onSelect, onOpen, onContextMenu, onPointerDown, onDragStart, onDragEnd, style, duration }: FileMediaCardProps) {
   const [seconds, setSeconds] = useState(duration);
+  const clickTimer = useRef<number>();
+  const cancelClick = () => window.clearTimeout(clickTimer.current);
   useEffect(() => setSeconds(duration), [duration, entry.path, entry.version]);
+  useEffect(() => cancelClick, [entry.path, onActivate === undefined]);
   return <div role="group" tabIndex={0} className={`folder-media-card audio-file-card${selected ? " is-selected" : ""}`}
     onPointerDown={onPointerDown}
     style={style} data-positioned={style ? "true" : undefined} data-asset-id={assetId} data-file-path={entry.path} aria-label={entry.name}
     draggable={!!onDragStart} onDragStart={onDragStart} onDragEnd={onDragEnd}
-    onClick={event => { if (!event.defaultPrevented) onSelect(event.ctrlKey || event.metaKey, event.shiftKey); }}
-    onDoubleClick={event => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey) (onActivate ?? onOpen)(); }}
-    onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onContextMenu(event.clientX, event.clientY); }}
+    onClick={event => {
+      cancelClick();
+      if (event.defaultPrevented) return;
+      if (!onActivate || event.ctrlKey || event.metaKey || event.shiftKey) {
+        onSelect(event.ctrlKey || event.metaKey, event.shiftKey);
+      } else if (event.detail < 2) {
+        clickTimer.current = window.setTimeout(onActivate, 300);
+      }
+    }}
+    onDoubleClick={event => { cancelClick(); if ((onActivate || !assetId) && !event.ctrlKey && !event.metaKey && !event.shiftKey) onOpen(); }}
+    onContextMenu={event => { cancelClick(); event.preventDefault(); event.stopPropagation(); onContextMenu(event.clientX, event.clientY); }}
     onKeyDown={event => {
       if (event.target !== event.currentTarget) return;
-      if (event.key === "Enter") { event.preventDefault(); (onActivate ?? onOpen)(); }
+      if (event.key === "Enter" && (onActivate || !assetId)) { cancelClick(); event.preventDefault(); onOpen(); }
       if (event.key === " ") { event.preventDefault(); onSelect(event.ctrlKey || event.metaKey, event.shiftKey); }
       if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
         event.preventDefault(); event.stopPropagation();

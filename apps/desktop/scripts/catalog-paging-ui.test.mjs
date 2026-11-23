@@ -71,7 +71,9 @@ try {
   assert.equal(await page.evaluate(()=>window.beforeCard.isConnected),true);
   await ready(); await page.evaluate(()=>{window.delay=0;});
   // Full-result selection, even though only a viewport of cards exists.
-  await page.getByRole('textbox',{name:'搜索素材'}).fill('small'); await ready();
+  const searchButton = page.getByRole('button',{name:'搜索素材',exact:true});
+  const search = page.getByRole('searchbox',{name:'搜索素材',exact:true});
+  await searchButton.click(); await search.fill('small'); await ready();
   await page.locator('[data-asset-id="asset-0"]').click({modifiers:['Control']});
   await scroller().evaluate(el=>{el.scrollTop=el.scrollHeight;}); await ready();
   await page.locator('[data-asset-id="asset-179"]').click({modifiers:['Shift']});
@@ -83,6 +85,7 @@ try {
   await page.getByRole('button',{name:'添加到新项目',exact:true}).click();
   await page.waitForFunction(()=>window.created?.length===180);
   // A failed page is retryable and does not poison later requests.
+  await scroller().evaluate(el=>{el.scrollTop=0;}); await ready();
   await page.evaluate(()=>{window.failOffset=0;window.refresh();});
   await page.getByRole('alert').filter({hasText:'模拟分页读取失败'}).waitFor();
   await page.evaluate(()=>{window.failOffset=-1;});
@@ -94,11 +97,11 @@ try {
   await page.getByRole('button',{name:'清除颜色筛选',exact:true}).click();
   await page.getByRole('button',{name:'颜色筛选',exact:true}).click();
   // Late summaries must not revive a previous query.
-  await page.getByRole('textbox',{name:'搜索素材'}).fill('slow');
-  await page.waitForTimeout(25); await page.getByRole('textbox',{name:'搜索素材'}).fill('empty');
+  await searchButton.click(); await search.fill('slow');
+  await page.waitForTimeout(25); await search.fill('empty');
   await page.getByText('没有匹配的素材。',{exact:true}).waitFor();
   await page.waitForTimeout(450); assert.equal(await cards().count(),0);
-  await page.getByRole('textbox',{name:'搜索素材'}).fill(''); await ready();
+  await search.fill(''); await search.press('Escape'); await ready();
   await page.evaluate(()=>window.changeKind('tags')); await ready();
   await page.locator('.catalog-tag-list').getByRole('button',{name:/Z 末尾/}).first().click();
   await page.locator('[data-tag-section="last"] [data-asset-id="asset-299940"]').waitFor();

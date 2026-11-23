@@ -260,6 +260,28 @@ try {
     return material && Math.abs(material.getBoundingClientRect().x - previous) < 1;
   }, { id: video.editResultId, previous: clipBeforeDrag.x });
   await checkPeekGap();
+
+  const resizeVideo = editedClip.getByRole('button', { name: '调整素材大小', exact: true });
+  await editedClip.hover();
+  assert.equal(await resizeVideo.evaluate(el => getComputedStyle(el).opacity), '1');
+  const handle = await resizeVideo.boundingBox();
+  const gripX = handle.x + handle.width / 2, gripY = handle.y + handle.height / 2;
+  await page.mouse.move(gripX, gripY);
+  await page.mouse.down();
+  await page.mouse.move(gripX + 51, gripY + 24, { steps: 4 });
+  await page.mouse.up();
+  await page.waitForFunction(({ id, width }) => window.snapshot().nodes.find(node => node.id === id)?.width > width,
+    { id: video.editResultId, width: clipBeforeDrag.width / zoom + 50 });
+  const resizedVideo = await page.evaluate(id => window.snapshot().nodes.find(node => node.id === id), video.editResultId);
+  assert.ok(Math.abs((resizedVideo.height - 32) / (resizedVideo.width - 2) - 9 / 16) < 0.001);
+  const clipAfterResize = await editedClip.boundingBox();
+  assert.ok(Math.abs(clipAfterResize.width - clipBeforeDrag.width - 51) < 1);
+  assert.equal(clipAfterResize.x, clipBeforeDrag.x);
+  assert.equal(clipAfterResize.y, clipBeforeDrag.y);
+  assert.equal(await preview.count(), 0);
+  await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+z`);
+  await page.waitForFunction(({ id, width }) => Math.abs(window.snapshot().nodes.find(node => node.id === id)?.width - width) < 1,
+    { id: video.editResultId, width: clipBeforeDrag.width / zoom });
   await editedClip.click({ button: 'right' });
   await page.getByRole('menuitem', { name: '固定生成卡', exact: true }).click();
   await editCard.getByRole('button', { name: '取消固定并收起' }).waitFor();
@@ -271,7 +293,7 @@ try {
   await page.evaluate(() => window.resumeEditRun());
   await editCard.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
-  console.log('PASS new + and saved direct inputs, image/video result wires, video material Peek drag/undo at zoom, whole video delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');
+  console.log('PASS new + and saved direct inputs, image/video result wires, video material Peek drag/resize/undo at zoom, whole video delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');
 } finally {
   await browser.close();
   await server.close();

@@ -112,6 +112,12 @@ pub fn browse_page(path: Option<&str>, offset: usize, all: bool) -> AppResult<Di
 }
 
 pub(crate) fn preview_key(path: &Path, metadata: &fs::Metadata) -> AppResult<String> {
+    #[cfg(windows)]
+    let change_time = if video_path(path) { windows_video_change_time(path) } else { None };
+    preview_key_with_metadata(path, metadata, #[cfg(windows)] change_time)
+}
+
+fn preview_key_with_metadata(path: &Path, metadata: &fs::Metadata, #[cfg(windows)] change_time: Option<i64>) -> AppResult<String> {
     let mut key = format!(
         "{}:{}:{:?}",
         path.display(),
@@ -127,19 +133,132 @@ pub(crate) fn preview_key(path: &Path, metadata: &fs::Metadata) -> AppResult<Str
         }
         #[cfg(windows)]
         {
-            use std::os::windows::{fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
-            use windows::Win32::{Foundation::HANDLE, Storage::FileSystem::{FileBasicInfo, GetFileInformationByHandleEx, FILE_BASIC_INFO, FILE_READ_ATTRIBUTES}};
+            use std::os::windows::fs::MetadataExt;
             let _ = write!(key, ":{}", metadata.creation_time());
-            // Detect an in-place rewrite even if a tool restores the last-write time.
-            if let Ok(file) = fs::OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES.0).open(path) {
-                let mut info = FILE_BASIC_INFO::default();
-                let result = unsafe { GetFileInformationByHandleEx(HANDLE(file.as_raw_handle()), FileBasicInfo,
-                    (&mut info as *mut FILE_BASIC_INFO).cast(), std::mem::size_of::<FILE_BASIC_INFO>() as u32) };
-                if result.is_ok() { let _ = write!(key, ":{}", info.ChangeTime); }
+            if let Some(change_time) = change_time {
+                let _ = write!(key, ":{change_time}");
             }
         }
     }
     Ok(format!("{:x}", Sha256::digest(key.as_bytes())))
+}
+
+#[cfg(windows)]
+fn windows_video_change_time(path: &Path) -> Option<i64> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use windows::Win32::{Foundation::HANDLE, Storage::FileSystem::{FileBasicInfo, GetFileInformationByHandleEx, FILE_BASIC_INFO, FILE_READ_ATTRIBUTES}};
+
+    let file = fs::OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES.0).open(path).ok()?;
+    let mut info = FILE_BASIC_INFO::default();
+    // SAFETY: the open file and writable, aligned FILE_BASIC_INFO live through the call.
+    unsafe {
+        GetFileInformationByHandleEx(HANDLE(file.as_raw_handle()), FileBasicInfo,
+            (&mut info as *mut FILE_BASIC_INFO).cast(), std::mem::size_of::<FILE_BASIC_INFO>() as u32)
+    }.ok()?;
+    Some(info.ChangeTime)
+}
+
+/// One metadata snapshot per directory walk; callers discard it when a walk yields.
+#[derive(Default)]
+pub(crate) struct ScanVideoVersions {
+    #[cfg(windows)]
+    entries: std::cell::OnceCell<Option<WindowsVideoDirectory>>,
+}
+
+impl ScanVideoVersions {
+    pub(crate) fn version(&self, path: &Path, metadata: &fs::Metadata) -> AppResult<String> {
+        #[cfg(windows)]
+        if let Some(change_time) = self.entries
+            .get_or_init(|| path.parent().and_then(windows_video_directory))
+            .as_ref()
+            .and_then(|listing| listing.get(path.file_name()?))
+            .and_then(|entry| entry.matching_change_time(metadata))
+        {
+            return preview_key_with_metadata(path, metadata, Some(change_time));
+        }
+        preview_key(path, metadata)
+    }
+}
+
+#[cfg(windows)]
+type WindowsVideoDirectory = std::collections::HashMap<std::ffi::OsString, WindowsVideoStamp>;
+
+#[cfg(windows)]
+struct WindowsVideoStamp {
+    size: u64,
+    modified: u64,
+    created: u64,
+    changed: i64,
+}
+
+#[cfg(windows)]
+impl WindowsVideoStamp {
+    fn matching_change_time(&self, metadata: &fs::Metadata) -> Option<i64> {
+        use std::os::windows::fs::MetadataExt;
+        (self.changed != 0 && self.size == metadata.len() && self.modified == metadata.last_write_time()
+            && self.created == metadata.creation_time()).then_some(self.changed)
+    }
+}
+
+#[cfg(windows)]
+fn windows_video_directory(path: &Path) -> Option<WindowsVideoDirectory> {
+    use std::{ffi::OsString, mem::{offset_of, size_of, size_of_val}, os::windows::{ffi::OsStringExt, fs::OpenOptionsExt, io::AsRawHandle}};
+    use windows::{core::HRESULT, Win32::{Foundation::{ERROR_NO_MORE_FILES, HANDLE}, Storage::FileSystem::{
+        FileIdBothDirectoryInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_DIRECTORY, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_BOTH_DIR_INFO, FILE_LIST_DIRECTORY,
+    }}};
+
+    let directory = fs::OpenOptions::new()
+        .access_mode(FILE_LIST_DIRECTORY.0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(path).ok()?;
+    // DWORDLONG alignment and a bounded buffer are required for directory records.
+    let mut buffer = vec![0_u64; 8192];
+    let capacity = size_of_val(buffer.as_slice());
+    let mut entries = WindowsVideoDirectory::new();
+    loop {
+        // SAFETY: the directory handle is open and buffer is aligned, initialized,
+        // writable, and capacity bytes long. SQLite never holds a lock here.
+        let result = unsafe {
+            GetFileInformationByHandleEx(HANDLE(directory.as_raw_handle()), FileIdBothDirectoryInfo,
+                buffer.as_mut_ptr().cast(), capacity as u32)
+        };
+        match result {
+            Ok(()) => (),
+            Err(error) if error.code() == HRESULT::from_win32(ERROR_NO_MORE_FILES.0) => return Some(entries),
+            Err(_) => return None,
+        }
+
+        let bytes = buffer.as_ptr().cast::<u8>();
+        let mut offset = 0_usize;
+        loop {
+            if offset.checked_add(size_of::<FILE_ID_BOTH_DIR_INFO>())? > capacity { return None; }
+            // SAFETY: offset starts aligned and every next offset is checked below.
+            let record = unsafe { bytes.add(offset).cast::<FILE_ID_BOTH_DIR_INFO>().read() };
+            let next = record.NextEntryOffset as usize;
+            let end = if next == 0 { capacity } else { offset.checked_add(next)? };
+            let start = offset + offset_of!(FILE_ID_BOTH_DIR_INFO, FileName);
+            let length = record.FileNameLength as usize;
+            if end > capacity || next % 8 != 0 || length == 0 || length % 2 != 0
+                || start.checked_add(length)? > end { return None; }
+            if record.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0 {
+                // SAFETY: the checked name range is wholly within the current record,
+                // the buffer is live, and FileName is aligned for u16.
+                let name = unsafe { std::slice::from_raw_parts(bytes.add(start).cast::<u16>(), length / 2) };
+                let name = OsString::from_wide(name);
+                if video_path(Path::new(&name)) {
+                    entries.insert(name, WindowsVideoStamp {
+                        size: record.EndOfFile as u64,
+                        modified: record.LastWriteTime as u64,
+                        created: record.CreationTime as u64,
+                        changed: record.ChangeTime,
+                    });
+                }
+            }
+            if next == 0 { break; }
+            offset = end;
+        }
+    }
 }
 
 /// Decoded HEIC is a disposable compatibility cache; the asset still owns its HEIC path.
@@ -629,6 +748,23 @@ mod tests {
         ingest,
         projects::{AssetDeleteMode, ProjectDeleteMode},
     };
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_video_version_matches_single_file_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("测试.mp4");
+        fs::write(&video, b"video metadata fixture").unwrap();
+        fs::write(dir.path().join("image.png"), b"not a video").unwrap();
+        let metadata = fs::symlink_metadata(&video).unwrap();
+        let versions = ScanVideoVersions::default();
+        assert_eq!(versions.version(&video, &metadata).unwrap(), preview_key(&video, &metadata).unwrap());
+        let entries = versions.entries.get().unwrap().as_ref().expect("directory metadata should be available on the local test volume");
+        assert_eq!(entries.len(), 1);
+        let stamp = entries.get(video.file_name().unwrap()).unwrap();
+        assert_eq!(stamp.matching_change_time(&metadata), windows_video_change_time(&video));
+    }
+
     struct Fixture {
         root: PathBuf,
         paths: LibraryPaths,

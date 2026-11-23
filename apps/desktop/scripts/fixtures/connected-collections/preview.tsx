@@ -34,7 +34,7 @@ function entry(id: string, folder_id: string, asset_id = id, is_reference = fals
 w.entries = [...Array.from({ length: 125 }, (_, i) => entry(`root-${i}`, "root")), entry("child-0", "child"), entry("ref-one", "child", "root-0", true), entry("ref-two", "child", "root-0", true), entry("nested-0", "nested"), entry("second-0", "second"), entry("video-0", "second", "video-0", false, true)];
 w.requests = []; w.picker = null; w.store = useStore; w.mode = useLocalFileMode; w.connections = folderConnections;
 w.previewActive = 0; w.previewPeak = 0; w.previewByPath = {}; w.previewDelay = cold ? 60 : 0;
-w.changed = () => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://assets-changed") fn({ payload: null }); });
+w.changed = (payload: unknown = null) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://assets-changed") fn({ payload }); });
 w.previewChanged = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://previews-changed") fn({ payload }); });
 w.connectionProgress = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://connection-progress") fn({ payload }); });
 w.connectionAvailability = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://connection-availability") fn({ payload }); });
@@ -76,7 +76,10 @@ w.__TAURI_INTERNALS__ = {
     if (w.catalogGate && ["folder_connections", "connection_entries"].includes(command)) await w.catalogGate;
     if (command === "folder_connections") return w.folders.map((item: any) => ({ ...item, count: entries({ ...args, folderId: item.id }).length }));
     if (command === "refresh_folder_connections") return;
-    if (command === "connection_entries") return structuredClone(entries(args).slice(args.offset, args.offset + args.limit));
+    if (command === "connection_entries") {
+      if (w.pageGate?.folderId === args.folderId) await w.pageGate.promise;
+      return structuredClone(entries(args).slice(args.offset, args.offset + args.limit));
+    }
     if (command === "connection_entry_ids") return entries(args).slice(args.offset, args.offset + args.limit).map((item: any) => item.id);
     if (command === "resolve_connection_entries") return args.ids.map((id: string) => w.entries.find((item: any) => item.id === id)).filter(Boolean);
     if (command === "plugin:dialog|open") return w.picker;

@@ -12,7 +12,7 @@ const card=id=>page.locator(`[data-connection-entry="${id}"] .folder-media-card`
 const menu=name=>page.getByRole('menuitem',{name,exact:true});
 async function more() { const button=page.getByRole('button',{name:'更多素材库控件',exact:true});if(await button.count() && await button.getAttribute('aria-expanded')!=='true') await button.click(); }
 try {
- await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/connected-collections/preview.html`); await page.getByRole('button',{name:'文件夹',exact:true}).click(); await card('root-0').waitFor();
+ await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/connected-collections/preview.html`); await page.getByRole('button',{name:'全部文件夹素材',exact:true}).click(); await card('root-0').waitFor();
  const scroller = page.locator('.connected-collections .catalog-scroller');
  await scroller.evaluate(el => { el.scrollTop = 900; });
  await page.getByRole('button', { name: '搜索素材', exact: true }).click();
@@ -41,7 +41,7 @@ try {
  await bar.getByRole('button',{name:'全选',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.catalog-selection')?.textContent.includes('130 项'));
  await bar.getByRole('button',{name:'取消选择',exact:true}).click();
  const resize=page.getByRole('separator',{name:'调整素材库侧栏宽度'});await resize.focus();await resize.press('ArrowRight');const remembered=await resize.getAttribute('aria-valuenow');
- await page.reload();await page.getByRole('button',{name:'文件夹',exact:true}).click(); await card('root-0').waitFor();assert.equal(await resize.getAttribute('aria-valuenow'),remembered);
+ await page.reload();await page.getByRole('button',{name:'全部文件夹素材',exact:true}).click(); await card('root-0').waitFor();assert.equal(await resize.getAttribute('aria-valuenow'),remembered);
  await page.evaluate(()=>{const template=window.entries[0];const make=(id,time,color)=>({...template,id,asset_id:id,name:id+'.png',color,asset:{...template.asset,id,name:id+'.png',generation_session_id:'conversation',created_at:time}});window.entries=[make('g-old',1,'red'),make('g-new',2,'blue'),{...window.entries[1],color:'red'}];window.changed();});
  await card('g-new').waitFor();assert.equal(await card('g-old').count(),0);const group=page.locator('.catalog-generation-group');assert.equal(await group.locator('.generation-group-count').innerText(),'2/2');
  await group.getByRole('button',{name:'上一张生成素材'}).click();await card('g-old').waitFor();await card('g-old').click({button:'right'});
@@ -61,7 +61,7 @@ try {
  await page.route('**/fixture/reference.png*',route=>route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#99aabb"/></svg>'}));
  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-workspace-live/preview.html`);
  const editor=page.getByRole('textbox',{name:'文档正文',exact:true});await editor.waitFor();
- await page.getByRole('button',{name:'文件夹',exact:true}).click();const embedded=page.locator('.text-workspace [data-connection-entry="entry-img1"] .folder-media-card');await embedded.waitFor();
+ await page.getByRole('button',{name:'全部文件夹素材',exact:true}).click();const embedded=page.locator('.text-workspace [data-connection-entry="entry-img1"] .folder-media-card');await embedded.waitFor();
  await embedded.click({button:'right'});await menu('重命名').waitFor();
  assert.equal(await page.locator('.text-workspace .asset-context-menu').count(),1);
  assert.equal(await page.evaluate(()=>window.store.getState().contextMenu),null,'embedded folder menu does not modify the background menu');

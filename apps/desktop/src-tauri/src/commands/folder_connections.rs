@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        folder_connections::{AssetOriginal, ConnectionEntry, ConnectionFilter, FolderConnection},
+        folder_connections::{AssetOriginal, ConnectionEntry, ConnectionFilter, FolderConnection, ScanChange},
         missing_originals::{MarkedReferenceSweep, MissingOriginalSweep},
         paths::LibraryPaths,
     },
@@ -8,7 +8,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -112,6 +112,28 @@ fn changed(app: &AppHandle) {
 }
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ScanCatalogScope {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    root_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    folder_ids: Vec<String>,
+}
+
+fn emit_scan_changes(app: &AppHandle, root: &str, root_changed: &mut bool, folders: &mut HashSet<String>) -> usize {
+    let mut notifications = 0;
+    if std::mem::take(root_changed) {
+        let _ = app.emit("library://assets-changed", ScanCatalogScope { root_ids: vec![root.to_owned()], folder_ids: Vec::new() });
+        notifications += 1;
+    }
+    if !folders.is_empty() {
+        let _ = app.emit("library://assets-changed", ScanCatalogScope { root_ids: Vec::new(), folder_ids: folders.drain().collect() });
+        notifications += 1;
+    }
+    if notifications > 0 { let _ = app.emit("external-files://changed", ()); }
+    notifications
+}
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ConnectionProgress {
     root_id: String,
     scanning: bool,
@@ -204,16 +226,20 @@ fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id:
     let mut last = Instant::now() - Duration::from_secs(1);
     let started = Instant::now();
     let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id.clone(), scanning: true, error: None });
-    let mut dirty = false;
+    let mut root_changed = false;
+    let mut folders = HashSet::new();
     let mut notifications = 0;
     let mut permit = Some(permit);
     let mut yielded = false;
-    let value = db.scan_connection_cooperatively(paths, &id, priority, |changed_data| {
-        dirty |= changed_data;
-        if dirty && last.elapsed() >= Duration::from_millis(500) {
-            changed(app);
-            notifications += 1;
-            dirty = false;
+    let value = db.scan_connection_cooperatively(paths, &id, priority, |change| {
+        match change {
+            ScanChange::Tick => (),
+            ScanChange::Root => root_changed = true,
+            ScanChange::Folder(folder) => { folders.insert(folder.to_owned()); }
+            ScanChange::Folders(changed) => folders.extend(changed.iter().cloned()),
+        }
+        if (root_changed || !folders.is_empty()) && last.elapsed() >= Duration::from_millis(500) {
+            notifications += emit_scan_changes(app, &id, &mut root_changed, &mut folders);
             last = Instant::now();
         }
     }, || {
@@ -226,7 +252,7 @@ fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id:
     }
     // Flush changes even when a later directory failed. Progress alone never
     // invalidates pages or forces the expensive catalog counts to run again.
-    if dirty { changed(app); notifications += 1; }
+    notifications += emit_scan_changes(app, &id, &mut root_changed, &mut folders);
     let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id, scanning: false, error: value.as_ref().err().map(ToString::to_string) });
     tracing::debug!(elapsed_ms = started.elapsed().as_millis(), notifications, "connection scan completed");
     if let Err(error) = value {
@@ -448,17 +474,29 @@ pub async fn refresh_folder_connections(
     queue_refresh(app, db.inner().clone(), paths.inner().clone(), None, folder_id, force);
     Ok(())
 }
+const GRANT_CAPACITY: usize = 16_384;
+const GRANT_EVICT_COUNT: usize = 2_048;
 #[derive(Default)]
-struct CatalogFileGrants(Mutex<HashSet<(String, String)>>);
+struct GrantVersions {
+    inserted: u64,
+    versions: HashMap<(String, String), u64>,
+}
+#[derive(Default)]
+struct CatalogFileGrants(Mutex<GrantVersions>);
 impl CatalogFileGrants {
     fn allow(&self, path: &str, version: Option<&str>, allow: impl FnOnce() -> AppResult<()>) -> AppResult<()> {
         let key = version.map(|version| (path.to_owned(), version.to_owned()));
         let mut granted = self.0.lock().unwrap();
-        if key.as_ref().is_some_and(|key| granted.contains(key)) { return Ok(()); }
+        if key.as_ref().is_some_and(|key| granted.versions.contains_key(key)) { return Ok(()); }
         allow()?;
         if let Some(key) = key {
-            if granted.len() >= 16_384 { granted.clear(); }
-            granted.insert(key);
+            if granted.versions.len() >= GRANT_CAPACITY {
+                let oldest = granted.inserted - (GRANT_CAPACITY - GRANT_EVICT_COUNT) as u64;
+                granted.versions.retain(|_, age| *age > oldest);
+            }
+            granted.inserted += 1;
+            let age = granted.inserted;
+            granted.versions.insert(key, age);
         }
         Ok(())
     }
@@ -787,6 +825,19 @@ mod maintenance_tests {
         assert_eq!(calls.get(), 6);
         CatalogFileGrants::default().allow("source", Some("v1"), allow).unwrap();
         assert_eq!(calls.get(), 7);
+    }
+
+    #[test]
+    fn catalog_grants_evict_oldest_versions_without_dropping_other_grants() {
+        let grants = CatalogFileGrants::default();
+        for i in 0..=GRANT_CAPACITY {
+            grants.allow(&i.to_string(), Some("v"), || Ok(())).unwrap();
+        }
+        assert_eq!(grants.0.lock().unwrap().versions.len(), GRANT_CAPACITY - GRANT_EVICT_COUNT + 1);
+        grants.allow(&GRANT_EVICT_COUNT.to_string(), Some("v"), || panic!("recent grant was lost")).unwrap();
+        let called = std::cell::Cell::new(false);
+        grants.allow("0", Some("v"), || { called.set(true); Ok(()) }).unwrap();
+        assert!(called.get());
     }
 
     #[tokio::test]

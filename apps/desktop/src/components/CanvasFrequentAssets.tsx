@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Check, ChevronDown, ChevronRight, Pin, Plus, RefreshCw, X } from "lucide-react";
 import { api, type CanvasFrequentAssetsResult } from "../lib/api";
 import type { Asset } from "../lib/types";
-import { isAudioAsset } from "../lib/audioMedia";
+import { isAudioAsset, isAudioPath } from "../lib/audioMedia";
 import { isTextAsset } from "../lib/textMedia";
 import { setDragAssets } from "../lib/dragPayload";
 import { externalFiles } from "../lib/externalFiles";
@@ -137,11 +137,11 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
   }
   async function activate(asset: Asset) {
     if (picking) return;
-    if (onInsertAsset && isAudioAsset(asset)) { onInsertAsset(asset); return; }
+    const audio = isAudioAsset(asset);
     if (onOpenAsset && isTextAsset(asset)) { onOpenAsset(asset); return; }
     const state = useStore.getState();
     if (!onInsertAsset && (state.activeProjectId !== projectId || !state.canvasLibraryOpen)) return;
-    if (!onInsertAsset && (state.boardOpen || state.genEditing)) {
+    if (!audio && !onInsertAsset && (state.boardOpen || state.genEditing)) {
       window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
       return;
     }
@@ -149,12 +149,18 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
     const isCurrent = () => alive.current && request === previewVersion.current && useStore.getState().projectRouteRevision === state.projectRouteRevision;
     try {
       if (!asset.store_path) throw new Error("素材原文件不可用");
-      const path = await externalFiles.media(asset.store_path);
+      const path = audio ? asset.store_path : await externalFiles.media(asset.store_path);
       if (isCurrent()) setPreview({ path, asset });
     } catch (reason) { if (isCurrent()) notifyError(reason, "无法预览素材"); }
   }
   function openAsset(asset: Asset) {
     if (onInsertAsset) { onInsertAsset(asset); return; }
+    if (isAudioAsset(asset)) {
+      const state = useStore.getState();
+      if (state.boardOpen || state.genEditing) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
+      else void activate(asset);
+      return;
+    }
     if (isVideoAsset(asset)) { void activate(asset); return; }
     previewVersion.current++; setPreview(null);
     if (onOpenAsset) onOpenAsset(asset); else useStore.getState().openDetail(asset.id);
@@ -226,7 +232,7 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
           {items[row].map(asset => <div className="canvas-frequent-card" key={asset.id} title={asset.name}>
             <FileMediaCard entry={{ path: asset.store_path ?? "", name: asset.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime ?? 0}:${asset.thumb_path}` }}
               selected={false} revision={0} labels={[]} assetId={asset.id} aspectRatio={1}
-              onSelect={() => { if (!onInsertAsset) void activate(asset); }} onActivate={() => void activate(asset)} onOpen={() => openAsset(asset)}
+              onSelect={() => { if (!onInsertAsset && !isAudioAsset(asset)) void activate(asset); }} onActivate={() => void activate(asset)} onOpen={() => openAsset(asset)}
               onContextMenu={(x,y) => (onAssetContextMenu ?? useStore.getState().openContextMenu)(x,y,asset.id,{ asset, singleAsset: true })}
               dragAssetIds={() => [asset.id]}
               onDragEnd={() => setDragAssets(null)}/>
@@ -240,7 +246,7 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
         </div>
       </div>)}
     </>}
-    {preview && (isVideoPath(preview.path)
+    {preview && (isVideoPath(preview.path) || isAudioPath(preview.path)
       ? <LibraryVideoPreview {...preview} sourceKey={videoSourceKey(preview.asset)} projectId={projectId} onClose={closePreview}/>
       : <Lightbox images={[preview.path]} index={0} onIndexChange={() => {}} onClose={closePreview}/>)}
   </section>;

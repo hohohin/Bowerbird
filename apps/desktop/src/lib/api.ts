@@ -89,6 +89,7 @@ export const api = {
   videoPoster: (sourcePath: string) => invoke<string | null>("video_poster", { sourcePath }),
   canvasImagePreview: (path: string, maxSize: number) => invoke<string>("canvas_image_preview", { path, maxSize }),
   trimVideo: (request: import("./videoTrim").VideoTrimRequest, projectId?: string) => invoke<Asset>("trim_video", { ...request, projectId: projectId ?? null }),
+  trimAudio: (request: import("./videoTrim").VideoTrimRequest, projectId?: string) => invoke<Asset>("trim_audio", { ...request, projectId: projectId ?? null }),
   extractVideoAudio: (sourcePath: string, operationId: string, projectId?: string) => invoke<Asset>("extract_video_audio", { sourcePath, operationId, projectId: projectId ?? null }),
   canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
   workflowTemplatesList: () => invoke<WorkflowTemplate[]>("workflow_templates_list"),

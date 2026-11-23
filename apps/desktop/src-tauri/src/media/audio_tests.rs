@@ -98,6 +98,7 @@ fn audio_verified_codecs_decode_without_external_tools() {
         let path = dir.path().join(format!("source.{extension}"));
         fs::write(&path, data).unwrap();
         let value = decode(&path).unwrap();
+        assert_eq!(duration(&path).unwrap(), value.duration, "{extension}");
         assert!(
             value.duration >= 0.14 && value.duration <= 0.3,
             "{extension}: {}",

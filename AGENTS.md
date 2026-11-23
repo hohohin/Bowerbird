@@ -37,7 +37,7 @@
 | 视频生成、即梦与方舟参数、恢复及计费 | [方舟视频 Cloud](dev-doc/VIDEO-API-INTEGRATION.md) · [即梦 Seedance 2.5](dev-doc/SEEDANCE-2.5-INTEGRATION.md) · [本机 ComfyUI H3](dev-doc/COMFYUI-LOCAL-VIDEO.md) |
 | 视频播放、转录、截帧、复刻与轻剪辑 | [视频素材](dev-doc/VIDEO-MEDIA.md) · [视频复刻](dev-doc/VIDEO-REPLICATION.md) · [独立复刻 Demo](spikes/video-replication-demo/README.md) · [轻剪辑调研](dev-doc/FILMCRAFT-RESEARCH.md) |
 | HyperFrames、可续改视频工程与 Studio | [Skill 视频](dev-doc/VIDEO-SKILL.md) |
-| 透明图层、音频波形、声音克隆或办公文档 | [分层](dev-doc/LAYER-EDITING.md) · [音频](dev-doc/AUDIO-LIBRARY.md) · [声音](dev-doc/VOICE-STUDIO.md) · [文本和办公](dev-doc/TEXT-LIBRARY.md) |
+| 透明图层、音频详情、波形、裁剪与转录、声音克隆或办公文档 | [分层](dev-doc/LAYER-EDITING.md) · [音频](dev-doc/AUDIO-LIBRARY.md) · [声音](dev-doc/VOICE-STUDIO.md) · [文本和办公](dev-doc/TEXT-LIBRARY.md) |
 | 提示词复用、常用库、偏好与记忆 | [创作记忆](dev-doc/CREATIVE-MEMORY-PLAN.md) |
 | Windows 或 macOS 本地运行、构建、打包和排障 | [Windows](Windows/README.md) · [Windows 平台适配](Windows/Windows-edited.md) · [macOS](macOS/README.md) |
 | 双端更新、签名、通道、回滚与正式验收 | [桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 发布验收](macOS/RELEASE-READINESS.md) |

@@ -78,7 +78,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const [assign, setAssign] = useState<string[] | null>(null);
   const [moveIds, setMoveIds] = useState<string[] | null>(null);
   const [references, setReferences] = useState(false);
-  const [preview, setPreview] = useState<{ asset: Asset; path: string; sourceKey: string } | null>(null);
+  const [preview, setPreview] = useState<{ asset: Asset; path: string; sourceKey: string; projectId: string | null } | null>(null);
   const [working, setWorking] = useState(false);
   const [color, setColor] = useState<string | null>(savedPosition?.color ?? null);
   const revision = useCatalogRevision(media === "images" && !!color);
@@ -286,17 +286,16 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     const next = selectCatalogItem(selected, asset.id, { additive, range, multiple });
     setSelected(next.selected); setMultiple(next.multiple);
   }
-  function activate(asset: Asset) {
+  function activate(asset: Asset, location?: CatalogLocation) {
     if (working) return;
-    if (onInsertAsset && isAudioAsset(asset)) { onInsertAsset(asset); return; }
+    const state = useStore.getState();
+    if (!onInsertAsset && projectId && (state.activeProjectId !== projectId || !state.canvasLibraryOpen)) return;
+    if (isAudioAsset(asset)) { void openPreview(asset, location); return; }
     if (isTextAsset(asset)) { openDetail(asset); return; }
     if (onInsertAsset) { void openPreview(asset); return; }
-    const state = useStore.getState();
-    if (projectId && (state.activeProjectId !== projectId || !state.canvasLibraryOpen)) return;
     if (state.boardOpen || state.genEditing) {
       window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
-    } else if (isAudioAsset(asset)) openDetail(asset);
-    else void openPreview(asset);
+    } else void openPreview(asset);
   }
   function openDetail(asset: Pick<Asset, "id">) {
     if (working) return;
@@ -304,23 +303,29 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     setPreview(null);
     if (onOpenAsset) onOpenAsset(asset); else useStore.getState().openDetail(asset.id);
   }
-  function openAsset(asset: Asset) {
+  function openAsset(asset: Asset, location: CatalogLocation) {
     if (working) return;
     if (onInsertAsset) onInsertAsset(asset);
-    else if (isVideoAsset(asset)) activate(asset);
+    else if (isAudioAsset(asset)) {
+      const state = useStore.getState();
+      if (state.boardOpen || state.genEditing) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
+      else void openPreview(asset, location);
+    } else if (isVideoAsset(asset)) activate(asset);
     else openDetail(asset);
   }
   function canShowOverlay() {
     return alive.current && !!root.current?.isConnected && !root.current.closest('[inert], [aria-hidden="true"]');
   }
-  async function openPreview(asset: Asset) {
+  async function openPreview(asset: Asset, location?: CatalogLocation) {
     const version = ++previewVersion.current;
     const routeRevision = useStore.getState().projectRouteRevision;
     const isCurrent = () => canShowOverlay() && version === previewVersion.current && useStore.getState().projectRouteRevision === routeRevision;
     try {
       if (!asset.store_path) throw new Error("素材原文件不可用");
-      const path = await externalFiles.media(asset.store_path);
-      if (isCurrent()) setPreview({ asset, path, sourceKey: videoSourceKey(asset)! });
+      const audio = isAudioAsset(asset);
+      const path = audio ? asset.store_path : await externalFiles.media(asset.store_path);
+      const targetProject = audio && projectScope ? (projectOverview ? location?.section : browseProjectId) ?? projectId : projectId;
+      if (isCurrent()) setPreview({ asset, path, sourceKey: videoSourceKey(asset)!, projectId: targetProject });
     } catch (error) { if (isCurrent()) notifyError(error, "无法预览素材"); }
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
@@ -417,7 +422,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
         <ThumbnailSizeSlider scope="library"/>
       </div>
     </div>
-    {preview && <LibraryVideoPreview {...preview} projectId={projectId} onClose={() => setPreview(null)}/>}
+    {preview && <LibraryVideoPreview {...preview} onClose={() => setPreview(null)}/>}
     {references && <ModalShell title="外部引用" width="lg" onClose={() => setReferences(false)}><LocalFileBrowser initialTab="references" onClose={() => setReferences(false)} onCreateProject={() => void onCreateProject?.()}/></ModalShell>}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); invalidateCatalog(); }}/>}
     {moveIds && <CollectionMoveDialog selection={{ assetIds: moveIds }} onClose={() => setMoveIds(null)} onSaved={finishSelection}/>}

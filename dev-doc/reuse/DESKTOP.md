@@ -84,7 +84,7 @@
 - 项目边界：[CategorizedLibrary.tsx](../../apps/desktop/src/components/CategorizedLibrary.tsx) 的 `browseProjectId` 用于项目素材查询、位置记忆、标签／分类及导入归属，`projectId` 仍表示当前创作项目，用于添加到画板、引用和截帧目标。新增嵌入宿主必须明确二者；不得为了浏览其他项目而修改 `activeProjectId`。`FileDropImport` 在完成后核对浏览项目身份，迟到结果不会切换另一个项目的素材视图。
 - 导航记忆：`createLocalFileMode(paneId)` 按 pane＋主页／项目保存 `source`、`lens` 和媒体类型，恢复时兼容旧 `view`、`tagSource`。浏览项目同样分栏记忆，兼容原项目键。`copyLibraryPane` 复制当前选择后独立浏览。普通打开使用 `setOpen(true)`。临时菜单与搜索词只在会话中保留。
 - 现有画板入口：[Toolbar.tsx](../../apps/desktop/src/components/Toolbar.tsx) 与 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 共用 `useStore.canvasLibraryOpen`／`setCanvasLibraryOpen` 和 `useLocalFileMode.setOpen(true)`；顶栏先恢复上次素材视图，展开后显示既有连接操作。`ConnectedCollections` 复用公共 `catalog-tree-row` 的 hover／focus／`is-menu-open` 名称避让，不给空闲目录名称无条件预留操作宽度。
-- 局部通知：`subscribeCatalogPreviews`／`subscribeConnectionProgress` 沿会话监听分发原生事件；`patchCatalogPage`／`patchConnectionProgress` 同时用于缓存、在途响应和可见页，禁止将预览／扫描进度重新转成全库失效。`useCatalogRevision(colorFiltered)`、`catalogCache.revision(colorFiltered)` 与 `read(key, loader, colorFiltered)` 必须使用一致的颜色范围；普通预览仅局部补字段，颜色筛选单独重验成员。`VirtualCatalog`、`ConnectedCollections` 是实际调用方，语义见 [性能说明](../FOLDER-MODE.md#文件夹读取与预览性能2026-11-10)。
+- 局部通知：`subscribeCatalogPreviews`／`subscribeConnectionProgress` 沿会话监听分发原生事件。`patchCatalogPage`／`patchConnectionProgress` 同时用于缓存、在途响应和可见页。目录页的 `catalogCache.revision(colorFiltered, scope)` 与 `read(key, loader, colorFiltered, scope)` 使用同一连接根及目录 ID，`useCatalogRevision(colorFiltered)` 提供目录树和汇总所需的会话版本。作用域内索引变更保留无关目录的读请求，预览仅补字段，颜色筛选单独更新成员。`VirtualCatalog`、`ConnectedCollections` 是实际调用方。[会话缓存](../FOLDER-MODE.md#素材库会话缓存2026-11-10源码待发布) · [性能说明](../FOLDER-MODE.md#文件夹读取与预览性能2026-11-10)。
 - 状态：**可跨模块复用**；仅适合桌面素材浏览宿主，不是通用全应用状态容器。
 
 ## 给素材列表加入单选、持续多选和 Shift 选择
@@ -141,6 +141,7 @@
 - 推荐 UI 入口：[AudioWaveform.tsx](../../apps/desktop/src/components/AudioWaveform.tsx) 的 `AudioWaveform`；底层为 [audioPreview.ts](../../apps/desktop/src/lib/audioPreview.ts) 的 `playAudioPreview`／`stopAudioPreview` 与 [audioPreviewPeaks.ts](../../apps/desktop/src/lib/audioPreviewPeaks.ts) 的 `requestAudioWaveform`。实际调用：[AudioFileMediaCard.tsx](../../apps/desktop/src/components/AudioFileMediaCard.tsx) 和 [AssetDetail.tsx](../../apps/desktop/src/components/AssetDetail.tsx) 都渲染 `AudioWaveform`。
 - 边界：一个 `HTMLAudioElement` 跨卡片持有持续播放；卸载只结束临时试听，不能随意停持续播放。原件修改／回收前释放对应句柄，`expectedVersion` 是原件指纹，不是 UI revision；波形按可见订阅和有限并发获取，不全量解码到 React。不是多轨混音器或视频播放器。
 - 状态：**可跨模块复用**；格式与生命周期约束见 [音频素材库](../AUDIO-LIBRARY.md)。
+- 完整音频详情经 [LibraryVideoPreview](../../apps/desktop/src/components/LibraryVideoPreview.tsx) 使用共用预览壳。主舞台由 [AudioDetailPlayer](../../apps/desktop/src/components/AudioDetailPlayer.tsx) 复用波形缓存、全局播放器与 `MediaTrimTimeline`。其 `seekRequest` 接收文稿阅读器选中的秒数和请求版本。
 - 画布独立音频卡片通过 `AudioWaveform.onWavePointerDown` 接入既有 `beginNodeDrag`，保留波形单击试听并在拖动／取消／多选后抑制误播；加载中也可拖动，完成后焦点回到卡片以支持撤销。素材库、详情与组内试听无需传此入口。[回归记录](../AUDIO-LIBRARY.md#画布音频拖动修复2026-11-10)。
 
 ## 在应用内拖素材，或把原件拖到其他应用

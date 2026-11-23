@@ -103,6 +103,14 @@ try {
   assert.equal(await sidebar().getByRole("treeitem", { name: "素材目录", exact: true }).locator("svg[data-folder-glyph]").count(), 1);
   assert.equal(await sidebar().getByRole("treeitem", { name: "风景", exact: true }).locator("svg[data-folder-glyph]").count(), 0);
   assert.deepEqual(await sections(), ["root","child","nested","empty","second","offline"]);
+  const folders = sidebar().getByRole("button", { name: "文件夹", exact: true });
+  await folders.click({ position: { x: 34, y: 14 } });
+  assert.equal(await folders.getAttribute("aria-expanded"), "false");
+  assert.equal(await folders.locator(".lucide-chevron-right").count(), 1);
+  await sidebar().getByRole("tree", { name: "文件夹层级" }).waitFor({ state: "hidden" });
+  assert.deepEqual(await sections(), ["root","child","nested","empty","second","offline"]);
+  await folders.press("Space");
+  assert.equal(await folders.getAttribute("aria-expanded"), "true");
   await sidebar().getByRole("treeitem", { name: "风景", exact: true }).click();
   await page.locator('[data-connection-entry="child-0"]').waitFor();
   assert.deepEqual(await sections(), ["child","nested"]);
@@ -119,6 +127,35 @@ try {
   await sidebar().getByRole("treeitem", { name: "晨间", exact: true, selected: true }).waitFor();
   await page.locator('[data-connection-entry="nested-0"]').waitFor();
   assert.deepEqual(await sections(), ["nested"]);
+
+  await folders.click();
+  assert.equal(await folders.getAttribute("aria-expanded"), "false");
+  assert.deepEqual(await sections(), ["nested"]);
+  await page.keyboard.press("e");
+  await sidebar().getByRole("button", { name: "拼音 A–Z", exact: true }).waitFor();
+  await page.keyboard.press("q");
+  assert.equal(await folders.getAttribute("aria-expanded"), "false");
+  assert.equal(await sidebar().getByRole("button", { name: "连接文件夹", exact: true }).count(), 0);
+  await page.locator(".app-topbar").getByRole("button", { name: "建立连接", exact: true }).waitFor();
+  await click("新建文件夹");
+  const newFolder = page.getByRole("dialog", { name: "新建文件夹", exact: true });
+  await newFolder.getByRole("textbox", { name: "文件夹名称" }).fill("空白测试目录");
+  await newFolder.getByText("保存位置 /fixture/BowerbirdLibrary/空白测试目录", { exact: true }).waitFor();
+  assert.equal(await newFolder.getByRole("button", { name: "更改父目录" }).count(), 0);
+  assert.equal(await folders.getAttribute("aria-expanded"), "false");
+  await newFolder.getByRole("button", { name: "保存", exact: true }).click();
+  const created = sidebar().getByRole("treeitem", { name: "空白测试目录", exact: true, selected: true });
+  await created.waitFor();
+  assert.equal(await folders.getAttribute("aria-expanded"), "true");
+  const createdId = await created.getAttribute("data-collection-id");
+  await page.locator(`[data-catalog-section="${createdId}"]`).waitFor();
+  assert.deepEqual(await sections(), [createdId]);
+  assert.equal(await page.locator(".catalog-scroller:visible [data-connection-entry]").count(), 0);
+  assert.deepEqual(await page.evaluate(() => window.requests.filter(({ command }) =>
+    ["create_connected_collection", "connect_folder", "plugin:dialog|open"].includes(command))), [
+    { command: "create_connected_collection", args: { parentId: null, name: "空白测试目录", path: null, projectId: null } },
+  ]);
+
   await sidebar().getByRole("button", { name: "收起侧栏", exact: true }).click();
   await page.reload();
   await sidebar().getByRole("button", { name: "展开侧栏", exact: true }).waitFor();

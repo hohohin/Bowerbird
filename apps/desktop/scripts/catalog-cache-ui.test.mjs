@@ -14,22 +14,26 @@ const hold = () => page.evaluate(() => { window.catalogGate = new Promise(resolv
 const paint = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 async function show(kind) {
   await page.evaluate(() => window.setLibraryVisible(true));
-  if (kind === 'folders') await page.getByRole('tab', { name: '文件夹', exact: true }).click();
+  if (kind === 'folders') await page.getByRole('button', { name: '全部文件夹素材', exact: true }).click();
 }
 try {
   await page.addInitScript(() => { window.total = 120; });
   for (const kind of ['all', 'tags', 'folders']) {
     await page.goto(`http://127.0.0.1:17979/scripts/fixtures/${kind === 'folders' ? 'connected-collections' : 'catalog-paging'}/preview.html`);
     if (kind === 'tags') await page.evaluate(() => window.changeKind('tags'));
-    if (kind === 'folders') await page.getByRole('tab', { name: '文件夹', exact: true }).click();
+    if (kind === 'folders') await page.getByRole('button', { name: '全部文件夹素材', exact: true }).click();
     const card = page.locator(kind === 'folders' ? '[data-connection-entry="root-0"]' : '[data-asset-id="asset-0"]').first();
     await card.waitFor();
     await page.waitForTimeout(300);
     const before = await reads();
-    await hide(); await hold();
+    await hide();
+    await page.clock.setFixedTime((await page.evaluate(() => Date.now())) + 90_000);
+    await hold();
     await show(kind);
     await card.waitFor({ timeout: 3000 }); await paint();
-    assert.deepEqual(await reads(), before, `${kind}: reopening with fresh snapshots must not re-read the list, counts or groups`);
+    const reopened = await reads();
+    console.log(`${kind}: ${reopened.length - before.length} extra reads after reopening 90s later`);
+    assert.deepEqual(reopened, before, `${kind}: reopening after 90s must reuse the list, counts and groups`);
     assert.equal(await page.getByText('正在读取素材…', { exact: true }).count(), 0);
     await page.evaluate(() => window.releaseCatalog());
 

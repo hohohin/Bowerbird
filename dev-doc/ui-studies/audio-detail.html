@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>音频详情示意 · Bowerbird</title>
+<link rel="stylesheet" href="../../apps/desktop/src/components/IndustrialTheme.css">
+<link rel="stylesheet" href="../../apps/desktop/src/components/VideoPlayer.css">
+<link rel="stylesheet" href="../../apps/desktop/src/components/MediaTrimTimeline.css">
+<link rel="stylesheet" href="../../apps/desktop/src/components/MediaTactical.css">
+<style>
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; color: var(--bb-ink); background: var(--bb-bg); font: 14px/1.5 Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; }
+  button, input, select { font: inherit; }
+  button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+  button:disabled { opacity: .48; cursor: default; }
+  :is(button, input, select, [tabindex]):focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 2px; }
+  button:hover:not(:disabled) { color: var(--bb-blue); background: var(--bb-popover-hover); }
+  h1, h2, p, dl { margin: 0; }
+  h2 { font-size: 19px; font-weight: 600; }
+  output, .time, .rate { font-variant-numeric: tabular-nums; }
+  svg { display: inline-block; vertical-align: middle; flex: none; }
+  .app-bar { height: 45px; display: flex; align-items: center; justify-content: space-between; padding-inline: 32px; border-bottom: 1px solid var(--bb-line); background: var(--bb-surface-2); }
+  .app-bar p { display: flex; align-items: center; gap: 10px; color: var(--bb-muted); font-size: 12px; }
+  .app-bar b { font-weight: 600; color: var(--bb-ink); }
+  .app-bar button { padding: 5px 9px; }
+  .preview { position: relative; max-width: 1560px; min-height: calc(100dvh - 45px); margin-inline: auto; padding: 30px 36px 36px; align-content: center; }
+  .preview::before { position: absolute; content: ""; inset: 14px; pointer-events: none; opacity: .55; background:
+    linear-gradient(var(--bb-line), var(--bb-line)) 0 0 / 38px 1px,
+    linear-gradient(var(--bb-line), var(--bb-line)) 0 0 / 1px 38px,
+    linear-gradient(var(--bb-line), var(--bb-line)) 100% 0 / 38px 1px,
+    linear-gradient(var(--bb-line), var(--bb-line)) 100% 0 / 1px 38px,
+    linear-gradient(var(--bb-line), var(--bb-line)) 100% 100% / 38px 1px,
+    linear-gradient(var(--bb-line), var(--bb-line)) 100% 100% / 1px 38px,
+    linear-gradient(var(--bb-line), var(--bb-line)) 0 100% / 38px 1px,
+    linear-gradient(var(--bb-line), var(--bb-line)) 0 100% / 1px 38px; background-repeat: no-repeat; }
+  .layout { display: grid; grid-template-columns: minmax(180px, .66fr) minmax(0, 1.65fr) minmax(245px, .78fr); align-items: center; gap: clamp(12px, 2.4vw, 36px); }
+  .readout { position: relative; min-width: 0; align-self: stretch; margin-block: 34px; border-block: 1px solid var(--bb-line); padding: 16px 14px; background: rgb(var(--industrial-panel-rgb) / .58); backdrop-filter: blur(12px); }
+  .readout::before, .analysis::before { content: ""; position: absolute; top: -1px; left: 22px; width: 38px; height: 2px; background: var(--bb-blue); }
+  .readout header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 12px; border-bottom: 1px solid var(--bb-line); margin-bottom: 10px; }
+  .readout .field-group { border: 1px solid var(--bb-line); padding: 8px 10px; margin-bottom: 9px; }
+  .readout .field-group > p, .readout dt { color: var(--bb-muted); font-size: 12px; }
+  .readout dl { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 4px 12px; margin-block: 4px; }
+  .readout dd { margin: 0; font-size: 12px; text-align: right; overflow-wrap: anywhere; }
+  .record-source { margin: 0 4px 14px; color: var(--bb-muted); font-size: 12px; }
+  .record-content { margin-inline: 4px; padding-block: 8px; color: var(--bb-ink); }
+  .record-content p { margin-block: 9px; }
+  .group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 10px; flex-wrap: wrap; }
+  .group-actions { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 7px; }
+  .group-actions button { min-height: 34px; padding-inline: 10px; font-size: 12px; font-weight: 600; }
+  .primary { color: var(--bb-blue); }
+  .icon-button { width: 34px; height: 34px; display: inline-grid; place-content: center; flex: none; }
+  .icon-button[aria-pressed=true] { color: var(--bb-blue); }
+  .stage { min-width: 0; position: relative; grid-column: 2; grid-row: 1; }
+  .preview-head, .preview-foot, .foot-actions { display: flex; align-items: center; justify-content: space-between; }
+  .preview-head { margin-bottom: 10px; gap: 8px; }
+  .preview-head h1 { border-left: 2px solid var(--bb-blue); padding: 9px 12px; background: var(--bb-surface-2); font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+  .preview-head > button, .foot-actions { background: var(--bb-surface-2); }
+  .preview-foot { gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .preview-foot > span { color: var(--bb-muted); font: 12px ui-monospace, monospace; }
+  .foot-actions { gap: 4px; padding-inline: 3px; }
+  .foot-actions output { padding-inline: 4px; color: var(--bb-muted); font: 12px ui-monospace, monospace; }
+  #details { grid-column: 3; grid-row: 1; }
+  .audio-player.video-player { position: relative; width: 100%; max-height: none; height: auto; overflow: visible; border-color: var(--bb-line); background: var(--bb-surface); }
+  .audio-player::before, .audio-player::after { position: absolute; content: ""; width: 16px; height: 16px; pointer-events: none; }
+  .audio-player::before { top: -5px; left: -5px; border-top: 1px solid var(--bb-blue); border-left: 1px solid var(--bb-blue); }
+  .audio-player::after { bottom: -5px; right: -5px; border-bottom: 1px solid var(--bb-blue); border-right: 1px solid var(--bb-blue); }
+  .wave-stage { position: relative; min-height: 205px; height: clamp(225px, 30vh, 380px); background: color-mix(in srgb, var(--bb-bg), #000 15%); border-bottom: 1px solid var(--bb-line); padding: 24px 24px 16px; display: grid; grid-template-rows: 1fr auto; }
+  .wave-track { position: relative; width: 100%; height: 100%; padding: 0; min-height: 0; cursor: crosshair; touch-action: none; }
+  #main-wave { display: block; width: 100%; height: 100%; }
+  .ruler { display: flex; justify-content: space-between; gap: 4px; padding-top: 8px; border-top: 1px solid var(--bb-line); color: var(--bb-muted); font: 11px ui-monospace, monospace; }
+  .ruler span { position: relative; }
+  .ruler span::before { position: absolute; content: ""; width: 1px; height: 5px; top: -8px; left: 50%; background: var(--bb-line); }
+  .playhead { position: absolute; inset-block: 0; width: 1px; background: var(--bb-blue); pointer-events: none; }
+  .playhead::before { content: ""; position: absolute; top: 0; left: -2px; width: 5px; height: 5px; background: var(--bb-blue); }
+  .audio-player .video-player-controls { padding: 12px 16px; color: var(--bb-ink); }
+  .audio-player .video-player-toolbar { gap: 6px; }
+  .audio-player .video-player-toolbar > button:first-child { background: var(--bb-blue); color: var(--bb-bg); }
+  .audio-player .video-player-time { min-width: 0; color: var(--bb-ink); }
+  .audio-player .video-player-volume { display: inline-block; min-width: 28px; width: min(10vw, 56px); accent-color: var(--bb-blue); }
+  .audio-player select { background: var(--bb-surface); color: var(--bb-ink); border: 0; min-height: 32px; padding-inline: 4px; font-size: 12px; }
+  #trim-controls { order: 0; padding: 0 10px 4px; }
+  .trim-film-track { background: color-mix(in srgb, var(--bb-bg), #000 15%); }
+  .trim-film-mask { background: color-mix(in srgb, var(--bb-bg) 77%, transparent); }
+  .trim-film-track canvas { display: block; width: 100%; height: 100%; }
+  .trim-film-cursor { background: var(--bb-ink); }
+  .audio-player.is-trimming .video-player-footer .video-player-frame-actions { display: flex; }
+  .audio-player .video-player-add { background: var(--bb-ink); color: var(--bb-bg); }
+  .audio-player .video-player-add:hover:not(:disabled) { background: var(--bb-surface-2); color: var(--bb-ink); }
+  .audio-player .video-player-footer { gap: 8px; }
+  #save-note { order: 4; padding-block: 2px; color: var(--bb-muted); font-size: 12px; }
+  #save-note[data-error=true] { color: var(--bb-ink); }
+  #save-note:empty { display: none; }
+  .analysis { position: relative; padding: 0; border: 1px solid var(--bb-line); background: var(--bb-surface); display: grid; grid-template-columns: minmax(0, .94fr) minmax(0, 1fr); grid-template-rows: auto 1fr; gap: 0; align-items: stretch; min-height: min(620px, calc(100dvh - 112px)); }
+  .analysis .stage { grid-column: 1; grid-row: 2; align-self: start; padding: 18px; }
+  .analysis-head { display: flex; align-items: center; gap: 12px; grid-column: 1 / -1; padding: 12px 16px; border-bottom: 1px solid var(--bb-line); }
+  .analysis-head > div { min-width: 0; }
+  .analysis-head p { color: var(--bb-muted); font-size: 12px; overflow-wrap: anywhere; }
+  .analysis-tabs { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+  .analysis-tabs button { min-height: 37px; padding-inline: 12px; white-space: nowrap; border-bottom: 2px solid transparent; }
+  .analysis-tabs button[aria-pressed=true] { color: var(--bb-blue); border-color: var(--bb-blue); background: var(--bb-popover-hover); }
+  .analysis-content { min-width: 0; padding: 22px clamp(14px, 2.2vw, 32px); border-left: 1px solid var(--bb-line); }
+  .search { display: flex; align-items: center; gap: 6px; }
+  .search input { width: 100%; min-width: 0; height: 34px; border: 1px solid var(--bb-line); border-radius: 0; background: var(--bb-surface-2); color: var(--bb-ink); padding-inline: 8px; }
+  .reader-status { margin-block: 9px; font-size: 12px; color: var(--bb-muted); }
+  .transcript-row { display: grid; grid-template-columns: 70px 1fr; align-items: start; gap: 5px; border-bottom: 1px solid var(--bb-line); padding-block: 9px; }
+  .transcript-row > button { padding: 5px 3px; color: var(--bb-blue); font: 12px ui-monospace, monospace; text-align: left; }
+  .words { line-height: 1.85; }
+  .words button { padding: 0; text-align: left; text-underline-offset: 3px; }
+  .words .current, .transcript-row > button[aria-current=true] { color: var(--bb-blue); text-decoration: underline; }
+  .job-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding-block: 12px; }
+  .job-actions button { min-height: 34px; padding-inline: 10px; border: 1px solid var(--bb-line); font-weight: 600; }
+  .sample-list { width: min(620px, calc(100% - 32px)); margin: 12vh auto; padding: 18px; background: var(--bb-surface); border: 1px solid var(--bb-line); }
+  .sample-list h1 { margin-bottom: 12px; font-size: 20px; }
+  .sample-list button { min-height: 48px; display: block; width: 100%; border-top: 1px solid var(--bb-line); text-align: left; }
+  dialog { width: min(420px, calc(100% - 32px)); color: var(--bb-ink); border: 1px solid var(--bb-line); background: var(--bb-surface); padding: 20px; }
+  dialog::backdrop { background: #0008; }
+  dialog p { margin-block: 12px; }
+  dialog menu { display: flex; justify-content: end; gap: 8px; padding: 0; margin: 14px 0 0; }
+  dialog button { padding: 7px 11px; border: 1px solid var(--bb-line); }
+  @media (max-width: 1000px) {
+    .preview { padding-inline: 24px; }
+    .layout { grid-template-columns: minmax(0, 1fr) minmax(225px, .58fr); }
+    .stage, .analysis .stage { grid-column: 1; }
+    #details { grid-column: 2; }
+    #record { grid-column: 1 / -1; grid-row: 2; margin-block: 4px; }
+  }
+  @media (max-width: 720px) {
+    .preview { padding: 16px 14px; }
+    .preview::before { display: none; }
+    .layout, .analysis { grid-template-columns: minmax(0, 1fr); align-items: start; gap: 12px; }
+    .stage, #details, #record, .analysis .stage { grid-column: auto; grid-row: auto; }
+    .stage { order: -2; }
+    #details { order: -1; }
+    .readout { margin-block: 2px; }
+    .analysis { min-height: 0; }
+    .analysis-head { order: -3; padding: 8px 10px; flex-wrap: wrap; gap: 4px 7px; }
+    .analysis-head > div:first-of-type { flex: 1; }
+    .analysis-tabs button { padding-inline: 6px; font-size: 12px; }
+    .analysis .stage { padding: 13px; }
+    .analysis-content { border-left: 0; border-top: 1px solid var(--bb-line); }
+    .wave-stage { min-height: 128px; height: 26vh; padding: 13px 14px; }
+    .app-bar { padding-inline: 16px; }
+  }
+  @media (max-width: 400px) {
+    .audio-player .video-player-controls { padding-inline: 9px; }
+    .audio-player .video-player-toolbar { gap: 2px; }
+    .audio-player .video-player-time { padding-left: 2px; font-size: 10px; }
+    .audio-player .video-player-toolbar > button { padding-inline: 5px; }
+  }
+  @media (prefers-reduced-transparency), (forced-colors: active) {
+    .readout { background: var(--bb-surface); backdrop-filter: none; }
+  }
+</style>
+</head>
+<body>
+<header class="app-bar">
+  <p><b>Bowerbird</b><span>音频详情示意</span></p>
+  <button id="theme" type="button">浅色</button>
+</header>
+<main class="preview" id="preview">
+  <div class="layout" id="layout">
+    <header class="analysis-head" id="analysis-head" hidden>
+      <button class="icon-button" id="back" aria-label="返回音频预览" type="button"></button>
+      <div><h2 id="analysis-title" tabindex="-1">音频分析</h2><p id="analysis-name"></p></div>
+      <div class="analysis-tabs" role="group" aria-label="音频分析视图">
+        <button type="button" id="analysis-tab" aria-pressed="false">分析</button>
+        <button type="button" id="transcript-tab" aria-pressed="false">转录文稿</button>
+      </div>
+      <button class="icon-button" id="close-analysis" aria-label="关闭音频分析" type="button"></button>
+    </header>
+    <aside class="readout" id="record" aria-labelledby="record-title">
+      <header><h2 id="record-title">生成记录</h2><button class="icon-button" id="close-record" aria-label="收起生成记录" type="button"></button></header>
+      <p class="record-source">当前音频 · 语音合成</p>
+      <div class="record-content">
+        <p>城市漫步的开场旁白。语速平稳，在提到街角的声音时略作停顿。</p>
+      </div>
+    </aside>
+    <section class="stage" aria-label="音频预览">
+      <header class="preview-head" id="preview-head">
+        <h1 id="asset-name"></h1><button class="icon-button" id="close-preview" aria-label="关闭预览" type="button"></button>
+      </header>
+      <section class="audio-player video-player is-contained" id="player" tabindex="0" aria-label="音频播放器">
+        <div class="wave-stage">
+          <div class="wave-track" id="wave-track" role="slider" tabindex="0" aria-label="播放进度" aria-valuemin="0" aria-valuenow="0">
+            <canvas id="main-wave" aria-hidden="true"></canvas>
+            <i class="playhead" id="playhead" aria-hidden="true"></i>
+          </div>
+          <div class="ruler" id="ruler" aria-hidden="true"></div>
+        </div>
+        <div class="video-player-controls">
+          <div class="video-player-toolbar">
+            <button id="play" type="button" aria-label="播放"></button>
+            <output class="video-player-time" aria-label="当前播放时间" aria-live="off"><b id="time">0:00.000</b> <span id="total"></span></output>
+            <button id="mute" type="button" aria-label="静音"></button>
+            <input id="volume" class="video-player-volume" aria-label="音量" type="range" min="0" max="1" step=".05" value=".75">
+            <select class="rate" id="rate" aria-label="播放速度"><option>.5</option><option>.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option></select>
+          </div>
+          <div class="trim-film-editor" id="trim-controls" hidden>
+            <div class="trim-timecodes">
+              <label>入点 <input aria-label="入点秒数" id="in-time" type="number" min="0" step=".01"></label>
+              <output id="selection-time"></output>
+              <label>出点 <input aria-label="出点秒数" id="out-time" type="number" step=".01"></label>
+            </div>
+            <div class="trim-film-track" id="trim-track">
+              <canvas id="trim-wave" aria-hidden="true"></canvas>
+              <div class="trim-film-mask" id="before-range" aria-hidden="true"></div>
+              <div class="trim-film-mask" id="after-range" aria-hidden="true"></div>
+              <div class="trim-film-selection" id="selection" aria-hidden="true"></div>
+              <i class="trim-film-cursor" id="trim-cursor" aria-hidden="true"></i>
+              <button class="trim-handle in" id="in-handle" type="button" role="slider" aria-label="裁剪起点" title="拖动边界，长按后轻拖细调"><span aria-hidden="true">‹</span></button>
+              <button class="trim-handle out" id="out-handle" type="button" role="slider" aria-label="裁剪终点" title="拖动边界，长按后轻拖细调"><span aria-hidden="true">›</span></button>
+            </div>
+          </div>
+          <div class="video-player-footer">
+            <div class="video-player-tools">
+              <button id="trim" type="button" aria-pressed="false">裁剪</button>
+            </div>
+            <div class="video-player-frame-actions" id="save-actions" hidden>
+              <button class="video-player-add" id="save-copy" type="button">另存为新音频</button>
+              <button id="overwrite" type="button">覆盖原件</button>
+              <button id="reset" type="button">重置</button>
+            </div>
+          </div>
+          <p id="save-note" role="status"></p>
+        </div>
+      </section>
+      <footer class="preview-foot" id="preview-foot">
+        <span id="format"></span>
+        <div class="foot-actions">
+          <button class="icon-button" id="previous" aria-label="上一项媒体" type="button"></button>
+          <output id="media-count" aria-label="媒体序号"></output>
+          <button class="icon-button" id="next" aria-label="下一项媒体" type="button"></button>
+          <button class="icon-button" id="open-transcript" aria-label="打开转录文稿" type="button"></button>
+          <button class="icon-button" id="toggle-record" aria-label="收起生成记录" aria-pressed="true" type="button"></button>
+          <button class="icon-button" id="toggle-details" aria-label="收起音频详情" aria-pressed="true" type="button"></button>
+        </div>
+      </footer>
+    </section>
+    <aside class="readout" id="details" aria-labelledby="detail-title">
+      <header><h2 id="detail-title">音频详情</h2><button class="icon-button" id="close-details" aria-label="收起音频详情" type="button"></button></header>
+      <section class="field-group" aria-label="信息">
+        <p>信息</p>
+        <dl><dt>时长</dt><dd id="detail-duration"></dd><dt>大小</dt><dd id="detail-size"></dd><dt>格式</dt><dd>WAV</dd></dl>
+      </section>
+      <section class="field-group" aria-label="音频分析">
+        <p class="group-head"><span>音频分析</span><span id="detail-quote"></span></p>
+        <div class="group-actions">
+          <button class="primary" id="detail-analysis" type="button">分析</button>
+          <button id="detail-transcript" type="button">转录文稿</button>
+        </div>
+      </section>
+      <section class="field-group" aria-label="来源">
+        <p>来源</p>
+        <dl><dt id="source-label"></dt><dd id="source-name"></dd></dl>
+      </section>
+    </aside>
+    <section class="analysis-content" aria-labelledby="analysis-title" id="analysis-content" hidden>
+      <div id="analysis-operations" hidden>
+        <p class="reader-status" id="job-status" role="status"></p>
+        <div class="job-actions">
+          <button id="start-job" type="button" class="primary">开始转录</button>
+          <button id="read-job" type="button">转录文稿</button>
+        </div>
+      </div>
+      <div id="reader" hidden>
+        <div class="search">
+          <input type="search" id="search" aria-label="搜索文稿" placeholder="搜索文稿">
+          <button class="icon-button" id="copy" aria-label="复制全文" type="button"></button>
+        </div>
+        <p class="reader-status" id="reader-status" role="status"></p>
+        <div id="segments"></div>
+      </div>
+    </section>
+  </div>
+</main>
+<section class="sample-list" id="sample-list" aria-label="示例素材" hidden>
+  <h1>示例素材</h1>
+  <div id="sample-entries"></div>
+</section>
+<dialog id="confirm-overwrite" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h2 id="confirm-title">覆盖原件？</h2>
+    <p>裁剪将应用到引用此原件的位置。当前版本的转录文稿会失效。</p>
+    <menu>
+      <button value="cancel" autofocus>取消</button>
+      <button class="primary" value="apply">确认覆盖</button>
+    </menu>
+  </form>
+</dialog>
+<script>
+  const el = id => document.getElementById(id)
+  const paths = {
+    play: '<path d="m7 4 13 8-13 8z"/>', pause: '<path d="M9 5v14M15 5v14"/>',
+    volume: '<path d="M11 5 6 9H3v6h3l5 4zM15 9a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12"/>',
+    muted: '<path d="M11 5 6 9H3v6h3l5 4zm5 5 5 5m0-5-5 5"/>',
+    cut: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8 8l12 12M14 10l6-6M8 16l4-4"/>',
+    close: '<path d="m6 6 12 12M18 6 6 18"/>', back: '<path d="M19 12H5m7-7-7 7 7 7"/>',
+    previous: '<path d="m15 6-6 6 6 6"/>', next: '<path d="m9 6 6 6-6 6"/>',
+    document: '<path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6"/>',
+    left: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M9 4v16"/>',
+    right: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M15 4v16"/>',
+    leftClose: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M9 4v16m6-5-3-3 3-3"/>',
+    rightClose: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M15 4v16m-6-5 3-3-3-3"/>',
+    copy: '<rect x="8" y="8" width="12" height="12" rx="1"/><path d="M16 4H5a1 1 0 0 0-1 1v11"/>'
+  }
+  const icon = name => '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths[name] + '</svg>'
+  const icons = {
+    back: 'back', 'close-analysis': 'close', 'close-preview': 'close', previous: 'previous', next: 'next',
+    'open-transcript': 'document', 'toggle-record': 'left', 'toggle-details': 'right',
+    'close-record': 'leftClose', 'close-details': 'rightClose', copy: 'copy'
+  }
+  for (const [id, path] of Object.entries(icons)) el(id).innerHTML = icon(path)
+  for (const option of el('rate').options) {
+    option.value = option.textContent
+    option.textContent = Number(option.value) + '×'
+  }
+
+  const intro = [
+    { start: .52, end: 5.26, words: ['从', '清晨', '的', '第一班', '电车', '开始，'] },
+    { start: 6.71, end: 13.4, words: ['整条', '街', '慢慢', '醒了', '过来。'] },
+    { start: 14.65, end: 22.1, words: ['街角', '的', '风铃', '响了', '三次，', '远处', '开始', '下雨。'] },
+    { start: 23.86, end: 31.8, words: ['我们', '沿着', '那条', '老路', '继续', '往前走。'] }
+  ]
+  const field = [
+    { start: .23, end: 4.4, words: ['这里', '是', '街角', '录音', '的', '第二段。'] },
+    { start: 7.5, end: 14.7, words: ['十字路口', '有', '自行车', '经过。'] },
+    { start: 17.7, end: 25.6, words: ['路灯', '后面', '有', '雨滴', '落在', '树叶', '上。'] }
+  ]
+  const samples = [
+    { name: '城市漫步 · 开场旁白', duration: 34.6, offset: 0, record: true, external: false, segments: intro, job: 'saved' },
+    { name: '街角环境录音', duration: 28.2, offset: 0, record: false, external: true, segments: field, job: 'pending' }
+  ]
+  const audio = new Audio()
+  audio.preload = 'auto'
+  audio.volume = Number(el('volume').value)
+  const state = { index: 0, time: 0, start: 0, end: 0, view: '', trim: false, record: true, details: true }
+  const current = () => samples[state.index]
+  const clamp = (n, min, max) => Math.min(max, Math.max(min, n))
+  const percent = n => (n / current().duration * 100) + '%'
+  const fmt = n => {
+    const millis = Math.max(0, Math.round(n * 1000))
+    return Math.floor(millis / 60000) + ':' + String(Math.floor(millis / 1000) % 60).padStart(2, '0') + '.' + String(millis % 1000).padStart(3, '0')
+  }
+
+  function signal(t, ranges) {
+    let envelope = 0
+    for (const { start, end } of ranges) {
+      if (t < start || t > end) continue
+      const syllable = Math.sin((t - start) * 6.9) ** 2
+      const cadence = .28 + .72 * Math.sin((t - start) * 2.17 + .42) ** 2
+      const attack = Math.min((t - start) * 8, (end - t) * 8, 1)
+      envelope = (.13 + .87 * syllable) * cadence * attack
+      break
+    }
+    return .014 + envelope * .85
+  }
+
+  function loadAudio(sample) {
+    const rate = 16000
+    const frames = Math.round(sample.duration * rate)
+    const buffer = new ArrayBuffer(44 + frames * 2)
+    const header = new DataView(buffer)
+    const samples16 = new Int16Array(buffer, 44)
+    header.setUint32(0, 0x52494646)
+    header.setUint32(4, buffer.byteLength - 8, true)
+    header.setUint32(8, 0x57415645)
+    header.setUint32(12, 0x666d7420)
+    header.setUint32(16, 16, true)
+    header.setUint16(20, 1, true)
+    header.setUint16(22, 1, true)
+    header.setUint32(24, rate, true)
+    header.setUint32(28, rate * 2, true)
+    header.setUint16(32, 2, true)
+    header.setUint16(34, 16, true)
+    header.setUint32(36, 0x64617461)
+    header.setUint32(40, frames * 2, true)
+    for (let frame = 0; frame < frames; frame++) {
+      const t = frame / rate + sample.offset
+      const attack = Math.min(frame / 350, (frames - frame) / 350, 1)
+      const tone = .60 * Math.sin(t * 923) + .25 * Math.sin(t * 1689) + .12 * Math.sin(t * 3383)
+      samples16[frame] = Math.round(9700 * tone * signal(t, sample.segments) * attack)
+    }
+    audio.pause()
+    if (audio.src) URL.revokeObjectURL(audio.src)
+    audio.src = URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }))
+    audio.playbackRate = Number(el('rate').value)
+  }
+
+  function draw(target) {
+    const { width, height } = target.getBoundingClientRect()
+    if (!width || !height) return
+    const dpr = Math.min(devicePixelRatio, 2)
+    target.width = Math.round(width * dpr)
+    target.height = Math.round(height * dpr)
+    const ctx = target.getContext('2d')
+    ctx.scale(dpr, dpr)
+    const style = getComputedStyle(document.documentElement)
+    const center = height / 2
+    const step = width > 380 ? 3 : 2
+    const sample = current()
+    ctx.fillStyle = style.getPropertyValue('--bb-line')
+    ctx.fillRect(0, Math.floor(center), width, 1)
+    const neutral = style.getPropertyValue('--bb-ink')
+    ctx.fillStyle = neutral
+    ctx.globalAlpha = .7
+    for (let x = 0; x < width; x += step) {
+      const t = sample.offset + sample.duration * x / width
+      const envelope = signal(t, sample.segments)
+      const texture = .60 + .40 * Math.sin(x * 2.11 + 5.7) ** 2
+      const peak = Math.max(1, Math.round(envelope * texture * (height * .46)))
+      ctx.fillRect(x, Math.round(center - peak), step - 1, peak * 2)
+    }
+  }
+
+  function drawWaves() {
+    draw(el('main-wave'))
+    draw(el('trim-wave'))
+  }
+
+  function renderProgress() {
+    el('time').textContent = fmt(state.time)
+    el('wave-track').setAttribute('aria-valuenow', state.time.toFixed(2))
+    el('wave-track').setAttribute('aria-valuetext', fmt(state.time))
+    el('playhead').style.left = percent(state.time)
+    el('trim-cursor').style.left = percent(state.time)
+    for (const item of el('segments').querySelectorAll('[data-position]')) {
+      const active = state.time >= Number(item.dataset.position) && state.time < Number(item.dataset.until)
+      item.classList.toggle('current', active)
+      if (item.classList.contains('segment-time')) item.setAttribute('aria-current', String(active))
+    }
+  }
+
+  function renderTrim() {
+    el('trim-controls').hidden = !state.trim
+    el('save-actions').hidden = !state.trim
+    el('player').classList.toggle('is-trimming', state.trim)
+    el('trim').setAttribute('aria-pressed', state.trim)
+    el('trim').innerHTML = icon('cut') + (state.trim ? '结束裁剪' : '裁剪')
+    el('in-time').value = state.start.toFixed(2)
+    el('in-time').max = (state.end - .05).toFixed(2)
+    el('out-time').value = state.end.toFixed(2)
+    el('out-time').min = (state.start + .05).toFixed(2)
+    el('out-time').max = current().duration.toFixed(2)
+    el('selection-time').textContent = '保留 ' + fmt(state.end - state.start)
+    el('before-range').style.width = percent(state.start)
+    el('after-range').style.right = 0
+    el('after-range').style.width = percent(current().duration - state.end)
+    el('selection').style.left = percent(state.start)
+    el('selection').style.width = percent(state.end - state.start)
+    for (const edge of ['in', 'out']) {
+      const min = edge === 'in' ? 0 : state.start + .05
+      const max = edge === 'in' ? state.end - .05 : current().duration
+      const time = edge === 'in' ? state.start : state.end
+      const handle = el(edge + '-handle')
+      handle.style.left = percent(time)
+      handle.setAttribute('aria-valuemin', min.toFixed(2))
+      handle.setAttribute('aria-valuemax', max.toFixed(2))
+      handle.setAttribute('aria-valuenow', time.toFixed(2))
+      handle.setAttribute('aria-valuetext', fmt(time))
+    }
+    const changed = state.start >= .005 || current().duration - state.end >= .005
+    for (const id of ['save-copy', 'overwrite', 'reset']) el(id).disabled = !changed
+    el('wave-track').setAttribute('aria-valuemin', (state.trim ? state.start : 0).toFixed(2))
+    el('wave-track').setAttribute('aria-valuemax', (state.trim ? state.end : current().duration).toFixed(2))
+    renderProgress()
+    drawWaves()
+  }
+
+  function changeEdge(edge, time) {
+    if (edge === 'in') state.start = clamp(time, 0, state.end - .05)
+    else state.end = clamp(time, state.start + .05, current().duration)
+    if (state.time < state.start || state.time >= state.end) seek(state.start)
+    renderTrim()
+  }
+
+  function note(message, error = false) {
+    el('save-note').dataset.error = String(error)
+    el('save-note').textContent = message
+  }
+
+  function seek(time, play = false) {
+    const min = state.trim ? state.start : 0
+    const max = state.trim ? state.end : current().duration
+    state.time = clamp(time, min, max)
+    if (!audio.paused && state.time >= max) audio.pause()
+    audio.currentTime = state.time
+    renderProgress()
+    if (play) { if (state.time >= max) seek(min); playAudio() }
+  }
+
+  function playAudio() {
+    audio.play().catch(() => note('示例音频暂时无法播放，请重试。', true))
+  }
+
+  function togglePlay(fromInPoint = false) {
+    if (!audio.paused) audio.pause()
+    else {
+      if (state.trim && (fromInPoint || state.time >= state.end)) seek(state.start)
+      else if (audio.ended) seek(0)
+      playAudio()
+    }
+  }
+
+  let animation = 0
+  function updatePlayback() {
+    state.time = audio.currentTime
+    if (state.trim && state.time >= state.end) {
+      audio.pause()
+      seek(state.end)
+      return
+    }
+    renderProgress()
+    if (!audio.paused) animation = requestAnimationFrame(updatePlayback)
+  }
+
+  function renderPlayerIcons() {
+    el('play').innerHTML = icon(audio.paused ? 'play' : 'pause')
+    el('play').setAttribute('aria-label', audio.paused ? '播放' : '暂停')
+    el('mute').innerHTML = icon(audio.muted || !audio.volume ? 'muted' : 'volume')
+    el('mute').setAttribute('aria-label', audio.muted ? '取消静音' : '静音')
+    el('mute').setAttribute('aria-pressed', audio.muted)
+  }
+
+  for (const playback of ['play', 'pause', 'ended']) {
+    audio.addEventListener(playback, () => {
+      renderPlayerIcons()
+      cancelAnimationFrame(animation)
+      if (playback === 'play') animation = requestAnimationFrame(updatePlayback)
+    })
+  }
+  el('play').addEventListener('click', () => togglePlay())
+  el('mute').addEventListener('click', () => {
+    audio.muted = !audio.muted
+    renderPlayerIcons()
+  })
+  el('volume').addEventListener('input', event => {
+    audio.volume = Number(event.target.value)
+    audio.muted = false
+    renderPlayerIcons()
+  })
+  el('rate').addEventListener('change', event => { audio.playbackRate = Number(event.target.value) })
+
+  const mainTrack = el('wave-track')
+  const trackTime = (track, clientX) => {
+    const rect = track.getBoundingClientRect()
+    return (clientX - rect.left) / rect.width * current().duration
+  }
+  mainTrack.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return
+    mainTrack.setPointerCapture(event.pointerId)
+    seek(trackTime(mainTrack, event.clientX))
+  })
+  mainTrack.addEventListener('pointermove', event => {
+    if (mainTrack.hasPointerCapture(event.pointerId)) seek(trackTime(mainTrack, event.clientX))
+  })
+  el('player').addEventListener('keydown', event => {
+    if (event.target !== el('player') && event.target !== mainTrack) return
+    const deltas = { ArrowLeft: -1, ArrowRight: 1 }
+    if (event.code === 'Space' || event.key === 'Enter') togglePlay(event.code === 'Space')
+    else if (event.key === 'Home') seek(0)
+    else if (event.key === 'End') seek(current().duration)
+    else if (event.key in deltas) seek(state.time + deltas[event.key])
+    else return
+    event.preventDefault()
+  })
+
+  el('trim').addEventListener('click', () => {
+    state.trim = !state.trim
+    audio.pause()
+    if (state.trim && (state.time < state.start || state.time >= state.end)) seek(state.start)
+    note('')
+    renderTrim()
+  })
+  el('reset').addEventListener('click', () => {
+    state.start = 0
+    state.end = current().duration
+    note('')
+    renderTrim()
+  })
+  const trimTrack = el('trim-track')
+  trimTrack.addEventListener('pointerdown', event => {
+    if (event.button === 0) seek(trackTime(trimTrack, event.clientX))
+  })
+  for (const edge of ['in', 'out']) {
+    const handle = el(edge + '-handle')
+    const input = el(edge + '-time')
+    const edgeTime = () => edge === 'in' ? state.start : state.end
+    let drag
+    input.addEventListener('change', () => {
+      if (Number.isFinite(input.valueAsNumber)) changeEdge(edge, input.valueAsNumber)
+      else input.value = edgeTime().toFixed(2)
+    })
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return
+      event.stopPropagation()
+      drag = { origin: event.clientX, last: event.clientX, start: performance.now(), fine: false, eligible: true }
+      handle.setPointerCapture(event.pointerId)
+    })
+    handle.addEventListener('pointermove', event => {
+      if (!drag || !handle.hasPointerCapture(event.pointerId)) return
+      const distance = Math.abs(event.clientX - drag.origin)
+      if (!drag.fine && distance > 12) drag.eligible = false
+      if (drag.eligible && distance >= 3 && performance.now() - drag.start >= 400) drag.fine = true
+      el('trim-controls').classList.toggle('is-fine', drag.fine)
+      const delta = (event.clientX - drag.last) / (drag.fine ? 4 : 1)
+      drag.last = event.clientX
+      changeEdge(edge, edgeTime() + delta / trimTrack.getBoundingClientRect().width * current().duration)
+    })
+    handle.addEventListener('lostpointercapture', () => {
+      drag = null
+      el('trim-controls').classList.remove('is-fine')
+    })
+    handle.addEventListener('keydown', event => {
+      const deltas = { ArrowLeft: -1, ArrowRight: 1 }
+      if (event.key === 'Home') changeEdge(edge, 0)
+      else if (event.key === 'End') changeEdge(edge, current().duration)
+      else if (event.key in deltas) changeEdge(edge, edgeTime() + deltas[event.key] * (event.shiftKey ? .01 : .1))
+      else return
+      event.preventDefault()
+    })
+  }
+  el('save-copy').addEventListener('click', () => {
+    samples.push({
+      ...current(), name: current().name + '-裁剪', duration: state.end - state.start, offset: current().offset + state.start,
+      external: false, record: false, job: ''
+    })
+    renderMediaCount()
+    note('已另存为「' + samples.at(-1).name + '」，并加入项目「城市漫步」。')
+  })
+  el('overwrite').addEventListener('click', () => {
+    if (current().external) {
+      note('已连接文件夹中的音频无法覆盖，请选择「另存为新音频」。', true)
+      return
+    }
+    el('confirm-overwrite').returnValue = 'cancel'
+    el('confirm-overwrite').showModal()
+  })
+  el('confirm-overwrite').addEventListener('close', () => {
+    if (el('confirm-overwrite').returnValue !== 'apply') return
+    Object.assign(current(), { duration: state.end - state.start, offset: current().offset + state.start, job: '' })
+    showSample(state.index)
+    note('已覆盖原件并更新波形与时长。旧转录文稿已失效。')
+    el('trim').focus()
+  })
+
+  function renderMediaCount() {
+    el('media-count').textContent = (state.index + 1) + ' / ' + samples.length
+    el('previous').disabled = state.index === 0
+    el('next').disabled = state.index >= samples.length - 1
+  }
+
+  function showSample(index) {
+    if (!samples[index]) return
+    Object.assign(state, { index, time: 0, start: 0, end: samples[index].duration, trim: false, record: true, details: true })
+    const sample = current()
+    loadAudio(sample)
+    el('asset-name').textContent = sample.name
+    el('analysis-name').textContent = sample.name
+    el('total').textContent = '/ ' + fmt(sample.duration)
+    el('detail-duration').textContent = fmt(sample.duration)
+    el('detail-size').textContent = (sample.duration * 32000 / 1048576).toFixed(2) + ' MB'
+    el('format').textContent = 'WAV · 16 kHz'
+    el('detail-quote').textContent = '示例报价 · 1 Bcoin'
+    el('source-label').textContent = sample.external ? '已连接文件夹' : '所属项目'
+    el('source-name').textContent = sample.external ? '外景录音' : '城市漫步'
+    mainTrack.setAttribute('aria-valuemax', sample.duration.toFixed(2))
+    el('ruler').replaceChildren(...Array.from({ length: 5 }, (_, index) => {
+      const mark = document.createElement('span')
+      mark.textContent = fmt(sample.duration * index / 4).split('.')[0]
+      return mark
+    }))
+    el('search').value = ''
+    el('preview').hidden = false
+    el('sample-list').hidden = true
+    note('')
+    renderMediaCount()
+    renderPlayerIcons()
+    openView('', false)
+    renderTrim()
+  }
+
+  function updatePanels() {
+    const inAnalysis = !!state.view
+    el('record').hidden = inAnalysis || !current().record || !state.record
+    el('details').hidden = inAnalysis || !state.details
+    el('toggle-record').hidden = !current().record
+    for (const [section, label] of [['record', '生成记录'], ['details', '音频详情']]) {
+      const toggle = el('toggle-' + section)
+      toggle.setAttribute('aria-pressed', state[section])
+      toggle.setAttribute('aria-label', (state[section] ? '收起' : '显示') + label)
+    }
+  }
+
+  function openView(view, focus = true) {
+    state.view = view
+    const inAnalysis = !!view
+    el('layout').classList.toggle('analysis', inAnalysis)
+    for (const id of ['analysis-head', 'analysis-content']) el(id).hidden = !inAnalysis
+    for (const id of ['preview-head', 'preview-foot']) el(id).hidden = inAnalysis
+    el('analysis-operations').hidden = view !== 'analysis'
+    el('reader').hidden = view !== 'transcript'
+    for (const tab of ['analysis', 'transcript']) el(tab + '-tab').setAttribute('aria-pressed', view === tab)
+    updatePanels()
+    if (view === 'transcript') renderReader()
+    if (view === 'analysis') renderJob()
+    if (focus) el(inAnalysis ? 'analysis-title' : 'open-transcript').focus()
+  }
+
+  function visibleSegments(sample) {
+    const stop = sample.offset + sample.duration
+    return sample.segments.flatMap(({ start, end, words }) => {
+      if (end <= sample.offset || start >= stop) return []
+      const spacing = (end - start) / words.length
+      const timed = words.flatMap((text, index) => {
+        const from = start + index * spacing
+        const to = from + spacing
+        if (to <= sample.offset || from >= stop) return []
+        return [{ text, from: Math.max(0, from - sample.offset), to: Math.min(stop, to) - sample.offset }]
+      })
+      return [{ from: Math.max(0, start - sample.offset), to: Math.min(stop, end) - sample.offset, timed }]
+    })
+  }
+
+  function jump(from) {
+    seek(from, true)
+  }
+
+  function codeButton(text, from, to) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = text
+    button.dataset.position = from
+    button.dataset.until = to
+    button.addEventListener('click', () => jump(from))
+    return button
+  }
+
+  function renderReader() {
+    const search = el('search').value.trim()
+    const ready = current().job === 'saved'
+    const rows = ready ? visibleSegments(current()).filter(({ timed }) => timed.map(word => word.text).join('').includes(search)) : []
+    el('reader-status').textContent = !ready ? '当前版本暂无转录文稿，可在「分析」中开始或恢复转录。' :
+      search ? '匹配 ' + rows.length + ' 个句段' : '点击字词或时间定位播放'
+    el('copy').disabled = !ready
+    el('segments').replaceChildren(...rows.map(({ from, to, timed }) => {
+      const row = document.createElement('div')
+      row.className = 'transcript-row'
+      const time = codeButton(fmt(from), from, to)
+      time.className = 'segment-time'
+      time.setAttribute('aria-label', '播放句段 ' + fmt(from))
+      const words = document.createElement('div')
+      words.className = 'words'
+      words.append(...timed.map(word => codeButton(word.text, word.from, word.to)))
+      row.append(time, words)
+      return row
+    }))
+    renderProgress()
+  }
+
+  function renderJob() {
+    const job = current().job
+    el('job-status').textContent = { pending: '检测到上次未完成的转录，可以恢复原任务。', running: '正在转录…',
+      saved: '当前原件版本的转录已完成。' }[job] || '豆包录音文件识别 · 示例报价 1 Bcoin'
+    el('start-job').hidden = job === 'saved'
+    el('start-job').disabled = job === 'running'
+    el('start-job').textContent = job === 'pending' ? '恢复转录' : '开始转录'
+    el('read-job').hidden = job !== 'saved'
+  }
+
+  el('start-job').addEventListener('click', () => {
+    const sample = current()
+    const started = { ...sample }
+    sample.job = 'running'
+    renderJob()
+    window.setTimeout(() => {
+      if (sample.offset !== started.offset || sample.duration !== started.duration) return
+      sample.job = 'saved'
+      if (sample !== current()) return
+      if (state.view === 'analysis') renderJob()
+      if (state.view === 'transcript') renderReader()
+    }, 620)
+  })
+  el('search').addEventListener('input', renderReader)
+  el('copy').addEventListener('click', async () => {
+    const transcript = visibleSegments(current()).map(({ timed }) => timed.map(word => word.text).join('')).join('\n')
+    try {
+      await navigator.clipboard.writeText(transcript)
+      el('reader-status').textContent = '已复制全文'
+    } catch {
+      el('reader-status').textContent = '无法访问剪贴板，可选中文字后复制。'
+    }
+  })
+  for (const id of ['detail-analysis', 'analysis-tab']) el(id).addEventListener('click', () => openView('analysis'))
+  for (const id of ['open-transcript', 'detail-transcript', 'transcript-tab', 'read-job']) el(id).addEventListener('click', () => openView('transcript'))
+  el('back').addEventListener('click', () => openView(''))
+  for (const section of ['record', 'details']) {
+    el('toggle-' + section).addEventListener('click', () => {
+      state[section] = !state[section]
+      updatePanels()
+    })
+    el('close-' + section).addEventListener('click', () => {
+      state[section] = false
+      updatePanels()
+      el('toggle-' + section).focus()
+    })
+  }
+  el('previous').addEventListener('click', () => showSample(state.index - 1))
+  el('next').addEventListener('click', () => showSample(state.index + 1))
+  function closePreview() {
+    el('preview').hidden = true
+    el('sample-list').hidden = false
+    el('sample-entries').replaceChildren(...samples.map((sample, index) => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = sample.name
+      button.addEventListener('click', () => {
+        showSample(index)
+        el('close-preview').focus()
+      })
+      return button
+    }))
+    el('sample-entries').querySelector('button')?.focus()
+  }
+  for (const id of ['close-preview', 'close-analysis']) el(id).addEventListener('click', closePreview)
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || el('preview').hidden || el('confirm-overwrite').open || event.defaultPrevented) return
+    if (!audio.paused) audio.pause()
+    else if (state.view) openView('')
+    else closePreview()
+  })
+  el('theme').addEventListener('click', () => {
+    const dark = document.documentElement.dataset.theme === 'dark'
+    document.documentElement.dataset.theme = dark ? 'light' : 'dark'
+    el('theme').textContent = dark ? '深色' : '浅色'
+    drawWaves()
+  })
+  const observer = new ResizeObserver(drawWaves)
+  observer.observe(el('main-wave'))
+  observer.observe(el('trim-wave'))
+  showSample(0)
+</script>
+</body>
+</html>

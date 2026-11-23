@@ -14,6 +14,7 @@ export function LibraryCatalog(props: Props) {
   const projects = useStore(s => s.projects);
   const available = projects.filter(project => !project.archived_at && (!project.provisional || project.id === context));
   const [sidebarBody, setSidebarBody] = useState<HTMLDivElement | null>(null);
+  const [foldersExpanded, setFoldersExpanded] = useState(true);
   const tags = sidebarMode === "tags";
   const folderView = !tags && target.kind === "folders";
   const projectView = !tags && target.kind === "projects";
@@ -25,6 +26,7 @@ export function LibraryCatalog(props: Props) {
         {...props} kind={tags ? "tags" : "all"} browseProjectId={project?.id ?? null} projectScope={projectView}
         overviewProjects={projectView && !project ? available : undefined} sidebarBody={tags ? sidebarBody : null}/>}
       {!tags && <ConnectedCollections {...props} sidebarBody={sidebarBody} showGallery={folderView}
+        foldersExpanded={foldersExpanded} onFoldersExpandedChange={setFoldersExpanded}
         selectedFolderId={target.kind === "folders" ? target.folderId : null} key={props.media}/>}
     </div>
   </div>;

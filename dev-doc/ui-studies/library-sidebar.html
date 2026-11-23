@@ -72,8 +72,9 @@
   .side-head .all { position: relative; }
   .side-head .all[aria-current]::before { top: auto; left: 5px; bottom: 1px; width: 11px; height: 2px; }
   .nav-group > .nav-row > .row-button { font-weight: 600; }
-  .section-toggle { display:flex; align-items:center; gap:7px; width:100%; min-height:32px; padding:0 7px; text-align:left; font-size:13px; font-weight:600; }
+  .section-toggle { display:flex; align-items:center; gap:7px; width:100%; min-height:32px; padding:0 7px; text-align:left; white-space:nowrap; font-size:13px; font-weight:600; }
   .section-toggle .section-chevron { margin-inline-start:auto; color:var(--muted); }
+  .nav-row > .section-toggle { flex:1; min-width:0; }
   .tag-section { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; }
   .tag-section > .section-toggle { margin:8px 6px; width:calc(100% - 12px); }
   .tag-list { display:flex; flex:1; min-height:0; }
@@ -84,7 +85,7 @@
   .nav-row .caret .icon { width: 12px; height: 12px; }
   .tree-row .row-button { padding-left: 2px; }
   .nav-row .caret-space { flex: 0 0 18px; }
-  .folder-connect { width: 28px; color: var(--secondary); }
+  .folder-add { width: 28px; color: var(--secondary); }
   .nav-row.is-drop-target { outline: 1px dashed var(--accent); outline-offset: -1px; }
   .side-footer { border-top: 1px solid var(--edge); flex: none; padding: 6px; }
   .side-footer button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 0 8px; color: var(--secondary); font-size: 12px; text-align: left; }
@@ -163,6 +164,9 @@
   @container (max-width: 450px) {
     .side-head .icon-btn:not(.expand) { width: 26px; }
     .side-head .all { font-size: 13px; }
+    .nav-row > .section-toggle { gap: 4px; padding-inline: 4px; font-size: 12px; }
+    .nav-row > .section-toggle .icon { width: 14px; height: 14px; }
+    .folder-add { width: 22px; }
   }
   @media (max-width: 840px) {
     #workspace[data-host="text"] .library { width: min(100%, 510px); }
@@ -211,6 +215,7 @@
     closeSide: '<rect x="3" y="4" width="18" height="16"/><path d="M9 4v16m8-11-3 3 3 3"/>',
     openSide: '<rect x="3" y="4" width="18" height="16"/><path d="M9 4v16m5-11 3 3-3 3"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    link: '<path d="m10 14 4-4m-6 7-1 1a3 3 0 0 1-4-4l4-4a3 3 0 0 1 4 0m2 4a3 3 0 0 0 4 0l4-4a3 3 0 0 0-4-4l-1 1"/>',
     sparkle: '<path d="M12 2c0 6-4 10-10 10 6 0 10 4 10 10 0-6 4-10 10-10-6 0-10-4-10-10z"/>',
     color: '<path d="M12 3C8 8 5 11 5 15a7 7 0 0 0 14 0c0-4-3-7-7-12zM9 15a3 3 0 0 0 3 3"/>',
     search: '<circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 5 5"/>',
@@ -293,10 +298,13 @@
     const onCanvas = host === "canvas";
     appbar.innerHTML = `<span class="brand">${icon("brand")} Bowerbird</span>
       ${onCanvas ? `<button type="button" class="app-action" id="canvas-toggle" aria-expanded="${canvasOpen}" title="打开或关闭素材库（Tab）">${icon("library")}素材库</button>` : ""}
+      ${!onCanvas || canvasOpen ? `<button type="button" class="app-action" id="library-connect">${icon("link")}建立连接</button>` : ""}
       <div class="app-center">${onCanvas ? "<span>春季品牌提案</span>" : host === "text" ? "<span>文本工作区</span>" :
         `<span class="app-current">${icon("library")}素材库</span><span class="app-action">${icon("project")}项目</span>`}</div>
       <span class="app-right">${onCanvas ? "Tab 开合素材库" : "Q 层级　E 标签"}</span>`;
     appbar.querySelector("#canvas-toggle")?.addEventListener("click", toggleCanvas);
+    appbar.querySelector("#library-connect")?.addEventListener("click", () =>
+      showDialog("建立连接", "<p>正式应用会打开系统选择器，用于连接已有文件夹。</p>"));
   }
   function toggleCanvas() {
     canvasOpen = !canvasOpen;
@@ -336,7 +344,7 @@
     let memory = load("pane." + id, defaultMemory(id));
     if (id === "split-right") save("pane." + id, memory);
     let media = "all", generated = 0, color = "", query = "", selecting = false, activeTag = null;
-    let projectsExpanded = true, tagsExpanded = true;
+    let projectsExpanded = true, foldersExpanded = true, tagsExpanded = true;
     let selection = new Set(), anchor = null;
     const expanded = new Set(folders.map(folder => folder.id));
     const root = document.createElement("section");
@@ -418,11 +426,42 @@
           <div class="nav-group">${sectionToggle("项目", "projects", projectsExpanded, "project")}
             <div class="nav-children" id="${id}-projects" ${projectsExpanded ? "" : "hidden"}><div class="nav-row">${row("projects", "全部项目素材")}</div>
             ${projects.map(project => `<div class="nav-row" data-drop="project:${project.id}">${row("project:" + project.id, project.name)}</div>`).join("")}</div></div>
-          <div class="nav-group"><div class="nav-row">${row("folders", "文件夹", "folder")}
-            ${action("plus", "建立连接", "connect", "", "folder-connect")}</div>
-            <div class="nav-children">${folderTree()}</div></div></nav>`;
+          <div class="nav-group"><div class="nav-row">${sectionToggle("文件夹", "folders", foldersExpanded, "folder")}
+            ${action("plus", "新建文件夹", "create-folder", "", "folder-add")}</div>
+            <div class="nav-children" id="${id}-folders" ${foldersExpanded ? "" : "hidden"}><div class="nav-row">${row("folders", "全部文件夹素材")}</div>
+            ${folderTree()}</div></div></nav>`;
         body.querySelector(".hierarchy").scrollTop = prev;
       }
+    }
+    function createFolder() {
+      showDialog("新建文件夹", `<form id="preview-folder-form">
+        <label>文件夹名称<input name="folderName" required maxlength="100" autofocus></label>
+        <p id="preview-folder-path">保存位置 BowerbirdLibrary</p>
+        <div class="dialog-actions"><button type="submit">保存</button></div>
+      </form>`);
+      const form = dialog.querySelector("#preview-folder-form");
+      const field = form.elements.folderName;
+      field.addEventListener("input", () => {
+        field.setCustomValidity("");
+        form.querySelector("#preview-folder-path").textContent = "保存位置 BowerbirdLibrary" +
+          (field.value.trim() ? "/" + field.value.trim() : "");
+      });
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        const name = field.value.trim();
+        if (!name || name === "." || name === ".." || name.includes("/") || name.includes(String.fromCharCode(92))) {
+          field.setCustomValidity("请输入有效的文件夹名称");
+          field.reportValidity();
+          return;
+        }
+        const folderId = "created-" + folders.length;
+        folders.push({ id: folderId, name, parent: null });
+        foldersExpanded = true;
+        dialog.close();
+        setMode("hierarchy", "folder:" + folderId);
+        body.querySelector(`[data-target="folder:${folderId}"]`).focus();
+      });
+      field.focus();
     }
     function toolPopover(type) {
       const field = tools.querySelector(`[data-filter="${type}"]`);
@@ -638,8 +677,10 @@
         case "collapse": collapse(true); break;
         case "expand": collapse(false); break;
         case "disclose-projects":
+        case "disclose-folders":
         case "disclose-tags":
           if (command === "disclose-projects") projectsExpanded = !projectsExpanded;
+          else if (command === "disclose-folders") foldersExpanded = !foldersExpanded;
           else tagsExpanded = !tagsExpanded;
           drawNavigation();
           if (command === "disclose-tags" && tagsExpanded) syncTag();
@@ -647,7 +688,7 @@
           break;
         case "generated": generated = (generated + 1) % 3; drawGallery(); tools.querySelector("[data-action=generated]").focus(); break;
         case "search": case "color": toolPopover(command); break;
-        case "connect": showDialog("建立连接", "<p>正式组件将在这里打开系统文件夹选择器。此处使用示例目录。</p>"); break;
+        case "create-folder": createFolder(); break;
         case "refresh": announce("已刷新示例文件夹"); break;
         case "select-all": selectAll(); break;
         case "selection":

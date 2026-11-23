@@ -5,11 +5,12 @@ import { catalogLayout, catalogScrollScale, masonryGeometry, masonryRatios, visi
 import type { Asset } from "../lib/types";
 import { api } from "../lib/api";
 import { CatalogAssetCard } from "./CatalogAssetCard";
-import { catalogCache, patchCatalogPage, type CatalogPreviewChange } from "../lib/catalogCache";
+import { catalogCache, patchCatalogPage, type CatalogFolderScope, type CatalogPreviewChange } from "../lib/catalogCache";
 import { subscribeCatalogPreviews } from "../lib/useCatalogRevision";
 import { originalDeletionEpoch, originalDeletionFor, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 
 export interface CatalogLocation { section: string; index: number; assetId?: string }
+type PageSection = CatalogSectionInfo & { collection?: CatalogFolderScope & { available: boolean } };
 type Page = { assets: Asset[]; groups: Record<string, Asset[]>; revision: number; deletionEpoch: number };
 type EntryAsset = Asset & { connectionGroup?: EntryAsset[] };
 function visiblePage(page: Page, hasPending: boolean): Page & { sourceIndices?: number[] } {
@@ -38,31 +39,33 @@ function visiblePage(page: Page, hasPending: boolean): Page & { sourceIndices?: 
 const layoutHistory = new Map<string, Map<string, readonly number[]>>();
 const assetKey = (asset: Asset) => asset.id;
 export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, pageScope, itemKey = assetKey, renderItem, emptySection }: {
-  filter: CatalogFilter; sections: (CatalogSectionInfo & { collection?: { id: string; available: boolean } })[]; headings: boolean; width: number; revision: number;
+  filter: CatalogFilter; sections: PageSection[]; headings: boolean; width: number; revision: number;
   scroll: RefObject<HTMLDivElement>; selected: Set<string>; jump: { id: string; sequence: number } | null; initialTop?: number;
   onActive: (id: string | null) => void; onAssetsChange?: (assets: Asset[]) => void;
   onBrowseGroup?: (head: string, shown: string | null) => void;
   onSelect: (asset: Asset, additive: boolean, range: boolean, location: CatalogLocation) => void;
-  onActivate?: (asset: Asset) => void; onOpen: (asset: Asset) => void; onContextMenu: (asset: Asset, x: number, y: number, location: CatalogLocation) => void;
+  onActivate?: (asset: Asset, location: CatalogLocation) => void; onOpen: (asset: Asset, location: CatalogLocation) => void;
+  onContextMenu: (asset: Asset, x: number, y: number, location: CatalogLocation) => void;
   readPage?: (sectionId: string, offset: number, limit: number) => Promise<Asset[]>;
   pageScope?: string;
   itemKey?: (asset: Asset) => string;
-  renderItem?: (asset: Asset, style: CSSProperties, ratio: number, location: CatalogLocation) => ReactNode;
+  renderItem?: (asset: Asset, style: CSSProperties, ratio: number, location: CatalogLocation, pageRevision: number) => ReactNode;
   emptySection?: (sectionId: string) => ReactNode;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const pendingDeletion = usePendingOriginalDeletion();
+  const colorFiltered = !!filter.color;
   const [viewport, setViewport] = useState(() => ({ top: initialTop ?? 0, height: scroll.current?.clientHeight || 800, width: scroll.current?.clientWidth || 800 }));
   const [tick, setTick] = useState(0);
   const geometryKey = JSON.stringify(pageScope ? [filter, pageScope] : filter);
   const pagePrefix = `pages:${geometryKey}:`;
   const [pages] = useState(() => new Map(catalogCache.entries<Omit<Page, "revision">>(pagePrefix)
-    .slice(-CATALOG_CACHE_PAGES).map(([key, entry]) => [key.slice(pagePrefix.length), { ...entry.value, revision: catalogCache.fresh(entry) ? entry.revision : -1 }])));
+    .slice(-CATALOG_CACHE_PAGES).map(([key, entry]) => [key.slice(pagePrefix.length), { ...entry.value, revision: entry.revision }])));
   const cache = useRef(pages);
   const [geometryRevision, setGeometryRevision] = useState(0);
   const placements = useRef<CatalogPlacementCache>(new Map());
   const measured = useRef(new Map<string, readonly number[]>());
-  const errors = useRef(new Map<string, string>());
+  const errors = useRef(new Map<string, { revision: number; message: string }>());
   const pending = useRef(new Set<string>());
   const alive = useRef(true);
   const version = useRef(revision); version.current = revision;
@@ -157,13 +160,16 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   };
   useEffect(() => subscribeCatalogPreviews(change => applyPreviews.current(change)), []);
   pump.current = () => {
-    if (!alive.current || version.current !== catalogCache.revision(!!filter.color)) return;
+    if (!alive.current) return;
     for (const block of wanted.current) {
       if (pending.current.size >= 3) break;
-      if (pending.current.has(block.key) || errors.current.has(block.key) || cache.current.get(block.key)?.revision === version.current) continue;
-      pending.current.add(block.key);
-      const requestedRevision = version.current;
       const section = sections[block.section];
+      const scope = section.collection;
+      const requestedRevision = catalogCache.revision(colorFiltered, scope);
+      if (!scope && version.current !== requestedRevision) continue;
+      if (pending.current.has(block.key) || errors.current.get(block.key)?.revision === requestedRevision || cache.current.get(block.key)?.revision === requestedRevision) continue;
+      pending.current.add(block.key);
+      const isCurrent = () => alive.current && (!!scope || version.current === requestedRevision) && catalogCache.revision(colorFiltered, scope) === requestedRevision;
       const pageFilter = { ...filter, id: section.tagId ?? filter.id, projectId: section.projectId ?? filter.projectId };
       void catalogCache.read(`${pagePrefix}${block.key}`, async () => {
         const deletionEpoch = originalDeletionEpoch();
@@ -171,9 +177,10 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
         const ids = readPage ? [] : assets.map(asset => asset.id);
         const groups = ids.length ? await api.listGenerationGroups(ids, pageFilter.projectId, pageFilter) ?? {} : {};
         return { assets, groups, deletionEpoch };
-      }, !!filter.color).then(page => {
-        if (!alive.current || version.current !== requestedRevision || catalogCache.revision(!!filter.color) !== requestedRevision) return;
+      }, colorFiltered, scope).then(page => {
+        if (!isCurrent()) return;
         measurePage(block.key, page.assets);
+        errors.current.delete(block.key);
         cache.current.delete(block.key); cache.current.set(block.key, { ...page, revision: requestedRevision });
         const keep = new Set(wanted.current.map(item => item.key));
         for (const key of cache.current.keys()) {
@@ -182,12 +189,11 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
         }
         setTick(v => v + 1);
       }).catch(error => {
-        if (alive.current && version.current === requestedRevision) { errors.current.set(block.key, String(error)); setTick(v => v + 1); }
+        if (isCurrent()) { errors.current.set(block.key, { revision: requestedRevision, message: String(error) }); setTick(v => v + 1); }
       }).finally(() => { pending.current.delete(block.key); pump.current(); });
     }
   };
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  useEffect(() => { errors.current.clear(); pump.current(); }, [revision]);
   const wantedKey = visible.map(block => block.key).join("|");
   useEffect(() => { pump.current(); }, [wantedKey, revision, tick]);
   useEffect(() => {
@@ -261,12 +267,13 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
       aria-label={headings ? `${section.name}${section.tagId && filter.media === "images" ? "图片" : "素材"}` : undefined} style={{ position: "absolute", top: layout.groups[index].top * scale, height: layout.groups[index].height * scale, width: "100%" }}>
       {headings && (current === section.id || visible.some(block => block.section === index) || (showEmpty && !section.count && layout.groups[index].top + layout.groups[index].height >= logicalTop - 500 && layout.groups[index].top <= logicalTop + viewport.height + 500)) && <h3 style={{ position: "absolute", width: "100%", top: Math.min(Math.max(layout.groups[index].top, logicalTop), layout.groups[index].top + layout.groups[index].height - 40) - logicalTop + viewport.top - layout.groups[index].top * scale }} className={`catalog-section-heading${current === section.id && viewport.top > 0 ? " is-pinned" : ""}`}><span title={section.name} data-library-count={`${String(section.count).padStart(2, "0")} 项`} className={`catalog-section-title${current === section.id && viewport.top > 0 ? " library-floating-surface" : ""}`}>{section.name}</span>{!section.count && emptySection && <span className="connected-empty-section">{emptySection(section.id)}</span>}</h3>}
       {visible.filter(block => block.section === index).map(block => {
-        const raw = cache.current.get(block.key), error = errors.current.get(block.key);
+        const raw = cache.current.get(block.key), failed = errors.current.get(block.key);
+        const error = failed?.revision === catalogCache.revision(colorFiltered, section.collection) ? failed.message : null;
         const page = raw && visiblePage(raw, pendingDeletion.size > 0);
         const geometry = page ? masonryGeometry(page.assets, viewport.width, width, block.columnTops) : null;
         return <div key={block.key} data-catalog-page={block.key} data-columns={geometry?.columns} className="folder-masonry catalog-virtual-page" style={{ position: "absolute", top: block.top - logicalTop + viewport.top - layout.groups[index].top * scale, height: block.height, pointerEvents: "none" }}
           onFocusCapture={() => setFocused(block.key)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setFocused(null); }}>
-          {error && <p className="catalog-error" role="alert" style={{ pointerEvents: "auto" }}>{userErrorMessage(error, "素材列表暂时无法读取，请重试。")}<button onClick={() => { errors.current.delete(block.key); setTick(v => v + 1); }}>重试</button></p>}
+          {error && <p className="catalog-error" role="alert" style={{ position: "relative", zIndex: 1, width: "fit-content", background: "var(--lt-screen)", pointerEvents: "auto" }}>{userErrorMessage(error, "素材列表暂时无法读取，请重试。")}<button onClick={() => { errors.current.delete(block.key); setTick(v => v + 1); }}>重试</button></p>}
           {!page && !error && <p className="catalog-hint" role="status">正在读取素材…</p>}
           {page?.assets.map((asset, index) => {
             const cell = geometry!.cells[index];
@@ -276,11 +283,13 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
             if (y + cell.height < logicalTop - 500 || y > logicalTop + viewport.height + 500) {
               if (focused !== block.key) return null;
             }
-            if (renderItem) return renderItem(asset, { width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }, cell.ratio, { section: section.id, index: block.offset + sourceIndex });
+            if (renderItem) return renderItem(asset, { width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }, cell.ratio, { section: section.id, index: block.offset + sourceIndex }, page.revision);
+            const locationOf = (shown: Asset): CatalogLocation => ({ section: section.id, index: block.offset + sourceIndex, assetId: shown.id });
             return <CatalogAssetCard key={section.projectId ? `${section.id}:${itemKey(asset)}` : itemKey(asset)} asset={asset} projectSection={section.projectId} group={page.groups[asset.id]} style={{ width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }}
               ratio={cell.ratio} selected={selected} revision={revision} onBrowseGroup={onBrowseGroup}
-              onSelect={(shown, additive, range) => onSelect(shown, additive, range, { section: section.id, index: block.offset + sourceIndex, assetId: shown.id })}
-              onActivate={onActivate} onOpen={onOpen} onContextMenu={(shown,x,y) => onContextMenu(shown,x,y,{ section: section.id, index: block.offset + sourceIndex, assetId: shown.id })}/>;
+              onSelect={(shown, additive, range) => onSelect(shown, additive, range, locationOf(shown))}
+              onActivate={onActivate ? shown => onActivate(shown, locationOf(shown)) : undefined}
+              onOpen={shown => onOpen(shown, locationOf(shown))} onContextMenu={(shown,x,y) => onContextMenu(shown,x,y,locationOf(shown))}/>;
           })}
         </div>;
       })}

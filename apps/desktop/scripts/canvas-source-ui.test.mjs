@@ -45,7 +45,7 @@ try {
   await selection.getByRole("button", { name: "全选", exact: true }).click();
   await selection.getByText("5 项", { exact: true }).waitFor();
   await selection.getByRole("button", { name: "取消选择", exact: true }).click();
-  await button("文件夹").click();
+  await button("全部文件夹素材").click();
   await sidebar.getByRole("treeitem", { name: "测试目录", exact: true }).click();
   await panel.locator('[data-catalog-section="test-root"] [data-connection-entry]').first().waitFor();
   assert.equal(await (await panel.boundingBox()).width, width);

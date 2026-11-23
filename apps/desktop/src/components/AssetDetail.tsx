@@ -1005,9 +1005,9 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
 
           {detailTab === "info" && (
             <>
-          {panelOnly && videoAsset && onOpenVideoAnalysis && <section className="asset-detail-card flex flex-col gap-3" aria-label="视频分析">
+          {panelOnly && (videoAsset || audioAsset) && onOpenVideoAnalysis && <section className="asset-detail-card flex flex-col gap-3" aria-label={audioAsset ? "音频分析" : "视频分析"}>
             <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h2 className="text-xs font-medium text-muted">视频分析</h2>
+              <h2 className="text-xs font-medium text-muted">{audioAsset ? "音频分析" : "视频分析"}</h2>
               {videoAnalysisStatus && <span className="text-xs text-muted">{videoAnalysisStatus}</span>}
             </div>
             <div className="flex flex-wrap gap-2">

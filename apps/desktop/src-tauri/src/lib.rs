@@ -703,6 +703,7 @@ pub fn run() {
             commands::video_poster::video_poster,
             commands::canvas_image_preview::canvas_image_preview,
             commands::video_trim::trim_video,
+            commands::audio_trim::trim_audio,
             commands::video_audio::extract_video_audio,
             commands::video_transcript::video_transcript_get,
             commands::video_analysis::video_analysis_get,

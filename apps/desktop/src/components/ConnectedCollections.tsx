@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { catalogCache, patchConnectionProgress } from "../lib/catalogCache";
 import { openCatalogMenu } from "../lib/openCatalogMenu";
 import { originalDeletionFor, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { invalidateCatalog, observeCatalogChanges, useCatalogRevision, subscribeConnectionProgress, waitingForConnectionScan } from "../lib/useCatalogRevision";
-import { ChevronDown, ChevronRight, Folder, Link2, MoreHorizontal, Plus, RefreshCw, Unlink } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Plus, RefreshCw, Unlink } from "lucide-react";
 import { api } from "../lib/api";
 import { connectedRows, connectedSubtreeRows, folderConnections, useConnectedNavigation, type ConnectionEntry, type FolderConnection } from "../lib/folderConnections";
 import { useLibraryThumbnail, useLibraryPane, useLibraryModeStore, libraryHasOverlay, type LibraryBrowsePosition } from "../lib/libraryPane";
@@ -12,13 +12,11 @@ import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { setDragAssets, getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
 import { externalFiles } from "../lib/externalFiles";
 import { addMaterialAssets } from "../lib/materialActions";
-import { prepareMediaImport } from "../lib/mediaImport";
 import { selectCatalogItem } from "../lib/catalogSelection";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { userErrorMessage } from "../lib/userError";
 import { useStore } from "../store";
 import type { Asset } from "../lib/types";
-import type { CatalogSectionInfo } from "../lib/catalogVirtualLayout";
 import type { CatalogFilter } from "../lib/materialCatalog";
 import { VirtualCatalog, type CatalogLocation } from "./VirtualCatalog";
 import { FileMediaCard } from "./FileMediaCard";
@@ -56,10 +54,12 @@ const assetsOf = (entries: ConnectionEntry[]) => [...new Map(entries.map(entry =
 const visibleEntry = (entry: ConnectionEntry) => !originalDeletionFor(entry.asset_id, entry.asset.store_path);
 const browsePositions = new Map<string, LibraryBrowsePosition>();
 
-export function ConnectedCollections({ media = "images", projectId = null, positionId = "default", sidebarBody, showGallery, selectedFolderId, onClose, onNavigate, onCreateProject, onAssetsChange, toolbarActions, onInsertAsset, onOpenAsset, onAssetContextMenu }: Omit<ComponentProps<typeof CategorizedLibrary>, "kind"> & {
-  showGallery: boolean; selectedFolderId: string | null;
+export function ConnectedCollections({ media = "images", projectId = null, positionId = "default", sidebarBody, showGallery, selectedFolderId, foldersExpanded, onFoldersExpandedChange, onClose, onNavigate, onCreateProject, onAssetsChange, toolbarActions, onInsertAsset, onOpenAsset, onAssetContextMenu }: Omit<ComponentProps<typeof CategorizedLibrary>, "kind"> & {
+  showGallery: boolean; selectedFolderId: string | null; foldersExpanded: boolean; onFoldersExpandedChange: (expanded: boolean) => void;
 }) {
   const mode = useLibraryModeStore();
+  const folderListId = useId();
+  const FolderChevron = foldersExpanded ? ChevronDown : ChevronRight;
   const query = mode(state => showGallery ? state.query.trim() : ""), searching = !!query;
   const generatedFilter = mode(state => showGallery ? state.generatedFilter : null);
   const catalogMedia = showGallery ? media : "all";
@@ -111,9 +111,9 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
   const foldersById = useMemo(() => new Map(folders.map(folder => [folder.id, folder])), [folders]);
   const canDropInFolder = useCallback((folder: FolderConnection) => folder.available && foldersById.get(folder.root_id)?.available !== false, [foldersById]);
   const searchCount = searching ? galleryRows.reduce((total, { item }) => total + item.count, 0) : 0;
-  const sections = useMemo<CatalogSectionInfo[]>(() => galleryRows.filter(({ item }) => !searching || item.count > 0).map(({ item }) => ({
+  const sections = useMemo(() => galleryRows.filter(({ item }) => !searching || item.count > 0).map(({ item }) => ({
     id: item.id, name: item.name, count: item.count, tagId: null,
-    collection: { id: item.id, available: canDropInFolder(item) },
+    collection: { id: item.id, rootId: item.root_id, available: canDropInFolder(item) },
   })), [galleryRows, canDropInFolder, searching]);
   const current = folders.find(folder => folder.id === active);
   const connectionRoot = current && foldersById.get(current.root_id);
@@ -217,8 +217,12 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
   }, [request, pane?.id]);
   useEffect(() => {
     const id = pendingJump.current;
-    if (id && folders.some(folder => folder.id === id)) { pendingJump.current = null; navigate(id); }
-  }, [folders, navigate]);
+    if (id && folders.some(folder => folder.id === id)) {
+      pendingJump.current = null;
+      onFoldersExpandedChange(true);
+      navigate(id);
+    }
+  }, [folders, navigate, onFoldersExpandedChange]);
   async function run(action: () => Promise<void>, changed = false) {
     if (lock.current) return;
     lock.current = true; setBusy(true);
@@ -276,23 +280,30 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
   function openAsset(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
     if (onInsertAsset) onInsertAsset(asset);
-    else if (isVideoAsset(asset)) activate(asset);
+    else if (isAudioAsset(asset)) {
+      const state = useStore.getState();
+      if (state.boardOpen || state.genEditing) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
+      else openPreview(asset);
+    } else if (isVideoAsset(asset)) activate(asset);
     else openDetail(asset);
   }
   function activate(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
-    if (onInsertAsset && isAudioAsset(asset)) { onInsertAsset(asset); return; }
-    if (isTextAsset(asset)) { openDetail(asset); return; }
     const state = useStore.getState();
     if (!onInsertAsset && projectId && state.activeProjectId !== projectId) return;
+    if (isAudioAsset(asset)) { openPreview(asset); return; }
+    if (isTextAsset(asset)) { openDetail(asset); return; }
     if (!onInsertAsset && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
-    else if (isAudioAsset(asset)) openDetail(asset);
-    else void run(async () => {
+    else openPreview(asset);
+  }
+  function openPreview(asset: Asset) {
+    const route = useStore.getState().projectRouteRevision;
+    void run(async () => {
       if (!asset.store_path) throw new Error("原文件暂不可用");
       const version = selectionVersion.current;
-      const path = await externalFiles.media(asset.store_path);
+      const path = isAudioAsset(asset) ? asset.store_path : await externalFiles.media(asset.store_path);
       if (!canShowOverlay() || filterRef.current !== filterKey || selectionVersion.current !== version) return;
-      if (useStore.getState().projectRouteRevision !== state.projectRouteRevision) return;
+      if (useStore.getState().projectRouteRevision !== route) return;
       setPreview({ asset, path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! });
     });
   }
@@ -388,11 +399,11 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
               return folder && foldersById.get(folder.root_id)?.available === false ? "文件夹已离线" : folder?.scanning ? "正在读取文件夹…" : null;
             }}
             onAssetsChange={assetsChanged} onSelect={select} onActivate={activate} onOpen={openAsset} onContextMenu={context}
-            renderItem={(head, style, ratio, location) => <CatalogAssetCard key={entryKey(head)} asset={head} group={(head as EntryAsset).connectionGroup} itemKey={entryKey}
-              style={style} ratio={ratio} selected={selected} revision={revision} onBrowseGroup={onBrowseGroup}
+            renderItem={(head, style, ratio, location, pageRevision) => <CatalogAssetCard key={entryKey(head)} asset={head} group={(head as EntryAsset).connectionGroup} itemKey={entryKey}
+              style={style} ratio={ratio} selected={selected} revision={pageRevision} onBrowseGroup={onBrowseGroup}
               onSelect={(asset, additive, range) => select(asset, additive, range, location)} onOpen={openAsset} onContextMenu={(asset, x, y) => context(asset, x, y, location)}
               renderMedia={(asset, mediaStyle, mediaRatio) => { const entry = entryOf(asset); return <div key={entry.id} data-connection-entry={entry.id} data-reference={entry.is_reference || undefined} className="connected-media" style={mediaStyle}>
-              <FileMediaCard entry={{ path: asset.store_path ?? "", name: entry.name, directory: false, preview: asset.thumb_path, version: entry.version ?? `${asset.id}:${asset.file_mtime}:${asset.thumb_path ?? revision}` }} expectedVersion={entry.version ?? undefined} style={{ width: "100%", height: "100%" }} aspectRatio={mediaRatio} selected={selected.has(entry.id)} revision={revision} labels={[]} assetId={asset.id} generated={!!(head as EntryAsset).connectionGroup?.length || !!asset.generation_session_id || asset.source === "comfy-h3"} duration={asset.duration}
+              <FileMediaCard entry={{ path: asset.store_path ?? "", name: entry.name, directory: false, preview: asset.thumb_path, version: entry.version ?? `${asset.id}:${asset.file_mtime}:${asset.thumb_path ?? pageRevision}` }} expectedVersion={entry.version ?? undefined} style={{ width: "100%", height: "100%" }} aspectRatio={mediaRatio} selected={selected.has(entry.id)} revision={pageRevision} labels={[]} assetId={asset.id} generated={!!(head as EntryAsset).connectionGroup?.length || !!asset.generation_session_id || asset.source === "comfy-h3"} duration={asset.duration}
                 onSelect={(additive, range) => select(asset, additive, range, location)} onActivate={!multiple ? () => activate(asset) : undefined} onOpen={() => openAsset(asset)} onContextMenu={(x, y) => context(asset, x, y, location)}
                 dragAssetIds={() => { const entries = selected.has(entry.id) ? dragSelection.current : [entry]; if (!entry.available || !entries.length || (selected.has(entry.id) && entries.length !== selected.size)) return []; return assetsOf(entries).map(asset => asset.id); }} onDragEnd={() => setDragAssets(null)}/>
               {entry.is_reference && <LibraryReferenceBadge/>}{!entry.available && <span className="connected-missing"><Unlink size={18}/>原文件失联</span>}
@@ -402,19 +413,16 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
       </div>
     </div></>}
     {sidebarBody && createPortal(<div className="library-folder-tree" aria-label="文件夹目录">
-        <div className="library-folder-heading"><button type="button" className="catalog-row library-sidebar-primary" aria-current={showGallery && selectedFolderId === null || undefined}
-          onClick={() => mode.getState().selectHierarchy({ kind: "folders", folderId: null })}><Folder size={14}/>文件夹</button>
-          <button type="button" aria-label="连接文件夹" title="建立连接" disabled={busy} onClick={() => void run(async () => {
-            const revision = useStore.getState().projectRouteRevision;
-            const path = await api.pickFolder();
-            if (!path || !alive.current) return;
-            await prepareMediaImport(projectId, revision);
-            if (!alive.current) return;
-            const id = await folderConnections.connect(path, projectId);
-            if (alive.current) { pendingJump.current = id; invalidateCatalog(); }
-          })}><Link2 size={13}/></button>
-          <button type="button" aria-label="新建文件夹" title="新建文件夹" onClick={() => setEditor({ parentId: null })}><Plus size={12}/></button></div>
-        <div className="library-sidebar-children">
+        <div className="library-folder-heading">
+          <button type="button" className="catalog-row library-sidebar-primary" aria-expanded={foldersExpanded} aria-controls={folderListId}
+            onClick={() => onFoldersExpandedChange(!foldersExpanded)}><Folder size={14} aria-hidden="true"/>文件夹
+            <FolderChevron size={14} className="library-sidebar-chevron" aria-hidden="true"/>
+          </button>
+          <button type="button" aria-label="新建文件夹" title="新建文件夹" onClick={() => setEditor({ parentId: null })}><Plus size={12} aria-hidden="true"/></button>
+        </div>
+        <div id={folderListId} className="library-sidebar-children" hidden={!foldersExpanded}>
+          <button type="button" className="catalog-row" aria-current={showGallery && selectedFolderId === null || undefined}
+            onClick={() => mode.getState().selectHierarchy({ kind: "folders", folderId: null })}>全部文件夹素材</button>
           <div role="tree" aria-label="文件夹层级">{visibleRows.map(({ item, depth }) => {
             const children = folders.some(folder => folder.parent_id === item.id);
             const available = canDropInFolder(item);

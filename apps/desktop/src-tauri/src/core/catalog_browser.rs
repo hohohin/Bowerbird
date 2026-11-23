@@ -1,6 +1,6 @@
 //! Bounded catalog reads. Counts and pages share exactly the same filter contract.
 use super::{
-    library::{asset_from_row, video_understanding_keyword_match, Asset},
+    library::{asset_from_row, media_understanding_keyword_match, Asset},
     material_catalog::{catalog_prompts, CatalogTag, MaterialCatalog, AUDIO, IMAGE, VIDEO, TEXT, catalog_visibility},
 };
 use crate::{
@@ -134,7 +134,7 @@ impl CatalogFilter {
             values.push(Value::Text(project.clone()));
         }
         if let Some(query) = self.query.as_deref().filter(|q| !q.is_empty()) {
-            let transcript = video_understanding_keyword_match("?");
+            let transcript = media_understanding_keyword_match("?");
             let entry = if entry_name { " OR e.name LIKE ? ESCAPE '\\'" } else { "" };
             clauses.push(format!("(a.name LIKE ? ESCAPE '\\' OR {transcript}{entry})"));
             let pattern = format!(
@@ -201,7 +201,7 @@ impl Database {
         let limit = limit.clamp(1, 512);
         values.push(Value::Text(after.unwrap_or("").to_string()));
         values.push(Value::Integer(limit));
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         with_gallery_cache(&conn, filter.generated.is_some(), |conn, provenance| {
             let mut stmt = conn.prepare(&format!(
                 "WITH {provenance}, page AS (SELECT a.id,a.name,a.store_path,a.thumb_path FROM assets a WHERE {condition} AND a.id>? ORDER BY a.id LIMIT ?) \
@@ -313,7 +313,7 @@ impl Database {
         let collections = self.list_collections()?;
         let gallery_count = gallery_count();
         let (condition, values) = filter.sql()?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         with_gallery_cache(&conn, true, |conn, provenance| {
             let total = conn.query_row(
                 &format!("WITH {provenance} SELECT {gallery_count} FROM assets a WHERE {condition}"),
@@ -389,7 +389,7 @@ impl Database {
         let filter = CatalogFilter { kind: "all".into(), id: None, project_id: None, ..filter.clone() };
         let (condition, values) = filter.sql_for_scope(false, true)?;
         let count = gallery_count();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         with_gallery_cache(&conn, true, |conn, provenance| {
             let mut stmt = conn.prepare(&format!("WITH {provenance}
                 SELECT pa.project_id,{count} FROM project_assets pa
@@ -404,7 +404,7 @@ impl Database {
         &self, filter: &CatalogFilter, offset: i64, limit: i64, columns: &str,
         map: impl FnMut(&rusqlite::Row) -> rusqlite::Result<T>,
     ) -> AppResult<Vec<T>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         with_gallery_cache(&conn, true, |conn, provenance| {
             let (sql, mut values) = filter.gallery_sql(columns, provenance)?;
             values.push(Value::Integer(limit.clamp(1, 240)));
@@ -424,7 +424,7 @@ impl Database {
         offset: i64,
         limit: i64,
     ) -> AppResult<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         with_gallery_cache(&conn, true, |conn, provenance| {
             let (sql, mut values) = filter.gallery_sql("a.id", provenance)?;
             values.push(Value::Integer(limit.clamp(1, 2000)));
@@ -457,7 +457,7 @@ impl Database {
         let ids = &asset_ids[..asset_ids.len().min(240)];
         values.extend(ids.iter().cloned().map(Value::Text));
         let placeholders = vec!["?"; ids.len()].join(",");
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         with_gallery_cache(&conn, true, |conn, provenance| {
             let eligible = gallery_eligible();
             let mut stmt = conn.prepare(&format!("WITH {provenance} SELECT {columns},{group} AS group_key FROM assets a WHERE {condition} AND {eligible} AND {group} IN (SELECT {group} FROM assets a WHERE a.id IN ({placeholders})) ORDER BY a.created_at,a.id"))?;
@@ -567,12 +567,12 @@ mod tests {
         {
             let conn = db.conn.lock().unwrap();
             conn.execute("UPDATE assets SET thumb_path='changed' WHERE id='a'", []).unwrap();
-            assert_eq!(conn.query_row("SELECT COUNT(*) FROM catalog_cache_version", [], |r| r.get::<_,u32>(0)).unwrap(),1);
             let tx = conn.unchecked_transaction().unwrap();
             tx.execute("DELETE FROM canvas_workflows", []).unwrap();
             tx.rollback().unwrap();
         }
         assert_eq!(ids(), ["b"]);
+        assert_eq!(db.browser_connection().query_row("SELECT COUNT(*) FROM catalog_cache_version", [], |r| r.get::<_, u32>(0)).unwrap(), 1);
         // Agent image outputs are individual assets, including HEIC/HEIF.
         db.conn.lock().unwrap().execute("UPDATE canvas_workflows SET document_json=json_set(document_json,'$.runs[0].steps.src.agentRunId','run')", []).unwrap();
         assert_eq!(ids(), ["b","a"]);

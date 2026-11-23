@@ -30,10 +30,12 @@ const audio = (id: string, file: string, duration: number): Asset => ({ id, name
 const image: Asset = { id: "image", name: "image.png", ext: "png", store_path: thumb, thumb_path: thumb, width: 240, height: 180, source: "external" };
 const video: Asset = { id: "video", name: "video.mp4", ext: "mp4", store_path: "/audio-fixtures/video.mp4", thumb_path: thumb, width: 240, height: 180, duration: 2, source: "external" };
 const originals = [audio("wav", "chime.wav", 12), audio("mp3", "long-vbr.mp3", 3600), audio("flac", "rain.flac", 24), audio("m4a", "space.m4a", 36), image, video];
+if (params.has("trim")) originals[0].source = "imported";
 w.assets = [...originals, ...Array.from({ length: params.has("stress") ? 1200 : 65 }, (_, i) => ({ ...originals[0], id: `extra-${i}`, name: `声音 ${i}.wav` }))];
 w.calls = []; w.unexpected = []; w.createdAssets = []; w.placed = []; w.libraryCloseCount = 0; w.clipboardPaths = [];
 w.store = useStore; w.mode = useLocalFileMode;
 w.externalFiles = externalFiles; w.mutations = [];
+const trimmedVersions = new Set<string>();
 const folder = (id: string, parent_id: string | null, name: string) => ({ id, parent_id, root_id: "root", name, path: `/fixture/${id}`, available: true, count: 0, scanning: false, error: null });
 w.folders = [folder("root", null, "声音素材"), folder("child", "root", "音乐"), folder("next", null, "另一集合")];
 w.entries = w.assets.map((asset: Asset, i: number) => ({ id: `entry-${asset.id}`, folder_id: i === 1 ? "child" : i === 2 ? "next" : "root", asset_id: asset.id, name: asset.name, path: asset.store_path, asset, available: true, is_reference: false, version: "a".repeat(64) }));
@@ -66,16 +68,41 @@ w.__TAURI_INTERNALS__ = {
     if (command === "connection_entry_ids") return entries(args).slice(args.offset, args.offset + args.limit).map((entry: any) => entry.id);
     if (command === "resolve_connection_entries") return w.entries.filter((entry: any) => args.ids.includes(entry.id));
     if (command === "catalog_overview") return { total: filtered(args.filter).length, untagged: filtered(args.filter).filter((a: Asset) => a.id !== "mp3").length, catalog: { tags: args.filter.media === "audios" ? tags : [], collections: [], prompts: [], tag_asset_ids: {} } };
+    if (command === "catalog_project_counts") return { "trim-project": filtered(args.filter).length };
     if (command === "catalog_page") return filtered(args.filter).slice(args.offset, args.offset + args.limit);
     if (command === "catalog_ids") return filtered(args.filter).slice(args.offset, args.offset + args.limit).map((asset: Asset) => asset.id);
     if (command === "catalog_prepare_colors") return { after: null, more: false, failed: 0, updated: 0 };
     if (command === "get_assets_by_ids") return w.assets.filter((asset: Asset) => args.assetIds.includes(asset.id));
+    if (command === "video_transcript_capabilities") return { available: true, credits: 1, maxDurationMs: 7_200_000 };
+    if (command === "video_transcript_get") return w.transcripts?.[args.assetId] ?? null;
+    if (command === "video_transcript_quote") return { sourceHash: "fixture-audio-hash", durationSeconds: 12, chargeRequired: true, cloudPending: false, noAudio: false };
+    if (command === "video_transcript_start") {
+      const transcript = { status: "completed", text: "音频文稿", utterances: [{ startMs: 2100, endMs: 4400, text: "音频文稿",
+        words: [{ startMs: 2100, endMs: 3400, text: "音频" }, { startMs: 3400, endMs: 4400, text: "文稿" }] }] };
+      w.transcripts = { ...w.transcripts, [args.assetId]: transcript };
+      return transcript;
+    }
+    if (command === "trim_audio") {
+      const original = w.assets.find((item: Asset) => item.store_path === args.sourcePath);
+      if (!original) throw new Error("未找到音频原件");
+      const player = document.querySelector<HTMLAudioElement>('audio[data-audio-preview]');
+      w.mutations.push({ command, args, paused: player?.paused ?? true, src: player?.getAttribute("src") ?? null });
+      const duration = args.end - args.start;
+      if (!args.overwrite) return { ...original, id: "copy", name: original.name + "-裁剪", duration };
+      if (original.source === "external") throw new Error("外部引用音频不能覆盖原文件，请选择另存为新音频");
+      const replacement = { ...original, duration, file_mtime: 2 };
+      w.assets = w.assets.map((item: Asset) => item.id === original.id ? replacement : item);
+      trimmedVersions.add(original.id);
+      w.transcripts = { ...w.transcripts, [original.id]: null };
+      return replacement;
+    }
     if (command === "audio_waveform") {
       const asset = w.assets.find((item: Asset) => item.id === args.assetId);
       if (!asset || kind(asset) !== "audios") throw new Error("unexpected audio asset");
       const file = asset.id === "mp3" ? "long-vbr.mp3" : asset.id === "flac" ? "rain.flac" : asset.id === "m4a" ? "space.m4a" : "chime.wav";
       const peaks = await fetch(`/audio-fixtures/${file}.peaks.json`).then(response => response.json());
-      return { ...peaks, sourceVersion: "a".repeat(64) };
+      return trimmedVersions.has(asset.id) ? { ...peaks, sourceVersion: "b".repeat(64), duration: asset.duration }
+        : { ...peaks, sourceVersion: "a".repeat(64) };
     }
     if (command === "external_files_preview" || command === "external_files_media") {
       if (/\.(wav|mp3|flac|m4a|ogg)(?:\?|$)/i.test(args.path)) throw new Error("audio entered image preview");
@@ -131,7 +158,9 @@ function Fixture() {
   w.openMutationDialog = (kind: string) => { w.assets[0].source = kind === "delete-reference" ? "external" : "imported"; setMutationDialog(kind); };
   return <>
     {params.has("reference") && <div style={{ position: "fixed", inset: 0, display: "flex" }}>
-      {connected ? <ConnectedCollections media="audios" projectId="p" onClose={() => {}}/> : <CategorizedLibrary kind="all" media="audios" projectId="p" onClose={() => {}}/>}
+      {connected ? <ConnectedCollections media="audios" projectId="p" onClose={() => {}}/> : <CategorizedLibrary kind="all" media="audios" projectId="p" projectScope
+        overviewProjects={params.has("trim") ? [{ id: "trim-project", name: "裁剪归属项目", workspace_path: "", asset_count: 4, kind: "user", created_at: 0 }] : undefined}
+        onClose={() => {}}/>}
     </div>}
     {!params.has("guards") && !params.has("reference") && <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
       <Toolbar localFilesOpen canvasMode={false} onCanvasModeChange={() => {}} onRefresh={async () => {}} onCreateCreative={() => {}}/>
