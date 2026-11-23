@@ -5,7 +5,7 @@
 .h3-frame-meta { flex-direction: column; align-items: flex-start; gap: 2px; font-size: 12px; }
 .h3-frame-meta strong { font-weight: 500; }
 .h3-frame-meta small { color: var(--bb-muted); font: 10px ui-monospace, Consolas, monospace; white-space: nowrap; }
-.comfy-frame-slots .comfy-frame-action { position: absolute; z-index: 2; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border-radius: 4px; background: rgb(0 0 0 / 76%); color: #fff; }
+.comfy-frame-slots .comfy-frame-action { position: absolute; z-index: 2; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border-radius: 0; background: rgb(0 0 0 / 76%); color: #fff; }
 .comfy-frame-disconnect { top: 2px; right: 2px; }
 .comfy-frame-slots .comfy-frame-swap { top: 27px; left: 50%; transform: translate(-50%, -50%); border: 1px solid var(--bb-line); background: transparent; color: var(--bb-muted); border-radius: 0; }
 .comfy-frame-slot { position: relative; flex: 0 0 70px; height: 54px; box-sizing: border-box; border: 1px dashed var(--bb-line); background: var(--bb-surface-2); font-size: 11px; }
@@ -76,9 +76,7 @@ button.h3-image-environment > .lucide-ellipsis { color: var(--bb-muted); }
   display: grid; grid-template-columns: auto minmax(0, max-content) auto auto auto; align-items: center; justify-content: start; gap: 2px;
 }
 .workflow-card[data-h3-card] .comfy-video-options > .tactical-select-trigger { min-width: 0; }
-.workflow-card[data-h3-card] .comfy-video-options .tactical-menu-trigger > span[aria-hidden] { display: none; }
 .workflow-card[data-h3-card] .comfy-video-options > :not(:first-child) { border-inline-start: 1px solid var(--bb-line); padding-inline-start: 4px; }
-.workflow-card[data-h3-card] .comfy-video-options .tactical-select-icon { display: none; }
 .workflow-card[data-h3-card] :is(.comfy-video-prompt[data-fit-content], .workflow-prompt-editor[data-fit-content] .ProseMirror) {
   min-height: 64px; padding: 4px 5px; font-size: 13.5px; line-height: 1.65;
 }
@@ -89,10 +87,10 @@ html[data-theme] .canvas-tactical .workflow-card[data-h3-card] footer {
 .workflow-card[data-h3-card] .workflow-h3-status { flex: 1; }
 .workflow-card[data-h3-card] .workflow-video-auto-optimize { min-height: 26px; padding: 0 4px; font-size: 11.5px; color: var(--bb-muted); }
 .workflow-card[data-h3-card] .workflow-video-auto-optimize:has(:checked) { color: var(--bb-blue); outline: 1px solid currentColor; font-family: ui-monospace, Consolas, monospace; }
-html[data-theme] .canvas-tactical .workflow-card[data-h3-card] footer button {
+html[data-theme] .canvas-tactical .workflow-card[data-h3-card] footer .h3-run-action {
   min-height: 28px; border: 1px solid var(--bb-line); padding: 3px 10px; color: var(--bb-blue); font-size: 12px;
 }
-.workflow-card[data-h3-card] footer button::after { content: ""; position: absolute; right: 0; bottom: 0; width: 3px; height: 3px; background: currentColor; }
+.workflow-card[data-h3-card] footer .h3-run-action::after { content: ""; position: absolute; right: 0; bottom: 0; width: 3px; height: 3px; background: currentColor; }
 .h3-run-guard { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--bb-warning); font-size: 12px; }
 .h3-run-guard strong { flex: 1; color: var(--bb-warning); font-weight: 500; }
 .h3-run-guard > div { width: 100%; display: flex; flex-wrap: wrap; gap: 12px; }

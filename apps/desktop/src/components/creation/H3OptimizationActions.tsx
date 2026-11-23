@@ -42,7 +42,7 @@ export function H3OptimizationActions({ nodeId, runs, disabled, busy, retryDisab
     const snapshot = run.steps[nodeId].comfyOptimization;
     return snapshot?.result && snapshot.dshContinuation;
   });
-  const status = !draft ? "未生成" : draft.paused ? "已停用" : stale ? "待同步" : draft.edited !== undefined ? "已微调" : "已生效";
+  const status = !draft ? "未生成" : draft.paused ? "已停用" : stale ? "需重新优化提示词" : draft.edited !== undefined ? "已微调" : "已生效";
   const pauseLabel = draft?.paused ? "恢复使用优化后提示词" : "暂停使用优化后提示词";
   return <section className="h3-optimized-module" aria-label="优化后提示词" data-state={status} onPointerDown={event => event.stopPropagation()}>
     <div className="h3-optimization-actions">
@@ -70,7 +70,7 @@ export function H3OptimizationActions({ nodeId, runs, disabled, busy, retryDisab
           return <section key={run.id}>
             <h3>第 {history.length - index} 次优化</h3>
             <div className="h3-history-heading"><h4>用户原文</h4>{canRestore && <button type="button" disabled={restoreDisabled || restoring} aria-label={`恢复第 ${history.length - index} 次用户原文`} onClick={() => void restore(run.id, "original")}>恢复到原文</button>}</div><p>{snapshot.input.prompt}</p>
-            <div className="h3-history-heading"><h4>优化结果</h4>{canRestore && snapshot.result !== undefined && <button type="button" disabled={restoreDisabled || restoring} aria-label={`恢复第 ${history.length - index} 次优化结果`} onClick={() => void restore(run.id, "result")}>恢复到优化稿</button>}</div><p>{snapshot.result ?? (run.status === "running" ? "正在优化…" : run.status === "waiting" ? "等待取回结果" : run.status === "stopped" ? "已停止" : "未返回优化结果")}</p>
+            <div className="h3-history-heading"><h4>优化结果</h4>{canRestore && snapshot.result !== undefined && <button type="button" disabled={restoreDisabled || restoring} aria-label={`恢复第 ${history.length - index} 次优化结果`} onClick={() => void restore(run.id, "result")}>恢复到优化后提示词</button>}</div><p>{snapshot.result ?? (run.status === "running" ? "正在优化…" : run.status === "waiting" ? "等待取回结果" : run.status === "stopped" ? "已停止" : "未返回优化结果")}</p>
           </section>;
         })}
       </div>

@@ -1,5 +1,5 @@
 import { contentTableRows, type ContentTable } from "./contentTable.ts";
-import { comfyAudioLabel, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_R2V_LIMITS, type ComfyVideoMode } from "./comfyVideo.ts";
+import { H3_AUDIO_LABEL, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_R2V_LIMITS, type ComfyVideoMode } from "./comfyVideo.ts";
 import type { VideoOptions } from "./videoGeneration";
 import { workflowTriggerMode } from "./workflowTriggerSchedule.ts";
 import { H3_IMAGE } from "./genProviders.ts";
@@ -31,7 +31,7 @@ export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" |
 export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; referenceRanks?: number[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[]; deliveries?: Record<string, { nodeId: string; cellId: string; append: boolean; value: WorkflowValue }> }
 export interface WorkflowPort { id: string; label: string; type: WorkflowPortType }
 export interface WorkflowInput { dimension?: { id?: string | null; title: string; body: string }; slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[];
-  videoFrame?: { position: "first" | "last"; assetId: string };
+  videoFrame?: { position: "first" | "last"; assetId?: string };
   /** A submitted image was still rendering when this completion listener was added. */
   pendingCompletionSession?: string;
   /** Per-member position in this generation card's reference strip, set by dragging. */
@@ -276,7 +276,7 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
     ];
     return [...(mode !== "text" ? [{ id: "first-frame", label: mode === "reference" ? "参考图" : "首帧", type: "image" as const }] : []),
       ...(mode === "frames" ? [{ id: "last-frame", label: "尾帧（可选）", type: "image" as const }] : []), { id: "text", label: "文本", type: "text" },
-      { id: H3_VIDEO_AUDIO_PORT, label: comfyAudioLabel(mode), type: "image" }];
+      { id: H3_VIDEO_AUDIO_PORT, label: H3_AUDIO_LABEL, type: "image" }];
   }
   if (node.kind === "loop") return node.loopMode === "count" ? [] : node.loopMode === "rows" ? [{ id: "text", label: "内容行", type: "text" }] : [{ id: "image", label: "图片列表", type: "image" }];
   if (node.kind === "instruction") return [{ id: "image", label: "图片", type: "image" }];
@@ -284,6 +284,9 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "generation" || node.kind === "skill" || node.kind === "agent") ports.push({ id: "visual-profile", label: "视觉规范", type: "visual-profile" });
   return ports;
 }
+export const workflowProducesVideo = (node: WorkflowNode) => node.kind === "comfy-video" || node.kind === "director3d"
+  || node.kind === "generation" && node.generation?.media === "video" || node.kind === "agent" && node.skill === "hyperframes";
+export const workflowFrameLabel = (frame: NonNullable<WorkflowInput["videoFrame"]>) => frame.position === "first" ? "首帧画面" : "尾帧画面";
 export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "director3d") return [{id:"image",label:"MP4",type:"image"}];
   if (node.kind === "voice") return node.voice?.id ? [{ id: "image", label: "配音", type: "image" }] : [];
@@ -829,7 +832,7 @@ export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, c
       const value = source?.kind === "agent" && input.portId === "image" && source.outputs.session?.nodeIds?.length
         ? { ...stored, type: "image" as const, nodeIds: [...new Set([...(stored?.nodeIds ?? []), ...source.outputs.session.nodeIds])] } : stored;
       if (!value || value.type !== port.type) throw new Error(`${port.label}输入尚无有效结果，请先运行上游`);
-      return value;
+      return input.videoFrame ? { ...value } : value;
       } catch (error) {
         const ref = activePromptReferences(node).find(ref => ref.type === port.type && workflowReferenceMatchesInput(ref, input));
         throw new WorkflowInputError(`${ref ? `@${ref.label}：` : `${port.label}输入：`}${error instanceof Error ? error.message : String(error)}`, node, input, ref?.label);

@@ -42,7 +42,7 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
     {channel === "jimeng" && <><DreaminaBalance /><span className="text-[11px] text-muted">暂无官方生成前报价；提交后显示任务消耗</span></>}
   </>;
   const fields = <>
-    <ModelSelect kind="视频" menuClassName={menuClassName} value={local?.options ? "local:h3" : `${channel}:${options.model_version}`} label={local?.options ? (composer ? "H3" : "本地部署 · H3") : videoModelLabel(model)} source={local?.options ? "local" : channel === "cloud" ? "cloud" : "personal"}
+    <ModelSelect kind="视频" menuClassName={menuClassName} value={local?.options ? "local:h3" : `${channel}:${options.model_version}`} label={local?.options ? (composer || card ? "H3" : "本地部署 · H3") : videoModelLabel(model)} source={local?.options ? "local" : channel === "cloud" ? "cloud" : "personal"}
       cloudBalance={entitlement ? balance : null} cloudLoggedIn={auth?.logged_in}
       options={modelOptions} onChange={selectModel} footer={composer || card ? status : undefined} quotaDetail={local?.options ? "本地 H3 视频，不消耗积分" : channel === "cloud" ? "使用 Bowerbird 账号积分" : "使用自有即梦账号额度，不扣 Bowerbird 积分"} />
     {local?.options ? local.onChange && <>

@@ -36,7 +36,7 @@ try {
   assert.deepEqual([...hiddenWorkflowSessionIds([workflow], [second])], ['second']);
   assert.equal(hiddenWorkflowSessionIds([workflow], [first, firstImage, second]).has('second'), false);
   const activity = (step, nodes, jobs = {}) => {
-    const { running, jobId, failed, session: active } = workflowGenerationActivity(workflow, step, nodes, jobs);
+    const { running, jobId, failed, session: active } = workflowGenerationActivity(workflow, { status: 'running', steps: { [workflow.id]: step } }, nodes, jobs);
     return { running, jobId, failed, sessionId: active?.id };
   };
   assert.deepEqual(activity({ status: 'done', jobId: 'job2', turnKey: 'second' }, [second]),
@@ -57,6 +57,19 @@ try {
   assert.equal(workflowGenerationActivity(workflow, undefined, [done], continuation).running, false);
 
   const secondImage = image('second-image', 'job2', 'second', 3);
+  const submitted = { id: 'current-run', status: 'done', steps: { generator: { status: 'done', generationSubmission: 'submitted', jobId: 'job2', turnKey: 'second' } } };
+  const submittedActivity = (nodes, jobs = {}, displayable) => workflowGenerationActivity(workflow, submitted, nodes, jobs, displayable);
+  assert.equal(submittedActivity([first, firstImage]).running, true, 'a saved handoff owns its live card before the current session or job reaches the projection');
+  assert.equal(submittedActivity([first, firstImage], { job2: { running: false, turns: [{ turnKey: 'another-turn', images: ['older.png'] }] } }).running, true);
+  assert.equal(submittedActivity([first, firstImage, failed]).terminal, 'failed');
+  assert.equal(submittedActivity([first, firstImage, cancelled]).terminal, 'cancelled');
+  assert.equal(submittedActivity([first, firstImage, done]).awaitingOutput, true, 'a success receipt alone cannot close a current live expansion');
+  assert.equal(submittedActivity([first, firstImage, done, secondImage], {}, new Set(['first-image'])).terminal, undefined);
+  assert.equal(submittedActivity([first, firstImage, done, secondImage]).terminal, 'done');
+  const removed = submittedActivity([first, firstImage, done, { ...secondImage, hiddenAt: 4 }]);
+  assert.equal(submittedActivity([first, firstImage, done, { ...secondImage, assetId: null }]).awaitingOutput, false,
+    'a deleted original remains an exact historical tombstone and cannot restart delivery');
+  assert.equal(removed.running || removed.awaitingOutput, false, 'an explicitly removed historical output is not a pending delivery');
   const splitting = { generation_group_dissolved: true };
   const split = projection([session('first', 'job1', 'done', splitting), session('second', 'job2', 'done', splitting, 2), firstImage, secondImage]);
   assert.equal(split.anchors.get('generator')?.id, 'second-image');
@@ -111,11 +124,14 @@ try {
   const backToImage = switched(workflow, [first, oldImage, done, newVideo]);
   assert.equal(backToImage.projection.anchors.get(workflow.id)?.id, first.id);
   assert.equal(backToImage.projection.origins.has(newVideo.id), false, 'a restored image card cannot route to historical video');
-  assert.equal(workflowGenerationActivity(remote, { status: 'waiting', videoJobActive: true }, [], {}).running, true);
-  assert.equal(workflowGenerationActivity(remote, { status: 'waiting', videoJobActive: true }, [done], {}).running, false);
+  const waitingVideo = { status: 'waiting', steps: { [remote.id]: { status: 'waiting', videoJobActive: true } } };
+  assert.equal(workflowGenerationActivity(remote, waitingVideo, [], {}).running, true);
+  assert.equal(workflowGenerationActivity(remote, waitingVideo, [done], {}).running, false);
   assert.equal(workflowGenerationActivity(remote, undefined, [second], {}).running, true);
-  assert.equal(workflowGenerationActivity(local, { status: 'running', comfyOptimization: {} }, [], {}).running, true);
-  assert.equal(workflowGenerationActivity(local, { status: 'done', jobId: 'local-job' }, [], {}).running, false);
+  const localRun = { status: 'running', steps: { [local.id]: { status: 'running', comfyOptimization: {} } } };
+  assert.equal(workflowGenerationActivity(local, localRun, [], {}).running, true);
+  assert.equal(workflowGenerationActivity(local, { ...localRun, status: 'stopped' }, [], {}).running, false);
+  assert.equal(workflowGenerationActivity(local, { status: 'done', steps: { [local.id]: { status: 'done', jobId: 'local-job' } } }, [], {}).running, false);
 
   const point = (nodes, cards = [local], runs) => firstWorkflowVideoOutputPoint(
     { nodes, threads: [], groups: [], groupItems: [] }, { schema_version: 1, run: null, nodes: cards, runs }, local);

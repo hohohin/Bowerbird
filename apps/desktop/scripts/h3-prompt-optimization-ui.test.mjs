@@ -12,8 +12,8 @@ const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 page.setDefaultTimeout(10000);
 const errors = []; page.on('pageerror', error => errors.push(error.message));
 try {
-  await page.goto('http://127.0.0.1:1699/scripts/fixtures/canvas-reference/preview.html');
-  await page.locator('[data-canvas-node-id="old"]').waitFor({ timeout: 30000 });
+  await page.goto('http://127.0.0.1:1699/scripts/fixtures/canvas-reference/preview.html', { waitUntil: 'commit' });
+  await page.locator('[data-canvas-node-id="old"]').waitFor({ timeout: 90000 });
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { CanvasWorkflowController, canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -424,6 +424,13 @@ try {
     const ui = canvasWorkflowController('p'); await ui.load(); await ui.edit([{ ...node, x: 800 }]);
   });
   const card = page.locator('[data-workflow-card="h3"]');
+  async function checkH3Header(card) {
+    const header = card.locator(':scope > header');
+    await header.getByRole('button', { name: '复制卡片', exact: true }).locator('svg').waitFor();
+    assert.equal(await header.getByRole('button', { name: /复制.*提示词/ }).count(), 0);
+    await header.getByRole('button', { name: '生成历史' }).locator('svg.lucide-history').waitFor();
+  }
+  await checkH3Header(card);
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -471,14 +478,15 @@ try {
   const preview = card.getByRole('button', { name: '展开编辑优化后提示词' });
   assert.match(await preview.innerText(), /单一连续镜头/);
   await preview.click();
-  const prose = card.getByLabel('提示词正文', { exact: true });
+  assert.equal(await card.getByRole('button', { name: '原文 (Raw)' }).getAttribute('aria-pressed'), 'true');
+  const prose = card.getByLabel('优化后提示词全文', { exact: true });
   const beforeEdit = await prose.inputValue();
   await prose.fill('微调后的画面');
   await card.getByRole('button', { name: '原文 (Raw)' }).click();
-  assert.equal(await card.getByLabel('优化后提示词全文').inputValue(), '微调后的画面');
+  assert.equal(await card.getByRole('textbox', { name: '优化后提示词全文', exact: true }).inputValue(), '微调后的画面');
   assert.equal(await card.evaluate(el => parseFloat(el.style.width)), 448);
   await card.getByRole('button', { name: '还原', exact: true }).click();
-  assert.equal(await card.getByLabel('优化后提示词全文').inputValue(), beforeEdit);
+  assert.equal(await card.getByRole('textbox', { name: '优化后提示词全文', exact: true }).inputValue(), beforeEdit);
   await card.getByRole('button', { name: '收起', exact: true }).click();
   await videoStatus.getByText('提示词已优化', { exact: true }).waitFor();
   assert.equal(await card.getByText('提示词已优化', { exact: true }).count(), 1);
@@ -547,9 +555,10 @@ try {
   await autoCheckbox.uncheck();
   await card.getByRole('button', { name: '恢复使用优化后提示词' }).click();
   await draft.fill('沿楼梯向上运镜。');
+  await card.getByText('需重新优化提示词', { exact: true }).waitFor();
   const staleCounts = await page.evaluate(() => [window.h3Calls.length, window.optimizeStarts.length]);
   await runButton.click();
-  await guard.getByRole('button', { name: '用旧优化稿' }).click();
+  await guard.getByRole('button', { name: '沿用旧优化结果' }).click();
   await page.waitForFunction(n => window.h3Calls.length === n + 1 && JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', staleCounts[0]);
   assert.match(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), /单一连续镜头/);
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), staleCounts[1]);
@@ -585,6 +594,10 @@ try {
   assert.equal(imageResult.request.parameters.referenceCount, 0);
   assert.deepEqual(imageResult.outputs.image.assetIds, ['previous']);
   const imageCard = page.locator('[data-workflow-card="image-h3"]');
+  await checkH3Header(imageCard);
+  const imageParameters = imageCard.getByRole('toolbar', { name: '生成参数' });
+  await imageParameters.locator('.model-select-source svg').waitFor();
+  await imageParameters.locator('.tactical-menu-trigger > span[aria-hidden="true"]').waitFor();
   const imageDraft = imageCard.getByLabel('卡片指令', { exact: true });
   const imageStatus = imageCard.locator('footer .workflow-h3-status[role="status"]');
   await imageStatus.getByText('提示词已优化', { exact: true }).waitFor();
@@ -612,7 +625,7 @@ try {
   await history.getByRole('button', { name: '恢复第 2 次优化结果', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'image-h3').prompt === '透明玻璃杯，杯沿反射窗边的柔光。');
   await history.waitFor({ state: 'hidden' });
-  await imageCard.getByLabel('优化后提示词全文').and(page.locator(':focus')).waitFor();
+  await imageCard.getByRole('textbox', { name: '优化后提示词全文', exact: true }).and(page.locator(':focus')).waitFor();
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), prior + 1, 'restoring history never submits another optimization');
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
@@ -772,7 +785,7 @@ try {
   await chatPanel.getByRole('button', { name: '应用到优化后提示词' }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes
     .find(node => node.id === 'image-h3').h3Prompt.edited === '优化后的柔光高光');
-  const sixFields = 'subject_definitions: <Picture 1> 指定人物。\nsummary: 雨声中，她回头。\nretention_analysis: 保留衣着。\n' +
+  const sixFields = 'subject_definitions: <Picture 1> 指定人物。\r\n\r\nsummary: 雨声中，她回头。\n\nretention_analysis: 保留衣着。\n' +
     'detailed_description: [Shot 1] 她说 <d>[Chinese] 等一下。</d>\noverall_soundscape: 雨落在伞面。\nnon_diegetic_music: N/A';
   await page.evaluate(async text => {
     const { api } = await import('/src/lib/api.ts');
@@ -789,9 +802,11 @@ try {
   await preview.click();
   await card.getByRole('button', { name: '结构化', exact: true }).click();
   assert.equal(await card.locator('.h3-struct-field').count(), 7, 'six Ref2VA fields plus a dialogue shortcut');
+  assert.equal(await card.getByLabel('主体定义', { exact: true }).inputValue(), '<Picture 1> 指定人物。');
+  assert.equal(await card.getByLabel('内容概要', { exact: true }).inputValue(), '雨声中，她回头。');
   await card.getByLabel('对白快捷编辑', { exact: true }).fill('好，$1。');
   await card.getByRole('button', { name: '原文 (Raw)' }).click();
-  assert.equal(await card.getByLabel('优化后提示词全文').inputValue(), sixFields.replace('等一下。','好，$$1。'));
+  assert.equal(await card.getByRole('textbox', { name: '优化后提示词全文', exact: true }).inputValue(), sixFields.replaceAll('\r\n', '\n').replace('等一下。','好，$$1。'));
   await card.getByRole('button', { name: '结构化', exact: true }).click();
   await card.getByLabel('对白快捷编辑', { exact: true }).fill('我们走吧。');
   await card.screenshot({ path: '.tmp/h3-optimization/structured.png' });
@@ -801,6 +816,10 @@ try {
     const { top, height } = item.getBoundingClientRect(); return Math.round(top + height / 2);
   }));
   assert.equal(parameterCenters.length, 5);
+  const videoParameters = card.locator('.comfy-video-options');
+  for (const icon of ['.model-select-source svg', '.lucide-film', '.lucide-timer', '.tactical-menu-trigger > span[aria-hidden="true"]', '.lucide-gauge']) {
+    await videoParameters.locator(icon).waitFor();
+  }
   assert.ok(Math.max(...parameterCenters) - Math.min(...parameterCenters) < 3, `R2V parameter centers: ${parameterCenters}`);
   await card.screenshot({ path: '.tmp/h3-optimization/card-dark.png' });
   await preview.click();

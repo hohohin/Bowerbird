@@ -100,6 +100,7 @@ try {
       && (node.inputs['last-frame']?.[0]?.assetId ?? null) === last;
   }, [first, last]);
   const swap = card.getByRole('button', { name: /交换首尾帧|调换首尾帧/ });
+  assert.equal(await card.locator('.comfy-frame-disconnect').first().evaluate(button => getComputedStyle(button).borderTopLeftRadius), '0px');
   await swap.click();
   await waitFrames('b', 'a');
   await page.reload(); await card.waitFor(); await mock();
@@ -119,7 +120,9 @@ try {
   });
   const setDragged = ids => page.evaluate(async ids => (await import('/src/lib/dragPayload.ts')).setDragAssets(ids), ids);
   await setDragged(['voice']);
-  await card.getByRole('group', { name: '录音引导' }).dispatchEvent('drop');
+  const referenceAudio = card.getByRole('group', { name: '参考音频' });
+  await referenceAudio.getByText('（可选，如角色声音）', { exact: true }).waitFor();
+  await referenceAudio.dispatchEvent('drop');
   await setDragged(null);
   await card.getByText('合成录音.wav', { exact: true }).waitFor();
   assert.match(await card.locator('header').innerText(), /视频生成/);
@@ -148,7 +151,7 @@ try {
   await modelMenu.locator('[data-model-key="local:h3"]').click();
   await card.getByLabel('H3 模式', { exact: true }).click();
   await page.getByRole('option', { name: '单图', exact: true }).click();
-  await card.getByRole('group', { name: '音色参考' }).getByText('合成录音.wav').waitFor();
+  await card.getByRole('group', { name: '参考音频' }).getByText('合成录音.wav').waitFor();
   assert.equal(await card.locator('.comfy-frame-slot').count(), 1);
   assert.equal(await card.getByLabel('参考图输入', { exact: true }).count(), 1);
   assert.match(await card.getByLabel('H3 时长', { exact: true }).innerText(), /5 秒/);
@@ -185,7 +188,7 @@ try {
   }, syntheticVoice);
   await page.reload(); await card.waitFor(); await mock();
   await page.locator(`[data-workflow-card="${imageCard.id}"]`).waitFor();
-  await card.getByRole('group', { name: '音色参考' }).getByText('合成录音.wav').waitFor();
+  await card.getByRole('group', { name: '参考音频' }).getByText('合成录音.wav').waitFor();
   assert.equal(await page.locator('.workflow-save-error').count(), 0);
   await runButton.click();
   await page.waitForFunction(() => window.h3Calls.some(call => call.action === 'start'));
@@ -219,7 +222,7 @@ try {
   assert.equal(input.ratio, '9:16');
   assert.equal(input.audioAssetId, 'voice'); assert.doesNotMatch(input.prompt, /<Audio 1>/);
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
-  await card.getByRole('button', { name: '断开参考录音' }).click();
+  await card.getByRole('button', { name: '断开参考音频' }).click();
   await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'h3').inputs['reference-audio']?.length);
   const checks = await page.evaluate(async () => {
     const { CanvasWorkflowController, filterAutomaticMediaValues } = await import('/src/lib/canvasWorkflowRuntime.ts');

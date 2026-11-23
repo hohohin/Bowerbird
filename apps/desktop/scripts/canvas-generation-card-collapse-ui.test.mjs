@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
+import { startBrowserDrag, finishBrowserDrag } from "./fixtures/explorer/native-drag.mjs";
 
 const entry = "scripts/fixtures/canvas-reference/preview.html";
 const native = process.argv.includes("--native");
@@ -38,6 +39,369 @@ const waitForSourceX = (x, equals = true) => page.waitForFunction(
   ({ x, equals }) => (JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.find(node => node.id === "generator").x === x) === equals,
   { x, equals },
 );
+const stage = page.locator("[data-canvas-stage]");
+const canvasAsset = id => stage.locator(`[data-frequent-asset-id="${id}"]`);
+const libraryAsset = id => page.locator(`.canvas-source-panel [data-asset-id="${id}"][draggable="true"]`).first();
+
+async function center(locator) {
+  await locator.waitFor();
+  const box = await locator.boundingBox();
+  assert.ok(box);
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+async function startLibraryDrag() {
+  await page.getByRole("button", { name: "展开画板素材库", exact: true }).click();
+  const asset = libraryAsset("b");
+  await asset.hover();
+  let drag;
+  if (native) {
+    // The hidden WebView2 fixture does not deliver CDP drag interception.
+    // Exercise the component's native handoff and replay the OS drop events.
+    const source = await asset.elementHandle();
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+    await page.evaluate(() => { window.holdNativeLibraryDrag = true; });
+    await source.evaluate((element, dataTransfer) => element.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer })), dataTransfer);
+    assert.equal(await dataTransfer.evaluate(data => data.getData("text/plain")), "b", "sidebar component sets the library drag payload");
+    await page.waitForFunction(() => typeof window.finishNativeLibraryDrag === "function");
+    assert.deepEqual(await page.evaluate(() => window.calls.findLast(call => call.command === "start_external_drag")?.args.assetIds), ["b"]);
+    const send = (type, point) => page.evaluate(({ type, point, dataTransfer }) => {
+      const hit = document.elementFromPoint(point.x, point.y);
+      const stage = hit?.closest("[data-canvas-stage]");
+      if (!stage) throw new Error("Library drag target is outside the canvas");
+      const target = type === "drop" ? stage : hit;
+      const event = new DragEvent(type.toLowerCase(), { bubbles: true, cancelable: true, dataTransfer, clientX: point.x, clientY: point.y });
+      const accepted = !target.dispatchEvent(event);
+      if (!accepted && type !== "dragEnter") throw new Error(`Canvas did not accept ${type}, target=${target.className}, payload=${dataTransfer.getData("text/plain")}`);
+    }, { type, point, dataTransfer });
+    drag = { send, drop: async point => {
+      for (const type of ["dragEnter", "dragOver", "drop"]) await send(type, point);
+      await source.dispatchEvent("dragend", { dataTransfer });
+      await page.evaluate(() => {
+        window.finishNativeLibraryDrag({ dropped: true });
+        window.finishNativeLibraryDrag = undefined;
+      });
+      await dataTransfer.dispose();
+      await source.dispose();
+    } };
+  } else {
+    const start = await center(asset);
+    const { session, data } = await startBrowserDrag(page, start.x, start.y);
+    drag = { send: (type, point) => session.send("Input.dispatchDragEvent", { type, data, ...point }),
+      drop: point => finishBrowserDrag(session, data, point.x, point.y) };
+  }
+  await page.locator('.canvas-source-panel[aria-hidden="true"]').waitFor({ state: "attached" });
+  return drag;
+}
+
+async function blankPoint(width = 250, height = 200) {
+  return stage.evaluate((element, { width, height }) => {
+    const stage = element.getBoundingClientRect();
+    const cards = [...element.querySelectorAll("[data-canvas-node], [data-workflow-card]")].map(card => card.getBoundingClientRect());
+    for (let y = stage.top + 100; y <= stage.bottom - height - 60; y += 55) {
+      for (let x = stage.left + 100; x <= stage.right - width - 30; x += 55) {
+        const hit = document.elementFromPoint(x, y);
+        if (hit && element.contains(hit) && !hit.closest("[data-canvas-node], [data-workflow-card], button, [role=toolbar]")
+          && cards.every(card => x + width + 20 <= card.left || x >= card.right + 20 || y + height + 20 <= card.top || y >= card.bottom + 20)) return { x, y };
+      }
+    }
+    throw new Error("No unobstructed position for a fixture card");
+  }, { width, height });
+}
+
+async function loadInteractionBoard(collapsed) {
+  await page.mouse.move(2, 2);
+  await page.goto(`${fixtureUrl}?source-library&canvas-library`);
+  await foregroundObstacle.waitFor();
+  await page.evaluate(async collapsed => {
+    const { newWorkflowNode } = await import("/src/lib/canvasWorkflow.ts");
+    const snapshot = window.snapshot();
+    const old = { ...snapshot.nodes.find(node => node.id === "old"), x: 90, y: 510, zIndex: 1 };
+    const generator = { ...newWorkflowNode("generation", 650, 240, "codex"), id: "generator", prompt: "生成测试鸟" };
+    const moving = { ...newWorkflowNode("instruction", 1120, 490, "codex"), id: "moving-workflow", prompt: "合成拖动卡片" };
+    snapshot.nodes = [old];
+    snapshot.view = { ...snapshot.view, panX: 85, panY: 70, zoom: 0.95 };
+    snapshot.groups = []; snapshot.groupItems = []; snapshot.edges = [];
+    if (collapsed) {
+      const group = `workflow:${JSON.stringify(["p", generator.id])}`;
+      const session = { ...old, id: "generation-session", x: generator.x, y: generator.y, width: 260, height: 205,
+        kind: "prompt", role: null, assetId: null, createdAt: 2,
+        payloadJson: JSON.stringify({ schema_version: 1, status: "done", job_id: "older-job", turn_key: "older-turn", provider: "codex", workflow_generation_group: group }) };
+      snapshot.nodes.push(session, { ...session, id: "older-output", kind: "asset", role: "output", assetId: "a", outputIsVideo: false,
+        payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: "合成参考 a", width: 190, height: 150 },
+          workflow_generation_group: group, execution: { job_id: "older-job", turn_key: "older-turn" } }) });
+      generator.activeSessionNodeId = session.id;
+      generator.sessionNodeIds = [session.id];
+    }
+    sessionStorage.setItem("workflow-p", JSON.stringify({ revision: 1, document: { schema_version: 1, nodes: [generator, moving], run: null } }));
+    sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
+  }, collapsed);
+  await page.reload();
+  await (collapsed ? image : origin).waitFor();
+}
+
+async function installControlledGeneration() {
+  await page.evaluate(async () => {
+    const { api } = await import("/src/lib/api.ts");
+    const { FREE_POLICY } = await import("/src/lib/entitlement.ts");
+    window.store.setState({ codexHealth: { ok: true }, cloudAuth: { logged_in: true, cloud_available: true },
+      cloudEntitlement: { policy: { ...FREE_POLICY, can_use_byo: true, max_parallel_jobs: 5 }, balances: { daily: 100, sub: 0, topup: 0 } },
+      startGeneration: async (...args) => {
+        const { jobId, turnKey } = args[12];
+        const { threadId } = args[9];
+        const source = JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.find(node => node.id === "generator");
+        const sessionId = `gen-prompt:${jobId}:${turnKey}:0`;
+        const group = `workflow:${JSON.stringify(["p", source.id])}`;
+        const payload = { schema_version: 1, job_id: jobId, turn_key: turnKey, text: args[0], provider: args[3], workflow_generation_group: group };
+        const base = { ...window.snapshot().nodes.find(node => node.id === "old"), projectId: "p", threadId,
+          id: sessionId, x: source.x, y: source.y, width: 260, height: 205, createdAt: 10 };
+        return await new Promise(resolve => {
+          window.controlledTurn = {
+            sessionId,
+            accept: () => resolve({ accepted: true, jobId }),
+            status: async (status, output = false) => {
+              const canvas = window.snapshot();
+              const session = canvas.nodes.some(node => node.id === sessionId);
+              const update = JSON.stringify({ ...payload, status, ...(status === "failed" ? { error: "合成验收失败" } : {}) });
+              if (session) await api.projectCanvasNoteUpdate(sessionId, update);
+              else await api.projectCanvasNodeCreate({ ...base, kind: "prompt", role: null, assetId: null, payloadJson: update });
+              const [asset] = await api.getAssetsByIds(["d"]);
+              if (output) await api.projectCanvasNodeCreate({ ...base, id: `gen-output:${jobId}:${turnKey}:d`, kind: "asset", role: "output", assetId: "d", outputIsVideo: false,
+                payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: asset.name, width: asset.width, height: asset.height },
+                  workflow_generation_group: group, execution: { job_id: jobId, turn_key: turnKey } }) });
+              window.store.setState(state => ({ genJobs: { ...state.genJobs, [jobId]: { id: jobId, projectId: "p", threadId, provider: args[3],
+                running: status === "running", turns: [{ id: 1, turnKey, prompt: args[0], images: output ? [asset.store_path] : [],
+                  ...(status === "failed" ? { error: "合成验收失败" } : {}) }] } } }));
+              window.emitChange();
+            },
+          };
+        });
+      } });
+  });
+}
+
+async function watchRunningCard() {
+  await origin.locator("xpath=self::*[@aria-busy='true']").waitFor();
+  await origin.evaluate(card => {
+    const violations = new Set();
+    const samples = [];
+    let borderIssue;
+    const observer = new MutationObserver(records => {
+      for (const record of records) {
+        if (record.type === "childList" && Array.from(record.removedNodes).some(node => node === card || node.contains(card))) violations.add("running card DOM was detached");
+        if (record.target === card && record.attributeName === "class" && !record.oldValue?.split(/\s+/).includes("canvas-card-running")) violations.add("running class was lost");
+        if (record.target === card && record.attributeName === "aria-busy" && record.oldValue !== "true") violations.add("busy state was lost");
+      }
+    });
+    const animation = () => card.getAnimations({ subtree: true }).find(item => item.animationName === "canvas-running-border");
+    const initialAnimation = animation();
+    const position = [card.style.left, card.style.top];
+    const stage = card.closest("[data-canvas-stage]");
+    let frame;
+    const sample = () => {
+      const bounds = stage.getBoundingClientRect(), box = card.getBoundingClientRect();
+      if (document.querySelector('[data-workflow-card="generator"]') !== card || !card.isConnected || !box.width || !box.height
+        || box.left >= bounds.right || box.right <= bounds.left || box.top >= bounds.bottom || box.bottom <= bounds.top) violations.add("running card was replaced or hidden");
+      if (card.style.left !== position[0] || card.style.top !== position[1]) violations.add("running card left its starting position");
+      const style = getComputedStyle(card, "::after");
+      const active = animation();
+      if (style.animationName !== "canvas-running-border" || style.animationIterationCount !== "infinite" || !active || initialAnimation !== active || active.playState !== "running") {
+        violations.add("running border was stopped or restarted");
+        borderIssue ??= { css: style.animationName, iterations: style.animationIterationCount, animation: active?.playState,
+          sameAnimation: initialAnimation === active, className: card.className, busy: card.getAttribute("aria-busy") };
+      }
+      const time = Number(active?.currentTime);
+      if (samples.length && time < samples.at(-1)) violations.add("running border time went backwards");
+      if (Number.isFinite(time)) samples.push(time);
+      frame = requestAnimationFrame(sample);
+    };
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ["class", "aria-busy"] });
+    frame = requestAnimationFrame(sample);
+    window.runningTrace = stop => {
+      if (stop) { observer.disconnect(); cancelAnimationFrame(frame); }
+      return { violations: [...violations], borderIssue, frames: samples.length, time: samples.at(-1) - samples[0] };
+    };
+  });
+}
+
+async function addCardsDuringRun() {
+  const ids = new Set((await readWorkflow()).nodes.map(node => node.id));
+  await page.getByRole("button", { name: "新增指令卡片", exact: true }).click();
+  const toolboxPoint = await blankPoint();
+  await page.mouse.click(toolboxPoint.x, toolboxPoint.y);
+  await page.waitForFunction(ids => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.some(node => !ids.includes(node.id)), [...ids]);
+  const added = (await readWorkflow()).nodes.find(node => !ids.has(node.id));
+  const card = page.locator(`[data-workflow-card="${added.id}"]`);
+  const start = await center(card.locator("header strong"));
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 62, start.y + 44, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForFunction(added => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.some(node => node.id === added.id && node.x !== added.x), added);
+  const menuPoint = await blankPoint();
+  await page.mouse.dblclick(menuPoint.x, menuPoint.y);
+  await page.getByRole("menu", { name: "新建卡片", exact: true }).getByRole("menuitem", { name: "图片反推", exact: true }).click();
+  await page.waitForFunction(count => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.length === count, ids.size + 2);
+  const external = await blankPoint();
+  await stage.evaluate(async (element, point) => {
+    const { newWorkflowNode } = await import("/src/lib/canvasWorkflow.ts");
+    const { LOCAL_CHAT_CARDS_CHANGED_EVENT } = await import("/src/lib/localChat.ts");
+    const bounds = element.getBoundingClientRect();
+    const plane = new DOMMatrix(getComputedStyle(element.querySelector(".canvas-plane")).transform);
+    const { x, y } = new DOMPoint(point.x - bounds.left, point.y - bounds.top).matrixTransform(plane.inverse());
+    const saved = JSON.parse(sessionStorage.getItem("workflow-p"));
+    saved.revision++;
+    saved.document.nodes.push({ ...newWorkflowNode("instruction", x, y, "codex"), id: "external-instruction", prompt: "外部来源建卡" });
+    sessionStorage.setItem("workflow-p", JSON.stringify(saved));
+    window.emitFixtureEvent(LOCAL_CHAT_CARDS_CHANGED_EVENT, { projectId: "p", nativeCanvasChanged: false });
+  }, external);
+  await page.locator('[data-workflow-card="external-instruction"]').waitFor();
+  const libraryDrag = await startLibraryDrag();
+  const point = await blankPoint(190, 160);
+  await libraryDrag.drop(point);
+  const asset = canvasAsset("b");
+  const assetStart = await center(asset);
+  const assetId = await asset.getAttribute("data-canvas-node-id");
+  await page.waitForFunction(id => window.snapshot().nodes.some(node => node.id === id), assetId);
+  const before = await page.evaluate(id => window.snapshot().nodes.find(node => node.id === id), assetId);
+  await page.mouse.move(assetStart.x, assetStart.y);
+  await page.mouse.down();
+  await page.mouse.move(assetStart.x + 55, assetStart.y + 42, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForFunction(before => window.snapshot().nodes.some(node => node.id === before.id && node.x !== before.x && node.y !== before.y), before);
+}
+
+async function runningSurvivesCanvasEdits(kind) {
+  const recalled = kind !== "first";
+  await loadInteractionBoard(recalled);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await installControlledGeneration();
+  if (recalled) {
+    await media.hover();
+    await peek.waitFor();
+    if (kind.startsWith("pin")) await pin.click();
+  }
+  await origin.getByRole("button", { name: "运行此卡片", exact: true }).click();
+  await page.waitForFunction(() => !!window.controlledTurn);
+  await watchRunningCard();
+  await page.evaluate(() => window.controlledTurn.accept());
+  await page.waitForFunction(() => {
+    const { run } = JSON.parse(sessionStorage.getItem("workflow-p")).document;
+    return run?.steps?.generator?.status === "done";
+  });
+  const sessionId = await page.evaluate(() => window.controlledTurn.sessionId);
+  assert.equal(await page.evaluate(id => window.snapshot().nodes.some(node => node.id === id), sessionId), false, "the submission receipt deliberately arrives before its session");
+  assert.deepEqual((await page.evaluate(() => window.runningTrace(false))).violations, [], `${kind}: accepting submission without a session must not stop the running card`);
+  await addCardsDuringRun();
+  const afterEdits = await page.evaluate(() => window.runningTrace(false));
+  assert.deepEqual(afterEdits.violations, [], `${kind}: busy card and its original animation survive toolbox, double-click, external attachment, drop and dragging during the session gap`);
+  assert.ok(afterEdits.frames >= 5 && afterEdits.time > 150, `${kind}: running border actually advanced: ${JSON.stringify(afterEdits)}`);
+  await page.evaluate(() => window.controlledTurn.status("running"));
+  await page.waitForTimeout(260);
+  const working = await page.evaluate(() => window.runningTrace(false));
+  assert.deepEqual(working.violations, [], `${kind}: publishing the pending session retains the running card ${JSON.stringify(working.borderIssue)}`);
+  if (kind !== "pin-failure") {
+    await page.evaluate(() => window.controlledTurn.status("done"));
+    await page.waitForTimeout(320);
+    assert.equal(await page.locator('[data-conversation-image="d"]').count(), 0, "terminal status is published before the new result");
+  }
+  const trace = await page.evaluate(() => window.runningTrace(true));
+  assert.deepEqual(trace.violations, [], `${kind}: the original busy card and border remain until terminal handoff ${JSON.stringify(trace.borderIssue)}`);
+  const away = await blankPoint();
+  await page.mouse.move(away.x, away.y);
+  if (kind === "pin-failure") {
+    await page.evaluate(() => window.controlledTurn.status("failed"));
+    await image.waitFor();
+  } else {
+    await page.evaluate(() => window.controlledTurn.status("done", true));
+    await stage.locator('[data-conversation-image="d"]').waitFor();
+  }
+  await origin.waitFor({ state: "detached" });
+}
+
+async function watchNoPeek() {
+  assert.equal(await peek.count(), 0);
+  await page.evaluate(() => {
+    let mounts = 0;
+    const check = records => {
+      if (document.querySelector("[data-workflow-peek]") || records.some(record => record.attributeName === "data-workflow-peek"
+        || Array.from(record.addedNodes).some(node => node instanceof Element && (node.matches("[data-workflow-peek]") || node.querySelector("[data-workflow-peek]"))))) mounts++;
+    };
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-workflow-peek"] });
+    window.stopPeekTrace = () => { check(observer.takeRecords()); observer.disconnect(); return mounts; };
+  });
+}
+
+async function dragMustNotPeek(type) {
+  await loadInteractionBoard(true);
+  const target = await center(media);
+  await watchNoPeek();
+  if (type === "library") {
+    const libraryDrag = await startLibraryDrag();
+    const destination = await center(media);
+    for (const event of ["dragEnter", "dragOver"]) await libraryDrag.send(event, destination);
+    await page.waitForTimeout(320);
+    assert.equal(await peek.count(), 0, "a library drag has been held over the collapsed result for over 250 ms");
+    const drop = await blankPoint(190, 160);
+    await libraryDrag.drop(drop);
+    await canvasAsset("b").waitFor();
+  } else {
+    const moving = type === "workflow" ? page.locator('[data-workflow-card="moving-workflow"] header strong') : type === "rapid" ? media : foregroundObstacle;
+    let start = await center(moving);
+    if (type === "rapid") {
+      const away = await blankPoint();
+      await page.mouse.move(away.x, away.y);
+      await media.evaluate(element => {
+        window.rapidDragTiming = {};
+        element.addEventListener("pointerenter", event => {
+          const timing = window.rapidDragTiming;
+          if (timing.enter === undefined) timing.enter = event.timeStamp;
+          else if (timing.up !== undefined && timing.reenter === undefined) timing.reenter = event.timeStamp;
+        });
+        element.addEventListener("pointerdown", event => { window.rapidDragTiming.down = event.timeStamp; }, { once: true });
+        document.addEventListener("pointerup", event => { window.rapidDragTiming.up = event.timeStamp; }, { once: true, capture: true });
+        document.addEventListener("pointermove", event => {
+          const timing = window.rapidDragTiming;
+          if (timing.down !== undefined && timing.up === undefined) timing.moved = event.timeStamp;
+        }, { capture: true });
+      });
+      start = { x: target.x, y: target.y };
+    }
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    const over = type === "rapid" ? { x: target.x + 80, y: target.y + 42 } : target;
+    await page.mouse.move(over.x, over.y, { steps: type === "rapid" ? 1 : 5 });
+    if (type !== "rapid") {
+      await page.waitForTimeout(320);
+      assert.equal(await peek.count(), 0, `${type}: crossing and pausing over collapsed media does not open Peek`);
+      const clearDrop = await blankPoint(250, 230);
+      await page.mouse.move(clearDrop.x + 120, clearDrop.y + 50);
+    }
+    await page.mouse.up();
+    if (type === "rapid") {
+      const away = await blankPoint();
+      await page.mouse.move(away.x, away.y);
+      const back = await center(media);
+      await page.mouse.move(back.x, back.y);
+      const { enter, down, moved, up, reenter } = await page.evaluate(() => window.rapidDragTiming);
+      assert.ok(enter <= down && down <= moved && moved <= up && up - enter < 160, `rapid drag and release must finish within 160 ms: ${JSON.stringify({ enter, down, moved, up, reenter })}`);
+      assert.ok(reenter >= up && reenter - up < 250, `pointer entered during the 250 ms release cooldown: ${JSON.stringify({ up, reenter })}`);
+    }
+  }
+  await page.waitForTimeout(260);
+  assert.equal(await page.evaluate(() => window.stopPeekTrace()), 0, `${type}: never mounted a Peek during drag or on release`);
+  const away = await blankPoint();
+  await page.mouse.move(away.x, away.y);
+  await media.hover();
+  await peek.waitFor();
+  await page.mouse.move(away.x, away.y);
+  await peek.waitFor({ state: "detached" });
+  await image.click();
+  await preview.waitFor();
+  await page.keyboard.press("Escape");
+  await preview.waitFor({ state: "detached" });
+}
 async function captureThemes(name) {
   for (const theme of ["light", "dark"]) {
     await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
@@ -320,6 +684,7 @@ try {
   assert.deepEqual(await origin.boundingBox(), movedPeekPosition, "pinning after release keeps the moved anchor's current position");
   await unpin.click();
   await origin.waitFor({ state: "detached" });
+  await page.waitForTimeout(260);
   await media.hover();
   await peek.waitFor();
   await page.keyboard.press(`${modifier}+z`);
@@ -422,6 +787,15 @@ try {
   assert.equal(await origin.count(), 0, "zoom below 35% keeps the editor hidden");
   assert.deepEqual(errors, []);
   console.log("PASS original placement, live wires, hover bridge, Peek animation and reduced motion, high layers, anchor drag/undo, pinning, generated material resize/cancel/undo/reload and exact continuation");
+  for (const kind of ["first", "peek", "pin", "pin-failure"]) {
+    await runningSurvivesCanvasEdits(kind);
+    console.log(`PASS ${kind}: generation DOM and running border survive unrelated canvas edits until the current result or failure`);
+  }
+  for (const type of ["material", "workflow", "library", "rapid"]) {
+    await dragMustNotPeek(type);
+    console.log(`PASS ${type}: suppress Peek throughout the drag and on release, then restore hover and click`);
+  }
+  assert.deepEqual(errors, []);
 } catch (error) {
   console.error("Canvas fixture", await page.evaluate(() => ({
     path: location.pathname,

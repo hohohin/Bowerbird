@@ -3,15 +3,15 @@ import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { AudioLines, CircleAlert, Images, X } from "lucide-react";
 import type { Asset } from "../../lib/types";
-import { comfyAudioHint, comfyAudioLabel, H3_R2V_REFERENCE_HINT, h3R2VInputError, type ComfyVideoMode } from "../../lib/comfyVideo";
+import { comfyAudioHint, H3_AUDIO_LABEL, H3_R2V_REFERENCE_HINT, h3R2VInputError, type ComfyVideoMode } from "../../lib/comfyVideo";
 
 /** Read-only projection of editor references; deletion stays in ProseMirror. */
 export function LocalVideoFrames({ frames, videos = [], audio, ignored, mode }: { frames: Asset[]; videos?: Asset[]; audio: Asset[]; ignored: number; mode: ComfyVideoMode }) {
   const reference = mode === "reference";
   const text = mode === "text";
   const r2v = mode === "r2v";
-  const title = r2v ? "参考素材预览" : text ? "录音引导预览" : reference ? "参考图预览" : "首尾帧预览";
-  const triggerLabel = r2v ? "检视参考素材" : text ? "检视录音引导" : reference ? "检视参考图" : "检视首尾帧";
+  const title = r2v ? "参考素材预览" : text ? "参考音频预览" : reference ? "参考图预览" : "首尾帧预览";
+  const triggerLabel = r2v ? "检视参考素材" : text ? "检视参考音频" : reference ? "检视参考图" : "检视首尾帧";
   const referenceError = r2v && h3R2VInputError(frames.length, videos.length, audio.length, false);
   const label = (index: number) => reference ? "参考图" : index === 0 ? "首帧" : "尾帧";
   const [open, setOpen] = useState(true);
@@ -65,7 +65,7 @@ export function LocalVideoFrames({ frames, videos = [], audio, ignored, mode }: 
       </figure>)}</div>}
       {reference && <p className="text-xs text-muted">用 &lt;Picture 1&gt; 指代主体，不固定首尾画面</p>}
       {!r2v && audio.length === 1 && <div className="composer-h3-audio">
-        <div><AudioLines size={14} aria-hidden="true" /><strong>{comfyAudioLabel(mode)}</strong><span title={audio[0].name}>{audio[0].name}</span></div>
+        <div><AudioLines size={14} aria-hidden="true" /><strong>{H3_AUDIO_LABEL}</strong><span title={audio[0].name}>{audio[0].name}</span></div>
         <small>{comfyAudioHint(mode)}</small>
       </div>}
       {!r2v && audio.length > 1 && <div className="composer-frames-warning" role="status"><CircleAlert size={13} aria-hidden="true" />本地 H3 每次可使用一段录音，请移除多余录音。</div>}

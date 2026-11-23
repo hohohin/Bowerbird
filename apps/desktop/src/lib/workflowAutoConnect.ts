@@ -1,4 +1,4 @@
-import { assertWorkflowAcyclic, H3_R2V_INPUT_LIMITS, H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowBindingKey, workflowConnectionError, workflowInputs, workflowOutputs,
+import { assertWorkflowAcyclic, H3_R2V_INPUT_LIMITS, H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowBindingKey, workflowConnectionError, workflowInputs, workflowOutputs, workflowProducesVideo,
   type WorkflowInput, type WorkflowNode, type WorkflowPortType } from "./canvasWorkflow.ts";
 
 export type AutomaticMedia = "image" | "video" | "audio";
@@ -61,8 +61,9 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
     const producer = nodes.find(node => node.id === source.nodeId);
     if (source.nodeId && (!producer || !workflowOutputs(producer).some(port => port.id === source.portId && port.type === output.type)))
       return fail("来源卡片或输出已不存在");
-    const knownMedia: AutomaticMedia[] | undefined = output.media ? (Array.isArray(output.media) ? output.media : [output.media])
-      : producer?.kind === "director3d" ? ["video"] : producer?.kind === "voice" ? ["audio"] : producer?.kind === "comfy-video" || producer?.kind === "generation" && producer.generation?.media === "video" ? ["video"] : undefined;
+    if (source.videoFrame && producer && !workflowProducesVideo(producer)) return fail("来源卡片已不再输出视频");
+    const knownMedia: AutomaticMedia[] | undefined = source.videoFrame ? ["image"] : output.media ? (Array.isArray(output.media) ? output.media : [output.media])
+      : producer?.kind === "voice" ? ["audio"] : producer && output.type === "image" && workflowProducesVideo(producer) ? ["video"] : undefined;
     if (output.selectionWireId && knownMedia?.some(media => !acceptedMedia.includes(media))) return fail("此卡片无法接收全部选中的素材类型");
     if (target.kind !== "trigger" && output.type === "image" && knownMedia && !knownMedia.some(media => acceptedMedia.includes(media))) {
       for (const media of knownMedia) rejectedMedia.add(media);

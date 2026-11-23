@@ -35,7 +35,7 @@ import { CanvasConnectionHandle } from "./CanvasConnectionHandle";
 import { CanvasConversationImages } from "./CanvasConversationImages";
 import { GenerationGroupControls } from "./GenerationGroupControls";
 import { canvasMaterialFilterState, type CanvasMaterialFilterState } from "../lib/canvasMaterialFilter";
-import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds, resolveGenerationCells, canvasSessionImages, workflowGenerationCardProjection, workflowGenerationActivity } from "../lib/canvasSessionOutputs";
+import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds, resolveGenerationCells, canvasSessionImages, workflowGenerationCardProjection, workflowGenerationActivity, type WorkflowGenerationActivity } from "../lib/canvasSessionOutputs";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { resolveWorkflowTaskFocus } from "../lib/workflowTaskFocus";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
@@ -587,6 +587,7 @@ export function CanvasWorkspace({
   concealedNodeIds.current = projection.hidden;
   const nonChatGraphNodes = useMemo(() => shownGraph.filter(node => !canvasChatId(node)), [shownGraph]);
   const [threads, setThreads] = useState<CreativeThread[]>([]);
+  const archivedThreadIds = useMemo(() => new Set(threads.filter(thread => thread.archivedAt != null).map(thread => thread.id)), [threads]);
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(focusNodeId);
   const focusedNodeIdRef = useRef(focusedNodeId);
   const [pendingNewCards, setPendingNewCards] = useState<string[]>([]);
@@ -609,6 +610,7 @@ export function CanvasWorkspace({
   const sourcePanelRef = useRef<HTMLElement>(null);
   const sourceDragFrame = useRef<number | null>(null);
   const [libraryDragging, setLibraryDragging] = useState(false);
+  const libraryDragActive = useRef(false);
   const boardShellRef = useRef<HTMLElement>(null);
   const explainTutorialSources = useOnboarding(state => state.guide.status === "active" && state.guide.role === "designer"
     && state.guide.sessions.designer?.projectId === projectId && [2, 7, 8].includes(state.guide.sessions.designer.step));
@@ -862,25 +864,57 @@ export function CanvasWorkspace({
   const containedOutputIds = useMemo(() => containedSessionOutputIds(shownGraph, workflowNodes), [shownGraph, workflowNodes]);
   const conversationCards = useMemo(() => canvasConversationCards(shownGraph, genJobs,
     new Set([...workflowHistoryIds, ...agentPromptGroupMap(shownGraph, graphEdges).keys(),
-      ...shownGraph.filter(node => threads.some(thread => thread.id === node.threadId && thread.archivedAt != null)).map(node => node.id)]),
+      ...shownGraph.filter(node => node.threadId && archivedThreadIds.has(node.threadId)).map(node => node.id)]),
     new Set([...containedOutputIds, ...shownMaterials.filter(node => node.kind === "folder").flatMap(node => node.assets.map(asset => asset.id))]), contentRoutedWorkflowSessionIds(shownGraph, workflowNodes)),
-    [shownGraph, genJobs, workflowHistoryIds, graphEdges, threads, containedOutputIds, shownMaterials, workflowNodes]);
+    [shownGraph, genJobs, workflowHistoryIds, graphEdges, archivedThreadIds, containedOutputIds, shownMaterials, workflowNodes]);
+  const generationMedia = useMemo(() => {
+    const standalone = new Set<string>(), delivered = new Set<string>();
+    for (const node of shownMaterials) {
+      if (node.kind === "asset" && node.asset.storePath) standalone.add(node.id);
+      for (const asset of node.kind === "asset" ? [node.asset] : node.assets) if (asset.storePath) delivered.add(asset.id);
+    }
+    return { standalone, delivered };
+  }, [shownMaterials]);
   const generationCardProjection = useMemo(() => {
     if (!workflowInteractive || !workflow) return { anchors: new Map<string, ProjectGraphNode>(), origins: new Map<string, typeof workflowNodes[number]>() };
-    const displayableMedia = new Set(shownMaterials.flatMap(node =>
-      node.kind === "asset" && node.asset.storePath ? [node.id] : []));
-    const archived = new Set(threads.filter(thread => thread.archivedAt != null).map(thread => thread.id));
-    const unavailable = new Set([...containedOutputIds, ...shownGraph.filter(node =>
-      node.kind === "asset" && !displayableMedia.has(node.id) || node.threadId && archived.has(node.threadId)).map(node => node.id)]);
+    const unavailable = new Set([...containedOutputIds, ...shownGraph.filter(node => node.kind === "asset" && !generationMedia.standalone.has(node.id)
+      || node.threadId && archivedThreadIds.has(node.threadId)).map(node => node.id)]);
     return workflowGenerationCardProjection(workflow.document, shownGraph, conversationCards, unavailable);
-  }, [workflowInteractive, workflow, workflowNodes, shownGraph, conversationCards, containedOutputIds, shownMaterials, threads]);
-  const [pinnedWorkflowCards, setPinnedWorkflowCards] = useState<ReadonlyMap<string, { x: number; y: number; ran: boolean }>>(() => new Map());
+  }, [workflowInteractive, workflow, workflowNodes, workflowRevision, shownGraph, conversationCards, containedOutputIds, generationMedia, archivedThreadIds]);
+  const previousGenerationActivities = useRef<ReadonlyMap<string, WorkflowGenerationActivity>>(new Map());
+  const generationActivities = useMemo(() => {
+    const activities = new Map<string, WorkflowGenerationActivity>();
+    if (!workflowInteractive || !workflow) return activities;
+    for (const node of workflowNodes) {
+      if (node.kind !== "generation" && node.kind !== "comfy-video") continue;
+      const run = workflowNodeRun(workflow.document, node.id);
+      const activity = workflowGenerationActivity(node, run, graphNodes, genJobs, generationMedia.delivered);
+      const previous = previousGenerationActivities.current.get(node.id);
+      const threadId = activity.session?.threadId ?? run?.threadId;
+      // Keep a live card through delivery, without treating a historical removed result as active on entry.
+      if (activity.awaitingOutput && activity.attemptId && previous?.attemptId === activity.attemptId && previous.running
+        && (!activity.session || !projection.hidden.has(activity.session.id))
+        && (!threadId || !archivedThreadIds.has(threadId))) activity.running = true;
+      activities.set(node.id, activity);
+    }
+    return activities;
+  }, [workflowInteractive, workflow, workflowNodes, workflowRevision, graphNodes, genJobs, generationMedia, archivedThreadIds, projection.hidden]);
+  useLayoutEffect(() => { previousGenerationActivities.current = generationActivities; }, [generationActivities]);
+  const activeGenerationIds = useMemo(() => new Set([...generationActivities].flatMap(([id, activity]) =>
+    activity.running || workflow?.startingAction(id) ? [id] : [])), [generationActivities, workflow, workflowRevision]);
+  const [pinnedWorkflowCards, setPinnedWorkflowCards] = useState<ReadonlyMap<string, CanvasPoint & { attemptId?: string }>>(() => new Map());
   const [peekedCard, setPeekedCard] = useState<{ nodeId: string; anchorId: string } | null>(null);
-  const peekAnchorPoint = peekedCard && (shownMaterials.find(node => node.id === peekedCard.anchorId)
+  const livePeekAnchor = peekedCard && (shownMaterials.find(node => node.id === peekedCard.anchorId)
     ?? shownGraph.find(node => node.id === peekedCard.anchorId));
-  const peekInteraction = useRef<{ anchor: HTMLElement; composing: boolean; ran: boolean } | null>(null);
+  const peekInteraction = useRef<{ anchor: HTMLElement; composing: boolean; point?: CanvasPoint; attemptId?: string } | null>(null);
+  const peekAnchorPoint = livePeekAnchor ?? (peekedCard && activeGenerationIds.has(peekedCard.nodeId) ? peekInteraction.current?.point : undefined);
+  useLayoutEffect(() => {
+    if (livePeekAnchor && peekInteraction.current) peekInteraction.current.point = { x: livePeekAnchor.x, y: livePeekAnchor.y };
+  }, [livePeekAnchor]);
   const peekIntent = useRef<ReturnType<typeof setTimeout>>();
   const peekClose = useRef<ReturnType<typeof setTimeout>>();
+  const lastCardDragEnd = useRef(-Infinity);
+  const externalDragInStage = useRef(false);
   const clearPeek = useCallback(() => {
     clearTimeout(peekIntent.current);
     clearTimeout(peekClose.current);
@@ -895,10 +929,10 @@ export function CanvasWorkspace({
     (panel?.querySelector<HTMLElement>("textarea") ?? panel)?.focus({ preventScroll: true });
   }, [quickRevision]);
   const [previewMember, setPreviewMember] = useState<{ openedId: string; nodeId: string } | null>(null);
-  const pinnedCardOffsets = useMemo(() => new Map([...pinnedWorkflowCards].filter(([id]) => generationCardProjection.anchors.has(id))),
-    [pinnedWorkflowCards, generationCardProjection.anchors]);
-  const collapsedGenerationAnchors = useMemo(() => new Map([...generationCardProjection.anchors].filter(([id]) => !pinnedCardOffsets.has(id))),
-    [generationCardProjection.anchors, pinnedCardOffsets]);
+  const pinnedCardOffsets = useMemo(() => new Map([...pinnedWorkflowCards].filter(([id]) => generationCardProjection.anchors.has(id) || activeGenerationIds.has(id))),
+    [pinnedWorkflowCards, generationCardProjection.anchors, activeGenerationIds]);
+  const collapsedGenerationAnchors = useMemo(() => new Map([...generationCardProjection.anchors].filter(([id]) => !pinnedCardOffsets.has(id) && !activeGenerationIds.has(id))),
+    [generationCardProjection.anchors, pinnedCardOffsets, activeGenerationIds]);
   const lastWorkflowFocus = useRef<{ id: string; element: HTMLElement } | null>(null);
   useEffect(() => {
     const rememberFocus = (event: FocusEvent) => {
@@ -932,29 +966,25 @@ export function CanvasWorkspace({
   }, []);
   useEffect(() => {
     if (!workflow || (!pinnedWorkflowCards.size && !peekedCard)) return;
-    const runningCard = (id: string) => {
-      const card = workflowNodes.find(node => node.id === id);
-      return !!card && (!!workflow.startingAction(id)
-        || workflowGenerationActivity(card, workflowNodeRun(workflow.document, id)?.steps[id], shownGraph, genJobs).running);
-    };
     if (peekedCard && peekInteraction.current) {
       const { nodeId, anchorId } = peekedCard;
-      const running = runningCard(nodeId);
-      if (generationCardProjection.anchors.get(nodeId)?.id !== anchorId || (!running && peekInteraction.current.ran)) clearPeek();
-      else if (running) peekInteraction.current.ran = true;
+      const activity = generationActivities.get(nodeId), interaction = peekInteraction.current;
+      if (activity?.running && activity.attemptId) interaction.attemptId = activity.attemptId;
+      if (!activeGenerationIds.has(nodeId) && (interaction.attemptId && activity?.terminal && interaction.attemptId === activity.attemptId
+        || generationCardProjection.anchors.get(nodeId)?.id !== anchorId)) clearPeek();
     }
-    let updated: Map<string, { x: number; y: number; ran: boolean }> | undefined;
+    let updated: Map<string, CanvasPoint & { attemptId?: string }> | undefined;
     for (const [id, entry] of pinnedWorkflowCards) {
-      if (!generationCardProjection.anchors.has(id)) {
+      const activity = generationActivities.get(id);
+      if (!activeGenerationIds.has(id) && (!generationCardProjection.anchors.has(id)
+        || entry.attemptId && activity?.terminal && entry.attemptId === activity.attemptId)) {
         (updated ??= new Map(pinnedWorkflowCards)).delete(id);
-        continue;
+      } else if (activity?.running && activity.attemptId && entry.attemptId !== activity.attemptId) {
+        (updated ??= new Map(pinnedWorkflowCards)).set(id, { ...entry, attemptId: activity.attemptId });
       }
-      const running = runningCard(id);
-      if (running && !entry.ran) (updated ??= new Map(pinnedWorkflowCards)).set(id, { ...entry, ran: true });
-      else if (!running && entry.ran) (updated ??= new Map(pinnedWorkflowCards)).delete(id);
     }
     if (updated) setPinnedWorkflowCards(updated);
-  }, [workflow, workflowNodes, workflowRevision, generationCardProjection.anchors, pinnedWorkflowCards, peekedCard, shownGraph, genJobs, clearPeek]);
+  }, [workflow, generationCardProjection.anchors, generationActivities, activeGenerationIds, pinnedWorkflowCards, peekedCard, clearPeek]);
   const conversationCardsRef = useRef(conversationCards);
   conversationCardsRef.current = conversationCards;
   const [conversationImageSelection, setConversationImageSelection] = useState<Record<string, { newest: string; selected: string }>>({});
@@ -1008,6 +1038,7 @@ export function CanvasWorkspace({
   }
   const visibleMaterials = useMemo(() => shownMaterials.filter(node => !containedOutputIds.has(node.id) && !conversationCards.hiddenIds.has(node.id)).map(displayedMaterial), [shownMaterials, containedOutputIds, conversationCards, conversationImagesById, conversationImageSelection]);
   function chooseCanvasTool(tool: typeof drawingTool) {
+    if (tool !== "select") clearTimeout(peekIntent.current);
     workflowRef.current?.cancelPlacement();
     setDrawingTool(tool);
   }
@@ -1096,6 +1127,7 @@ export function CanvasWorkspace({
     undoHistoryRef.current = [];
     setCanUndo(false);
     resizeBaselineRef.current.clear();
+    lastCardDragEnd.current = -Infinity;
     if (marqueeElement.current) marqueeElement.current.hidden = true;
     marqueePressRef.current = null;
   }, [projectId]);
@@ -2324,6 +2356,7 @@ export function CanvasWorkspace({
         if (scopedInspectorOpen) return;
         if (!editing && viewModeRef.current === "canvas") {
           event.preventDefault();
+          clearTimeout(peekIntent.current);
           spacePressedRef.current = true;
           setSpacePanReady(true);
         }
@@ -2771,6 +2804,8 @@ export function CanvasWorkspace({
   useEffect(() => {
     const end = () => {
       if (isNativeAssetDrag()) return;
+      libraryDragActive.current = false;
+      externalDragInStage.current = false;
       if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
       sourceDragFrame.current = null;
       setLibraryDragging(false);
@@ -2782,9 +2817,30 @@ export function CanvasWorkspace({
         setFolderDropTargetId(null);
       }
     };
+    const dragOverStage = (event: globalThis.DragEvent) => {
+      const inside = event.target instanceof Node && !!stageRef.current?.contains(event.target);
+      if (inside && !externalDragInStage.current) clearTimeout(peekIntent.current);
+      externalDragInStage.current = inside;
+    };
+    const dragLeavesStage = (event: globalThis.DragEvent) => {
+      const stage = stageRef.current;
+      if (!(event.target instanceof Node) || !stage?.contains(event.target)) return;
+      const next = event.relatedTarget instanceof Node ? event.relatedTarget : document.elementFromPoint(event.clientX, event.clientY);
+      if (!stage.contains(next)) externalDragInStage.current = false;
+    };
+    const drop = () => { externalDragInStage.current = false; };
+    // External file import may intercept drag events at the window before they reach the stage.
+    window.addEventListener("dragenter", dragOverStage, true);
+    window.addEventListener("dragover", dragOverStage, true);
+    window.addEventListener("dragleave", dragLeavesStage, true);
+    window.addEventListener("drop", drop, true);
     window.addEventListener("dragend", end);
     window.addEventListener(EXTERNAL_DRAG_ENDED, end);
     return () => {
+      window.removeEventListener("dragenter", dragOverStage, true);
+      window.removeEventListener("dragover", dragOverStage, true);
+      window.removeEventListener("dragleave", dragLeavesStage, true);
+      window.removeEventListener("drop", drop, true);
       window.removeEventListener("dragend", end);
       window.removeEventListener(EXTERNAL_DRAG_ENDED, end);
       if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
@@ -2949,7 +3005,6 @@ export function CanvasWorkspace({
 
   function translateDrag(drag: DragProjection & { nodeId: string; selectedIds: Set<string> }, materials: CanvasNode[], graph: ProjectGraphNode[],
     workflowGeometry: WorkflowGeometry[], dx: number, dy: number) {
-    if (peekInteraction.current && peekedCard && !drag.selectedIds.has(peekedCard.anchorId)) clearPeek();
     const apply = () => {
       translateGraphSelection(graph, drag.selectedIds, dx, dy);
       translateMaterialSelection(materials, drag.selectedIds, dx, dy);
@@ -3366,6 +3421,7 @@ export function CanvasWorkspace({
 
   function beginNodeDrag(event: PointerEvent<HTMLElement>, node: CanvasNode) {
     if (isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return;
+    clearTimeout(peekIntent.current);
     suppressNodeClickRef.current = false;
     event.preventDefault();
     event.stopPropagation();
@@ -3400,6 +3456,7 @@ export function CanvasWorkspace({
 
   function beginGraphNodeDrag(event: PointerEvent<HTMLElement>, node: { id: string; x: number; y: number; kind: string }) {
     if (isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return;
+    clearTimeout(peekIntent.current);
     suppressNodeClickRef.current = false;
     setPendingNewCards(pending => pending.filter(id => id !== node.id));
     // Readonly rich text can opt back into selection inside a draggable card.
@@ -3450,6 +3507,7 @@ export function CanvasWorkspace({
         { x: event.clientX, y: event.clientY },
       )) return;
       drag.moved = true;
+      dismissPeekForDrag(drag.selectedIds);
       if (drag.toggleSelection) setSelectedCanvasNodeIds(drag.selectedIds);
     }
     const origin = drag.initialNodes.find((node) => node.id === drag.nodeId) ?? drag.initialWorkflow.find(node => node.id === drag.nodeId);
@@ -3504,6 +3562,7 @@ export function CanvasWorkspace({
     drag.snapAnchors = undefined;
     if (cancelled) graphNodeFrame.cancel();
     else graphNodeFrame.finish(canvasPointerSample(event));
+    if (drag.moved) lastCardDragEnd.current = performance.now();
     snapSizeObserverRef.current?.disconnect(); snapSizeObserverRef.current = null;
     const isWorkflow = drag.initialWorkflow.some(node => node.id === drag.nodeId);
     if (cancelled && !isWorkflow) suppressNodeClickRef.current = true;
@@ -3605,8 +3664,13 @@ export function CanvasWorkspace({
   }
 
   function peekIsLocked(editor = peekEditor()) {
+    if (peekedCard && (activeGenerationIds.has(peekedCard.nodeId) || workflow?.startingAction(peekedCard.nodeId))) return true;
     return !!editor && (editor.matches(':focus-within,[aria-busy="true"]') || !!peekInteraction.current?.composing
       || !!editor.querySelector('[aria-haspopup="listbox"][aria-expanded="true"]'));
+  }
+
+  function dismissPeekForDrag(selectedIds: ReadonlySet<string>) {
+    if (peekedCard && !selectedIds.has(peekedCard.anchorId) && !peekIsLocked()) clearPeek();
   }
 
   function peekAnchorIsDragging() {
@@ -3632,7 +3696,10 @@ export function CanvasWorkspace({
     return workflowInteractive && !useStore.getState().projectRoutePending && !loadingRef.current
       && !spacePressedRef.current && drawingTool !== "pan" && zoomRef.current >= 0.35
       && !panDragRef.current && !nodeDragRef.current && !graphNodeDragRef.current && !activeDragId
-      && !marqueePressRef.current && !workflowRef.current?.isConnecting()
+      && performance.now() - lastCardDragEnd.current >= 250
+      && !libraryDragging && !libraryDragActive.current && !externalDragInStage.current && !isNativeAssetDrag()
+      && resizeBaselineRef.current.size === 0 && !canvasExportRef.current
+      && !marqueePressRef.current && !sectionDrawRef.current && !workflowRef.current?.isConnecting()
       && !promptMenu && !quickRevision && !useStore.getState().contextMenu
       && !document.querySelector('[role="menu"], [role="dialog"][aria-modal="true"]');
   }
@@ -3640,15 +3707,20 @@ export function CanvasWorkspace({
   const openPeek = useLatestCallback((anchorId: string, anchor: HTMLElement) => {
     if (!canStartPeek() || !anchor.isConnected || !anchor.matches(":hover") || peekIsLocked()) return;
     const origin = generationCardProjection.origins.get(anchorId);
-    if (!origin || generationCardProjection.anchors.get(origin.id)?.id !== anchorId || pinnedCardOffsets.has(origin.id)) return;
+    if (!origin || generationCardProjection.anchors.get(origin.id)?.id !== anchorId || pinnedCardOffsets.has(origin.id)
+      || activeGenerationIds.has(origin.id) || workflow?.startingAction(origin.id)) return;
     clearTimeout(peekClose.current);
-    peekInteraction.current = { anchor, composing: false, ran: false };
+    peekInteraction.current = { anchor, composing: false };
     setPeekedCard({ nodeId: origin.id, anchorId });
   });
 
   function startPeek(event: PointerEvent<HTMLElement>, anchorId: string) {
+    if (event.pointerType === "touch" || event.buttons !== 0 || !canStartPeek()) {
+      clearTimeout(peekIntent.current);
+      return;
+    }
     if (peekedCard?.anchorId === anchorId) { clearTimeout(peekClose.current); return; }
-    if (event.pointerType === "touch" || event.buttons || !generationCardProjection.origins.has(anchorId) || !canStartPeek()) return;
+    if (!generationCardProjection.origins.has(anchorId)) return;
     clearTimeout(peekIntent.current);
     const anchor = event.currentTarget;
     peekIntent.current = setTimeout(() => openPeek(anchorId, anchor), 160);
@@ -3741,9 +3813,9 @@ export function CanvasWorkspace({
     if (!anchor || !card) return;
     if (peekedCard?.nodeId === nodeId && peekAnchorPoint && peekInteraction.current) {
       const { x, y } = peekAnchorPoint;
-      const { ran } = peekInteraction.current;
+      const { attemptId } = peekInteraction.current;
       setPinnedWorkflowCards(current => new Map(current).set(nodeId,
-        { x: x - card.width - 12 - card.x, y: y - card.y, ran }));
+        { x: x - card.width - 12 - card.x, y: y - card.y, attemptId }));
       clearPeek();
       return;
     }
@@ -3753,7 +3825,7 @@ export function CanvasWorkspace({
     const position = visible || placeCanvasCardNearSource({ ...card, x: imageRect.x - card.width - 12, y: imageRect.y },
       anchors.filter(item => item.id !== card.id).map(item => item.rect));
     setPinnedWorkflowCards(current => current.has(nodeId) ? current : new Map(current).set(nodeId,
-      { x: position.x - card.x, y: position.y - card.y, ran: false }));
+      { x: position.x - card.x, y: position.y - card.y }));
     setQuickRevision(null);
     setSelectedCanvasNodeIds(new Set([nodeId]));
     const stage = stageRef.current;
@@ -4166,6 +4238,7 @@ export function CanvasWorkspace({
         { x: event.clientX, y: event.clientY },
       )) return;
       drag.moved = true;
+      dismissPeekForDrag(drag.selectedIds);
       if (drag.toggleSelection) setSelectedCanvasNodeIds(drag.selectedIds);
     }
     const point = toBoardPoint(event.clientX, event.clientY);
@@ -4218,6 +4291,7 @@ export function CanvasWorkspace({
     drag.snapAnchors = undefined;
     if (cancelled) nodeFrame.cancel();
     else nodeFrame.finish(canvasPointerSample(event));
+    if (drag.moved) lastCardDragEnd.current = performance.now();
     snapSizeObserverRef.current?.disconnect(); snapSizeObserverRef.current = null;
     const moving = nodesRef.current.find((node) => node.id === drag.nodeId);
     if (moving?.kind === "asset" && isAudioPath(moving.asset.storePath)
@@ -4375,7 +4449,10 @@ export function CanvasWorkspace({
   function resizeCanvasMaterial(nodeId: string, size: { width: number; height: number }, finished: boolean, cancelled = false) {
     const node = nodesRef.current.find(candidate => candidate.id === nodeId);
     if (!node) return;
-    if (!resizeBaselineRef.current.has(nodeId)) resizeBaselineRef.current.set(nodeId, { material: node });
+    if (!resizeBaselineRef.current.has(nodeId)) {
+      resizeBaselineRef.current.set(nodeId, { material: node });
+      clearTimeout(peekIntent.current);
+    }
     const updated = { ...node, ...size };
     commitNodes(nodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate));
     setActiveDragId(finished ? null : nodeId);
@@ -4554,6 +4631,7 @@ export function CanvasWorkspace({
 
   function beginPan(event: PointerEvent<HTMLDivElement>) {
     if (!event.currentTarget.contains(event.target as Node)) return;
+    clearTimeout(peekIntent.current);
     if (!isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) {
       const targetIsCanvasNode = !!(event.target as HTMLElement).closest("[data-canvas-node]");
       if (event.button === 0 && !targetIsCanvasNode) {
@@ -5389,10 +5467,6 @@ export function CanvasWorkspace({
   }
 
   const hoverTargetId = hoverIntent?.targetId ?? null;
-  const archivedThreadIds = useMemo(
-    () => new Set(threads.filter((thread) => thread.archivedAt != null).map((thread) => thread.id)),
-    [threads],
-  );
   const focusedThreadIsArchived = !!focusedThreadId && archivedThreadIds.has(focusedThreadId);
   const activeGraph = useMemo(
     () => projectGraphVisibility(shownGraph, graphEdges, archivedThreadIds),
@@ -6062,6 +6136,8 @@ export function CanvasWorkspace({
         data-file-import-project-id={browseProjectId ?? ""}
         aria-hidden={sourceCollapsed} tabIndex={-1} onDragStart={event => {
           if (!(event.target as HTMLElement).closest('[data-asset-id]') || !getDragAssets()?.length) return;
+          clearTimeout(peekIntent.current);
+          libraryDragActive.current = true;
           if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
           // Wait only for the browser to capture the source thumbnail; never animate over the drop target.
           sourceDragFrame.current = requestAnimationFrame(() => {
@@ -6364,6 +6440,7 @@ export function CanvasWorkspace({
           >
             {projectId && workflowInteractive && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} getZoom={readCanvasZoom} opening={opening} entryCardIds={entryCardIds} deferredCandidateIds={deferredCandidateIds} graphNodes={nonChatGraphNodes} visibleGraphNodeIds={visibleGraphNodeIds} conversationCards={conversationCards} selectedConversationOutputs={selectedConversationOutputs} imageOnlyConversationIds={imageOnlyConversationIds} sessionHeights={sessionHeights} generationCardAnchors={generationCardProjection.anchors} pinnedCardOffsets={pinnedCardOffsets}
               peekCard={peekedCard && peekAnchorPoint ? { ...peekedCard, point: peekAnchorPoint } : undefined}
+              generationActivities={generationActivities} activeGenerationIds={activeGenerationIds}
               onPeekInteraction={onPeekInteraction} onToggleGenerationPin={toggleGenerationPin}
               diagnosticTarget={diagnosticTarget} selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={workflowOnSelect}
               onNodesChanged={workflowOnNodesChanged} onEdited={workflowOnEdited}

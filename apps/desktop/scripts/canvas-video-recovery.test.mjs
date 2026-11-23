@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, cacheDir: '.tmp/video-recovery/vite', server: { host: '127.0.0.1', port: 1698, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } },
+  optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] },
+  cacheDir: '.tmp/video-recovery/vite', server: { host: '127.0.0.1', port: 1698, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
@@ -14,7 +17,7 @@ try {
   await page.evaluate(async () => {
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     const { DEFAULT_VIDEO_OPTIONS } = await import('/src/lib/videoGeneration.ts');
-    const node = { ...newWorkflowNode('generation', 400, 60, 'codex'), id: 'video', prompt: '镜头推进',
+    const node = { ...newWorkflowNode('generation', 820, 60, 'codex'), id: 'video', prompt: '镜头推进',
       generation: { media: 'video', videoChannel: 'cloud', videoOptions: DEFAULT_VIDEO_OPTIONS },
       inputs: { image: [{ assetId: 'deleted-input' }] } };
     const run = { id: 'run', startId: 'video', threadId: 't', order: ['video'], status: 'running',
@@ -57,6 +60,14 @@ try {
     const { removeWorkflowNodes } = await import('/src/lib/workflowRemoval.ts');
     const check = (condition, message) => { if (!condition) throw Error(message); };
     const seed = JSON.parse(sessionStorage.getItem('recovery-seed'));
+    const tail = { nodeId: 'video', portId: 'image', videoFrame: { position: 'last' } };
+    const still = { assetId: 'another-reference' };
+    const parked = { ...seed.nodes[0], id: 'parked', inputs: { image: [tail, still] },
+      savedComfyR2V: { 'reference-image': [tail, still] } };
+    const [survivor] = removeWorkflowNodes([...seed.nodes, parked], ['video']);
+    for (const inputs of [survivor.inputs.image, survivor.savedComfyR2V['reference-image']]) {
+      check(inputs.length === 1 && inputs[0].assetId === still.assetId, 'removing a video clears both active and parked frame references');
+    }
     let count = 0;
     for (const [result, message] of [
       [null, '未找到原视频任务'],

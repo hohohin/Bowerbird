@@ -64,8 +64,8 @@
 
 - **用途／关键词**：当前输入、上游结果、预览、自动连线、生成卡投影。
 - **入口**：[canvasSessionOutputs.ts](../../apps/desktop/src/lib/canvasSessionOutputs.ts) 提供 `workflowBindingAssetIds`、`workflowGenerationResultAnchor` 和 `workflowGenerationPreviewIds`。[workflowCanvasCapabilities.ts](../../apps/desktop/src/lib/workflowCanvasCapabilities.ts) 提供 `workflowSourceMediaLabel`。
-- **调用**：从素材、内容格或上游本轮结果解析输入。卡片、引用和断开菜单共用来源名称。绘线和整理取当前可见卡片或单元格的锚点，预览读取当前产物。`workflowGenerationActivity` 根据执行步骤、会话和生成任务识别图片、远程视频与 H3 的运行状态，`workflowGenerationCardProjection` 提供可收纳生成卡的媒体锚点和产物来源。原生读取按实际原件类型区分图片与视频，节点保留原有执行标识。
-- **边界／状态**：精确输入由原端口及编号定位，调度、重跑和提示词引用沿生成卡的输出身份取值。循环、触发器与定向内容写入保留生成卡。[结果接入下游](../CANVAS-WORKFLOW.md#2026-11-13生成结果接入下游桌面源码待发布)。
+- **调用**：从素材、内容格或上游本轮结果解析输入。卡片、引用和断开菜单共用来源名称。绘线和整理取当前可见卡片或单元格的锚点，预览读取当前产物。`workflowGenerationActivity` 根据工作流状态、执行步骤、会话和生成任务识别图片、远程视频与 H3 的运行状态，`workflowGenerationCardProjection` 提供可收纳生成卡的媒体锚点和产物来源。原生读取按实际原件类型区分图片与视频，节点保留原有执行标识。
+- **边界／状态**：精确输入由原端口及编号定位，调度、重跑和提示词引用沿生成卡的输出身份取值。循环、触发器与定向内容写入保留生成卡。悬停预览及固定态沿本轮身份保持运行状态，直到产物可见、失败或取消。[折叠与悬停预览](../CANVAS-WORKFLOW.md#折叠生成卡的悬停预览) · [结果接入下游](../CANVAS-WORKFLOW.md#2026-11-13生成结果接入下游桌面源码待发布)。
 
 ## 读取项目对话摘要和流式正文
 
@@ -201,6 +201,7 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 - 入口：[videoGeneration.ts](../../apps/desktop/src/lib/videoGeneration.ts) 的 `GenerationSettings`、`VideoOptions`、`resolveVideoOptions`、`videoInputError`、`videoRatio`；实际调用：[CreationBoard.tsx](../../apps/desktop/src/components/CreationBoard.tsx)、[GenerationPanel.tsx](../../apps/desktop/src/components/GenerationPanel.tsx) 和 [CanvasWorkflowLayer.tsx](../../apps/desktop/src/components/CanvasWorkflowLayer.tsx) 解析本次引用。
 - 工作流视频卡切换供应商使用 [selectWorkflowVideoProvider](../../apps/desktop/src/lib/canvasWorkflow.ts)，由卡面的视频模型选择器调用，负责普通引用与 H3 帧输入的往返转换。
 - H3 多素材参考（R2V）的图片、视频和独立音频端口由 [canvasWorkflow.ts](../../apps/desktop/src/lib/canvasWorkflow.ts) 的 `H3_R2V_INPUT_PORTS` 定义。`workflowExecutionInputs` 只读取当前模式的端口，`selectWorkflowVideoProvider` 保存切换时暂时停用的连线。混合素材自动连线复用 [planAutomaticConnection](../../apps/desktop/src/lib/workflowAutoConnect.ts)，按媒体类型分别绑定端口。
+- 视频卡动态首帧、尾帧与视频素材静态抽帧共用 [workflowVideoFrames.ts](../../apps/desktop/src/lib/workflowVideoFrames.ts)。动态连线保存帧位置，在下游读取输入时调用现有视频解码和图片入库接口。交互约定见[画板工作流](../CANVAS-WORKFLOW.md)。
 - 边界：仅首尾帧为显式模式，其余按提交引用推导；不能把只是连接到工作流的素材全部当成引用。历史恢复保留冻结参数，不用当前自动识别重写；本机 H3 用自身固定工作流。前端校验不替代 Rust／服务端能力与权益校验。
 - 状态：**可跨模块复用**；模型／模式契约见 [Seedance](../SEEDANCE-2.5-INTEGRATION.md) 与 [Cloud 视频](../VIDEO-API-INTEGRATION.md)。
 

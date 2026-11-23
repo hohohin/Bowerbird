@@ -4,8 +4,9 @@ import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasDocumentTextValue, canvasNoteValue, readCanvasNote, type CanvasNotePayload } from "./canvasNotes";
 import { contentInputAxisIndex } from "./canvasContentInput";
 import { documentMediaReferences, type DocumentMediaReference } from "./documentProjection";
+import { generationPromptNodeId } from "./projectNodeIds";
 import { activePromptReferences, isWorkflowGenerationResult, workflowActiveSession, workflowBindingKey, workflowInputProducers,
-  workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowInput, type WorkflowNode, type WorkflowStep } from "./canvasWorkflow";
+  workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowInput, type WorkflowNode, type WorkflowRun } from "./canvasWorkflow";
 
 /** Result of the exact submitted turn, independent of other turns in its gallery. */
 export function submittedTurnState(id: string, nodes: readonly CanvasNode[]): "pending" | "done" | "closed" {
@@ -56,26 +57,64 @@ const ordinaryImageCard = (node: WorkflowNode) => node.kind === "generation" && 
 const pendingGeneration = (status: unknown) => status === "running" || status === "querying" || status === "queued";
 const workflowMediaOutput = (node: CanvasNode) => node.kind === "asset" && node.role === "output" && !!node.assetId;
 const generationSessions = (node: WorkflowNode) => [...(node.sessionNodeIds ?? []), ...(node.outputs.image?.nodeIds ?? []), workflowActiveSession(node)];
+const activityNodesBySnapshot = new WeakMap<readonly CanvasNode[], Map<string, CanvasNode>>();
 
-/** Submitted image and video turns can stay active outside a running workflow step. */
-export function workflowGenerationActivity(node: WorkflowNode, step: WorkflowStep | undefined,
-  nodes: readonly CanvasNode[], jobs: Readonly<Record<string, GenJob>>): {
-  running: boolean; jobId?: string; failed?: boolean; session?: CanvasNode; sessionStatus?: string; error?: string;
-} {
+export interface WorkflowGenerationActivity {
+  running: boolean;
+  attemptId?: string;
+  terminal?: "done" | "failed" | "cancelled";
+  awaitingOutput?: boolean;
+  jobId?: string;
+  failed?: boolean;
+  session?: CanvasNode;
+  sessionStatus?: string;
+  error?: string;
+}
+
+/** A step hands off generation before the exact turn and its output reach the board. */
+export function workflowGenerationActivity(node: WorkflowNode, run: WorkflowRun | undefined,
+  nodes: readonly CanvasNode[], jobs: Readonly<Record<string, GenJob>>, displayable?: ReadonlySet<string>): WorkflowGenerationActivity {
   if (!collapsibleGenerationCard(node)) return { running: false };
-  if (node.kind === "comfy-video") return { running: step?.status === "running", jobId: step?.jobId };
-  const session = nodes.find(item => item.id === workflowActiveSession(node) && item.kind === "prompt");
+  const step = run?.steps[node.id];
+  const submitted = step?.generationSubmission === "submitted";
+  const executing = !!run && workflowRunActive(run) && (step?.status === "running"
+    || run.status === "running" && step?.status === "pending" && (run.startId === node.id || !!step.detail));
+  let canvasNodes = activityNodesBySnapshot.get(nodes);
+  if (!canvasNodes) {
+    canvasNodes = new Map(nodes.map(item => [item.id, item]));
+    activityNodesBySnapshot.set(nodes, canvasNodes);
+  }
+  const sessionId = workflowActiveSession(node);
+  const checkpointId = step?.jobId && step.turnKey ? generationPromptNodeId(step.jobId, step.turnKey) : undefined;
+  const exactSession = checkpointId ? canvasNodes.get(checkpointId) : undefined;
+  const savedSession = sessionId ? canvasNodes.get(sessionId) : undefined;
+  const session = exactSession?.kind === "prompt" ? exactSession : savedSession?.kind === "prompt"
+    && (!checkpointId || payload(savedSession).job_id === step?.jobId && payload(savedSession).turn_key === step?.turnKey) ? savedSession : undefined;
   const data = session && payload(session);
-  const jobId: string | undefined = step?.status === "running" ? step.jobId : data?.job_id ?? step?.jobId;
-  const turnKey = step?.status === "running" ? step.turnKey : data?.turn_key ?? step?.turnKey;
+  const jobId = step?.jobId ?? data?.job_id;
+  const turnKey = step?.turnKey ?? data?.turn_key;
   const job = jobId ? jobs[jobId] : undefined;
-  const lastTurn = job?.turns[job.turns.length - 1];
-  const live = lastTurn?.turnKey === turnKey ? job : undefined;
-  const error = live ? lastTurn?.error ?? undefined : undefined;
-  const running = step?.status === "running" || (live?.running ?? (pendingGeneration(data?.status)
-    || (videoGenerationCard(node) && step?.status === "waiting" && !!step.videoJobActive && !data?.status)));
-  const failed = !running && (data?.status === "failed" || (pendingGeneration(data?.status) && !!error));
-  return { running, jobId, failed, session, sessionStatus: typeof data?.status === "string" ? data.status : undefined, error };
+  const turn = turnKey ? job?.turns.find(turn => turn.turnKey === turnKey) : undefined;
+  const live = !!turn && !!job?.running && job.turns[job.turns.length - 1] === turn;
+  const sessionStatus = data?.status;
+  const error = !live ? turn?.error ?? step?.error : undefined;
+  const cancelled = ["cancelled", "canceled", "stopped"].includes(sessionStatus ?? "") || step?.comfyCancelled
+    || run?.status === "stopped" && !submitted && !live;
+  const failed = !cancelled && (sessionStatus === "failed" || step?.status === "failed" || !!turn?.error && !live);
+  const completed = sessionStatus === "done" || !live && !!turn?.images?.length || videoGenerationCard(node) && step?.status === "done";
+  const attemptId = step && run ? run.loop?.bodyIds.includes(node.id) ? `${run.id}:${run.loop.index}` : run.id
+    : session?.id ?? sessionId ?? undefined;
+  const comfyOutput = node.kind === "comfy-video" && jobId ? canvasNodes.get(`workflow-comfy:${jobId}`) : undefined;
+  const outputs = !completed ? [] : node.kind === "comfy-video"
+    ? comfyOutput?.kind === "asset" && comfyOutput.role === "output" ? [comfyOutput] : []
+    : canvasTurnOutputs(nodes, session?.projectId ?? job?.projectId ?? nodes[0]?.projectId, jobId, turnKey);
+  const availableOutputs = outputs.filter(output => output.assetId && output.hiddenAt == null);
+  const hasVisibleOutput = availableOutputs.some(output => !displayable || displayable.has(output.id));
+  const terminal = cancelled ? "cancelled" : failed ? "failed" : completed && hasVisibleOutput ? "done" : undefined;
+  const awaitingOutput = !!completed && !hasVisibleOutput && (!outputs.length || !!availableOutputs.length);
+  const running = !terminal && (executing || !completed && (live || pendingGeneration(sessionStatus)
+    || submitted && !!checkpointId || videoGenerationCard(node) && step?.status === "waiting" && !!step.videoJobActive));
+  return { running, attemptId, terminal, awaitingOutput, jobId, failed, session, sessionStatus, error };
 }
 
 /** Exact saved result IDs and turn identities establish provenance, never Asset ID equality. */
@@ -255,13 +294,17 @@ function sessionOutputKey(projectId: string, jobId: unknown, turnKey: unknown) {
 export function canvasSessionImages(session: CanvasNode, nodes: readonly CanvasNode[]) {
   if (session.kind !== "prompt") return [];
   const turn = payload(session);
-  const key = sessionOutputKey(session.projectId, turn.job_id, turn.turn_key);
+  return canvasTurnOutputs(nodes, session.projectId, turn.job_id, turn.turn_key).filter(node => node.assetId);
+}
+
+function canvasTurnOutputs(nodes: readonly CanvasNode[], projectId: string | undefined, jobId: unknown, turnKey: unknown) {
+  const key = projectId && sessionOutputKey(projectId, jobId, turnKey);
   if (!key) return [];
   let outputs = sessionOutputsBySnapshot.get(nodes);
   if (!outputs) {
     outputs = new Map();
     for (const node of nodes) {
-      if (node.kind !== "asset" || node.role !== "output" || !node.assetId) continue;
+      if (node.kind !== "asset" || node.role !== "output") continue;
       const execution = payload(node).execution;
       const owner = sessionOutputKey(node.projectId, execution?.job_id, execution?.turn_key);
       if (!owner) continue;
@@ -291,6 +334,7 @@ export function workflowGenerationPreviewIds(source: WorkflowNode, canvas: reado
 }
 
 export function workflowBindingAssetIds(input: WorkflowInput, source: WorkflowNode | undefined, card: CanvasNode | undefined, canvas: readonly CanvasNode[]) {
+  if (input.nodeId && input.videoFrame) return [];
   if (input.groupId) return input.assetIds ?? [];
   if (input.dimension) return [];
   if (input.assetId) return [input.videoFrame?.assetId ?? input.assetId];

@@ -307,7 +307,7 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
             {message.text ? <MessageText text={message.text} /> : <p className="local-chat-pending">{message.status === "running" ? <><LoaderCircle size={13} className="local-chat-spin" />正在准备回复…</> : "本轮尚未收到回复。"}</p>}
             {message.role === "assistant" && <div className="local-chat-message-actions">{message.text && <button type="button" onClick={() => void copyMessage(message)} aria-label="复制回复">{copied === message.id ? <Check size={12} /> : <Copy size={12} />}{copied === message.id ? "已复制" : "复制"}</button>}
               {onApplyPrompt && message.status === "done" && message.text && <button type="button"
-                onClick={() => void onApplyPrompt(message.text).catch(error => notifyError(error, "回复未能应用到优化稿"))}>应用到优化后提示词</button>}
+                onClick={() => void onApplyPrompt(message.text).catch(error => notifyError(error, "回复未能应用到优化后提示词"))}>应用到优化后提示词</button>}
               {message.status !== "done" && message.status !== "running" && <small>{message.dshTerminalError ? userErrorMessage(message.dshTerminalError, "本机 DSH 本轮失败。") : { stopped: "已停止 · 已收到的内容已保留", interrupted: "回复已中断 · 可以继续对话", failed: "本轮未完成" }[message.status]}</small>}
               {message.paidCloudChat && <ChatPaidReceipt conversationId={conversationId} turnId={message.turnId} />}</div>}
           </article>}

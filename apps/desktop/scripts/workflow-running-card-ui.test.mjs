@@ -15,16 +15,31 @@ try {
   await page.goto(`${server.resolvedUrls.local[0]}${entry}`);
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(async () => {
+    const { api } = await import("/src/lib/api.ts");
     const { newWorkflowNode } = await import("/src/lib/canvasWorkflow.ts");
     const { canvasWorkflowController } = await import("/src/lib/canvasWorkflowRuntime.ts");
+    const { publishGeneration } = await import("/scripts/fixtures/canvas-reference/generation.ts");
     const controller = canvasWorkflowController("p");
+    api.localAgentFindAssetId = async () => "a";
     window.requestCount = 0;
     window.store.setState({ codexHealth: { ok: true }, cloudAuth: { logged_in: true, cloud_available: true },
       cloudEntitlement: { policy: { can_use_byo: true }, balances: { daily: 10, sub: 0, topup: 0 } },
-      startGeneration: async () => {
+      startGeneration: async (...args) => {
         window.requestCount++;
+        const { jobId, turnKey } = args[12];
+        window.deliverResult = async () => {
+          const [asset] = await api.getAssetsByIds(["a"]);
+          const { x, y } = controller.document.nodes.find(node => node.id === "source");
+          await publishGeneration(args, [asset.store_path]);
+          await api.projectCanvasNodeUpdate(`gen-prompt:${jobId}:${turnKey}:0`, { x, y });
+          await api.projectCanvasNodeUpdate(`gen-output:${jobId}:${turnKey}:0`, { payloadJson: JSON.stringify({
+            schema_version: 1, snapshot: { name: asset.name, width: asset.width, height: asset.height },
+            execution: { job_id: jobId, turn_key: turnKey },
+          }) });
+          window.emitChange();
+        };
         await new Promise(resolve => { window.finish = resolve; });
-        return { accepted: true };
+        return { accepted: true, jobId };
       } });
     await controller.load();
     await controller.edit([{ ...newWorkflowNode("generation", 100, 100, "codex"), id: "source", prompt: "一只鸟" }]);
@@ -67,8 +82,19 @@ try {
   }
   await page.evaluate(() => window.finish());
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem("workflow-p")).document.run.status === "done");
-  await page.waitForFunction(() => !document.querySelector('[data-workflow-card="source"] [aria-label="删除卡片"]').disabled);
+  assert.equal(await original.getAttribute("aria-busy"), "true", "acceptance without a visible result keeps the original card running");
+  assert.equal(await original.getByLabel("删除卡片", { exact: true }).isDisabled(), true);
+  assert.equal(await original.getByLabel("卡片指令", { exact: true }).getAttribute("contenteditable"), "false");
+
+  await page.evaluate(() => window.deliverResult());
+  const result = page.locator('[data-conversation-image="a"]');
+  await result.waitFor();
+  await original.waitFor({ state: "detached" });
+  await result.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "固定生成卡", exact: true }).click();
+  assert.equal(await original.getByLabel("删除卡片", { exact: true }).isDisabled(), false);
+  assert.equal(await original.getByLabel("卡片指令", { exact: true }).getAttribute("contenteditable"), "true");
   assert.equal(await page.evaluate(() => window.requestCount), 1);
   assert.deepEqual(errors, []);
-  console.log("PASS active generation move/undo, independent click and keyboard copies, original prompt/options/deletion locks and single submission");
+  console.log("PASS active generation move/undo, independent click and keyboard copies, locks through acceptance, delivery collapse/unlock and single submission");
 } finally { await browser.close(); await server.close(); }

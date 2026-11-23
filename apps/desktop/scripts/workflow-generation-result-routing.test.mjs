@@ -157,6 +157,7 @@ try {
   });
   await page.reload();
   await connectWithPlus('clip', '视频下游');
+  await page.getByRole('menu', { name: '引用视频', exact: true }).getByRole('menuitem', { name: '引用完整视频', exact: true }).click();
   await checkWire('clip', 'edit-clip');
   const clipCard = page.locator('[data-workflow-card="clip"]');
   const editCard = page.locator('[data-workflow-card="edit-clip"]');
@@ -291,6 +292,13 @@ try {
   assert.equal(await editCard.getAttribute('aria-busy'), 'true');
   assert.equal(await editCard.getByRole('button', { name: '取消固定并收起' }).isDisabled(), true);
   await page.evaluate(() => window.resumeEditRun());
+  await page.waitForFunction(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { workflowNodeRun } = await import('/src/lib/canvasWorkflow.ts');
+    return workflowNodeRun(canvasWorkflowController('p').document, 'edit-clip')?.status === 'done';
+  });
+  assert.equal(await editCard.count(), 1, 'the pinned card remains until the board receives its result');
+  await page.evaluate(() => { window.save(); window.emitChange(); });
   await editCard.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
   console.log('PASS new + and saved direct inputs, image/video result wires, video material Peek drag/resize/undo at zoom, whole video delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');

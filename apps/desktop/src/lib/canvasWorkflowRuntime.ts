@@ -4,7 +4,7 @@ import { mergeWorkflowChanges } from "./workflowExternalChanges";
 import { cloudChatEndedMessage } from "./userError";
 import { activeTriggerSchedule, advanceTriggerSchedule, triggerScheduleOccurrence, workflowTriggerMode } from "./workflowTriggerSchedule";
 import { normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflowCompletionTriggers, h3CardDraft, h3DraftForResult, h3OriginalPrompt, h3PromptPatch, isH3ImageCard } from "./canvasWorkflow";
-import { resolveVideoCardOutputs } from "./workflowVideoFrames";
+import { resolveDynamicVideoFrame, resolveVideoCardOutputs } from "./workflowVideoFrames";
 import { automaticInputMedia, planAutomaticConnection, contentCardAcceptsMedia, type AutomaticOutput } from "./workflowAutoConnect";
 import { isAudioPath } from "./audioMedia";
 import { voiceApi } from "./voice";
@@ -27,7 +27,7 @@ import { canStartAnotherAgentRun, canUseAgentRun, understandProvider } from "./e
 import { renderLayerDocument } from "./layerDocument";
 import { workflowLayerDecompose } from "./workflowLayerDecompose";
 import { readCanvasNote, emptyCanvasCell, canvasGridWeights, canvasTextMinSize } from "./canvasNotes";
-import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationCells, latestWorkflowSessionImage, completedCanvasSessions, canvasSessionCompleted, canvasSessionCompletionLookup, submittedTurnState } from "./canvasSessionOutputs";
+import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationCells, latestWorkflowSessionImage, completedCanvasSessions, canvasSessionCompleted, canvasSessionCompletionLookup, submittedTurnState, workflowGenerationActivity } from "./canvasSessionOutputs";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasContentInput, contentInputAxisIndex } from "./canvasContentInput";
 import { agentResultValue } from "./workflowAgentResult";
@@ -159,6 +159,17 @@ export class CanvasWorkflowController {
   private queuedDocument = emptyWorkflow();
   private queuedDraft?: { nodeId: string; document: CanvasWorkflow };
   private startingCards = new Map<string, CardStart>();
+  private generationHandoffs = new Map<string, { runId: string; jobId: string; turnKey: string }>();
+  private liveGenerationCheckpoint = (nodeId: string, run: WorkflowRun) => {
+    const step = run.steps[nodeId], handoff = this.generationHandoffs.get(nodeId);
+    if (!step) return false;
+    if (workflowRunActive(run) && (step.status === "running"
+      || run.status === "running" && step.status === "pending" && (run.startId === nodeId || !!step.detail))) return true;
+    if (handoff?.runId === run.id && handoff.jobId === step.jobId && handoff.turnKey === step.turnKey) return true;
+    if (step.generationSubmission !== "submitted" || !step.jobId || !step.turnKey) return false;
+    const job = useStore.getState().genJobs[step.jobId];
+    return !!job?.running && job.turns[job.turns.length - 1]?.turnKey === step.turnKey;
+  };
   startingAction(nodeId: string) { return this.startingCards.get(nodeId)?.kind; }
   hasRunningGenerationCard(matches: (node: WorkflowNode) => boolean) {
     const runs = workflowRuns(this.document).filter(run => run.status === "running");
@@ -480,7 +491,7 @@ export class CanvasWorkflowController {
       const snapshot = draft?.document ?? initial;
       if (this.discarded) return;
       if (authorizeEdit) await api.canvasWorkflowAuthorize();
-      let merged = mergeWorkflowChanges(base, snapshot, this.persistedDocument);
+      let merged = mergeWorkflowChanges(base, snapshot, this.persistedDocument, this.liveGenerationCheckpoint);
       let mergeBase = this.persistedDocument, revision = this.revision;
       // A chat turn can append four batches while unrelated runs checkpoint.
       for (let conflicts = 0; ; conflicts++) {
@@ -492,7 +503,7 @@ export class CanvasWorkflowController {
           if (!String(error).includes("工作流已被其他窗口修改") || conflicts >= 4) throw error;
           refreshBoard = true;
           const latest = await api.canvasWorkflowGet(this.projectId);
-          merged = mergeWorkflowChanges(mergeBase, merged, latest.document);
+          merged = mergeWorkflowChanges(mergeBase, merged, latest.document, this.liveGenerationCheckpoint);
           mergeBase = latest.document; revision = latest.revision;
         }
       }
@@ -525,8 +536,8 @@ export class CanvasWorkflowController {
     const refresh = this.writing.then(async () => {
       const latest = await api.canvasWorkflowGet(this.projectId).catch(error => { readFailure = { error }; return null; });
       if (!latest || latest.revision <= this.revision) return;
-      const document = mergeWorkflowChanges(this.persistedDocument, this.document, latest.document);
-      const queued = mergeWorkflowChanges(this.persistedDocument, this.queuedDocument, latest.document);
+      const document = mergeWorkflowChanges(this.persistedDocument, this.document, latest.document, this.liveGenerationCheckpoint);
+      const queued = mergeWorkflowChanges(this.persistedDocument, this.queuedDocument, latest.document, this.liveGenerationCheckpoint);
       this.document = document;
       this.persistedDocument = structuredClone(latest.document);
       this.revision = latest.revision;
@@ -666,6 +677,13 @@ export class CanvasWorkflowController {
     } finally { this.encapsulating = false; }
   }
   async syncCanvasReferences(canvas: Parameters<typeof reconcileCanvasWorkflowReferences>[1]) {
+    if (this.generationHandoffs.size) for (const [id, handoff] of this.generationHandoffs) {
+      const node = this.document.nodes.find(item => item.id === id), run = this.run(handoff.runId);
+      const step = run?.steps[id];
+      const activity = node && step?.jobId === handoff.jobId && step.turnKey === handoff.turnKey
+        && workflowGenerationActivity(node, run, canvas, useStore.getState().genJobs);
+      if (!activity || !activity.running && !activity.awaitingOutput) this.generationHandoffs.delete(id);
+    }
     if (!this.ready) return;
     const nodes = reconcileCanvasWorkflowReferences(this.document.nodes, canvas).map(node => this.isLocked(node.id) ? this.document.nodes.find(current => current.id === node.id)! : node);
     if (JSON.stringify(nodes) !== JSON.stringify(this.document.nodes)) await this.edit(nodes);
@@ -2259,6 +2277,7 @@ export class CanvasWorkflowController {
     }
     if (halted()) return;
     if (!turnKey) throw new Error("原生成任务缺少轮次身份，请检查原任务");
+    this.generationHandoffs.set(id, { runId, jobId, turnKey });
     await this.step(runId, id, { generationSubmission: "submitted", detail: "生成任务已提交" });
     if (!await this.deliverSubmittedSessions(runId, node, halted)) return;
     await this.finish(runId, node, { image: { type: "image", nodeIds: [`gen-prompt:${jobId}:${turnKey}:0`] } });
@@ -2405,6 +2424,15 @@ export class CanvasWorkflowController {
     this.executionDrains.set(runId, new Promise<void>(resolve => { drained = resolve; }));
     const failures = new Map<string, unknown>();
     const halted = () => this.stopped.has(runId) || failures.size > 0;
+    const prepareMediaInputs = async (node: WorkflowNode, inputs: WorkflowNode["inputs"], values: Record<string, WorkflowValue[]>) => {
+      for (const [port, items] of Object.entries(values)) for (const [index, value] of items.entries()) {
+        const binding = inputs[port]?.[index];
+        if (!binding?.nodeId || !binding.videoFrame) continue;
+        if (halted()) return;
+        items[index] = await resolveDynamicVideoFrame(this.projectId, node, binding, value, halted);
+      }
+      if (!halted()) await filterAutomaticMediaValues(node, values, this.document.nodes);
+    };
     const active = new Map<string, Promise<void>>();
     const attempted = new Set<string>();
     const execute = async (id: string) => {
@@ -2470,7 +2498,8 @@ export class CanvasWorkflowController {
           const pending = values.image.filter(value => value.nodeIds?.length);
           if (pending.length && !await this.resolveInputGenerations(runId, node, pending, halted)) return;
         if (pending.length && accountId !== undefined && accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
-          await filterAutomaticMediaValues(node, values);
+          await prepareMediaInputs(node, node.inputs, values);
+          if (halted()) return;
           await resolveVideoCardOutputs(node, values, canvas?.nodes ?? [], this.projectId, halted);
           if (halted()) return;
           sourceItems = validateLoopItems(values.image.flatMap(value => value.assetIds ?? []).map(assetId => ({ text: "", assetIds: [assetId] })), node);
@@ -2493,8 +2522,10 @@ export class CanvasWorkflowController {
         return;
       }
       const values: Record<string, WorkflowValue[]> = frozenChat ? {} : structuredClone(directedValue ? { [directedValue.type]: [directedValue] } : workflowInputValues(this.document.nodes, connectedNode, readCell));
-      if (!(node.kind === "text" && node.textTarget?.image)) {
-        const pending = Object.values(values).flat().filter(value => value.nodeIds?.length && value.type === "image");
+      {
+        const pending = Object.entries(values).flatMap(([port, items]) => items.filter((value, index) =>
+          value.nodeIds?.length && value.type === "image" &&
+          (node.kind !== "text" || !node.textTarget?.image || connectedNode.inputs[port]?.[index]?.videoFrame)));
         if (pending.length && !await this.resolveInputGenerations(runId, node, pending, halted)) return;
         if (pending.length && accountId !== undefined && accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
       }
@@ -2504,11 +2535,17 @@ export class CanvasWorkflowController {
         : localVideoMode ? { prompt: node.prompt, references: h3RunReferences(filterDisconnectedReferences(connectedNode.inputs, values), localVideoMode) }
         : undefined;
       const inputNode: WorkflowNode = step.localAgentSkill === "hyperframes" ? { ...node, skill: "hyperframes", agentTransport: "codex-cli" } : node;
-      await filterAutomaticMediaValues(inputNode, values, this.document.nodes);
+      const r2vImagePort = H3_R2V_INPUT_PORTS.image;
+      const frameSources = localVideoMode === "r2v" ? connectedNode.inputs[r2vImagePort]?.map((input, index) =>
+        input.nodeId && input.videoFrame ? values[r2vImagePort]?.[index] : undefined) : undefined;
+      await prepareMediaInputs(inputNode, connectedNode.inputs, values);
+      if (halted()) return;
       if ((node.kind === "generation" || node.kind === "comfy-video") && Object.values(connectedNode.inputs).some(port => port.some(input => input.excludedAssetIds?.length))) {
         Object.assign(values, filterDisconnectedReferences(connectedNode.inputs, values));
       }
-      if (localVideoMode === "r2v") generationRunInput = { prompt: node.prompt, references: h3RunReferences(values, localVideoMode) };
+      if (localVideoMode === "r2v") generationRunInput = { prompt: node.prompt, references: h3RunReferences({ ...values,
+        [r2vImagePort]: (values[r2vImagePort] ?? []).map((value, index) => value.assetIds?.length ? frameSources?.[index] ?? value : value),
+      }, localVideoMode) };
       if (node.kind === "voice") { await this.runVoice(runId, node, halted, values); return; }
       if (node.kind === "instruction") {
         const count = (values.image ?? []).flatMap(value => value.assetIds ?? []).length;

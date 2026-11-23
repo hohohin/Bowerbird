@@ -84,9 +84,10 @@ w.save = () => {
   sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
   sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation" || asset.source === "external" || asset.source === "video-frame" || asset.ext === "mp4")));
 };
-w.emitChange = () => {
-  for (const [handler, event] of listeners) if (event === "creative://changed") callbacks.get(handler)?.({ event, id: handler, payload: { projectId: "p" } });
+w.emitFixtureEvent = (name: string, payload: unknown) => {
+  for (const [handler, event] of listeners) if (event === name) callbacks.get(handler)?.({ event, id: handler, payload });
 };
+w.emitChange = () => w.emitFixtureEvent("creative://changed", { projectId: "p" });
 w.emitAssetsChanged = () => {
   for (const [handler, event] of listeners) if (event === "library://assets-changed") callbacks.get(handler)?.({ event, id: handler, payload: null });
 };
@@ -115,6 +116,9 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "start_external_drag" && w.holdNativeLibraryDrag) {
+      return await new Promise(resolve => { w.finishNativeLibraryDrag = resolve; });
+    }
     if (command === "list_gen_jobs") return [];
     if (detailRoute) {
       if (command === "create_blank_project") {

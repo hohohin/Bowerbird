@@ -18,7 +18,7 @@
   display: grid; gap: 7px; min-width: 0; padding-top: 6px; border-top: 1px solid var(--bb-line);
 }
 .h3-optimized-module:is([data-state="未生成"], [data-state="已停用"]) { --draft-mark: var(--bb-muted); }
-.h3-optimized-module[data-state="待同步"] { --draft-mark: var(--bb-warning); }
+.h3-optimized-module[data-state="需重新优化提示词"] { --draft-mark: var(--bb-warning); }
 .h3-opt-heading { display: flex; align-items: center; gap: 7px; flex: 1; color: var(--bb-ink); font-size: 11.5px; }
 .h3-opt-heading::before { content: ""; width: 4px; height: 4px; border: 1px solid var(--draft-mark); background: var(--draft-mark); }
 .h3-optimized-module:is([data-state="未生成"], [data-state="已停用"]) .h3-opt-heading::before { background: transparent; }

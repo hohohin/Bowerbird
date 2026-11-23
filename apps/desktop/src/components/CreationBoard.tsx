@@ -9,7 +9,7 @@ import { VideoControls } from "./creation/VideoControls";
 import { LocalVideoFrames } from "./creation/LocalVideoFrames";
 import { H3OptimizeButton } from "./creation/H3OptimizeButton";
 import { ComfyEnvironmentControl, type ComfyEnvironmentState } from "./ComfyVideoCard";
-import { canUseComfyVideo, comfyAudioLabel, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, DEFAULT_COMFY_VIDEO, h3R2VInputError, localVideoFrames, localVideoInputError, type ComposerLocalVideoRequest } from "../lib/comfyVideo";
+import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, DEFAULT_COMFY_VIDEO, h3R2VInputError, localVideoFrames, localVideoInputError, type ComposerLocalVideoRequest } from "../lib/comfyVideo";
 import { isAudioAsset } from "../lib/audioMedia";
 import { h3R2VPromptReferences, restoreH3R2VReferences, restoreH3VideoAudioReference } from "../lib/h3PromptOptimization";
 import { ProviderQuota } from "./creation/ProviderQuota";
@@ -1540,7 +1540,7 @@ export function CreationBoard({
             </button>
             <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block group-focus-within:block">
               像跟 AI 输入 prompt 一样书写；<span className="text-accent">点击素材库图片</span>，将参考图插入当前光标处。也可输入 <span className="text-accent">@图名</span> 插入参考图（空格/标点后自动识别）。<span className="text-accent">长按任意图片</span>四周会出现<span className="text-accent">维度环</span>，点环上扇区即可把该维度加入创作板（创作板未打开会自动打开）；无维度数据的图会提示先右键反推。
-              {isLocalVideo ? <p className="mt-2 text-[11px] leading-4 text-muted">{r2v ? "可组合添加参考图片、视频和独立录音。" : `在编辑框中加入一段录音，即可用于${comfyAudioLabel(localMode)}。`}生成进度与结果在画板显示。</p> : isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? `支持图片与视频参考；参考视频每段及总时长均须为 2–${videoOptions.model_version === "seedance2.5" ? 30 : 15} 秒。` : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird Bcoin，按提交时锁定的任务报价结算。" : "使用即梦积分，模型权限以官方账号为准。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
+              {isLocalVideo ? <p className="mt-2 text-[11px] leading-4 text-muted">{r2v ? "可组合添加参考图片、视频和独立录音。" : "可在编辑框中加入一段参考音频，如角色声音。"}生成进度与结果在画板显示。</p> : isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? `支持图片与视频参考；参考视频每段及总时长均须为 2–${videoOptions.model_version === "seedance2.5" ? 30 : 15} 秒。` : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird Bcoin，按提交时锁定的任务报价结算。" : "使用即梦积分，模型权限以官方账号为准。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
               {cloudAgentMode && (
                 <p className="mt-2 text-[10px] leading-4 text-muted">
                   隐私说明：本次文字和所选参考图会加密上传至 Bowerbird Cloud，仅用于规划与执行。输入和过程内容通常最长保留 24 小时，最终结果最长保留 7 天；取消会停止后续调用，已上传副本仍按上述期限清理。接受后的图片保存到本地素材库，其余素材和本地数据库不会上传。

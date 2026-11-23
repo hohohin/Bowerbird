@@ -64,8 +64,8 @@ async function installMock() {
   });
 }
 try {
-  await page.goto('http://127.0.0.1:1672/scripts/fixtures/canvas-reference/preview.html');
-  await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await page.goto('http://127.0.0.1:1672/scripts/fixtures/canvas-reference/preview.html', { waitUntil: 'commit' });
+  await page.locator('[data-canvas-node-id="old"]').waitFor({ timeout: 90000 });
   await page.evaluate(()=>{const canvas=window.snapshot();canvas.nodes=canvas.nodes.filter(node=>node.id!=='far');sessionStorage.setItem('reference-fixture',JSON.stringify(canvas));});
   await page.reload();await page.locator('[data-canvas-node-id="old"]').waitFor();await installMock();
   await page.evaluate(()=>{window.environmentPhase='stopped';});
@@ -285,6 +285,7 @@ try {
   assert.equal((await snapshot()).nodes[0].inputs['last-frame'][0].assetId,'b');
   // Simulate losing a ready installation between detection and preparation.
   await page.evaluate(()=>{window.prepareError=true;});
+  assert.equal(await card.getByRole('button',{name:'运行',exact:true}).evaluate(button => getComputedStyle(button, '::after').width), '3px');
   await card.getByRole('button',{name:'运行',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='failed');
   assert.equal((await snapshot()).run.steps[(await snapshot()).nodes[0].id].jobId,undefined);
@@ -315,7 +316,10 @@ try {
   await page.evaluate(()=>{window.comfyMode='queued';window.cancelMode='done';});
   await card.getByRole('button',{name:'继续工作流'}).click();
   await card.getByText('已加入本机队列',{exact:true}).waitFor();
-  await card.getByRole('button',{name:'停止工作流'}).click();
+  const stopWorkflow = card.getByRole('button',{name:'停止工作流'});
+  await stopWorkflow.hover();
+  assert.equal(await stopWorkflow.evaluate(button => getComputedStyle(button, '::after').content), 'none');
+  await stopWorkflow.click();
   await card.getByRole('button',{name:'取回上次视频'}).waitFor();
   assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.command==='cancel_codex_create').length),0,'stop never cancels unrelated generators');
   await page.evaluate(()=>{window.comfyMode='done';window.failNodeSave=true;});
@@ -329,15 +333,25 @@ try {
   await card.getByRole('button',{name:'继续工作流'}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='done');
   const status=card.locator('footer .workflow-h3-status[role="status"]');
-  await status.getByText('视频已生成 · 用时 4 分 34 秒',{exact:true}).waitFor();
   assert.deepEqual((await snapshot()).nodes[0].outputs.image.assetIds,['h3-video']);
   let resultId=(await snapshot()).nodes[0].resultNodeIds[0];
-  await page.locator(`[data-canvas-node-id="${resultId}"]`).waitFor();
-  await page.locator(`[data-workflow-result-link="${resultId}"].is-image`).waitFor();
+  async function pinResultSource(anchor, id) {
+    const wire = page.locator(`[data-workflow-result-link="${id}"].is-image`);
+    await anchor.hover();
+    const pin = card.getByRole('button', { name: '固定在画板上', exact: true });
+    await pin.waitFor();
+    assert.equal(await wire.count(), 0, 'a floating peek has no output wire');
+    await pin.click();
+    await wire.waitFor();
+  }
+  const firstResultCard = page.locator(`[data-canvas-node-id="${resultId}"]`);
+  await pinResultSource(firstResultCard, resultId);
+  await status.getByText('视频已生成 · 用时 4 分 34 秒',{exact:true}).waitFor();
   assert.equal(await card.locator('video').count(),0,'result is outside the workflow card');
   const firstResult=await page.evaluate(id=>window.snapshot().nodes.find(node=>node.id===id),resultId);
   assert.equal(firstResult.assetId,'h3-video');assert.equal(firstResult.kind,'asset');assert.equal(firstResult.role,'output');
-  assert.ok(firstResult.x>=(await snapshot()).nodes[0].x+320);
+  const source = (await snapshot()).nodes[0];
+  assert.deepEqual([firstResult.x, firstResult.y], [source.x, source.y], 'first result takes the collapsed source position');
   assert.ok(Math.abs((firstResult.width-2)/(firstResult.height-32)-672/1216)<1e-8);
   calls=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('comfy-calls')));
   assert.equal(calls.filter(call=>call.action==='start').length,1,'recovery never resubmits');
@@ -355,7 +369,8 @@ try {
   const secondResultId=(await snapshot()).nodes[0].resultNodeIds[0];
   assert.notEqual(secondResultId,resultId,'explicit new generation has its own output card');
   resultId=secondResultId;
-  await page.locator(`[data-canvas-node-id="${resultId}"]`).waitFor();
+  const latestResultCard = page.locator(`[data-canvas-node-id="${resultId}"]`);
+  await pinResultSource(latestResultCard, resultId);
   // Detection completes after the run unlocks: saving a service address must not invalidate its video.
   await page.evaluate(()=>{window.detectedEndpoint='http://127.0.0.1:8199';window.dispatchEvent(new Event('focus'));});
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].comfyVideo.endpoint==='http://127.0.0.1:8199');
@@ -365,7 +380,7 @@ try {
   await page.screenshot({path:'.tmp/comfy-video/completed.png'});
   const submittedCount=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('comfy-calls')).filter(call=>call.action==='start').length);
   await page.evaluate(()=>window.save());
-  await page.reload();await card.waitFor();await installMock();
+  await page.reload();await page.locator('[data-canvas-node-id="old"]').waitFor();await installMock();
   assert.deepEqual((await snapshot()).nodes[0].outputs.image.assetIds,['h3-video'],'completed output survives reload');
   assert.equal((await snapshot()).nodes[0].resultNodeIds[0],resultId);
   assert.equal(await page.evaluate(id=>window.snapshot().nodes.filter(node=>node.id===id).length,resultId),1,'reload never duplicates result');
@@ -441,5 +456,8 @@ try {
   assert.equal(await card.getByRole('button',{name:'取回上次视频'}).count(),0,'confirmed cancellation survives reload');
   assert.deepEqual(errors,[]);
   console.log('H3 UI: header status, environment setup, keyboard dismissal, compact card, generation and durable recovery passed');
-} catch(error) { console.error(errors);await page.screenshot({path:'.tmp/comfy-video/failure.png'});throw error; }
+} catch(error) {
+  console.error(error, errors);
+  await page.screenshot({path:'.tmp/comfy-video/failure.png'}); throw error;
+}
 finally { await browser.close();await server.close(); }

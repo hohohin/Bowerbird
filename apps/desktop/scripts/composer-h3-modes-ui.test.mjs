@@ -76,11 +76,11 @@ try {
       const preview = page.getByRole('dialog', { name: '参考素材预览', exact: true });
       assert.match(await preview.innerText(), /<Picture 1>[\s\S]*<Picture 2>[\s\S]*<Video 1>[\s\S]*独立录音 1[\s\S]*先编视频原声/);
     } else if (audioEnabled) {
-      const previewName = mode === 'text' ? '录音引导预览' : mode === 'reference' ? '参考图预览' : '首尾帧预览';
+      const previewName = mode === 'text' ? '参考音频预览' : mode === 'reference' ? '参考图预览' : '首尾帧预览';
       const preview = page.getByRole('dialog', { name: previewName, exact: true });
       const audio = preview.locator('.composer-h3-audio');
       assert.match(await audio.innerText(), /测试参考录音/);
-      assert.match(await audio.innerText(), mode === 'reference' ? /音色参考.*[\s\S]*<Audio 1>/ : /录音引导.*[\s\S]*第 0 秒/);
+      assert.match(await audio.innerText(), mode === 'reference' ? /参考音频.*[\s\S]*<Audio 1>/ : /参考音频.*[\s\S]*第 0 秒/);
     }
     try { await page.waitForFunction(() => !document.querySelector('.composer-glass .generation-send-button').disabled); }
     catch (error) {

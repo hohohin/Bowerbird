@@ -6,7 +6,7 @@
 
 - **用途／关键词**：代码分享、快照、GPT、Gemini、OAuth。
 - **入口**：[core.mjs](../../apps/code-reader-mcp/core.mjs) 提供 TOOLS、callTool、validateSnapshot。[export.mjs](../../apps/code-reader-mcp/export.mjs) 负责脱敏导出，[dependencies.mjs](../../apps/code-reader-mcp/dependencies.mjs) 负责依赖覆盖。
-- **调用**：stdio server.mjs 与 Gemini http-app.mjs 复用工具。run-gemini.mjs 通过 oauth-state-file.mjs 管理重启后可恢复的授权状态。
+- **调用**：stdio 与 Gemini 通过 [snapshot-store.mjs](../../apps/code-reader-mcp/snapshot-store.mjs) 热读取同一份有效快照。本机[分支控制台](../../apps/code-reader-mcp/branch-console.mjs)复用导出器，按工作区或指定分支的提交切换快照。run-gemini.mjs 通过 oauth-state-file.mjs 管理重启后可恢复的授权状态。
 - **边界／状态**：仅供私有开发，HTTP 子进程保持只读。[MCP 接入与维护](../../apps/code-reader-mcp/README.md)。
 
 ## 接入图片模型

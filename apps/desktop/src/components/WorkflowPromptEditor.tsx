@@ -14,7 +14,7 @@ import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { workflowAssetMedia, workflowSourceMediaLabel } from "../lib/workflowCanvasCapabilities";
 import { readCanvasNote } from "../lib/canvasNotes";
 import { agentOutputWriters } from "../lib/workflowAgentOutputs";
-import { workflowReferenceMatchesInput, workflowImageContainer, workflowInputValues, workflowReferenceToken, isWorkflowGenerationResult, rebindGenerationReferences, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
+import { workflowReferenceMatchesInput, workflowImageContainer, workflowInputValues, workflowReferenceToken, workflowFrameLabel, isWorkflowGenerationResult, rebindGenerationReferences, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode } from "../lib/types";
 
 const schema = new Schema({ nodes: {
@@ -52,6 +52,10 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
     const number = slot ?? index + 1;
     if (type === "text" && !showTextCandidates) return [{ reference: { type, input, slot, label: `文本 ${number}` }, preview: "" }];
     const source = nodes.find(node => node.id === input.nodeId);
+    if (input.nodeId && input.videoFrame && source) return [{
+      reference: { type, input, slot, label: `图片来源 ${number}` },
+      preview: `${workflowFrameLabel(input.videoFrame)} · 运行时从上游视频获取`,
+    }];
     const mediaLabel = (ids: string[] = []) => workflowSourceMediaLabel(ids, assets, source);
     if (canvasWorkflowInputState(input, graphNodes, nodes) === "missing") return [{
       reference: { type, input, slot, label: `${type === "text" ? "文本" : "素材来源"} ${number}` },

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { History, Image as ImageIcon, List } from "lucide-react";
+import { History, Image as ImageIcon } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
 import { canvasSessionImages, workflowSessionIds } from "../lib/canvasSessionOutputs";
@@ -70,7 +70,7 @@ export function WorkflowGenerationHistory({ node, graphNodes, onOpen, h3Runs }: 
       title={h3Runs ? "生成会话与调度记录" : "生成历史"} data-has-runs={h3Runs && (rows.length || dispatches.length) ? true : undefined}
       aria-controls={`generation-history-${node.id}`} aria-haspopup="dialog"
       onPointerDown={event => event.stopPropagation()} onClick={() => setOpen(value => !value)}>
-      {h3Runs ? <List size={14} /> : <History size={12} />}生成历史{rows.length > 0 && <span>{rows.length}</span>}
+      <History size={h3Runs ? 14 : 12} />生成历史{rows.length > 0 && <span>{rows.length}</span>}
     </button>
     {open && createPortal(<div ref={popup} id={`generation-history-${node.id}`} role="dialog" aria-label="生成历史" tabIndex={-1}
       className="workflow-generation-history-popover" style={position}

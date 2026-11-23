@@ -191,8 +191,8 @@ html[data-theme] .canvas-tactical .canvas-plane .workflow-card .workflow-generat
 html[data-theme] .canvas-tactical .canvas-plane .workflow-card .workflow-generation-parameters .model-select .model-select-trigger::before { display:none; }
 html[data-theme] .canvas-tactical .canvas-plane .workflow-card .workflow-video-parameters .model-select .model-select-trigger { padding-inline:3px; }
 html[data-theme] .canvas-tactical .canvas-plane .workflow-card .workflow-video-parameters .model-select .model-select-trigger::before { display:none; }
-.workflow-card .workflow-generation-parameters .model-select-name,
-.workflow-card .workflow-generation-parameters button[title="选择画面比例"] > span:not([aria-hidden="true"]) { order:-1; }
+.workflow-card:not([data-h3-card]) .workflow-generation-parameters .model-select-name,
+.workflow-card:not([data-h3-card]) .workflow-generation-parameters button[title="选择画面比例"] > span:not([aria-hidden="true"]) { order:-1; }
 
 /* Current models are identified by a small state mark instead of a filled provider row. */
 html[data-theme] .canvas-tactical .canvas-plane .workflow-card .model-select .model-select-trigger,

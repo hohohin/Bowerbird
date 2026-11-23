@@ -41,9 +41,7 @@ export interface ComposerLocalVideoRequest extends H3VideoReferences { prompt: s
 export function localVideoFrames(references: Asset[]) {
   return references.filter(asset => /\.(png|jpe?g|webp|bmp)(?:[?#].*)?$/i.test(asset.store_path ?? ""));
 }
-export function comfyAudioLabel(mode: ComfyVideoMode) {
-  return mode === "reference" ? "音色参考" : "录音引导";
-}
+export const H3_AUDIO_LABEL = "参考音频";
 export function comfyAudioHint(mode: ComfyVideoMode) {
   return mode === "reference" ? "用 <Audio 1> 指代录音的音色。" : "录音从第 0 秒参与生成，超出视频时长的部分会被裁掉。";
 }

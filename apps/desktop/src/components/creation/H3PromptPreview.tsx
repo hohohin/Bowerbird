@@ -13,7 +13,12 @@ type Field = { label: string; key: string; start: number; end: number };
 // Ranges point into the exact submitted text. Editing one field preserves the other fields and their separators.
 function promptFields(text: string): Field[] {
   const headings = [...text.matchAll(heading)];
-  const endBefore = (next?: number) => next === undefined ? text.length : next - (text[next - 2] === "\r" ? 2 : 1);
+  const endBefore = (next?: number) => {
+    if (next === undefined) return text.length;
+    let end = next;
+    while (end && (text[end - 1] === "\r" || text[end - 1] === "\n")) end--;
+    return end;
+  };
   const fields: Field[] = headings.map((match, i) => {
     const key = match[1].toLowerCase() as keyof typeof fieldNames;
     const start = match.index! + match[0].length;
@@ -34,7 +39,7 @@ function firstDialogue(text: string): Field | undefined {
 export function H3PromptPreview({ draft, seconds, disabled, update, readText }: {
   draft: H3CardPrompt; seconds?: number; disabled: boolean; update: (changes: Partial<H3CardPrompt>) => void; readText: () => string;
 }) {
-  const [raw, setRaw] = useState(false);
+  const [preferRaw, setPreferRaw] = useState(false);
   const peek = useRef<HTMLButtonElement>(null), editor = useRef<HTMLDivElement>(null);
   const moveFocus = useRef(false);
   useLayoutEffect(() => {
@@ -46,6 +51,8 @@ export function H3PromptPreview({ draft, seconds, disabled, update, readText }: 
   const expand = (expanded: boolean) => { moveFocus.current = true; update({ expanded }); };
   const text = draft.edited ?? draft.result;
   const fields = promptFields(text);
+  const structured = seconds !== undefined && fields.some(field => field.key);
+  const raw = preferRaw || !structured;
   const dialogue = firstDialogue(text);
   const hasField = (key: string) => fields.some(f => f.key === key && !/^(?:n\/a)?$/i.test(text.slice(f.start, f.end).trim()));
   const facts = [seconds && `0.00s → ${seconds.toFixed(2)}s`, dialogue && `对白「${text.slice(dialogue.start, dialogue.end)}」`,
@@ -54,7 +61,7 @@ export function H3PromptPreview({ draft, seconds, disabled, update, readText }: 
   if (!draft.expanded) return <button ref={peek} type="button" className="h3-prompt-peek" aria-expanded="false" disabled={disabled}
     aria-label="展开编辑优化后提示词" onClick={() => expand(true)}>
     {(draft.paused || !!facts.length) && <span className="h3-peek-facts">{draft.paused ? "已停用 · 运行时使用原文" : facts.join(" · ")}</span>}
-    <span className="h3-peek-excerpt">{text || "优化稿为空"}</span><span className="h3-peek-cue"><Pencil size={11} />点击展开编辑</span>
+    <span className="h3-peek-excerpt">{text || "优化后提示词为空"}</span><span className="h3-peek-cue"><Pencil size={11} />点击展开编辑</span>
   </button>;
   const rangeField = (field: Field, index: number) => {
     const range = (current: string) => index < 0 ? firstDialogue(current) : promptFields(current)[index];
@@ -66,15 +73,15 @@ export function H3PromptPreview({ draft, seconds, disabled, update, readText }: 
   };
   return <div ref={editor} className="h3-prompt-editor">
     <div className="h3-editor-bar">
-      {seconds !== undefined && <div role="group" aria-label="优化稿编辑视图">
-        <button type="button" aria-pressed={!raw} onClick={() => setRaw(false)}>结构化</button>
-        <button type="button" aria-pressed={raw} onClick={() => setRaw(true)}>原文 (Raw)</button>
+      {seconds !== undefined && <div role="group" aria-label="优化后提示词编辑视图">
+        <button type="button" disabled={!structured} aria-pressed={!raw} onClick={() => setPreferRaw(false)}>结构化</button>
+        <button type="button" aria-pressed={raw} onClick={() => setPreferRaw(true)}>原文 (Raw)</button>
       </div>}
       {draft.edited !== undefined && <button type="button" disabled={disabled} onClick={() => update({ edited: undefined })}>还原</button>}
       <button type="button" disabled={disabled} aria-expanded="true" onClick={() => expand(false)}>收起</button>
     </div>
-    {raw || seconds === undefined ? <CanvasTextarea className="h3-raw-field" aria-label="优化后提示词全文" rows={7} disabled={disabled}
-      spellCheck={false} value={text} readCurrentValue={readText} onValueChange={edit} /> : <>
+    {raw ? <CanvasTextarea className="h3-raw-field" aria-label="优化后提示词全文" rows={7} disabled={disabled}
+      spellCheck={false} value={text} readCurrentValue={readText} onValueChange={value => { setPreferRaw(true); edit(value); }} /> : <>
       {dialogue && rangeField(dialogue, -1)}
       {fields.map(rangeField)}
     </>}

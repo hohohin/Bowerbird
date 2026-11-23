@@ -38,7 +38,7 @@ import { WorkflowGenerationReferences, WorkflowMediaThumbnail } from "./Workflow
 import { canvasDocumentHeight, expandCanvasSections, readCanvasNote } from "../lib/canvasNotes";
 import { contentInputPort } from "../lib/canvasContentInput";
 import { contentTableRows } from "../lib/contentTable";
-import { canvasInputAssetIds, canvasInputValue, canvasWorkflowInputState, canvasSessionImages, workflowBindingAssetIds, workflowGenerationResultAnchor, hiddenWorkflowSessionIds, workflowSessionIds, completedCanvasSessions, workflowGenerationActivity } from "../lib/canvasSessionOutputs";
+import { canvasInputAssetIds, canvasInputValue, canvasWorkflowInputState, canvasSessionImages, workflowBindingAssetIds, workflowGenerationResultAnchor, hiddenWorkflowSessionIds, workflowSessionIds, completedCanvasSessions, type WorkflowGenerationActivity } from "../lib/canvasSessionOutputs";
 import { generationProgressLabel } from "../lib/generationProgress";
 import { useStore } from "../store";
 import { canvasWirePath as path, dragWire, type DragOffset } from "../lib/canvasDragPreview";
@@ -48,7 +48,7 @@ import { getDragAssets } from "../lib/dragPayload";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { workflowDiagnosticReport } from "../lib/workflowDiagnostics";
-import { h3CardDraft, h3DraftForResult, h3DraftStale, h3OriginalPrompt, h3PromptPatch, isH3ImageCard } from "../lib/canvasWorkflow";
+import { h3CardDraft, h3DraftForResult, h3DraftStale, h3OriginalPrompt, h3PromptPatch, isH3ImageCard, workflowFrameLabel, workflowProducesVideo } from "../lib/canvasWorkflow";
 import { removeWorkflowNodes, retryWorkflowSave } from "../lib/workflowRemoval";
 import { H3_R2V_INPUT_LIMITS, H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, WORKFLOW_CARD_DRAG_TYPE, workflowDisconnectId, workflowBindingKey, compileGenerationPrompt, selectWorkflowVideoProvider, generationInputNode, generationReferencePreviewOrder, h3RunReferences, lastGenerationRunInput, disconnectGenerationReference, reorderGenerationReferences, isWorkflowGenerationResult, workflowInputValues, workflowOrder } from "../lib/canvasWorkflow";
 import { assertWorkflowAcyclic, invalidateWorkflow, newWorkflowNode, normalizeWorkflowInputSlots, workflowNodeRun, workflowRuns, workflowInputProducers, workflowConnectionError, workflowCompletionOutput, workflowCompletionTarget, workflowInputs, workflowOutputs,
@@ -166,6 +166,8 @@ interface Props {
   imageOnlyConversationIds?: ReadonlySet<string>;
   sessionHeights?: ReadonlyMap<string, number>;
   generationCardAnchors?: ReadonlyMap<string, CanvasNode>;
+  generationActivities: ReadonlyMap<string, WorkflowGenerationActivity>;
+  activeGenerationIds: ReadonlySet<string>;
   pinnedCardOffsets?: ReadonlyMap<string, { x: number; y: number }>;
   peekCard?: { nodeId: string; anchorId: string; point: { x: number; y: number } };
   onPeekInteraction?: (kind: "enter" | "leave" | "blur" | "compose" | "commit") => void;
@@ -208,7 +210,7 @@ type ConnectionMenuState = { gesture: AutomaticGesture; x: number; y: number; vi
 
 function singleVideoOutput(outputs: AutomaticOutput[]) {
   const [output] = outputs;
-  return outputs.length === 1 && !output.selectionWireId && !!output.binding.assetId
+  return outputs.length === 1 && !output.selectionWireId && (output.binding.assetId || output.binding.nodeId && output.binding.portId)
     && (output.media === "video" || Array.isArray(output.media) && output.media.length === 1 && output.media[0] === "video")
     ? output : undefined;
 }
@@ -222,7 +224,7 @@ function connectionForType(source: Connection, type?: WorkflowPort["type"]): Con
   return ["*latest", "*latest-image"].includes(source.cellId ?? "") && (type === "text" || type === "image")
     ? { ...source, cellId: type === "image" ? "*latest-image" : "*latest", type } : source;
 }
-export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, opening, entryCardIds, deferredCandidateIds, materials, graphNodes, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
+export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, opening, entryCardIds, deferredCandidateIds, materials, graphNodes, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, generationActivities, activeGenerationIds, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
   const pendingCards = useRef(new Map<string, PendingConnectionCard>());
@@ -312,11 +314,12 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   // Pending cards are a view of an in-flight gesture. Only validated nodes enter saves and undo.
   const pending = [...pendingCards.current.values()].filter(card => card.projectId === projectId && !nodeById.has(card.node.id));
   const renderedNodes = pending.length ? [...document.nodes, ...pending.map(({ node, inputs }) => ({ ...node, inputs }))] : document.nodes;
-  const collapsedAnchor = (id: string) => pinnedCardOffsets?.has(id) ? undefined : generationCardAnchors?.get(id);
+  const collapsedAnchor = (id: string) => activeGenerationIds.has(id) || pinnedCardOffsets?.has(id) ? undefined : generationCardAnchors?.get(id);
   const cardMounted = (id: string) => entryCardIds === null || entryCardIds.has(id) || (!!deferredCandidateIds && !deferredCandidateIds.has(id));
-  const workflowNodeMounted = (node: WorkflowNode) => cardMounted(node.textTarget?.nodeId ?? node.textSource ?? collapsedAnchor(node.id)?.id ?? node.id);
+  const workflowNodeMounted = (node: WorkflowNode) => activeGenerationIds.has(node.id)
+    || cardMounted(node.textTarget?.nodeId ?? node.textSource ?? collapsedAnchor(node.id)?.id ?? node.id);
   const collapsedAnchorOwners = useMemo(() => new Map([...(generationCardAnchors ?? [])].flatMap(([id, anchor]) =>
-    pinnedCardOffsets?.has(id) ? [] : [[anchor.id, id] as const])), [generationCardAnchors, pinnedCardOffsets]);
+    activeGenerationIds.has(id) || pinnedCardOffsets?.has(id) ? [] : [[anchor.id, id] as const])), [generationCardAnchors, pinnedCardOffsets, activeGenerationIds]);
   const displayPoint = (node: WorkflowNode) => {
     const offset = pinnedCardOffsets?.get(node.id);
     return offset ? { x: node.x + offset.x, y: node.y + offset.y } : node;
@@ -436,6 +439,11 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   }, [sourceImages]);
   function h3ReferenceAssets(input: WorkflowInput, media?: keyof typeof H3_R2V_INPUT_PORTS) {
     const source = media ? { ...input, mediaFilter: [media] } : input;
+    if (source.nodeId && source.videoFrame) {
+      if (source.mediaFilter && !source.mediaFilter.includes("image")) return [];
+      // The slot accepts a frame, but its preview comes from the upstream video's cover.
+      return inputImages({ ...source, videoFrame: undefined });
+    }
     return inputImages(source).filter(id => {
       if (!media && !source.mediaFilter) return true;
       const material = materialByAsset.get(id);
@@ -444,15 +452,16 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     });
   }
   function inputMediaLabel(binding: WorkflowInput) {
+    if (binding.videoFrame) return "图片";
     return workflowSourceMediaLabel(inputImages(binding), assets, nodeById.get(binding.nodeId ?? ""));
   }
   function portMediaLabel(bindings: WorkflowInput[]) {
     const label = inputMediaLabel(bindings[0]);
     return bindings.slice(1).every(binding => inputMediaLabel(binding) === label) ? label : "素材";
   }
-  function referencePreviewValues(node: WorkflowNode, includeText = false) {
+  function referencePreviewValues(node: WorkflowNode, includeText = false, imageIds = sourceImages) {
     return {
-      image: (node.inputs.image ?? []).map(input => ({ type: "image" as const, assetIds: sourceImages(input) })),
+      image: (node.inputs.image ?? []).map(input => ({ type: "image" as const, assetIds: imageIds(input) })),
       text: (node.inputs.text ?? []).map(input => {
         const card = graphById.get(input.canvasNodeId ?? "");
         const value = includeText ? (card ? canvasInputValue(card, input.cellId ?? "", graphNodes) : nodeById.get(input.nodeId ?? "")?.outputs[input.portId ?? ""]) : undefined;
@@ -563,7 +572,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       if (!node || !snapshot?.result || activeController.current !== controller || !h3CardDraft(node)
         || ("mode" in snapshot.input) !== (node.kind === "comfy-video")) throw new Error("卡片或优化记录已更改，请从当前卡片重新打开续聊。");
       if (controller.isLocked(nodeId) || controller.startingAction(nodeId)) throw new Error("请在卡片任务结束后应用回复。");
-      if (!text.trim() || text.length > 16000) throw new Error("优化稿需要 1–16000 字。");
+      if (!text.trim() || text.length > 16000) throw new Error("优化后提示词需要 1–16000 字。");
       const update = h3PromptPatch({ ...h3DraftForResult(snapshot.input, snapshot.result, h3OriginalPrompt(node)), edited: text });
       await edit(invalidateWorkflow(controller.document.nodes.map(item => item.id === nodeId ? { ...item, ...update } : item), nodeId));
       notifySuccess("回复已应用到优化后提示词");
@@ -670,7 +679,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     return controller.subscribe((urgent, promptEditor) => {
       const focused = window.document.activeElement;
       if (promptEditor && focused?.matches(".comfy-video-prompt") && focused.closest<HTMLElement>("[data-workflow-card]")?.dataset.workflowCard === promptEditor) return;
-      if (urgent) { redraw(value => value + 1); return; }
+      if (urgent) { refresh(); return; }
       // A save acknowledgement arrives outside the input event's transition.
       if (focused?.closest(".workflow-card textarea, .workflow-card [contenteditable=true]")) startTransition(refresh);
       else refresh();
@@ -776,7 +785,15 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       return;
     }
     const previous = controller.document.nodes;
-    const nodes = previous.map(node => node.id === id ? { ...node, ...update } : node);
+    const current = previous.find(node => node.id === id);
+    if (!current) return;
+    const updated = { ...current, ...update };
+    if (workflowProducesVideo(current) && !workflowProducesVideo(updated)
+      && previous.some(node => [...Object.values(node.inputs), ...Object.values(node.savedComfyR2V ?? {})]
+        .some(inputs => inputs?.some(input => input.nodeId === id && input.videoFrame)))) {
+      notifyError(null, "请先断开下游的首帧或尾帧画面引用，再切换输出类型"); return;
+    }
+    const nodes = previous.map(node => node.id === id ? updated : node);
     const promptOnly = Object.keys(update).length === 1 && typeof update.prompt === "string";
     const h3DraftEdit = !!update.h3Prompt && typeof update.prompt === "string";
     const next = invalidate && (!promptOnly || previous.some(node => Object.keys(node.outputs).length))
@@ -804,7 +821,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       ?? materials.find(item => item.assetId === binding.assetId)?.id;
     const native = graphNodes.find(node => node.id === binding.canvasNodeId);
     const label = (id && cardNames[id]) || assets.find(asset => asset.id === binding.assetId)?.name || "来源已移除";
-    if (binding.videoFrame) return { label, detail: binding.videoFrame.position === "first" ? "首帧画面" : "尾帧画面" };
+    if (binding.videoFrame) return { label, detail: workflowFrameLabel(binding.videoFrame) };
     const media = inputMediaLabel(binding);
     let detail = workflow ? workflowOutputs(workflow).find(port => port.id === binding.portId)?.label ?? "输出" : binding.groupId ? `全部${media}` : media;
     if (binding.portId === "image" && /图片/.test(detail)) detail = detail.replace("图片", media);
@@ -973,6 +990,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     return null;
   }
   function videoReferenceError(video: VideoReferenceTarget, frame?: VideoReferencePosition) {
+    if (frame && (video.created ?? nodeById.get(video.target.nodeId ?? ""))?.kind === "trigger") return "此输入只接收完成信号";
     const output = frame ? videoFrameOutputPreview(video.output, frame) : video.output;
     if ((frame || video.created) && lockedOutput([output], !!frame)) return "来源卡片正在使用";
     if (!video.created) return automaticError([output], video.target);
@@ -995,6 +1013,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   }
   function commitAutomatic(outputs: AutomaticOutput[], target: AutomaticTarget, createNodes: WorkflowNode[] = [], frame?: VideoReferencePosition) {
     clearAutomatic();
+    if (frame && outputs[0].binding.nodeId) {
+      outputs = [videoFrameOutputPreview(outputs[0], frame)];
+      frame = undefined;
+    }
     const owner = controller;
     const routeRevision = useStore.getState().projectRouteRevision;
     const sameRoute = () => {
@@ -1339,7 +1361,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         const outputs = gestureOutputs(gesture, id);
         const receiver = gesture.side === "output" ? automaticTarget(id) : gesture.target;
         const error = id === gesture.id ? "不能连接卡片自身" : receiverError(outputs, receiver);
-        if (error) { clearAutomatic(); notifyError(null, error); }
+        if (error && (id === gesture.id || !singleVideoOutput(outputs))) { clearAutomatic(); notifyError(null, error); }
         else chooseAutomaticReceiver(gesture, outputs, receiver, { x: event.clientX, y: event.clientY });
       } else if (element?.closest(".canvas-stage") && !element.closest(".canvas-toolbar,.canvas-creation-dock,[role=menu]")) {
         setCursor({ x: event.clientX, y: event.clientY });
@@ -1552,7 +1574,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         : Object.values(chatSummaries).find(chat => chat.projectId === projectId && chat.nodeId === id));
       return controller.isLocked(id) || !!chat && localChatRunning(chat) || agentActionLocks.current.has(id)
         || node?.planning?.status === "waiting"
-        || !!node && workflowGenerationActivity(node, workflowNodeRun(controller.document, id)?.steps[id], graphNodes, genJobs).running
+        || activeGenerationIds.has(id)
         || controller.document.nodes.some(node => (node.textSource === id || node.textTarget?.nodeId === id || node.resultNodeIds?.includes(id)) && controller.isLocked(node.id));
     },
     position(positions, persist = false) {
@@ -1756,7 +1778,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     </button>;
   }
   const statusLabels = { pending: "等待上游", running: "执行中", waiting: "等待继续", done: "已完成", failed: "失败" };
-  const entryContext = useMemo(() => ({}), [document, graphNodes, materials, assets, selectedIds, providerIssues]);
+  const entryContext = useMemo(() => ({}), [document, graphNodes, materials, assets, selectedIds, providerIssues, generationActivities, activeGenerationIds, peekCard]);
   const stagedCardContext = useCanvasEntryCardContext(entryContext, opening);
   const automaticWires = new Set<string>();
   return <>
@@ -1857,12 +1879,12 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     {materials.filter(material => cardMounted(material.id)).map(material => <div key={material.id} data-workflow-material={material.id} className={`workflow-material-hotspot ${hoveredMaterial === material.id ? "is-hovered" : ""} ${selectedIds.has(material.id) ? "is-selected" : ""}`} style={{ left: material.x, top: material.y, width: material.width, height: material.height }}>
       {automaticButton(material.id, "output")}
     </div>)}
-    {renderCanvasCards(renderedNodes.filter(node => node.kind !== "text" && (peekCard?.nodeId === node.id
-      ? cardMounted(peekCard.anchorId) : cardMounted(node.id) && !collapsedAnchor(node.id))), stagedCardContext, node => {
+    {renderCanvasCards(renderedNodes.filter(node => node.kind !== "text" && (activeGenerationIds.has(node.id) || (peekCard?.nodeId === node.id
+      ? cardMounted(peekCard.anchorId) : cardMounted(node.id) && !collapsedAnchor(node.id)))), stagedCardContext, node => {
       const creating = !nodeById.has(node.id);
       const run = workflowNodeRun(document, node.id);
       const step = run?.steps[node.id];
-      const imageActivity = workflowGenerationActivity(node, step, graphNodes, genJobs);
+      const imageActivity: WorkflowGenerationActivity = generationActivities.get(node.id) ?? { running: false };
       const failure = controller.cardFailure(node.id, run);
       const imageFailure = !failure && imageActivity.failed && imageActivity.session;
       const agentChat = node.kind === "agent" ? (node.chatConversationId ? chatSummaries[node.chatConversationId] : Object.values(chatSummaries).find(chat => chat.projectId === projectId && chat.nodeId === node.id)) : undefined;
@@ -1930,17 +1952,21 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const lastGenerationInput = generationCard ? lastGenerationRunInput(document, node.id) : undefined;
       const localMode = localVideo ? comfyVideoMode(node.comfyVideo) : undefined;
       const r2vCounts = localMode === "r2v" ? {
-        referenceImageCount: (node.inputs[H3_R2V_INPUT_PORTS.image] ?? []).flatMap(input => h3ReferenceAssets(input, "image")).length,
+        referenceImageCount: (node.inputs[H3_R2V_INPUT_PORTS.image] ?? []).reduce((n, input) =>
+          n + (input.nodeId && input.videoFrame ? 1 : h3ReferenceAssets(input, "image").length), 0),
         referenceVideoCount: (node.inputs[H3_R2V_INPUT_PORTS.video] ?? []).flatMap(input => h3ReferenceAssets(input, "video")).length,
         referenceAudioCount: (node.inputs[H3_R2V_INPUT_PORTS.audio] ?? []).flatMap(input => h3ReferenceAssets(input, "audio")).length,
       } : undefined;
       let generationAction = "运行";
       if (lastGenerationInput?.prompt === node.prompt) {
         const current = generationInputNode(node, document.nodes);
+        const runReferenceIds = (input: WorkflowInput) => input.nodeId && input.videoFrame
+          ? inputImages({ ...input, videoFrame: undefined })
+          : localMode === "r2v" ? h3ReferenceAssets(input) : inputImages(input);
         const currentReferences = localVideo
           ? h3RunReferences(Object.fromEntries(Object.entries(current.inputs).map(([port, inputs]) =>
-            [port, inputs.map(input => ({ type: "image" as const, assetIds: localMode === "r2v" ? h3ReferenceAssets(input) : inputImages(input) }))])), localMode)
-          : [generationReferencePreviewOrder(current, referencePreviewValues(current), document.nodes)];
+            [port, inputs.map(input => ({ type: "image" as const, assetIds: runReferenceIds(input) }))])), localMode)
+          : [generationReferencePreviewOrder(current, referencePreviewValues(current, false, runReferenceIds), document.nodes)];
         if (JSON.stringify(lastGenerationInput.references) === JSON.stringify(currentReferences)) generationAction = "重试";
       }
       const references = referenceIds.map(id => assets.find(asset => asset.id === id)).filter((asset): asset is Asset => !!asset);
@@ -1951,7 +1977,15 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           const draft = { ...node, inputs: { text: node.inputs.text ?? [],
             image: (node.inputs.image ?? []).map(input => input.groupId ? { ...input, assetIds: sourceImages(input) } : input) } };
           const inputNode = generationInputNode(draft, document.nodes);
-          const values = workflowInputValues(document.nodes, inputNode, (id, cell) => {
+          // The preview only needs media types. Each deferred frame represents one future PNG.
+          const pendingFrames = new Set<string>();
+          const image = (inputNode.inputs.image ?? []).map((input, i) => {
+            if (!input.nodeId || !input.videoFrame) return input;
+            const assetId = `preview-frame:${i}`;
+            pendingFrames.add(assetId);
+            return { assetId };
+          });
+          const values = workflowInputValues(document.nodes, { ...inputNode, inputs: { ...inputNode.inputs, image } }, (id, cell) => {
             const source = graphById.get(id); return source ? canvasInputValue(source, cell, graphNodes) : undefined;
           });
           for (const [index, input] of (inputNode.inputs.image ?? []).entries()) {
@@ -1961,6 +1995,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           }
           const frameIds = new Set(videoFrameInputValues(draft, values, graphNodes, document.nodes).flatMap(value => value.assetIds ?? []));
           const references = compileGenerationPrompt(draft, values, document.nodes).assetIds.map(id => {
+            if (pendingFrames.has(id)) return { store_path: "__video_frame__.png" };
             const asset = assets.find(asset => asset.id === id);
             // These sockets submit a PNG tail frame, not the source video.
             return frameIds.has(id) && isVideoPath(asset?.store_path) ? { store_path: "__video_tail__.png" } : { store_path: asset?.store_path };
@@ -1991,7 +2026,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       })] as const).map(([port, inputs]) => [port, inputs.filter(input => !input.autoConnect || !thumbnailWireIds.has(input.autoConnect))] as const);
       const bindings = labelledInputs.some(([, inputs]) => inputs.length > 0) && <div className="workflow-bindings">
         {[...new Map(labelledInputs.flatMap(([, inputs]) => inputs).filter(input => input.autoConnect).map(input => [workflowDisconnectId(input)!, input])).entries()].map(([id, input]) =>
-          <button key={id} disabled={busy && input.portId !== "signal" && node.kind !== "trigger"} title="断开连接" onClick={() => disconnectAutomatic(id)}>{sourceLabel(input).label}<X size={11} /></button>)}
+          <button key={id} disabled={busy && input.portId !== "signal" && node.kind !== "trigger"} title="断开连接" onClick={() => disconnectAutomatic(id)}>{sourceLabel(input).label}{input.videoFrame && ` · ${workflowFrameLabel(input.videoFrame)}`}<X size={11} /></button>)}
         {labelledInputs.map(([port, bindings]) => [port, bindings.filter(input => !input.autoConnect)] as const).filter(([, bindings]) => bindings.length).map(([port, bindings]) =>
           <button key={port} disabled={busy && port !== "completion" && port !== "signal"} title="断开此输入" onClick={event => chooseDisconnect({ nodeId: node.id, port }, { x: event.clientX, y: event.clientY }, true)}>{node.kind === "loop" && bindings.length === 1 ? sourceLabel(bindings[0]).label : node.kind === "voice" && port === "image" ? "参考录音" : port === "completion" ? "完成触发" : port === "signal" ? "触发器" : port === "text" ? "文本" : port === "visual-profile" ? "视觉规范" : port === "first-frame" ? node.comfyVideo?.mode === "reference" ? "参考图" : "首帧" : port === "last-frame" ? "尾帧" : portMediaLabel(bindings)}{(node.kind !== "loop" || bindings.length > 1) && ` · ${bindings.length} 个来源`} <X size={11} /></button>)}
       </div>;
@@ -2025,7 +2060,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         if (step) return statusLabels[step.status];
         if (providerIssue) return "暂不可运行";
         if (node.trigger) return "工作流起点";
-        return h3AutoOptimize ? "就绪 · 运行前自动优化" : draft && !draft.paused ? "就绪 · 使用优化稿" : "就绪 · 使用原文";
+        return h3AutoOptimize ? "就绪 · 运行前自动优化" : draft && !draft.paused ? "就绪 · 使用优化后提示词" : "就绪 · 使用原文";
       })() : undefined;
       const h3Progress = localVideo && h3Status === generatingStatus && run?.status === "running" ? step?.comfyProgress : undefined;
       const h3VideoPhase = h3Progress?.label
@@ -2180,8 +2215,6 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           {node.kind === "comfy-video" && <CardComfyEnvironment node={node} disabled={busy} onChange={changes => patch(node.id, changes, false)} onStatus={reportComfy} />}
           {(peek || pinned) && <button className="workflow-generation-pin" type="button" aria-label={pinLabel} title={pinLabel}
             aria-pressed={pinned} disabled={running} onClick={() => onToggleGenerationPin?.(node.id)}>{pinned ? <PinOff size={14} /> : <Pin size={14} />}</button>}
-          {h3 && <button aria-label="复制卡片提示词" title="复制当前使用的卡片提示词" disabled={!node.prompt}
-            onClick={() => handle(navigator.clipboard.writeText(currentNode().prompt).then(() => notifySuccess("提示词已复制")))}><Copy size={13} /></button>}
           <button aria-label="复制卡片" title="复制卡片" disabled={creating} onClick={() => {
             const current = controller.document.nodes.find(card => card.id === node.id);
             if (!current) return;
@@ -2267,7 +2300,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           </div>}
           {localVideo && <ComfyVideoCard node={node} prompt={original} onPromptChange={updateOriginal} modelControl={videoControls}
                 disabled={busy} readCurrentPrompt={readCurrentPrompt}
-                assets={assets} inputImages={localMode === "r2v" ? h3ReferenceAssets : inputImages} onChange={changes => patch(node.id, changes)} optimizationActions={optimizationActions} />}
+                assets={assets} inputImages={h3ReferenceAssets} onChange={changes => patch(node.id, changes)} optimizationActions={optimizationActions} />}
           {(node.kind === "generation" || node.kind === "agent" && !hasAgentMessages) && <WorkflowPromptEditor fitContent={videoCard || localImage} cardNames={cardNames} node={{ ...node, prompt: original, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} disabled={busy && !creating} readCurrentPrompt={readCurrentPrompt} onChange={updateOriginal} />}
           {localImage && optimizationActions}
           {node.kind !== "director3d" && node.kind !== "planner" && node.kind !== "trigger" && node.kind !== "loop" && node.kind !== "generation" && node.kind !== "agent" && node.kind !== "comfy-video" && node.kind !== "voice" && !(node.kind === "instruction" && node.action !== "describe") && !(node.kind === "visual-profile" && node.profileId) && <CanvasTextarea aria-label={node.kind === "instruction" ? "反推要求" : node.kind === "visual-profile" ? "视觉要求" : "卡片指令"}
@@ -2332,10 +2365,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           </p>}
           {(retryIssue || !busy && (restartIssue || providerIssue)) && <ProviderIssueNotice issue={retryIssue || restartIssue || providerIssue} />}
           {staleReview === node.id && draft && !draft.paused && h3DraftStale(node, draft) && !h3AutoOptimize && !busy &&
-            <div className="h3-run-guard" role="alert"><strong>原文或生成设置已更改，优化稿尚未同步</strong>
+            <div className="h3-run-guard" role="alert"><strong>原文或生成设置已更改，需重新优化提示词</strong>
               <button aria-label="关闭运行确认" onClick={() => setStaleReview(null)}><X size={13} /></button>
               <div><button onClick={() => runCard(node.id, true, false, "optimize")}>先优化再运行</button>
-                <button onClick={() => runCard(node.id, true, false, "previous")}>用旧优化稿</button>
+                <button onClick={() => runCard(node.id, true, false, "previous")}>沿用旧优化结果</button>
                 <button onClick={() => runCard(node.id, true, false, "original")}>用新原文直出</button></div>
             </div>}
           {node.kind === "loop" && <WorkflowLoopActions run={run?.order.includes(node.id) ? run : undefined} busy={busy} invalid={loopStartInvalid || !!providerIssue}
@@ -2364,7 +2397,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
                 }} />
                 {h3AutoOptimize ? "AUTO" : "自动优化提示词"}
               </label>}
-              <button disabled={busy || !!providerIssue} aria-label={videoCard || generationAction === "重试" ? generationAction : "运行此卡片"} title={localVideo ? "本机算力·不扣额度" : undefined}
+              <button className={h3 ? "h3-run-action" : undefined} disabled={busy || !!providerIssue} aria-label={videoCard || generationAction === "重试" ? generationAction : "运行此卡片"} title={localVideo ? "本机算力·不扣额度" : undefined}
                 onClick={() => runCard(node.id, true)}><Play size={13} aria-hidden="true" />{generationCard ? generationAction : "运行此卡片"}</button>
             </>}
             {node.kind === "trigger" && triggerMode === "manual" && <button disabled={creating || !!providerIssue} aria-label="触发下游" onClick={() => handle(controller.start(node.id))}><Play size={13} />触发下游</button>}
