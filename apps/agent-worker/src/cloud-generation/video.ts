@@ -60,6 +60,24 @@ export async function probeMonoSpeechMp3(bytes: Uint8Array): Promise<number> {
   return duration;
 }
 
+export async function probeSilentH264Mp4(bytes: Uint8Array): Promise<{ durationMs: number; width: number; height: number; fps: number }> {
+  const info = await probeMedia(bytes);
+  const stream = info.streams?.[0];
+  const [num, den] = String(stream?.avg_frame_rate).split("/").map(Number);
+  const result = {
+    durationMs: Math.round(Number(info.format?.duration) * 1000),
+    width: Number(stream?.width),
+    height: Number(stream?.height),
+    fps: num / den,
+  };
+  if (!info.format?.format_name?.split(",").includes("mp4") || info.streams?.length !== 1 ||
+      stream?.codec_type !== "video" || stream.codec_name !== "h264" ||
+      Object.values(result).some(n => !Number.isFinite(n) || n <= 0)) {
+    throw new Error("invalid_silent_video_media");
+  }
+  return result;
+}
+
 export async function downloadBoundedMedia(fetch: WorkerFetch, url: string, limit: number, signal?: AbortSignal): Promise<Uint8Array> {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hostname === "localhost" || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(parsed.hostname)) throw new Error("video_url_invalid");

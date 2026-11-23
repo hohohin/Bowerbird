@@ -32,6 +32,7 @@ import { OverlayScrollArea } from "./CollectionScrollArea";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { VideoTranscriptBatchButton } from "./VideoTranscriptBatch";
+import { VideoAnalysisBatchButton } from "./VideoAnalysisBatch";
 import { videoSourceKey } from "../lib/videoSourceKey";
 import { isVideoAsset } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
@@ -398,7 +399,10 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       <LibraryCatalogControls filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared} onSearchStart={() => {
         if (galleryReady) searchReturn.current = { ...position.current, top: scroll.current?.scrollTop ?? 0 };
       }} onStartSelection={() => { setMultiple(true); requestAnimationFrame(() => root.current?.querySelector<HTMLButtonElement>(".catalog-selection button")?.focus()); }}>{toolbarActions}
-        {flow && media === "videos" && (!projectScope || browseProjectId) && <VideoTranscriptBatchButton scope={{ projectId: projectScope ? browseProjectId : null, label: projectScope ? `项目内视频${scopedProjectName ? ` · ${scopedProjectName}` : ""}` : "全部视频" }}/>}
+        {flow && media === "videos" && (!projectScope || browseProjectId) && <>
+          <VideoTranscriptBatchButton scope={{ projectId: projectScope ? browseProjectId : null, label: projectScope ? `项目内视频${scopedProjectName ? ` · ${scopedProjectName}` : ""}` : "全部视频" }}/>
+          <VideoAnalysisBatchButton scope={{ projectId: projectScope ? browseProjectId : null, label: projectScope ? `项目内视频${scopedProjectName ? ` · ${scopedProjectName}` : ""}` : "全部视频" }}/>
+        </>}
         {semantic.scope && <LibrarySemanticSearch key={semantic.scope} owner={root} search={semantic}
           scopeLabel={projectScope ? `项目素材${scopedProjectName ? ` / ${scopedProjectName}` : ""}` : "全部素材"}/>}
       </LibraryCatalogControls>

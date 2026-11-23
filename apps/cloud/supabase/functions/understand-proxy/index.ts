@@ -9,6 +9,8 @@ import { isReplication, replicationOperations, replicationService, replicationPr
 import { shortRewrite, standardTextFits } from "../_shared/bcoin-text.ts";
 import { imageMetadata } from "../_shared/image-metadata.ts";
 import { FILE_SPEECH_AUDIO_NAME, FILE_SPEECH_BUCKET, FILE_SPEECH_KEY_PREFIX, FILE_SPEECH_MAX_DURATION_MS, FILE_SPEECH_MIME, FILE_SPEECH_OPERATION, FILE_SPEECH_SERVICE, fileSpeechAudioKey, parseFileSpeechAudio } from "../_shared/file-speech.ts";
+import { LIBRARY_VISUAL_PREFIX } from "../_shared/library-visual.ts";
+import { commitLibraryVisual, getLibraryVisual, libraryVisualCapabilities, prepareLibraryVisual } from "../_shared/library-visual-edge.ts";
 
 // 双模式：UNDERSTAND_ASYNC=false（默认）保持旧的「单次 Edge 请求内同步调方舟」行为；
 // true 时切换为生图 G0 同款异步任务模式（create/get 短请求 + VPS Worker 领取执行），
@@ -249,10 +251,20 @@ Deno.serve(async (request) => {
     userId = user.id;
     const raw = await readJsonBody(request, 50 * 1024 * 1024);
     if (raw.action === "replication-capabilities") return jsonResponse({ services: await replicationCapabilities(admin) }, 200, cors);
+    if (raw.action === "library-visual-capabilities") return jsonResponse(await libraryVisualCapabilities(admin), 200, cors);
+    if (raw.action === "library-visual-prepare") return await prepareLibraryVisual(admin, user.id, raw, cors);
+    if (raw.action === "library-visual-commit") return await commitLibraryVisual(admin, user.id, raw.job_id, cors);
+    if (raw.action === "library-visual-get") {
+      if (typeof raw.job_id !== "string") throw new ApiError("invalid_request", "缺少画面分析任务编号");
+      return await getLibraryVisual(admin, user.id, "id", raw.job_id, cors);
+    }
     if (raw.action === "file-speech-capabilities") return jsonResponse(await fileSpeechCapabilities(admin, user.id), 200, cors);
     if (raw.action === "file-speech-prepare") return await prepareFileSpeech(admin, user.id, raw, cors);
     if (raw.action === "file-speech-commit") return await commitFileSpeech(admin, user.id, raw.job_id, cors);
     if (raw.action === "get-by-key") {
+      if (typeof raw.idempotency_key === "string" && raw.idempotency_key.startsWith(LIBRARY_VISUAL_PREFIX) && raw.idempotency_key.length <= 200) {
+        return await getLibraryVisual(admin, user.id, "idempotency_key", raw.idempotency_key, cors);
+      }
       if (typeof raw.idempotency_key !== "string" || raw.idempotency_key.length > 200 ||
           !["replication:", FILE_SPEECH_KEY_PREFIX].some(prefix => (raw.idempotency_key as string).startsWith(prefix))) {
         throw new ApiError("invalid_request", "原任务编号无效");

@@ -18,6 +18,9 @@ import { ImagePreviewContinuation } from "./ImagePreviewContinuation";
 import { VideoPlayer } from "./VideoPlayer";
 import { AudioDetailPlayer } from "./AudioDetailPlayer";
 import { VideoTranscriptPanel, type VideoAnalysisView } from "./VideoTranscriptPanel";
+import { BcoinAmount } from "./BcoinAmount";
+import { LibraryVideoReplication } from "./LibraryVideoReplication";
+import { VideoVisualAnalysis, useVideoVisualAnalysis } from "./VideoVisualAnalysis";
 import { loadImagePreviewHistory } from "../lib/imagePreviewContinuation";
 import { useStore } from "../store";
 import "./CreationImagePreview.css";
@@ -60,7 +63,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   const [introducedKey, setIntroducedKey] = useState<string | null>(null);
   const [inspectorKey, setInspectorKey] = useState<string | null>(null);
   const [conversationKey, setConversationKey] = useState<string | null>(null);
-  const [videoAnalysis, setVideoAnalysis] = useState<{ key: string; view: VideoAnalysisView | null }>();
+  const [videoAnalysis, setVideoAnalysis] = useState<{ key: string; view: VideoAnalysisView | "replication" | null }>();
   const [videoSeek, setVideoSeek] = useState<{ key: string; time: number; revision: number }>();
   const [mediaReplacement, setMediaReplacement] = useState<{ key: string; revision: number; duration?: number | null }>();
   const [measuredAudio, setMeasuredAudio] = useState<{ key: string; duration: number }>();
@@ -241,7 +244,8 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   const transcriptOwner = cloudAuth?.cloud_available && cloudAuth.logged_in ? cloudAuth.user_id : null;
   const transcriptPrice = useVideoTranscriptPrice(media && contentMounted ? transcriptOwner : null);
   const duration = measuredAudio?.key === transcriptKey ? measuredAudio.duration : replacement ? replacement.duration : asset.duration;
-  const videoAnalysisStatus = transcriptPrice.credits !== null ? `转录 · ${transcriptPrice.credits} Bcoin`
+  const visualAnalysis = useVideoVisualAnalysis(video && contentMounted ? asset.id : undefined, transcriptKey);
+  const videoAnalysisStatus = transcriptPrice.credits !== null ? <>转录 · <BcoinAmount amount={transcriptPrice.credits}/></>
     : transcriptPrice.loading ? "正在读取价格…"
     : transcriptPrice.connectionError ? "暂时无法连接转录服务"
     : transcriptPrice.reason === "pilot_exhausted" ? "试转录名额已使用"
@@ -256,7 +260,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
     }
   }, [workspaceOpen, videoKey]);
 
-  function selectAnalysisView(view: VideoAnalysisView) {
+  function selectAnalysisView(view: VideoAnalysisView | "replication") {
     if (!workspaceOpen) {
       analysisOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       if (!openTranscript && transcriptPrice.unavailable) transcriptPrice.refresh();
@@ -404,7 +408,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
           <p title={asset.name}>{asset.name}</p>
         </div>
         <div className="video-analysis-tabs" role="group" aria-label={`${mediaLabel}分析视图`}>
-          <button type="button" aria-pressed={workspaceView === "analysis"} onClick={() => selectAnalysisView("analysis")}>分析</button>
+          <button type="button" aria-pressed={workspaceView === "analysis" || workspaceView === "replication"} onClick={() => selectAnalysisView("analysis")}>分析</button>
           <button type="button" aria-pressed={workspaceView === "transcript"} onClick={() => selectAnalysisView("transcript")}>转录文稿</button>
         </div>
         <button type="button" className="video-analysis-icon-button" onClick={close}
@@ -482,11 +486,20 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
           </div>
         </figure>
       </section>
-      {workspaceView && <section className="video-analysis-content" aria-label={workspaceView === "transcript" ? "转录文稿" : "转录操作"}>
-        {contentMounted && <VideoTranscriptPanel key={transcriptKey} assetId={asset.id} sourceKey={transcriptKey}
-          view={workspaceView} active={!closing} price={transcriptPrice} durationSeconds={duration} mediaKind={audio ? "audio" : "video"}
-          onRead={() => { analysisHeading.current?.focus({ preventScroll: true }); selectAnalysisView("transcript"); }}
-          onSeek={time => setVideoSeek(previous => ({ key: transcriptKey, time, revision: (previous?.revision ?? 0) + 1 }))}/>}
+      {workspaceView && <section className="video-analysis-content" aria-label={workspaceView === "transcript" ? "转录文稿" : audio ? "转录操作" : "分析操作"}>
+        {contentMounted && (audio || workspaceView === "transcript" ? <VideoTranscriptPanel key={transcriptKey} assetId={asset.id} sourceKey={transcriptKey}
+          active={!closing} price={transcriptPrice} durationSeconds={duration} mediaKind={audio ? "audio" : "video"}
+          onRead={audio && workspaceView === "analysis" ? () => {
+            analysisHeading.current?.focus({ preventScroll: true });
+            selectAnalysisView("transcript");
+          } : undefined}
+          onSeek={time => setVideoSeek(previous => ({ key: transcriptKey, time, revision: (previous?.revision ?? 0) + 1 }))}/>
+          : <div className="video-transcript-panel" key={`${transcriptKey}:${workspaceView}`}>
+            {workspaceView === "replication" ? <LibraryVideoReplication onBack={() => selectAnalysisView("analysis")}/> : <>
+              <VideoVisualAnalysis key={visualAnalysis.owner} assetId={asset.id} state={visualAnalysis}/>
+              <button type="button" className="app-button-primary mt-4" onClick={() => selectAnalysisView("replication")}>复刻</button>
+            </>}
+          </div>)}
       </section>}
       {!openTranscript && <section className={`creation-image-preview-conversation creation-image-preview-inspector ${!inspectorOpen ? "is-collapsed" : inspectorVisible ? "is-ready" : "is-loading"}${inspectorClosing ? " is-leaving" : ""}`}
         aria-label={mediaDetail} aria-hidden={workspaceOpen || !inspectorVisible || !inspectorOpen || inspectorClosing} hidden={workspaceOpen}>
@@ -499,6 +512,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
           onReady={() => setInspectorKey(requestKey)}
           onOpenVideoAnalysis={media ? selectAnalysisView : undefined}
           videoAnalysisStatus={media ? videoAnalysisStatus : undefined}
+          videoVisualQuote={video && visualAnalysis.quote?.chargeRequired ? visualAnalysis.quote.credits ?? undefined : undefined}
           selection={{ assetId: asset.id, onClose: close, onOpen: close, onNavigate: close }}/>}
         <span className="creation-image-preview-panel-mark" aria-hidden="true"/>
       </section>}

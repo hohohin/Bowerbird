@@ -617,11 +617,29 @@ impl Database {
         definitions: &[super::cloud::NewLabel],
         expected: Option<&ImageVersion>,
     ) -> AppResult<bool> {
+        self.apply_classification_with_guard(
+            asset, revision, prediction, record_observation, evaluated, model, definitions,
+            |tx| match expected {
+                Some(expected) => Ok(image_version(tx, asset)?.as_ref() == Some(expected)),
+                None => Ok(true),
+            },
+        )
+    }
+
+    pub(super) fn apply_classification_with_guard(
+        &self,
+        asset: &str,
+        revision: i64,
+        prediction: &Prediction,
+        record_observation: bool,
+        evaluated: &[String],
+        model: &str,
+        definitions: &[super::cloud::NewLabel],
+        current_source: impl FnOnce(&rusqlite::Transaction<'_>) -> AppResult<bool>,
+    ) -> AppResult<bool> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        if let Some(expected) = expected {
-            if image_version(&tx, asset)?.as_ref() != Some(expected) { return Ok(false); }
-        }
+        if !current_source(&tx)? { return Ok(false); }
         let current: i64 = tx.query_row(
             "SELECT revision FROM local_classification_state WHERE id=1",
             [],
