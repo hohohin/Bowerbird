@@ -1,10 +1,12 @@
-import { useRef, type RefCallback } from "react";
+import { useId, useRef, useState, type RefCallback } from "react";
 import { create } from "zustand";
-import { Layers2, LayoutDashboard, PanelLeftClose, PanelLeftOpen, Tags } from "lucide-react";
+import { ChevronDown, ChevronRight, Layers2, LayoutDashboard, PanelLeftClose, PanelLeftOpen, Settings2, Tags } from "lucide-react";
 import { useLibraryModeStore } from "../lib/libraryPane";
 import { useProjectAssetDrop } from "../lib/useProjectAssetDrop";
+import { invalidateCatalog } from "../lib/useCatalogRevision";
 import { useStore } from "../store";
 import type { Project } from "../lib/types";
+import { LocalClassificationDialog } from "./LocalClassificationDialog";
 import "./LibrarySidebar.css";
 
 const widthKey = "bowerbird.catalog.sidebarWidth";
@@ -31,9 +33,15 @@ export function LibrarySidebar({ projects, bodyRef, contextProjectId }: {
   const { width, resize } = useSidebarWidth();
   const aside = useRef<HTMLElement>(null);
   const drag = useRef<{ x: number; width: number } | null>(null);
+  const projectListId = useId(), tagListId = useId();
+  const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [tagsExpanded, setTagsExpanded] = useState(true);
+  const [manageTags, setManageTags] = useState(false);
   const drop = useProjectAssetDrop();
   const actions = mode.getState();
   const hierarchy = sidebarMode === "hierarchy";
+  const ProjectChevron = projectsExpanded ? ChevronDown : ChevronRight;
+  const TagChevron = tagsExpanded ? ChevronDown : ChevronRight;
   function setCollapsed(value: boolean) {
     actions.setSidebarCollapsed(value);
     requestAnimationFrame(() => aside.current?.querySelector<HTMLButtonElement>(value ? "[data-sidebar-expand]" : "[data-sidebar-collapse]")?.focus());
@@ -52,26 +60,44 @@ export function LibrarySidebar({ projects, bodyRef, contextProjectId }: {
     </div>
     <div className="library-sidebar-scroll" hidden={collapsed} data-mode={sidebarMode}>
       {hierarchy && <nav className="library-sidebar-projects" aria-label="项目">
-        <button type="button" className="catalog-row library-sidebar-primary" aria-current={target.kind === "projects" && (!target.projectId || !projects.some(project => project.id === target.projectId)) || undefined}
-          onClick={() => actions.selectHierarchy({ kind: "projects", projectId: null })}><LayoutDashboard size={14}/>项目</button>
-        <div className="library-sidebar-children">
-          {projects.map(project => <button type="button" key={project.id} className="catalog-row library-sidebar-project"
-            aria-current={target.kind === "projects" && target.projectId === project.id || undefined}
-            aria-label={project.name} title={project.name} {...drop(project)}
-            onContextMenu={event => {
-              event.preventDefault();
-              const bounds = event.currentTarget.getBoundingClientRect();
-              useStore.getState().openProjectContextMenu(event.clientX || bounds.left, event.clientY || bounds.bottom, project.id);
-            }}
-            onClick={() => actions.selectHierarchy({ kind: "projects", projectId: project.id })}><span>{project.name}</span></button>)}
+        <button type="button" className="catalog-row library-sidebar-primary" aria-expanded={projectsExpanded} aria-controls={projectListId}
+          onClick={() => setProjectsExpanded(value => !value)}><LayoutDashboard size={14} aria-hidden="true"/>项目
+          <ProjectChevron size={14} className="library-sidebar-chevron" aria-hidden="true"/>
+        </button>
+        <div id={projectListId} hidden={!projectsExpanded}>
+          <div className="library-sidebar-children">
+            <button type="button" className="catalog-row"
+              aria-current={target.kind === "projects" && (!target.projectId || !projects.some(project => project.id === target.projectId)) || undefined}
+              onClick={() => actions.selectHierarchy({ kind: "projects", projectId: null })}>全部项目素材</button>
+            {projects.map(project => <button type="button" key={project.id} className="catalog-row library-sidebar-project"
+              aria-current={target.kind === "projects" && target.projectId === project.id || undefined}
+              aria-label={project.name} title={project.name} {...drop(project)}
+              onContextMenu={event => {
+                event.preventDefault();
+                const bounds = event.currentTarget.getBoundingClientRect();
+                useStore.getState().openProjectContextMenu(event.clientX || bounds.left, event.clientY || bounds.bottom, project.id);
+              }}
+              onClick={() => actions.selectHierarchy({ kind: "projects", projectId: project.id })}><span>{project.name}</span></button>)}
+          </div>
+          {contextProjectId && target.kind === "projects" && target.projectId && target.projectId !== contextProjectId && projects.some(project => project.id === contextProjectId) &&
+            <button type="button" className="catalog-row library-sidebar-back" onClick={() => actions.selectHierarchy({ kind: "projects", projectId: contextProjectId })}>回到当前项目</button>}
         </div>
-        {contextProjectId && target.kind === "projects" && target.projectId && target.projectId !== contextProjectId && projects.some(project => project.id === contextProjectId) &&
-          <button type="button" className="catalog-row library-sidebar-back" onClick={() => actions.selectHierarchy({ kind: "projects", projectId: contextProjectId })}>回到当前项目</button>}
       </nav>}
-      <div ref={bodyRef} className="library-sidebar-slot"/>
+      {!hierarchy && <div className="library-sidebar-tag-heading">
+        <button type="button" className="catalog-row library-sidebar-primary" aria-expanded={tagsExpanded} aria-controls={tagListId}
+          onClick={() => setTagsExpanded(value => !value)}>拼音 A–Z
+          <TagChevron size={14} className="library-sidebar-chevron" aria-hidden="true"/>
+        </button>
+      </div>}
+      <div ref={hierarchy || tagsExpanded ? bodyRef : null} id={hierarchy ? undefined : tagListId}
+        className="library-sidebar-slot" hidden={!hierarchy && !tagsExpanded}/>
     </div>
     {!collapsed && <>
-      <footer className="library-sidebar-footer"><button type="button" data-sidebar-collapse aria-expanded onClick={() => setCollapsed(true)}><PanelLeftClose size={15}/>收起侧栏</button></footer>
+      <footer className="library-sidebar-footer">
+        <button type="button" data-sidebar-collapse aria-expanded onClick={() => setCollapsed(true)}><PanelLeftClose size={15}/>收起侧栏</button>
+        {!hierarchy && <button type="button" className="library-sidebar-manage-tags" title="管理标签" aria-label="管理标签"
+          onClick={() => setManageTags(true)}><Settings2 size={15} aria-hidden="true"/></button>}
+      </footer>
       <div className="catalog-sidebar-resize" role="separator" aria-label="调整素材库侧栏宽度" aria-orientation="vertical" aria-valuenow={width} aria-valuemin={120} aria-valuemax={320} tabIndex={0}
         onPointerDown={event => {
           if (event.button !== 0) return;
@@ -87,5 +113,6 @@ export function LibrarySidebar({ projects, bodyRef, contextProjectId }: {
           resize(event.key === "Home" ? 208 : (aside.current?.getBoundingClientRect().width ?? width) + (event.key === "ArrowLeft" ? -16 : 16));
         }}/>
     </>}
+    {manageTags && <LocalClassificationDialog initialView="labels" onClose={() => { setManageTags(false); invalidateCatalog(); }}/>}
   </aside>;
 }

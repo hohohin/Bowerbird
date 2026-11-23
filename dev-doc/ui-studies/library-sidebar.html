@@ -72,6 +72,11 @@
   .side-head .all { position: relative; }
   .side-head .all[aria-current]::before { top: auto; left: 5px; bottom: 1px; width: 11px; height: 2px; }
   .nav-group > .nav-row > .row-button { font-weight: 600; }
+  .section-toggle { display:flex; align-items:center; gap:7px; width:100%; min-height:32px; padding:0 7px; text-align:left; font-size:13px; font-weight:600; }
+  .section-toggle .section-chevron { margin-inline-start:auto; color:var(--muted); }
+  .tag-section { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; }
+  .tag-section > .section-toggle { margin:8px 6px; width:calc(100% - 12px); }
+  .tag-list { display:flex; flex:1; min-height:0; }
   .nav-children { margin-left: 12px; padding-left: 2px; border-left: 1px solid var(--edge); }
   .tree-row[data-depth="1"] { margin-left: 12px; }
   .tree-row[data-depth="2"] { margin-left: 24px; }
@@ -331,6 +336,7 @@
     let memory = load("pane." + id, defaultMemory(id));
     if (id === "split-right") save("pane." + id, memory);
     let media = "all", generated = 0, color = "", query = "", selecting = false, activeTag = null;
+    let projectsExpanded = true, tagsExpanded = true;
     let selection = new Set(), anchor = null;
     const expanded = new Set(folders.map(folder => folder.id));
     const root = document.createElement("section");
@@ -375,6 +381,10 @@
       return `<button type="button" class="row-button" data-target="${target}" ${current} title="${esc(name)}">
         ${glyph ? icon(glyph) : ""}<span>${esc(name)}</span></button>`;
     }
+    function sectionToggle(name, section, open, glyph) {
+      return `<button type="button" class="section-toggle" data-action="disclose-${section}" aria-expanded="${open}" aria-controls="${id}-${section}">
+        ${glyph ? icon(glyph) : ""}${name}<span class="section-chevron">${icon(open ? "down" : "right")}</span></button>`;
+    }
     function folderTree(parentId = null, depth = 0) {
       return folders.filter(folder => folder.parent === parentId).map(folder => {
         const hasChildren = folders.some(child => child.parent === folder.id);
@@ -396,16 +406,18 @@
       foot.innerHTML = `<button type="button" data-action="collapse">${icon("closeSide")}收起侧栏</button>`;
       if (isTags) {
         const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-        body.innerHTML = `<nav class="alphabet" aria-label="标签首字母索引">
+        body.innerHTML = `<div class="tag-section">${sectionToggle("拼音 A–Z", "tags", tagsExpanded)}
+          <div class="tag-list" id="${id}-tags" ${tagsExpanded ? "" : "hidden"}><nav class="alphabet" aria-label="标签首字母索引">
           ${letters.map(letter => `<button type="button" data-letter="${letter}" aria-label="定位 ${letter} 开头的标签"
             aria-disabled="${!tags.some(tag => tag[0] === letter)}">${letter}</button>`).join("")}</nav>
           <div class="tag-scroll" aria-label="全局标签">${tags.map(([letter, tag]) => `<div class="tag-initial" aria-hidden="true">${letter}</div>
-            <button type="button" class="tag-row" data-tag="${tag}" ${tag === activeTag ? 'aria-current="location"' : ""}>${tag}</button>`).join("")}</div>`;
+            <button type="button" class="tag-row" data-tag="${tag}" ${tag === activeTag ? 'aria-current="location"' : ""}>${tag}</button>`).join("")}</div></div></div>`;
       } else {
         const prev = body.querySelector(".hierarchy")?.scrollTop ?? 0;
         body.innerHTML = `<nav class="hierarchy" aria-label="层级导航">
-          <div class="nav-group"><div class="nav-row">${row("projects", "项目", "project")}</div>
-            <div class="nav-children">${projects.map(project => `<div class="nav-row" data-drop="project:${project.id}">${row("project:" + project.id, project.name)}</div>`).join("")}</div></div>
+          <div class="nav-group">${sectionToggle("项目", "projects", projectsExpanded, "project")}
+            <div class="nav-children" id="${id}-projects" ${projectsExpanded ? "" : "hidden"}><div class="nav-row">${row("projects", "全部项目素材")}</div>
+            ${projects.map(project => `<div class="nav-row" data-drop="project:${project.id}">${row("project:" + project.id, project.name)}</div>`).join("")}</div></div>
           <div class="nav-group"><div class="nav-row">${row("folders", "文件夹", "folder")}
             ${action("plus", "建立连接", "connect", "", "folder-connect")}</div>
             <div class="nav-children">${folderTree()}</div></div></nav>`;
@@ -625,6 +637,14 @@
         case "all": setMode("hierarchy", "all"); head.querySelector("[data-action=all]").focus(); break;
         case "collapse": collapse(true); break;
         case "expand": collapse(false); break;
+        case "disclose-projects":
+        case "disclose-tags":
+          if (command === "disclose-projects") projectsExpanded = !projectsExpanded;
+          else tagsExpanded = !tagsExpanded;
+          drawNavigation();
+          if (command === "disclose-tags" && tagsExpanded) syncTag();
+          body.querySelector(`[data-action=${command}]`).focus({ preventScroll: true });
+          break;
         case "generated": generated = (generated + 1) % 3; drawGallery(); tools.querySelector("[data-action=generated]").focus(); break;
         case "search": case "color": toolPopover(command); break;
         case "connect": showDialog("建立连接", "<p>正式组件将在这里打开系统文件夹选择器。此处使用示例目录。</p>"); break;

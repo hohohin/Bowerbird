@@ -9,7 +9,6 @@ import { catalogCache } from "../lib/catalogCache";
 import { openCatalogMenu } from "../lib/openCatalogMenu";
 import { hasPendingOriginalDeletions, isPendingOriginal, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { invalidateCatalog, useCatalogRevision } from "../lib/useCatalogRevision";
-import { Settings2 } from "lucide-react";
 import { materialCatalog, type CatalogKind, type MaterialCatalog, type CatalogFilter } from "../lib/materialCatalog";
 import { catalogInitial, orderCatalogTags, UNTAGGED_SECTION } from "../lib/materialCatalogOrder";
 import { type LibraryMedia } from "../lib/localFileMode";
@@ -37,7 +36,6 @@ import { videoSourceKey } from "../lib/videoSourceKey";
 import { isVideoAsset } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset } from "../lib/textMedia";
-import { LocalClassificationDialog } from "./LocalClassificationDialog";
 import { LocalFileBrowser } from "./LocalFileBrowser";
 import { CollectionAssignDialog, CollectionMoveDialog } from "./CollectionDialogs";
 import { ModalShell } from "./ModalShell";
@@ -79,7 +77,6 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const alphabetic = true;
   const [assign, setAssign] = useState<string[] | null>(null);
   const [moveIds, setMoveIds] = useState<string[] | null>(null);
-  const [manageTags, setManageTags] = useState(false);
   const [references, setReferences] = useState(false);
   const [preview, setPreview] = useState<{ asset: Asset; path: string; sourceKey: string } | null>(null);
   const [working, setWorking] = useState(false);
@@ -404,8 +401,6 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     </div>
     <div className="catalog-body">
       {!flow && sidebarBody && createPortal(<>
-        <div className="catalog-sidebar-heading"><span>拼音 A–Z</span>
-          <button title="管理标签" aria-label="管理标签" onClick={() => setManageTags(true)}><Settings2 size={15}/></button></div>
         {catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => invalidateCatalog()}>重试</button></p>}
         <CatalogTagIndex tags={tags} active={active} dropTarget={dropTarget} alphabetic pinned={pinnedTags} onTogglePin={id => { togglePin(id); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} onNavigate={navigateTag} onLetter={navigateLetter}/>
       </>, sidebarBody)}
@@ -423,7 +418,6 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       </div>
     </div>
     {preview && <LibraryVideoPreview {...preview} projectId={projectId} onClose={() => setPreview(null)}/>}
-    {manageTags && <LocalClassificationDialog initialView="labels" projectId={projectScope ? browseProjectId ?? undefined : undefined} onClose={() => { setManageTags(false); invalidateCatalog(); }}/>}
     {references && <ModalShell title="外部引用" width="lg" onClose={() => setReferences(false)}><LocalFileBrowser initialTab="references" onClose={() => setReferences(false)} onCreateProject={() => void onCreateProject?.()}/></ModalShell>}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); invalidateCatalog(); }}/>}
     {moveIds && <CollectionMoveDialog selection={{ assetIds: moveIds }} onClose={() => setMoveIds(null)} onSaved={finishSelection}/>}

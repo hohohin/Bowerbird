@@ -17,7 +17,7 @@ const assets = (id, section = "all") => page.locator(`[data-catalog-section="${s
 try {
   const fixture = `${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?navigation`;
   await page.goto(fixture + "&home");
-  await row("项目").click();
+  await row("全部项目素材").click();
   await assets("p", "p").first().waitFor();
   await assets("q", "q").first().waitFor();
   for (const width of [1000, 600, 320]) {
@@ -36,7 +36,7 @@ try {
   await assets("q").first().waitFor();
   await page.evaluate(() => window.store.setState({ projects: window.store.getState().projects.filter(project => project.id !== "q") }));
   await assets("p", "p").first().waitFor();
-  assert.equal(await row("项目").getAttribute("aria-current"), "true");
+  assert.equal(await row("全部项目素材").getAttribute("aria-current"), "true");
   await page.setViewportSize({ width: 1000, height: 800 });
   await page.goto(fixture);
   await assets("p").first().waitFor();
