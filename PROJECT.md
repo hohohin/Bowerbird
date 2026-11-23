@@ -31,7 +31,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 | 范围 | 当前状态与证据 |
 |---|---|
-| Windows | 公开版 **26.11.2301**，发布源码 3a7077bf 含 SQLite **0062**。11 月 23 日北京时间 14:32 公网复核通过，Tauri 更新签名有效，按用户授权跳过 Authenticode。[发布与回滚](dev-doc/DESKTOP-UPDATES.md#windows-26112301-已公开发布2026-11-23) |
+| Windows | 公开版 **26.11.2302**，发布源码 cc767d6f8 含 SQLite **0062**。11 月 23 日北京时间 16:14 公网复核通过，Tauri 更新签名有效，按用户授权跳过 Authenticode。[发布与回滚](dev-doc/DESKTOP-UPDATES.md#windows-26112302-已公开发布2026-11-23) |
 | macOS | 公开通道为 Apple Silicon **26.10.801**、Intel **26.10.1501**，ARM 1502 未切通道。[桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 正式验收](macOS/RELEASE-READINESS.md) |
 | 浏览器扩展 | **0.5.2**，显示当前项目，采集图片可直入画板。更新后须在浏览器重新加载。[版本与验收](apps/extension/README.md) |
 | Cloud 与官网 | Cloud 网关、原请求恢复和 VPS 定时巡检已上线。微信 Native v3 已开放公开购买，注册及 Pro 月度赠币已启用。Seedance 2.5 已开三档，分层已部署。GPT／Flash 未启价，Studio 未新增销售。[部署](apps/cloud/DEPLOY.md) · [微信支付](apps/cloud/WECHATPAY.md) · [现行定价](dev-doc/Bowerbird定价方案v2-订阅积分制.md) |
@@ -53,7 +53,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 ### 近期里程碑
 
-- **2026-11-23｜Windows 26.11.2301 后的源码存档。** 顶栏验签后可直接安装并重启，运行中的本地生成会触发确认。画板折叠生成卡预览随图片或视频结果移动，保留原位置和连线。生成卡与底部创作框可选择未配置的自有订阅 GPT Image 2，并打开对应授权设置。[验证与边界](project_logs/2026-11-23-source-archive.md)
+- **2026-11-23｜Windows 26.11.2302 已公开发布。** 顶栏验签后可直接安装并重启，运行中的本地生成会触发确认。画板折叠生成卡预览随图片或视频结果移动。生成卡与底部创作框可打开自有订阅 GPT Image 2 的授权设置。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112302-已公开发布2026-11-23) · [源码存档](project_logs/2026-11-23-source-archive.md)
 
 - **2026-11-23｜Windows 26.11.2301 已公开发布。** 素材库常驻侧栏、可编辑标注与截图发往画板。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112301-已公开发布2026-11-23)
 
