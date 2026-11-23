@@ -68,6 +68,58 @@ try {
     await page.waitForFunction(selector => document.querySelector(selector)?.getAttribute('aria-label') === '更新后的素材.png', kind === 'folders' ? '[data-connection-entry="root-0"] [data-asset-id]' : '[data-asset-id="asset-0"]');
     console.log(`PASS ${kind}: immediate reopen, no duplicate reads, hidden changes, cached cards during delayed revalidation`);
   }
+
+  // Leave a small folder behind while paging through more than the 16 locally
+  // retained pages in another folder. The original page is still in session cache.
+  await page.goto('http://127.0.0.1:17979/scripts/fixtures/connected-collections/preview.html');
+  const folder = id => page.locator(`[role="treeitem"][data-collection-id="${id}"]`);
+  const smallCard = page.locator('[data-connection-entry="second-0"]');
+  await folder('second').click();
+  await smallCard.waitFor();
+  await page.evaluate(() => {
+    const example = window.entries.find(entry => entry.id === 'root-0');
+    const count = 1200 - window.entries.filter(entry => entry.folder_id === 'root').length;
+    for (let i = 0; i < count; i++) {
+      const id = `large-${i}`;
+      window.entries.push({ ...example, id, asset_id: id, asset: { ...example.asset, id } });
+    }
+    window.changed({ folderIds: ['root'] });
+  });
+  await folder('root').click();
+  await page.locator('[data-catalog-section="root"] [data-library-count="1200 项"]').waitFor();
+  const scroller = page.locator('.connected-collections .catalog-scroller');
+  for (let top = 0; ; ) {
+    const { max, step } = await scroller.evaluate((view, target) => {
+      view.scrollTop = target;
+      return { max: view.scrollHeight - view.clientHeight, step: view.clientHeight };
+    }, top);
+    await paint();
+    await page.waitForFunction(() => !document.querySelector('.catalog-virtual-page [role="status"]'));
+    if (top >= max) break;
+    top = Math.min(top + step, max);
+  }
+  const beforeReturn = await reads();
+  assert.ok(new Set(beforeReturn.filter(r => r.command === 'connection_entries' && r.args.folderId === 'root').map(r => r.args.offset)).size > 16,
+    'the large folder must evict the small folder from the local page cache');
+  await hold();
+  await page.evaluate(() => {
+    const list = document.querySelector('.catalog-virtual');
+    const status = '.catalog-hint[role="status"]';
+    window.previousCatalog = list;
+    window.transientLoading = false;
+    const observer = new MutationObserver(records => {
+      window.transientLoading ||= records.some(record => [...record.addedNodes, ...record.removedNodes].some(node =>
+        node instanceof Element && (node.matches(status) || node.querySelector(status))));
+    });
+    observer.observe(list, { childList: true, subtree: true });
+  });
+  await folder('second').click();
+  await smallCard.waitFor(); await paint();
+  assert.ok(await page.evaluate(() => window.previousCatalog === document.querySelector('.catalog-virtual')), 'switching folders reuses the catalog');
+  assert.equal(await page.evaluate(() => window.transientLoading), false, 'no intermediate loading indicator on returning to a fresh session page');
+  assert.deepEqual(await reads(), beforeReturn, 'returning after local eviction reuses the session page');
+  await page.evaluate(() => window.releaseCatalog());
+  console.log('PASS folders: returning after local eviction paints the session page immediately');
   assert.deepEqual(errors, []);
 } catch (error) {
   console.error('browser errors', errors);

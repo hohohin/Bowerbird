@@ -15,6 +15,28 @@ import { getDragAssets, isNativeAssetDrag, setDragAssets } from "../lib/dragPayl
 import { startExternalDrag } from "../lib/externalDrag";
 import { useLibraryDragHold } from "../lib/useLibraryDragHold";
 const previews = createFilePreviewQueue(externalFiles.preview);
+type PreviewTarget = { visible: (inside: boolean) => void; nearby: (inside: boolean) => void };
+const previewObservers = new WeakMap<Element | Document, {
+  visible: IntersectionObserver; nearby: IntersectionObserver; targets: Map<Element, PreviewTarget>;
+}>();
+function observePreview(element: Element, target: PreviewTarget) {
+  const root = element.closest(".library-scroller, .canvas-frequent-scroll");
+  const list = root ?? element.ownerDocument;
+  let shared = previewObservers.get(list);
+  if (!shared) {
+    const targets = new Map<Element, PreviewTarget>();
+    const observer = (range: keyof PreviewTarget, rootMargin: string) => new IntersectionObserver(entries => {
+      for (const entry of entries) targets.get(entry.target)?.[range](entry.isIntersecting);
+    }, { root, rootMargin });
+    shared = { visible: observer("visible", "0px"), nearby: observer("nearby", "400px"), targets };
+    previewObservers.set(list, shared);
+  }
+  const { visible, nearby, targets } = shared;
+  targets.set(element, target);
+  visible.observe(element);
+  nearby.observe(element);
+  return () => { targets.delete(element); visible.unobserve(element); nearby.unobserve(element); };
+}
 export type FileMediaCardProps = {
   entry: LocalFileEntry; selected: boolean; revision: number; labels: string[];
   onSelect: (additive: boolean, range: boolean) => void; onOpen: () => void;
@@ -86,22 +108,32 @@ function VisualFileMediaCard({ entry, selected, revision, labels, onSelect, onAc
       }
       return;
     }
-    let alive = true; let priority = 1;
+    let alive = true;
+    let priority: 0 | 1 | undefined;
+    let nearby = false;
     let request: ReturnType<typeof previews.request> | undefined;
     setPreview(null);
-    const visible = new IntersectionObserver(entries => {
-      priority = entries.some(e => e.isIntersecting) ? 0 : 1;
-      request?.priority(priority);
-    });
-    const observer = new IntersectionObserver(entries => {
-      if (!entries.some(e => e.isIntersecting)) { request?.cancel(); request = undefined; return; }
-      if (request) return;
+    if (!ref.current) return;
+    const requestPreview = () => {
+      // Wait for both initial observations so nearby cards never fill the queue ahead of visible cards.
+      if (!nearby || priority === undefined || request) return;
       const ready = previews.peek(previewKey);
       if (ready) { setPreview(ready); return; }
       request = previews.request(previewKey, entry.path, priority, path => { if (alive) setPreview(path); });
-    }, { rootMargin: "400px" });
-    if (ref.current) { visible.observe(ref.current); observer.observe(ref.current); }
-    return () => { alive = false; request?.cancel(); visible.disconnect(); observer.disconnect(); };
+    };
+    const unobserve = observePreview(ref.current, {
+      visible(inside) {
+        priority = inside ? 0 : 1;
+        request?.priority(priority);
+        requestPreview();
+      },
+      nearby(inside) {
+        nearby = inside;
+        if (inside) requestPreview();
+        else { request?.cancel(); request = undefined; }
+      },
+    });
+    return () => { alive = false; request?.cancel(); unobserve(); };
   }, [entry.path, entry.directory, entry.preview, previewKey, failedPreview]);
   return <button ref={ref} type="button" style={style} data-positioned={style ? "true" : undefined} className={`folder-media-card${selected ? " is-selected" : ""}`} aria-pressed={selected}
     onPointerDown={onPointerDown}

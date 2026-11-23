@@ -289,3 +289,69 @@ fn group_materialization_bounds_work_in_a_large_current_folder() {
     assert_eq!(outcomes[0].0,outcomes[1].0,"materialization must not change visible members or order");
     assert!(outcomes[1].1<outcomes[0].1,"shared provenance rows must reduce repeated VM work");
 }
+
+#[test]
+#[ignore = "isolated first-connection latency comparison"]
+fn compare_first_connection_preparation() {
+    use std::time::Instant;
+
+    const FILES: usize = 128;
+    let fixture = tempfile::tempdir().unwrap();
+    let source = fixture.path().join("originals");
+    fs::create_dir(&source).unwrap();
+    let exemplar = source.join("000.bmp");
+    image::RgbImage::from_pixel(1024, 1024, image::Rgb([17, 42, 123]))
+        .save(&exemplar)
+        .unwrap();
+    let size = fs::metadata(&exemplar).unwrap().len();
+    for index in 1..FILES {
+        let path = source.join(format!("{index:03}.bmp"));
+        fs::copy(&exemplar, &path).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_len(size + index as u64)
+            .unwrap();
+    }
+
+    let mut samples = [Vec::new(), Vec::new()];
+    for run in 0..6 {
+        // Match the same source files and alternate order on equally warm disk data.
+        for baseline in [run % 2 == 0, run % 2 != 0] {
+            let library = LibraryPaths::init(fixture.path().join(format!("library-{run}-{baseline}"))).unwrap();
+            let db = Database::open(&library.db).unwrap();
+            db.migrate().unwrap();
+            let start = Instant::now();
+            let root = db.connect_directory(&source, None).unwrap();
+            let mut first = None;
+            let result = SCAN_SEQUENTIAL_BASELINE.with(|flag| {
+                flag.set(baseline);
+                let scan = db.scan_connection_changes(&library, &root, None, |changed| {
+                    if changed && first.is_none() {
+                        let elapsed = start.elapsed().as_micros();
+                        let count = db.connected_folder(&root).unwrap().count;
+                        if count > 0 { first = Some((elapsed, count)); }
+                    }
+                });
+                flag.set(false);
+                scan
+            });
+            result.unwrap();
+            let total = start.elapsed().as_micros();
+            assert_eq!(db.connected_folder(&root).unwrap().count, FILES as i64);
+            assert!(db.pending_connected_fingerprints("").unwrap().is_empty());
+            let (first, count) = first.expect("first indexed batch should be observable");
+            if run > 0 { samples[usize::from(baseline)].push((first, total, count)); }
+        }
+    }
+    for (baseline, sample) in samples.into_iter().enumerate() {
+        let median = |get: fn((u128, u128, i64)) -> u128| {
+            let mut values: Vec<_> = sample.iter().copied().map(get).collect();
+            values.sort_unstable();
+            values[2]
+        };
+        println!("first-connect baseline={} files={FILES} first_items={} first_us={} total_us={}",
+            baseline == 1, sample[0].2, median(|value| value.0), median(|value| value.1));
+    }
+}

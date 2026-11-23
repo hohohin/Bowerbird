@@ -9,7 +9,7 @@ export function createFilePreviewQueue(load: (path: string) => Promise<string>, 
   let scheduled = false;
   function remember(key: string, path: string) {
     cache.delete(key); cache.set(key, path);
-    if (cache.size > 512) cache.delete(cache.keys().next().value!);
+    if (cache.size > 2048) cache.delete(cache.keys().next().value!);
   }
   function schedule() {
     if (scheduled) return;

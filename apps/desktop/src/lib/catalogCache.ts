@@ -5,7 +5,7 @@ import type { ConnectionEntry, FolderConnection } from "./folderConnections";
 
 export type CatalogPage = { assets: Asset[]; groups: Record<string, Asset[]> };
 export type CatalogPreviewChange = { assets: Asset[]; versions?: Record<string, string> };
-export type ConnectionProgress = { rootId: string; scanning: boolean; error: string | null; rootAvailable?: boolean };
+export type ConnectionProgress = { rootId: string; folderId?: string; activeFolderId?: string; scanning: boolean; error: string | null; rootAvailable?: boolean };
 export type CatalogChange = { rootIds?: string[]; folderIds?: string[] };
 export type CatalogFolderScope = { id: string; rootId: string };
 type EntryAsset = Asset & { connectionEntry?: ConnectionEntry; connectionGroup?: Asset[] };
@@ -50,11 +50,14 @@ export function patchCatalogPage<T extends CatalogPage>(page: T, change: Catalog
 export function patchConnectionProgress(folders: FolderConnection[], progress: ConnectionProgress) {
   const next = folders.map(folder => {
     if (folder.root_id !== progress.rootId) return folder;
+    const inScope = !progress.folderId || folder.id === progress.folderId;
+    const scanning = progress.scanning && (progress.activeFolderId ? folder.id === progress.activeFolderId : inScope);
+    const error = inScope || scanning ? progress.error : folder.error;
     // A returned root does not prove that every former subfolder still exists.
     const available = progress.rootAvailable === false ? false
       : folder.id === progress.rootId && progress.rootAvailable === true ? true : folder.available;
-    return folder.scanning === progress.scanning && folder.error === progress.error && folder.available === available
-      ? folder : { ...folder, scanning: progress.scanning, error: progress.error, ...(folder.available !== available ? { available } : {}) };
+    return folder.scanning === scanning && folder.error === error && folder.available === available
+      ? folder : { ...folder, scanning, error, ...(folder.available !== available ? { available } : {}) };
   });
   return next.every((folder, i) => folder === folders[i]) ? folders : next;
 }

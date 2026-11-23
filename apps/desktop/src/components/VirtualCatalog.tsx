@@ -38,7 +38,7 @@ function visiblePage(page: Page, hasPending: boolean): Page & { sourceIndices?: 
 // total height alone cannot continue uneven columns or adapt to a new width.
 const layoutHistory = new Map<string, Map<string, readonly number[]>>();
 const assetKey = (asset: Asset) => asset.id;
-export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, pageScope, itemKey = assetKey, renderItem, emptySection }: {
+export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, pageScope, browseScope, itemKey = assetKey, renderItem, emptySection }: {
   filter: CatalogFilter; sections: PageSection[]; headings: boolean; width: number; revision: number;
   scroll: RefObject<HTMLDivElement>; selected: Set<string>; jump: { id: string; sequence: number } | null; initialTop?: number;
   onActive: (id: string | null) => void; onAssetsChange?: (assets: Asset[]) => void;
@@ -47,7 +47,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   onActivate?: (asset: Asset, location: CatalogLocation) => void; onOpen: (asset: Asset, location: CatalogLocation) => void;
   onContextMenu: (asset: Asset, x: number, y: number, location: CatalogLocation) => void;
   readPage?: (sectionId: string, offset: number, limit: number) => Promise<Asset[]>;
-  pageScope?: string;
+  pageScope?: string; browseScope?: string | null;
   itemKey?: (asset: Asset) => string;
   renderItem?: (asset: Asset, style: CSSProperties, ratio: number, location: CatalogLocation, pageRevision: number) => ReactNode;
   emptySection?: (sectionId: string) => ReactNode;
@@ -72,6 +72,9 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   const anchor = useRef<{ key: string; delta: number; asset?: { id: string; delta: number } } | { section: string; delta: number } | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
   const oldGeometry = useRef("");
+  const activeScope = useRef(browseScope);
+  const changingScope = activeScope.current !== browseScope;
+  const sectionsRef = useRef(sections); sectionsRef.current = sections;
   const showEmpty = !!emptySection;
   if (oldGeometry.current !== geometryKey) {
     measured.current = layoutHistory.get(geometryKey) ?? new Map();
@@ -104,9 +107,10 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   }, [sections, viewport.width, viewport.height, width, headings, geometryRevision, geometryKey, showEmpty]);
   const layoutRef = useRef(layout); layoutRef.current = layout;
   const scale = catalogScrollScale(layout.height + 100, viewport.height);
-  const logicalTop = viewport.top / scale;
+  const top = changingScope ? initialTop ?? 0 : viewport.top;
+  const logicalTop = top / scale;
   const visible = visibleCatalogBlocks(layout.blocks, logicalTop, viewport.height);
-  const focusBlock = focused ? layout.blocks.find(block => block.key === focused) : undefined;
+  const focusBlock = !changingScope && focused ? layout.blocks.find(block => block.key === focused) : undefined;
   if (focusBlock && !visible.some(block => block.key === focused)) visible.push(focusBlock);
   const wanted = useRef(visible); wanted.current = visible;
   const pump = useRef<() => void>(() => {});
@@ -115,9 +119,10 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
     const view = scroll.current;
     if (!view || anchor.current) return;
     const top = view.scrollTop / catalogScrollScale(layoutRef.current.height + 100, view.clientHeight);
-    const emptyIndex = showEmpty ? layoutRef.current.groups.findIndex((group, index) => !sections[index].count && group.top <= top + 1 && group.top + group.height > top) : -1;
+    const currentSections = sectionsRef.current;
+    const emptyIndex = showEmpty ? layoutRef.current.groups.findIndex((group, index) => !currentSections[index].count && group.top <= top + 1 && group.top + group.height > top) : -1;
     if (emptyIndex >= 0) {
-      anchor.current = { section: sections[emptyIndex].id, delta: top - layoutRef.current.groups[emptyIndex].top };
+      anchor.current = { section: currentSections[emptyIndex].id, delta: top - layoutRef.current.groups[emptyIndex].top };
       return;
     }
     const visible = visibleCatalogBlocks(layoutRef.current.blocks, top, view.clientHeight, 0);
@@ -198,9 +203,11 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   useEffect(() => { pump.current(); }, [wantedKey, revision, tick]);
   useEffect(() => {
     if (!onAssetsChange) return;
-    const pages = [...cache.current.values()].map(page => visiblePage(page, pendingDeletion.size > 0));
+    const ids = new Set(sections.map(section => section.id));
+    const pages = [...cache.current].filter(([key]) => ids.has(key.slice(0, key.lastIndexOf(":"))))
+      .map(([, page]) => visiblePage(page, pendingDeletion.size > 0));
     onAssetsChange([...new Map(pages.flatMap(page => [...page.assets, ...Object.values(page.groups).flat()]).map(asset => [itemKey(asset), asset])).values()]);
-  }, [tick, pendingDeletion, onAssetsChange, itemKey]);
+  }, [tick, pendingDeletion, onAssetsChange, itemKey, sections]);
   useEffect(() => () => onAssetsChange?.([]), [onAssetsChange]);
   useLayoutEffect(() => {
     const view = scroll.current;
@@ -221,6 +228,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
     return () => { observer.disconnect(); view.removeEventListener("scroll", schedule); view.removeEventListener("wheel", wheel); cancelAnimationFrame(frame); };
   }, [scroll]);
   useLayoutEffect(() => {
+    if (changingScope) { anchor.current = null; return; }
     if (anchor.current && scroll.current) {
       const saved = anchor.current;
       if ("section" in saved) {
@@ -245,12 +253,22 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
       }
       anchor.current = null;
     }
-  }, [layout, scroll]);
+  }, [layout, scroll, changingScope]);
   const restored = useRef(false);
   const jumped = useRef<typeof jump>(null);
   useLayoutEffect(() => {
-    if (!restored.current && layout.blocks.length && scroll.current) { scroll.current.scrollTop = initialTop ?? 0; restored.current = true; }
-  }, [layout, initialTop, scroll]);
+    if (changingScope) {
+      activeScope.current = browseScope;
+      restored.current = false;
+      setFocused(null);
+    }
+    if (!restored.current && (changingScope || layout.blocks.length) && scroll.current) {
+      scroll.current.scrollTop = initialTop ?? 0;
+      const top = scroll.current.scrollTop;
+      setViewport(previous => previous.top === top ? previous : { ...previous, top });
+      restored.current = true;
+    }
+  }, [layout, initialTop, scroll, browseScope, changingScope]);
   useLayoutEffect(() => {
     if (!jump || jumped.current === jump || !scroll.current) return;
     const index = sections.findIndex(section => section.id === jump.id);
@@ -265,13 +283,18 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
       data-file-import-collection-id={section.collection?.id} data-file-import-collection-name={section.collection ? section.name : undefined}
       data-file-import-collection-available={section.collection?.available} className={showEmpty && !section.count ? "is-empty" : undefined}
       aria-label={headings ? `${section.name}${section.tagId && filter.media === "images" ? "图片" : "素材"}` : undefined} style={{ position: "absolute", top: layout.groups[index].top * scale, height: layout.groups[index].height * scale, width: "100%" }}>
-      {headings && (current === section.id || visible.some(block => block.section === index) || (showEmpty && !section.count && layout.groups[index].top + layout.groups[index].height >= logicalTop - 500 && layout.groups[index].top <= logicalTop + viewport.height + 500)) && <h3 style={{ position: "absolute", width: "100%", top: Math.min(Math.max(layout.groups[index].top, logicalTop), layout.groups[index].top + layout.groups[index].height - 40) - logicalTop + viewport.top - layout.groups[index].top * scale }} className={`catalog-section-heading${current === section.id && viewport.top > 0 ? " is-pinned" : ""}`}><span title={section.name} data-library-count={`${String(section.count).padStart(2, "0")} 项`} className={`catalog-section-title${current === section.id && viewport.top > 0 ? " library-floating-surface" : ""}`}>{section.name}</span>{!section.count && emptySection && <span className="connected-empty-section">{emptySection(section.id)}</span>}</h3>}
+      {headings && (current === section.id || visible.some(block => block.section === index) || (showEmpty && !section.count && layout.groups[index].top + layout.groups[index].height >= logicalTop - 500 && layout.groups[index].top <= logicalTop + viewport.height + 500)) && <h3 style={{ position: "absolute", width: "100%", top: Math.min(Math.max(layout.groups[index].top, logicalTop), layout.groups[index].top + layout.groups[index].height - 40) - logicalTop + top - layout.groups[index].top * scale }} className={`catalog-section-heading${current === section.id && top > 0 ? " is-pinned" : ""}`}><span title={section.name} data-library-count={`${String(section.count).padStart(2, "0")} 项`} className={`catalog-section-title${current === section.id && top > 0 ? " library-floating-surface" : ""}`}>{section.name}</span>{!section.count && emptySection && <span className="connected-empty-section">{emptySection(section.id)}</span>}</h3>}
       {visible.filter(block => block.section === index).map(block => {
-        const raw = cache.current.get(block.key), failed = errors.current.get(block.key);
+        const local = cache.current.get(block.key);
+        // Paint warm session pages immediately after local eviction. The pump
+        // will restore them to the bounded local cache and update measurements.
+        const snapshot = local ? undefined : catalogCache.peek<Omit<Page, "revision">>(`${pagePrefix}${block.key}`);
+        const raw = snapshot && catalogCache.fresh(snapshot) ? { ...snapshot.value, revision: snapshot.revision } : local;
+        const failed = errors.current.get(block.key);
         const error = failed?.revision === catalogCache.revision(colorFiltered, section.collection) ? failed.message : null;
         const page = raw && visiblePage(raw, pendingDeletion.size > 0);
         const geometry = page ? masonryGeometry(page.assets, viewport.width, width, block.columnTops) : null;
-        return <div key={block.key} data-catalog-page={block.key} data-columns={geometry?.columns} className="folder-masonry catalog-virtual-page" style={{ position: "absolute", top: block.top - logicalTop + viewport.top - layout.groups[index].top * scale, height: block.height, pointerEvents: "none" }}
+        return <div key={block.key} data-catalog-page={block.key} data-columns={geometry?.columns} className="folder-masonry catalog-virtual-page" style={{ position: "absolute", top: block.top - logicalTop + top - layout.groups[index].top * scale, height: block.height, pointerEvents: "none" }}
           onFocusCapture={() => setFocused(block.key)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setFocused(null); }}>
           {error && <p className="catalog-error" role="alert" style={{ position: "relative", zIndex: 1, width: "fit-content", background: "var(--lt-screen)", pointerEvents: "auto" }}>{userErrorMessage(error, "素材列表暂时无法读取，请重试。")}<button onClick={() => { errors.current.delete(block.key); setTick(v => v + 1); }}>重试</button></p>}
           {!page && !error && <p className="catalog-hint" role="status">正在读取素材…</p>}

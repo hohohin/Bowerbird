@@ -16,6 +16,15 @@ export type ConnectionMedia = "all" | "images" | "videos" | "audios" | "texts" |
 async function entryBatches(command: string, ids: string[], key: string, args: Record<string, unknown> = {}) {
   for (let offset = 0; offset < ids.length; offset += 2000) await invoke<void>(command, { ...args, [key]: ids.slice(offset, offset + 2000) });
 }
+async function resolveEntries(ids: string[], isCurrent: (() => boolean) | undefined, verifyOriginals: boolean) {
+  const result: ConnectionEntry[] = [];
+  for (let offset = 0; offset < ids.length; offset += 2000) {
+    if (isCurrent && !isCurrent()) return [];
+    const batch = { ids: ids.slice(offset, offset + 2000) };
+    result.push(...await invoke<ConnectionEntry[]>("resolve_connection_entries", verifyOriginals ? batch : { ...batch, verifyOriginals: false }));
+  }
+  return result;
+}
 export const folderConnections = {
   list: (projectId: string | null = null, media: ConnectionMedia = null, filter: ConnectionFilter = {}) => invoke<FolderConnection[]>("folder_connections", { projectId, filter, media: media === "all" ? null : media }),
   connect: (path: string, projectId: string | null = null) => invoke<string>("connect_folder", { path, projectId }),
@@ -30,14 +39,8 @@ export const folderConnections = {
     }
     return result;
   },
-  resolve: async (ids: string[], isCurrent = () => true) => {
-    const result: ConnectionEntry[] = [];
-    for (let offset = 0; offset < ids.length; offset += 2000) {
-      if (!isCurrent()) return [];
-      result.push(...await invoke<ConnectionEntry[]>("resolve_connection_entries", { ids: ids.slice(offset, offset + 2000) }));
-    }
-    return result;
-  },
+  resolve: (ids: string[], isCurrent?: () => boolean) => resolveEntries(ids, isCurrent, true),
+  resolveIndexed: (ids: string[], isCurrent?: () => boolean) => resolveEntries(ids, isCurrent, false),
   references: (assetIds: string[], folderId: string) => entryBatches("create_material_references", assetIds, "assetIds", { folderId }),
   create: (parentId: string | null, name: string, path: string | null = null, projectId: string | null = null) => invoke<string>("create_connected_collection", { parentId, name, path, projectId }),
   renameFolder: (id: string, name: string) => invoke<void>("rename_connected_collection", { id, name }),

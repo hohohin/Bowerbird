@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        folder_connections::{AssetOriginal, ConnectionEntry, ConnectionFilter, FolderConnection, ScanChange},
+        folder_connections::{AssetOriginal, ConnectionEntry, ConnectionFilter, FolderConnection, ScanChange, ScanTarget},
         missing_originals::{MarkedReferenceSweep, MissingOriginalSweep},
         paths::LibraryPaths,
     },
@@ -46,12 +46,29 @@ mod watcher;
 pub use watcher::watch;
 
 #[derive(Default)]
+struct RefreshTargets {
+    roots: HashSet<String>,
+    folders: HashMap<String, String>,
+}
+impl RefreshTargets {
+    fn roots(roots: HashSet<String>) -> Self { Self { roots, ..Self::default() } }
+
+    fn is_empty(&self) -> bool { self.roots.is_empty() && self.folders.is_empty() }
+
+    fn merge(&mut self, other: Self) {
+        self.roots.extend(other.roots);
+        self.folders.extend(other.folders);
+        self.folders.retain(|_, root| !self.roots.contains(root));
+    }
+}
+
+#[derive(Default)]
 struct RefreshQueue {
     running: bool,
     all: bool,
     scanning_all: bool,
     last_full_scan: Option<Instant>,
-    roots: HashSet<String>,
+    targets: RefreshTargets,
     priority: Option<String>,
     originals: bool,
     reference_continuation: bool,
@@ -67,7 +84,7 @@ impl RefreshQueue {
         true
     }
     fn has_work(&self) -> bool {
-        self.all || !self.roots.is_empty() || self.originals
+        self.all || !self.targets.is_empty() || self.originals
     }
     fn advance_originals(&mut self, catalog_more: bool, pending: bool, references_more: bool) {
         if !self.reference_continuation { self.schedule.pending = pending; }
@@ -120,13 +137,18 @@ struct ScanCatalogScope {
 }
 
 fn emit_scan_changes(app: &AppHandle, root: &str, root_changed: &mut bool, folders: &mut HashSet<String>) -> usize {
+    let roots = std::mem::take(root_changed).then(|| root.to_owned()).into_iter().collect();
+    emit_catalog_scopes(app, roots, folders.drain().collect())
+}
+
+fn emit_catalog_scopes(app: &AppHandle, roots: Vec<String>, folders: Vec<String>) -> usize {
     let mut notifications = 0;
-    if std::mem::take(root_changed) {
-        let _ = app.emit("library://assets-changed", ScanCatalogScope { root_ids: vec![root.to_owned()], folder_ids: Vec::new() });
+    if !roots.is_empty() {
+        let _ = app.emit("library://assets-changed", ScanCatalogScope { root_ids: roots, folder_ids: Vec::new() });
         notifications += 1;
     }
     if !folders.is_empty() {
-        let _ = app.emit("library://assets-changed", ScanCatalogScope { root_ids: Vec::new(), folder_ids: folders.drain().collect() });
+        let _ = app.emit("library://assets-changed", ScanCatalogScope { root_ids: Vec::new(), folder_ids: folders });
         notifications += 1;
     }
     if notifications > 0 { let _ = app.emit("external-files://changed", ()); }
@@ -136,6 +158,10 @@ fn emit_scan_changes(app: &AppHandle, root: &str, root_changed: &mut bool, folde
 #[serde(rename_all = "camelCase")]
 struct ConnectionProgress {
     root_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    folder_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_folder_id: Option<String>,
     scanning: bool,
     error: Option<String>,
 }
@@ -172,13 +198,13 @@ fn queue_refresh(
     app: AppHandle,
     db: Arc<Database>,
     paths: Arc<LibraryPaths>,
-    roots: Option<HashSet<String>>,
+    targets: Option<RefreshTargets>,
     priority: Option<String>,
     force: bool,
 ) {
     let mut queue = REFRESH.lock().unwrap();
-    if let Some(roots) = roots {
-        queue.roots.extend(roots);
+    if let Some(targets) = targets {
+        queue.targets.merge(targets);
     } else if !queue.request_full_scan(Instant::now(), force) {
         return;
     }
@@ -222,21 +248,30 @@ fn requested_root_ids(
     ids.sort_by_key(|id| Some(id) != priority_root.as_ref());
     Ok(ids)
 }
-fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id: String, priority: Option<&str>, permit: tokio::sync::SemaphorePermit<'static>) {
+fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id: String, folder: Option<String>, priority: Option<&str>, permit: tokio::sync::SemaphorePermit<'static>) {
     let mut last = Instant::now() - Duration::from_secs(1);
     let started = Instant::now();
-    let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id.clone(), scanning: true, error: None });
+    let publish_progress = |scanning, active_folder_id, error| {
+        let _ = app.emit("library://connection-progress", ConnectionProgress {
+            root_id: id.clone(), folder_id: folder.clone(), active_folder_id, scanning, error,
+        });
+    };
+    publish_progress(true, None, None);
     let mut root_changed = false;
     let mut folders = HashSet::new();
     let mut notifications = 0;
     let mut permit = Some(permit);
     let mut yielded = false;
-    let value = db.scan_connection_cooperatively(paths, &id, priority, |change| {
+    let mut retry_folders = HashSet::new();
+    let target = folder.as_deref().map_or(ScanTarget::Root { priority }, ScanTarget::Folder);
+    let value = db.scan_connection_target(paths, &id, target, |change| {
         match change {
             ScanChange::Tick => (),
+            ScanChange::EnteringFolder(active) => publish_progress(true, Some(active.to_owned()), None),
             ScanChange::Root => root_changed = true,
             ScanChange::Folder(folder) => { folders.insert(folder.to_owned()); }
             ScanChange::Folders(changed) => folders.extend(changed.iter().cloned()),
+            ScanChange::RetryFolder(folder) => { retry_folders.insert(folder.to_owned()); }
         }
         if (root_changed || !folders.is_empty()) && last.elapsed() >= Duration::from_millis(500) {
             notifications += emit_scan_changes(app, &id, &mut root_changed, &mut folders);
@@ -248,12 +283,19 @@ fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id:
         paused
     });
     if yielded {
-        REFRESH.lock().unwrap().roots.insert(id.clone());
+        let mut queue = REFRESH.lock().unwrap();
+        if folder.is_some() {
+            if !queue.targets.roots.contains(&id) {
+                queue.targets.folders.extend(retry_folders.into_iter().map(|folder| (folder, id.clone())));
+            }
+        } else {
+            queue.targets.merge(RefreshTargets::roots(HashSet::from([id.clone()])));
+        }
     }
     // Flush changes even when a later directory failed. Progress alone never
     // invalidates pages or forces the expensive catalog counts to run again.
     notifications += emit_scan_changes(app, &id, &mut root_changed, &mut folders);
-    let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id, scanning: false, error: value.as_ref().err().map(ToString::to_string) });
+    publish_progress(false, None, value.as_ref().err().map(ToString::to_string));
     tracing::debug!(elapsed_ms = started.elapsed().as_millis(), notifications, "connection scan completed");
     if let Err(error) = value {
         tracing::warn!("connection scan: {error}");
@@ -366,23 +408,30 @@ fn start_refresh(
                 queue.scanning_all = queue.all;
                 (
                     std::mem::take(&mut queue.all),
-                    std::mem::take(&mut queue.roots),
+                    std::mem::take(&mut queue.targets),
                     queue.priority.clone(),
                     std::mem::take(&mut queue.originals),
                 )
             };
             let result = async {
+                let RefreshTargets { roots, mut folders } = requested;
                 let (db2, priority2) = (db.clone(), priority.clone());
-                let ids = if all || !requested.is_empty() {
+                let ids = if all || !roots.is_empty() {
                     tauri::async_runtime::spawn_blocking(move ||
-                        requested_root_ids(&db2, all, &requested, priority2.as_deref()))
+                        requested_root_ids(&db2, all, &roots, priority2.as_deref()))
                         .await.map_err(|e| AppError::Other(e.to_string()))??
                 } else { Vec::new() };
-                for id in ids {
+                let full: HashSet<_> = ids.iter().collect();
+                folders.retain(|_, root| !full.contains(root));
+                let mut scoped: Vec<_> = folders.into_iter().collect();
+                scoped.sort_by_key(|(folder, _)| Some(folder) != priority.as_ref());
+                let jobs = ids.into_iter().map(|root| (root, None))
+                    .chain(scoped.into_iter().map(|(folder, root)| (root, Some(folder))));
+                for (id, folder) in jobs {
                     let (app, db, paths, priority) = (app.clone(), db.clone(), paths.clone(), priority.clone());
                     let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
                     tauri::async_runtime::spawn_blocking(move || {
-                        scan_requested_root(&app, &db, &paths, id, priority.as_deref(), permit);
+                        scan_requested_root(&app, &db, &paths, id, folder, priority.as_deref(), permit);
                     }).await.map_err(|e| AppError::Other(e.to_string()))?;
                 }
                 if originals {
@@ -449,7 +498,7 @@ pub async fn connect_folder(
         app,
         db.inner().clone(),
         paths.inner().clone(),
-        Some(HashSet::from([root_id])),
+        Some(RefreshTargets::roots(HashSet::from([root_id]))),
         Some(id.clone()),
         true,
     );
@@ -592,12 +641,20 @@ pub async fn resolve_connection_entries(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     ids: Vec<String>,
+    verify_originals: Option<bool>,
 ) -> AppResult<Vec<ConnectionEntry>> {
     let db = db.inner().clone();
-    let values = tauri::async_runtime::spawn_blocking(move || db.resolve_visible_connection_entries(&ids))
+    let verify_originals = verify_originals.unwrap_or(true);
+    let values = tauri::async_runtime::spawn_blocking(move || {
+        if verify_originals {
+            db.resolve_visible_connection_entries(&ids)
+        } else {
+            db.visible_connection_entries(&ids)
+        }
+    })
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
-    allow_entries(&app, &values)?;
+    if verify_originals { allow_entries(&app, &values)?; }
     Ok(values)
 }
 #[tauri::command]
@@ -886,7 +943,7 @@ mod maintenance_tests {
     fn checks_on_startup_without_roots_then_waits_between_healthy_sweeps() {
         let now = Instant::now();
         let mut queue = RefreshQueue::default();
-        assert!(queue.roots.is_empty());
+        assert!(queue.targets.is_empty());
         queue.originals = queue.schedule.request(now, false);
         assert!(queue.has_work());
         assert!(std::mem::take(&mut queue.originals));

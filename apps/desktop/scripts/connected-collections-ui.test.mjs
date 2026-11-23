@@ -174,7 +174,9 @@ try {
   await dialog().waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'plugin:dialog|open').length), beforePick);
   assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'create_connected_collection').at(-1).args.path), null);
+  await active(await page.evaluate(() => window.folders.find(folder => folder.name === '默认目录').id));
   await navigate('root');
+  await row('root').click(); // Re-click the selected folder to reset its remembered scroll position.
   await card('root-0').click({ modifiers: ['Control'] });
   await page.locator('.catalog-selection').getByRole('button', { name: '添加到文件夹', exact: true }).click();
   await dialog().getByText('新建文件夹', { exact: true }).click();
@@ -205,6 +207,8 @@ try {
   await navigate('root');
   for (const id of ['root-0','root-1']) await card(id).click({ modifiers: ['Control'] });
   await page.locator('.catalog-selection').getByText('2 项', { exact: true }).waitFor();
+  const originalResolves = () => page.evaluate(() => window.requests.filter(r => r.command === 'resolve_connection_entries' && r.args.verifyOriginals !== false).length);
+  const beforeCleanup = await originalResolves();
   // A different pane cleaned root-1. root-0 is offline but remains a valid entry.
   await page.evaluate(() => {
     window.entries = window.entries.filter(e => e.id !== 'root-1');
@@ -215,6 +219,7 @@ try {
   assert.equal(await card('root-0').getAttribute('aria-pressed'), 'true');
   await page.evaluate(() => { window.entries = window.entries.filter(e => e.id !== 'root-0'); window.changed(); });
   await page.locator('.catalog-selection').waitFor({ state: 'detached' });
+  assert.equal(await originalResolves(), beforeCleanup, 'external index changes prune checked entries without verifying the originals');
   assert.deepEqual(errors, []);
   console.log('PASS production connected collections: DFS, paging, sticky title, entry selection, references, rename/trash, create, collapse/scroll, disconnect, picker cancel/connect, view routing');
 } catch (error) {

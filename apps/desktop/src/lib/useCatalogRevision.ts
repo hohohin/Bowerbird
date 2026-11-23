@@ -45,7 +45,7 @@ export function observeCatalogChanges() {
     listen<ConnectionProgress>("library://connection-progress", event => {
       const progress = event.payload;
       if (!progress?.rootId) return;
-      const phase = reconnected.get(progress.rootId);
+      const phase = progress.folderId || progress.activeFolderId ? undefined : reconnected.get(progress.rootId);
       // A previous scan may finish while the reconnect scan is still queued.
       if (phase === "waiting" && !progress.scanning) return;
       if (phase && progress.scanning) reconnected.set(progress.rootId, "scanning");

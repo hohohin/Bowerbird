@@ -940,15 +940,18 @@ fn refresh_checks_selected_directory_before_other_cached_directories() {
     fs::copy(f.source.join("one.png"), f.source.join("root-new.png")).unwrap();
     fs::copy(f.source.join("one.png"), child.join("selected-new.png")).unwrap();
     let mut selected_seen_first = false;
-    f.db.scan_connection_prioritized(&f.paths, &root, Some(&selected), || {
+    let mut visited = Vec::new();
+    f.db.scan_connection_cooperatively(&f.paths, &root, Some(&selected), |event| {
+        if let ScanChange::EnteringFolder(folder) = event { visited.push(folder.to_owned()); }
         let selected_count = f.entries(&selected).len();
         let root_count = f.entries(&root).len();
         if selected_count == 1 && root_count == 1 {
             selected_seen_first = true;
         }
-    })
+    }, || false)
     .unwrap();
     assert!(selected_seen_first);
+    assert_eq!(visited, [selected.clone(), root.clone()]);
     assert_eq!(f.entries(&root).len(), 2);
     assert_eq!(f.entries(&selected).len(), 1);
 }
@@ -1028,7 +1031,7 @@ fn scan_notices_same_second_edits_in_the_original_and_reference_folders_only() {
     write_stamp(800_000_000);
     let mut changes = HashSet::new();
     f.db.scan_connection_cooperatively(&f.paths, &root, None, |change| match change {
-        ScanChange::Tick => (),
+        ScanChange::Tick | ScanChange::EnteringFolder(_) | ScanChange::RetryFolder(_) => (),
         ScanChange::Root => panic!("a file edit must not invalidate its entire root"),
         ScanChange::Folder(folder) => { changes.insert(folder.to_owned()); }
         ScanChange::Folders(folders) => changes.extend(folders.iter().cloned()),
@@ -1037,6 +1040,110 @@ fn scan_notices_same_second_edits_in_the_original_and_reference_folders_only() {
     assert_eq!(after.asset_id, before.asset_id);
     assert_ne!(after.version, before.version);
     assert_eq!(changes, HashSet::from([root, destination]));
+}
+
+#[test]
+fn scoped_scan_discovers_new_children_and_leaves_indexed_siblings_to_their_notices() {
+    let f = Fixture::new();
+    let a = f.source.join("a");
+    let b = f.source.join("b");
+    fs::create_dir(&a).unwrap();
+    fs::create_dir(&b).unwrap();
+    let image = f.source.join("one.png");
+    let root = f.connect(&f.source);
+    let folder_id = |path: &Path| f.db.connection_folders(None, None).unwrap()
+        .into_iter().find(|folder| folder.path == string(path)).unwrap().id;
+    let a_id = folder_id(&a);
+    let b_id = folder_id(&b);
+    let scan_a = || {
+        let mut visited = Vec::new();
+        f.db.scan_connection_target(&f.paths, &root, ScanTarget::Folder(&a_id), |event| {
+            if let ScanChange::EnteringFolder(folder) = event { visited.push(folder.to_owned()); }
+        }, || false).unwrap();
+        visited
+    };
+    let new = a.join("new").join("nested");
+    fs::create_dir_all(&new).unwrap();
+    fs::copy(&image, new.join("incoming.png")).unwrap();
+    fs::copy(&image, b.join("sibling.png")).unwrap();
+    let visited = scan_a();
+    let nested_id = folder_id(&new);
+    assert_eq!(visited, [a_id.clone(), folder_id(new.parent().unwrap()), nested_id.clone()]);
+    assert_eq!(f.entries(&nested_id).len(), 1);
+    assert!(f.entries(&b_id).is_empty());
+
+    fs::rename(a.join("new"), f._temp.path().join("parked-child")).unwrap();
+    assert_eq!(scan_a(), [a_id.clone()]);
+    assert!(!f.db.connected_folder(&nested_id).unwrap().available);
+    assert_eq!(f.db.every_entry_id(Some(&nested_id)).unwrap().len(), 1);
+    assert!(f.entries(&b_id).is_empty());
+
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    assert_eq!(f.entries(&b_id).len(), 1);
+}
+
+#[test]
+fn a_scoped_walk_retries_the_new_child_when_its_initial_prepare_yields() {
+    let f = Fixture::new();
+    let a = f.source.join("a");
+    fs::create_dir(&a).unwrap();
+    let root = f.connect(&f.source);
+    let folder_id = |path: &Path| f.db.connection_folders(None, None).unwrap()
+        .into_iter().find(|folder| folder.path == string(path)).unwrap().id;
+    let a_id = folder_id(&a);
+    let child = a.join("child");
+    fs::create_dir(&child).unwrap();
+    fs::copy(f.source.join("one.png"), child.join("one.png")).unwrap();
+    let mut retries = Vec::new();
+    let mut checkpoints = 0;
+    f.db.scan_connection_target(&f.paths, &root, ScanTarget::Folder(&a_id), |change| {
+        if let ScanChange::RetryFolder(folder) = change { retries.push(folder.to_owned()); }
+    }, || {
+        checkpoints += 1;
+        checkpoints == 5 // First preparation checkpoint in the newly discovered child.
+    }).unwrap();
+    let child_id = folder_id(&child);
+    assert_eq!(retries, [child_id.clone()]);
+    assert!(f.entries(&child_id).is_empty());
+    f.db.scan_connection_target(&f.paths, &root, ScanTarget::Folder(&child_id), |_| (), || false).unwrap();
+    assert_eq!(f.entries(&child_id).len(), 1);
+}
+
+#[test]
+#[ignore = "isolated notice reconciliation benchmark"]
+fn compare_full_and_scoped_connection_reconciliation() {
+    let mut f = Fixture::new();
+    f.db = Database::open(&f.paths.db).unwrap();
+    f.db.migrate().unwrap();
+    for directory in 0..24 {
+        let folder = f.source.join(format!("folder-{directory}"));
+        fs::create_dir(&folder).unwrap();
+        for index in 0..48 {
+            fs::File::create(folder.join(format!("file-{index}.mp4"))).unwrap()
+                .set_len(4096 + directory * 48 + index).unwrap();
+        }
+    }
+    let root = f.connect(&f.source);
+    let folder = f.db.connection_folders(None, None).unwrap().into_iter()
+        .find(|folder| folder.name == "folder-0").unwrap();
+    let hot = Path::new(&folder.path).join("file-0.mp4");
+    let mut full = Vec::new();
+    let mut scoped = Vec::new();
+    for trial in 0..7 {
+        for (offset, target, samples) in [
+            (0, ScanTarget::Root { priority: None }, &mut full),
+            (1, ScanTarget::Folder(&folder.id), &mut scoped),
+        ] {
+            fs::OpenOptions::new().write(true).open(&hot).unwrap()
+                .set_len(8000 + trial * 2 + offset).unwrap();
+            let start = std::time::Instant::now();
+            f.db.scan_connection_target(&f.paths, &root, target, |_| (), || false).unwrap();
+            samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    full.sort_by(f64::total_cmp);
+    scoped.sort_by(f64::total_cmp);
+    println!("one file change (1153 indexed): full 25 folders {:.2} ms {full:.2?}; one folder {:.2} ms {scoped:.2?}", full[3], scoped[3]);
 }
 
 #[test]

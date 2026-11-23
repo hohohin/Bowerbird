@@ -125,3 +125,23 @@ test('progress patches cached and pending folder snapshots without invalidating 
   assert.deepEqual(cache.peek('folders:cached').value, [{ ...folder, scanning: false }]);
   assert.equal(cache.fresh(cache.peek('folders:cached')), true);
 });
+
+test('scoped progress preserves sibling errors and whole-root progress tracks the active directory', async () => {
+  const cache = createCatalogCache(), pending = deferred();
+  const folders = [
+    { id: 'A', root_id: 'root', scanning: false, error: 'A read failed' },
+    { id: 'B', root_id: 'root', scanning: true, error: 'B read failed' },
+  ];
+  await cache.read('folders:cached', async () => folders);
+  const read = cache.read('folders:pending', () => pending.promise);
+  cache.updateConnectionProgress({ rootId: 'root', folderId: 'B', scanning: false, error: null });
+  pending.resolve(folders);
+  const scoped = [folders[0], { ...folders[1], scanning: false, error: null }];
+  assert.deepEqual(await read, scoped);
+  assert.deepEqual(cache.peek('folders:cached').value, scoped);
+
+  cache.updateConnectionProgress({ rootId: 'root', activeFolderId: 'B', scanning: true, error: null });
+  assert.deepEqual(cache.peek('folders:cached').value.map(folder => folder.scanning), [false, true]);
+  cache.updateConnectionProgress({ rootId: 'root', activeFolderId: 'A', scanning: true, error: null });
+  assert.deepEqual(cache.peek('folders:cached').value.map(folder => folder.scanning), [true, false]);
+});

@@ -85,6 +85,7 @@
 - 导航记忆：`createLocalFileMode(paneId)` 按 pane＋主页／项目保存 `source`、`lens` 和媒体类型，恢复时兼容旧 `view`、`tagSource`。浏览项目同样分栏记忆，兼容原项目键。`copyLibraryPane` 复制当前选择后独立浏览。普通打开使用 `setOpen(true)`。临时菜单与搜索词只在会话中保留。
 - 现有画板入口：[Toolbar.tsx](../../apps/desktop/src/components/Toolbar.tsx) 与 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 共用 `useStore.canvasLibraryOpen`／`setCanvasLibraryOpen` 和 `useLocalFileMode.setOpen(true)`；顶栏先恢复上次素材视图，展开后显示既有连接操作。`ConnectedCollections` 复用公共 `catalog-tree-row` 的 hover／focus／`is-menu-open` 名称避让，不给空闲目录名称无条件预留操作宽度。
 - 局部通知：`subscribeCatalogPreviews`／`subscribeConnectionProgress` 沿会话监听分发原生事件。`patchCatalogPage`／`patchConnectionProgress` 同时用于缓存、在途响应和可见页。目录页的 `catalogCache.revision(colorFiltered, scope)` 与 `read(key, loader, colorFiltered, scope)` 使用同一连接根及目录 ID，`useCatalogRevision(colorFiltered)` 提供目录树和汇总所需的会话版本。作用域内索引变更保留无关目录的读请求，预览仅补字段，颜色筛选单独更新成员。`VirtualCatalog`、`ConnectedCollections` 是实际调用方。[会话缓存](../FOLDER-MODE.md#素材库会话缓存2026-11-10源码待发布) · [性能说明](../FOLDER-MODE.md#文件夹读取与预览性能2026-11-10)。
+- 文件夹浏览：`VirtualCatalog` 的 `browseScope` 负责同一过滤条件内切换目录及恢复滚动，分页仍按目录与页码缓存。`ConnectedCollections` 的勾选复用已加载条目，跨页缺失项和受影响目录的选中项通过 `folderConnections.resolveIndexed` 读取索引，实际文件操作沿用 `resolve` 与原生命令的原件校验。`FileMediaCard` 在同一滚动区共用屏内和 400px 预取两个观察器，`filePreviewQueue` 优先处理屏内卡片并限制并发。[目录增量对账](../FOLDER-MODE.md#连接目录浏览与增量对账2026-11-23桌面源码) · [索引读取入口](../../apps/desktop/src/lib/folderConnections.ts)
 - 状态：**可跨模块复用**；仅适合桌面素材浏览宿主，不是通用全应用状态容器。
 
 ## 给素材列表加入单选、持续多选和 Shift 选择

@@ -11,7 +11,7 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/connected-collections/preview.html');
-  await page.getByRole('tab', { name: '文件夹', exact: true }).click();
+  await page.getByRole('button', { name: '全部文件夹素材', exact: true }).click();
   const row = page.getByRole('treeitem', { name: '另一目录', exact: true });
   const card = page.locator('[data-connection-entry="second-0"]');
   const status = page.locator('.catalog-gallery .connected-status');
@@ -28,7 +28,7 @@ try {
   await page.evaluate(() => window.setLibraryVisible(false));
   await row.waitFor({state:'detached'});
   await page.evaluate(() => window.setLibraryVisible(true));
-  await page.getByRole('tab', { name: '文件夹', exact: true }).click();
+  await page.getByRole('button', { name: '全部文件夹素材', exact: true }).click();
   await row.click();
   await status.filter({hasText:'另一目录」已离线'}).waitFor();
   const preReconnectReads = await page.evaluate(() => window.requests.filter(r => r.command === 'folder_connections').length);
@@ -41,6 +41,18 @@ try {
   await page.waitForFunction(count => window.requests.filter(r => r.command === 'folder_connections').length > count, preReconnectReads);
   await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
   await status.filter({hasText:'正在读取「另一目录」'}).waitFor();
+  const waitingReads = await page.evaluate(() => window.requests.filter(r => r.command === 'folder_connections').length);
+  await page.evaluate(() => {
+    window.connectionProgress({rootId:'second',folderId:'second',scanning:true,error:null});
+    window.connectionProgress({rootId:'second',folderId:'second',scanning:false,error:null});
+    // A step from the older whole-root job cannot start the queued reconnect either.
+    window.connectionProgress({rootId:'second',activeFolderId:'second',scanning:true,error:null});
+    window.connectionProgress({rootId:'second',scanning:false,error:null});
+  });
+  await page.waitForTimeout(170);
+  assert.match(await status.innerText(),/正在读取/);
+  assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'folder_connections').length), waitingReads,
+    'a path-scoped scan or a step from an older job cannot complete the queued whole-root reconnect');
   await page.evaluate(() => {
     window.folders.filter(f => f.root_id === 'second').forEach(f => {f.scanning = true;});
     window.connectionProgress({rootId:'second',scanning:true,error:null});

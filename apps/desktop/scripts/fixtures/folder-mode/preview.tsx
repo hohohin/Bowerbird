@@ -74,10 +74,10 @@ w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poste
     const path=args.path||'/pictures';
     if(path==='/missing') throw new Error('目录不可用');
     if(path==='/slow') await new Promise(r=>setTimeout(r,500));
-    const entries=path==='/pictures'?[{path:'/pictures/sub',name:'旅行',directory:true},{path:'/pictures/photo.png',name:'photo.png',directory:false},{path:'/pictures/clip.mp4',name:'clip.mp4',directory:false}]:[{path:path+'/other.png',name:'other.png',directory:false}];
+    const entries=path==='/pictures'?(w.previewEntries as {path:string;name:string;directory:boolean}[] | undefined)??[{path:'/pictures/sub',name:'旅行',directory:true},{path:'/pictures/photo.png',name:'photo.png',directory:false},{path:'/pictures/clip.mp4',name:'clip.mp4',directory:false}]:[{path:path+'/other.png',name:'other.png',directory:false}];
     return {path,parent:path==='/pictures'?'/': '/pictures',entries:args.offset?[]:entries.map(entry=>({...entry,version:w.previewVersion||'1',preview:w.directoryCache&&!entry.directory?poster:null})),total:entries.length};
   }
-  if(command==='external_files_preview') { if(w.previewDelay) await new Promise(r=>setTimeout(r,w.previewDelay)); return poster; }
+  if(command==='external_files_preview') { if(w.previewGate) await w.previewGate(args.path); if(w.previewDelay) await new Promise(r=>setTimeout(r,w.previewDelay)); return poster; }
   if(command==='external_files_media') return args.path;
   if(command==='external_files_index') return {id:'explicit-copy',external_path:args.path};
   if(command==='external_files_copy') return {id:args.assetId};

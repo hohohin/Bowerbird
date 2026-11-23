@@ -1,11 +1,12 @@
 //! Native filesystem notices are hints; reconciliation remains the existing conservative scan.
-use super::{queue_refresh, request_originals_check};
-use crate::core::folder_connections::connection_root_readable;
+use super::{emit_catalog_scopes, queue_refresh, request_originals_check, RefreshTargets};
+use crate::core::folder_connections::{connection_root_readable, registered_path_spelling};
 use crate::{core::paths::LibraryPaths, db::Database, error::AppResult};
 use notify::{
     event::{ModifyKind, RenameMode},
     Event, EventKind, RecursiveMode, Watcher,
 };
+use rusqlite::{params, OptionalExtension};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -23,7 +24,7 @@ struct Root {
     path: PathBuf,
     indexed_available: bool,
     // A reference may point outside all connected roots. Watch its original's parent too.
-    originals: Vec<PathBuf>,
+    originals: Vec<(PathBuf, String)>,
 }
 fn roots(db: &Database) -> AppResult<Vec<Root>> {
     let conn = db.conn.lock().unwrap();
@@ -38,16 +39,17 @@ fn roots(db: &Database) -> AppResult<Vec<Root>> {
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut stmt = conn.prepare("SELECT DISTINCT f.root_id,a.store_path FROM connected_entries e JOIN connected_folders f ON f.id=e.folder_id JOIN assets a ON a.id=e.asset_id WHERE e.is_reference=1 AND a.store_path IS NOT NULL")?;
+    let mut stmt = conn.prepare("SELECT DISTINCT f.root_id,a.store_path,e.folder_id FROM connected_entries e JOIN connected_folders f ON f.id=e.folder_id JOIN assets a ON a.id=e.asset_id WHERE e.is_reference=1 AND a.store_path IS NOT NULL")?;
     for value in stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             PathBuf::from(row.get::<_, String>(1)?),
+            row.get::<_, String>(2)?,
         ))
     })? {
-        let (id, path) = value?;
+        let (id, path, folder) = value?;
         if let Some(root) = roots.iter_mut().find(|root| root.id == id) {
-            root.originals.push(path);
+            root.originals.push((registered_path_spelling(&path), folder));
         }
     }
     Ok(roots)
@@ -92,29 +94,47 @@ fn collect_original_changes(event: &Event, generated: &[PathBuf], changed: &mut 
     );
 }
 
-fn affected(event: &Event, roots: &[Root]) -> HashSet<String> {
-    if matches!(event.kind, EventKind::Access(_)) {
-        return HashSet::new();
+fn collect_scan_paths(event: &Event, paths: &mut HashMap<PathBuf, bool>) {
+    if matches!(event.kind, EventKind::Access(_)) { return; }
+    let replacement = matches!(event.kind, EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_)));
+    for path in event.paths.iter().filter(|path| !ignored(path)) {
+        *paths.entry(path.clone()).or_default() |= replacement;
     }
-    roots
-        .iter()
-        .filter(|root| {
-            event.need_rescan()
-                || event
-                    .paths
-                    .iter()
-                    .filter(|path| !ignored(path))
-                    .any(|path| {
-                        path.starts_with(&root.path)
-                            || root.path.starts_with(path)
-                            || root
-                                .originals
-                                .iter()
-                                .any(|original| original == path || original.starts_with(path))
-                    })
-        })
-        .map(|root| root.id.clone())
-        .collect()
+}
+
+fn affected(db: &Database, roots: &[Root], paths: &HashMap<PathBuf, bool>) -> AppResult<RefreshTargets> {
+    let mut targets = RefreshTargets::default();
+    if paths.is_empty() { return Ok(targets); }
+    let conn = db.conn.lock().unwrap();
+    let mut lookup = conn.prepare_cached("SELECT id FROM connected_folders WHERE path=?1 AND root_id=?2")?;
+    for (path, replacement) in paths {
+        for root in roots {
+            if *replacement && root.path.starts_with(path) {
+                targets.roots.insert(root.id.clone());
+                continue;
+            }
+            if path.starts_with(&root.path) {
+                // A directory notice may name the directory rather than the
+                // changed child. Include its parent to handle a rename or removal.
+                let mut found = false;
+                for ancestor in path.ancestors().take_while(|path| path.starts_with(&root.path)) {
+                    if let Some(folder) = lookup.query_row(params![ancestor.to_string_lossy(), root.id], |row| row.get::<_, String>(0)).optional()? {
+                        targets.folders.insert(folder, root.id.clone());
+                        found = true;
+                        if ancestor != path { break; }
+                    }
+                }
+                if !found { targets.folders.insert(root.id.clone(), root.id.clone()); }
+            }
+            for (original, folder) in &root.originals {
+                if original.starts_with(path) {
+                    targets.folders.insert(folder.clone(), root.id.clone());
+                }
+            }
+        }
+    }
+    targets.folders.retain(|_, root| !targets.roots.contains(root));
+    Ok(targets)
 }
 fn invalidated_watches(event: &Event, watched: &HashMap<PathBuf, RecursiveMode>) -> Vec<PathBuf> {
     let replaced = matches!(
@@ -142,7 +162,7 @@ fn desired_watches(
             watches.insert(root.path.clone(), RecursiveMode::Recursive);
         }
         // Watching the parent detects replacement/deletion of a watched directory itself.
-        for path in std::iter::once(&root.path).chain(root.originals.iter()) {
+        for path in std::iter::once(&root.path).chain(root.originals.iter().map(|(path, _)| path)) {
             if let Some(parent) = path.parent() {
                 parents.insert(parent.to_path_buf());
             }
@@ -217,20 +237,23 @@ fn reconcile_availability(
 }
 #[derive(Default)]
 struct Pending {
-    roots: HashSet<String>,
+    targets: RefreshTargets,
     first: Option<Instant>,
     last: Option<Instant>,
 }
 impl Pending {
     fn add(&mut self, roots: HashSet<String>, now: Instant) {
-        if roots.is_empty() {
+        self.add_targets(RefreshTargets::roots(roots), now);
+    }
+    fn add_targets(&mut self, targets: RefreshTargets, now: Instant) {
+        if targets.is_empty() {
             return;
         }
-        self.roots.extend(roots);
+        self.targets.merge(targets);
         self.first.get_or_insert(now);
         self.last = Some(now);
     }
-    fn take_ready(&mut self, now: Instant) -> Option<HashSet<String>> {
+    fn take_ready(&mut self, now: Instant) -> Option<RefreshTargets> {
         if self
             .last
             .is_some_and(|last| now.duration_since(last) >= Duration::from_millis(750))
@@ -240,7 +263,7 @@ impl Pending {
         {
             self.first = None;
             self.last = None;
-            return Some(std::mem::take(&mut self.roots));
+            return Some(std::mem::take(&mut self.targets));
         }
         None
     }
@@ -318,8 +341,9 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                         &known_roots,
                         &mut available,
                         |value| {
+                            let root = value.root_id.clone();
                             let _ = app.emit("library://connection-availability", value);
-                            super::changed(&app);
+                            emit_catalog_scopes(&app, vec![root], Vec::new());
                         },
                         |root| pending.add(HashSet::from([root]), now),
                     );
@@ -346,7 +370,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                                                 .filter(|root| {
                                                     root.path.starts_with(&path)
                                                         || path.starts_with(&root.path)
-                                                        || root.originals.iter().any(|original| {
+                                                        || root.originals.iter().any(|(original, _)| {
                                                             original.starts_with(&path)
                                                         })
                                                 })
@@ -367,9 +391,11 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                 }
                 let mut changed_originals = HashSet::new();
                 let mut lost_roots = HashSet::new();
+                let mut noticed_paths = HashMap::new();
                 while let Ok(event) = receive.try_recv() {
                     match event {
                         Ok(mut event) => {
+                            for path in &mut event.paths { *path = registered_path_spelling(path); }
                             // Classify a paired rename before removing generated
                             // paths, so a generated origin cannot shift its destination.
                             collect_original_changes(&event, &generated, &mut changed_originals);
@@ -381,7 +407,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                             if event.need_rescan() {
                                 lost_roots.extend(known_roots.iter().map(|root| root.id.clone()));
                             } else {
-                                pending.add(affected(&event, &known_roots), now);
+                                collect_scan_paths(&event, &mut noticed_paths);
                             }
                             // A root can be removed and recreated between availability polls.
                             // Reattach its OS handle even when the same path already exists again.
@@ -394,10 +420,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                         }
                         Err(error) => {
                             tracing::warn!("connection watcher: {error}");
-                            pending.add(
-                                known_roots.iter().map(|root| root.id.clone()).collect(),
-                                now,
-                            );
+                            lost_roots.extend(known_roots.iter().map(|root| root.id.clone()));
                             // An OS watch can become invalid after a mount/root is replaced.
                             if let Some(native) = native.as_mut() {
                                 for path in watched.keys() {
@@ -408,14 +431,24 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                         }
                     }
                 }
+                let targets = match affected(&db, &known_roots, &noticed_paths) {
+                    Ok(targets) => targets,
+                    Err(error) => {
+                        tracing::warn!(%error, "connection watcher scope lookup");
+                        lost_roots.extend(known_roots.iter().map(|root| root.id.clone()));
+                        RefreshTargets::default()
+                    }
+                };
                 if !changed_originals.is_empty() {
                     let paths: Vec<_> = changed_originals.into_iter().collect();
                     match crate::core::semantic_search::index::note_original_changes(&db, &paths) {
-                        Ok(true) => super::changed(&app),
+                        Ok(true) if targets.is_empty() => super::changed(&app),
+                        Ok(true) => { emit_catalog_scopes(&app, targets.roots.iter().cloned().collect(), targets.folders.keys().cloned().collect()); }
                         Ok(false) => (),
                         Err(error) => tracing::warn!(%error, "semantic index change notice"),
                     }
                 }
+                pending.add_targets(targets, now);
                 if overflow.swap(false, Ordering::AcqRel) {
                     lost_roots.extend(known_roots.iter().map(|root| root.id.clone()));
                 }
@@ -436,12 +469,12 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                     );
                     fallback_at = now;
                 }
-                if let Some(roots) = pending.take_ready(now) {
+                if let Some(targets) = pending.take_ready(now) {
                     queue_refresh(
                         app.clone(),
                         db.clone(),
                         paths.clone(),
-                        Some(roots),
+                        Some(targets),
                         None,
                         true,
                     );
@@ -660,42 +693,46 @@ mod tests {
     }
     #[test]
     fn filters_sidecar_and_reads_but_tracks_reference_files_and_external_originals() {
-        let root = Root {
-            id: "a".into(),
-            indexed_available: true,
-            path: PathBuf::from("/media"),
-            originals: vec![PathBuf::from("/outside/source.png")],
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        let source = base.join("media");
+        std::fs::create_dir_all(source.join("first")).unwrap();
+        std::fs::create_dir_all(source.join("second")).unwrap();
+        let paths = LibraryPaths::init(base.join("library")).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id = db.connect_directory(&source, None).unwrap();
+        db.scan_connection(&paths, &id).unwrap();
+        let folders = db.connection_folders(None, None).unwrap();
+        let folder = |name: &str| folders.iter().find(|folder| folder.name == name).unwrap().id.clone();
+        let first = folder("first");
+        let second = folder("second");
+        let external = base.join("outside/source.png");
+        let mut known = roots(&db).unwrap();
+        known[0].originals.push((external.clone(), first.clone()));
+        let scoped = |event| {
+            let mut notices = HashMap::new();
+            collect_scan_paths(&event, &mut notices);
+            affected(&db, &known, &notices).unwrap()
         };
-        for path in [
-            "/media/.bowerbird/id.json",
-            "/media/.bowerbird-cache/file",
-            "/other/file",
-        ] {
-            assert!(affected(
-                &Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path.into()),
-                &[root.clone()]
-            )
-            .is_empty());
+        let modified = |path: PathBuf| Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path);
+        for path in [source.join(".bowerbird/id.json"), source.join(".bowerbird-cache/file"), base.join("other/file")] {
+            assert!(scoped(modified(path)).is_empty());
         }
-        for path in [
-            "/media/photo.png.bowerbird",
-            "/media/photo.png",
-            "/outside/source.png",
-            "/media",
-        ] {
-            assert_eq!(
-                affected(
-                    &Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path.into()),
-                    &[root.clone()]
-                ),
-                HashSet::from(["a".into()])
-            );
+        for path in [source.join("first/photo.png.bowerbird"), source.join("first/unknown/photo.png"), external] {
+            let target = scoped(modified(path));
+            assert!(target.roots.is_empty());
+            assert_eq!(target.folders, HashMap::from([(first.clone(), id.clone())]));
         }
-        assert!(affected(
-            &Event::new(EventKind::Access(AccessKind::Read)).add_path("/media/photo.png".into()),
-            &[root]
-        )
-        .is_empty());
+        let paired = scoped(Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(source.join("first/photo.png")).add_path(source.join("second/photo.png")));
+        assert_eq!(paired.folders, HashMap::from([(first, id.clone()), (second, id.clone())]));
+        let modified_root = scoped(modified(source.clone()));
+        assert_eq!(modified_root.folders, HashMap::from([(id.clone(), id.clone())]));
+        let replaced = scoped(Event::new(EventKind::Remove(notify::event::RemoveKind::Folder)).add_path(source.clone()));
+        assert_eq!(replaced.roots, HashSet::from([id]));
+        assert!(replaced.folders.is_empty());
+        assert!(scoped(Event::new(EventKind::Access(AccessKind::Read)).add_path(source.join("first/photo.png"))).is_empty());
     }
     #[test]
     fn debounces_bursts_without_starving_continuous_writes() {
@@ -711,6 +748,7 @@ mod tests {
             pending
                 .take_ready(start + Duration::from_millis(1250))
                 .unwrap()
+                .roots
                 .len(),
             2
         );
@@ -724,6 +762,7 @@ mod tests {
             pending
                 .take_ready(start + Duration::from_secs(2))
                 .unwrap()
+                .roots
                 .len(),
             1
         );
@@ -887,7 +926,7 @@ mod tests {
         let mut pending = Pending::default();
         let now = Instant::now();
         queue_lost_notifications(&db, HashSet::from([root]), &mut pending, now);
-        for id in pending.take_ready(now + Duration::from_secs(1)).unwrap() {
+        for id in pending.take_ready(now + Duration::from_secs(1)).unwrap().roots {
             db.scan_connection(&paths, &id).unwrap();
         }
         assert_eq!(identity(), (prior.0, format!("{:x}", Sha256::digest(&supported))));

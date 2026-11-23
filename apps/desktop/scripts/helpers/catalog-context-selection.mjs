@@ -51,7 +51,7 @@ export async function checkContextLookup(page, card, cancel, { idsCommand, looku
     bridge.invoke = async (command, args) => {
       if (command === idsCommand) return [firstId, secondId, coldId];
       const ids = args.ids ?? args.assetIds;
-      if (command === lookupCommand && ids.includes(coldId) && ids.length === 1) {
+      if (command === lookupCommand && args.verifyOriginals !== false && ids.includes(coldId) && ids.length === 1) {
         window.coldMenuIds = [...ids];
         await new Promise(resolve => { window.releaseMenuLookup = () => { window.releaseMenuLookup = null; resolve(); }; });
         const rows = await invoke(command, args);
