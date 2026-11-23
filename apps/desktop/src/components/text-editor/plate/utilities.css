@@ -1314,12 +1314,6 @@
     background-color: color-mix(in oklab, var(--bb-surface-hover) 50%, transparent);
   }
 }
-.bg-muted\/60:is(.text-plate-ui, .text-plate-ui *) {
-  background-color: var(--bb-surface-hover);
-  @supports (color: color-mix(in lab, red, red)) {
-    background-color: color-mix(in oklab, var(--bb-surface-hover) 60%, transparent);
-  }
-}
 .bg-popover:is(.text-plate-ui, .text-plate-ui *) {
   background-color: var(--bb-surface);
 }
@@ -1469,9 +1463,6 @@
 }
 .px-\[0\.3em\]:is(.text-plate-ui, .text-plate-ui *) {
   padding-inline: 0.3em;
-}
-.px-px:is(.text-plate-ui, .text-plate-ui *) {
-  padding-inline: 1px;
 }
 .py-0:is(.text-plate-ui, .text-plate-ui *) {
   padding-block: calc(var(--spacing) * 0);
@@ -3179,11 +3170,6 @@
 .data-\[disabled\=true\]\:opacity-50:is(.text-plate-ui, .text-plate-ui *) {
   &[data-disabled="true"] {
     opacity: 50%;
-  }
-}
-.data-\[highlighted\=true\]\:bg-accent:is(.text-plate-ui, .text-plate-ui *) {
-  &[data-highlighted="true"] {
-    background-color: var(--bb-surface-hover);
   }
 }
 .data-\[inline-suggestion\=insert\]\:bg-emerald-100\!:is(.text-plate-ui, .text-plate-ui *) {

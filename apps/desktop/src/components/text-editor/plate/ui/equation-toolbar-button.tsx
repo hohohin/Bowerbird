@@ -22,7 +22,7 @@ export function InlineEquationToolbarButton(
       }}
       tooltip="转为公式"
     >
-      <RadicalIcon />
+      <RadicalIcon />{props.children}
     </ToolbarButton>
   );
 }

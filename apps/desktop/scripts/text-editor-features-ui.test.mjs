@@ -44,6 +44,77 @@ try {
   await page.getByRole('button', { name: '接受', exact: true }).click();
   assert.match(await editor.innerText(), /Original revised/);
   console.log('PASS suggestion persistence and acceptance');
+
+  await fresh();
+  await page.keyboard.type('Keep this selection');
+  await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
+  const more = selection.getByRole('button', { name: '更多选区工具', exact: true });
+  const action = (name) => selectionTools.getByRole('button', { name, exact: true });
+  const outerOrder = () => selection.getByRole('button').evaluateAll(buttons =>
+    buttons.map(button => button.getAttribute('aria-label')).slice(1, -1));
+  await selection.waitFor();
+  const documentLeaves = () => editor.locator('[data-slate-node="text"]').evaluateAll(nodes => nodes.map(node => node.innerHTML));
+  const before = await documentLeaves();
+  assert.deepEqual(await outerOrder(), ['加粗', '斜体', '链接']);
+  await more.click();
+  for (const name of ['下划线', '字号', '底色', '字色', '删除线']) await action('添加' + name).click();
+  assert.ok(await action('添加高亮').isDisabled());
+  const grip = name => action('调整' + name + '的顺序');
+  await grip('字号').scrollIntoViewIfNeeded();
+  const start = await grip('字号').boundingBox();
+  const end = await grip('加粗').boundingBox();
+  await page.mouse.move(start.x + 8, start.y + 12);
+  await page.mouse.down();
+  await page.mouse.move(end.x + 8, end.y + 4, { steps: 14 });
+  await page.mouse.up();
+  assert.equal((await outerOrder())[0], '字号');
+  await grip('字号').press('ArrowDown');
+  assert.equal((await outerOrder())[1], '字号');
+  await grip('字号').click();
+  await action('上移').click();
+  const expected = ['字号', '加粗', '斜体', '链接', '下划线', '底色', '字色', '删除线'];
+  assert.deepEqual(await outerOrder(), expected);
+  assert.deepEqual(await documentLeaves(), before);
+  await page.keyboard.press('Escape');
+  await selection.getByRole('button', { name:'下划线', exact:true }).click();
+  assert.equal(await editor.locator('u').innerText(), 'Keep this selection');
+  await selection.getByRole('button', { name:'字号', exact:true }).click();
+  const sizeField = page.getByRole('textbox', { name:'字号', exact:true });
+  await sizeField.fill('21'); await sizeField.press('Enter');
+  assert.equal(await editor.locator('[data-slate-string]').first().evaluate(el => getComputedStyle(el).fontSize), '21px');
+  await selection.getByRole('button', { name:'字号', exact:true }).click();
+  await sizeField.fill('48'); await sizeField.press('Escape');
+  assert.equal(await editor.locator('[data-slate-string]').first().evaluate(el => getComputedStyle(el).fontSize), '21px');
+  await selection.getByRole('button', { name:'底色', exact:true }).click();
+  await page.getByRole('menuitem', {name:'yellow', exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('[contenteditable=true] [style*="background-color"]'));
+  console.log('PASS eight-format limit, drag, keyboard and click ordering, retained selection and pinned formatting');
+
+  await page.goto(new URL('scripts/fixtures/text-library/preview.html', server.resolvedUrls.local[0]).href);
+  await editor.locator('[data-slate-string]').first().click();
+  await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
+  await selection.waitFor();
+  assert.deepEqual(await outerOrder(), expected);
+  await page.setViewportSize({ width:375, height:800 });
+  await more.click();
+  for (const width of [375, 320]) {
+    await page.setViewportSize({ width, height:800 });
+    await page.waitForFunction(width => ['[aria-label="选中文字格式"]', '[role=dialog][aria-label="更多选区工具"]'].every(selector => {
+      const box = document.querySelector(selector)?.getBoundingClientRect();
+      return box?.width && box.x >= -1 && box.right <= width + 1;
+    }), width);
+  }
+  for (const name of expected) await action('移除' + name).click();
+  assert.deepEqual(await outerOrder(), []);
+  assert.ok(await action('添加下划线').isEnabled());
+  await action('下划线').click();
+  assert.ok(await editor.locator('u').count() > 0);
+  await fresh();
+  await page.keyboard.type('Empty preference');
+  await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
+  await selection.waitFor();
+  assert.deepEqual(await outerOrder(), []);
+  console.log('PASS shared preferences in asset detail and workspace, narrow layout, direct menu format and saved empty toolbar');
   assert.deepEqual(errors, []);
 } finally {
   await mkdir('.tmp/text-editor-features', { recursive: true });

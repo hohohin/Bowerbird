@@ -18,8 +18,10 @@ await check('menus are opaque and low-frequency tools live with the selection', 
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
     for (const name of ['正文或标题', '导出', '列表', '插入素材']) {
       await toolbar.getByRole('button', { name, exact: true }).click();
-      await opaque(page.getByRole('menu').last());
+      const menu = page.locator('[role="menu"][data-state="open"]');
+      await opaque(menu);
       await page.keyboard.press('Escape');
+      await menu.waitFor({ state: 'hidden' });
     }
     await editor.locator('[data-slate-string]').first().click();
     await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
