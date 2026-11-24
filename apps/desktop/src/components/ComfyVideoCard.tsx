@@ -7,9 +7,10 @@ import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { comfyAudioHint, H3_AUDIO_LABEL, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, H3_R2V_LIMITS, H3_R2V_REFERENCE_HINT, H3_VIDEO_MODES, H3_VIDEO_RESOLUTIONS, type ComfyEnvironment, type ComfyVideoOptions, type ComfyVideoMode, type ComfyVideoProgress } from "../lib/comfyVideo";
+import { comfyAudioHint, H3_AUDIO_LABEL, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, H3_R2V_LIMITS, H3_R2V_REFERENCE_HINT, H3_VIDEO_MODES, H3_VIDEO_RESOLUTIONS, type ComfyVideoOptions, type ComfyVideoMode, type ComfyVideoProgress } from "../lib/comfyVideo";
 import { isAudioAsset } from "../lib/audioMedia";
 import { api } from "../lib/api";
+import { useComfyEnvironment } from "../lib/comfyEnvironmentState";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError } from "../lib/notify";
 import type { Asset } from "../lib/types";
@@ -68,65 +69,18 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   const endpoint = imageMode ? H3_IMAGE_ENDPOINT : options.endpoint;
   const dialog = useRef<HTMLDialogElement>(null);
   const dot = useRef<HTMLButtonElement>(null);
-  const [environment, setEnvironment] = useState<ComfyEnvironment>();
-  const [connectionError, setConnectionError] = useState("");
-  const [checking, setChecking] = useState(true);
   const [directory, setDirectory] = useState<string>();
-  const [refresh, setRefresh] = useState(0);
-  const [acting, setActing] = useState(false);
   const [driverOpening, setDriverOpening] = useState(false);
-  const actionInFlight = useRef(false);
-  const latest = useRef({ mode, options, onChange, disabled, environment }); latest.current = { mode, options, onChange, disabled, environment };
-  const request = useRef(0);
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; request.current++; }; }, []);
-  function accept(state: ComfyEnvironment) {
-    if (state.mode && state.mode !== latest.current.mode) return;
-    setEnvironment(state); setConnectionError("");
-    if (comfyEnvironmentReady(state)) dialog.current?.close();
-    if (!imageMode && state.phase === "ready" && state.endpoint !== latest.current.options.endpoint && !latest.current.disabled) {
-      latest.current.onChange({ comfyVideo: { ...latest.current.options, endpoint: state.endpoint } });
+  const [pickerError, setPickerError] = useState("");
+  const { environment, error, checking, acting, check } = useComfyEnvironment(mode, endpoint, directory);
+  const connectionError = pickerError || error;
+  useEffect(() => {
+    if (connectionError || !environment || (environment.mode && environment.mode !== mode)) return;
+    if (comfyEnvironmentReady(environment)) dialog.current?.close();
+    if (!imageMode && environment.phase === "ready" && environment.endpoint !== options.endpoint && !disabled) {
+      onChange({ comfyVideo: { ...options, endpoint: environment.endpoint } });
     }
-  }
-  useEffect(() => {
-    if (actionInFlight.current) return;
-    const token = ++request.current;
-    setChecking(true);
-    const timer = window.setTimeout(() => {
-      comfyEnvironment("detect", endpoint, directory, undefined, mode).then(state => {
-        if (mounted.current && request.current === token) accept(state);
-      }).catch(error => { if (mounted.current && request.current === token) setConnectionError(String(error)); })
-        .finally(() => { if (mounted.current && request.current === token) setChecking(false); });
-    }, 250);
-    return () => { window.clearTimeout(timer); request.current++; };
-  }, [endpoint, directory, refresh, disabled, mode]);
-  useEffect(() => {
-    if (environment?.phase !== "installing" && environment?.phase !== "starting") return;
-    let stopped = false;
-    let timer: number;
-    async function poll() {
-      try { const state = await comfyEnvironment("status", endpoint, undefined, undefined, latest.current.mode); if (!stopped) accept(state); }
-      catch (error) { if (!stopped) setConnectionError(String(error)); }
-      if (!stopped) timer = window.setTimeout(poll, 1000);
-    }
-    timer = window.setTimeout(poll, 1000);
-    return () => { stopped = true; window.clearTimeout(timer); };
-  }, [environment?.phase, mode, endpoint]);
-  useEffect(() => {
-    let timer: number | undefined;
-    const refreshEnvironment = () => {
-      window.clearTimeout(timer);
-      const token = request.current;
-      // Focusing the app can be the pointer-down of the Install click itself.
-      // Let that click finish before deciding whether an idle refresh is needed.
-      timer = window.setTimeout(() => {
-        if (token !== request.current || actionInFlight.current || ["installing", "starting"].includes(latest.current.environment?.phase ?? "")) return;
-        setChecking(true); setRefresh(value => value + 1);
-      }, 250);
-    };
-    window.addEventListener("focus", refreshEnvironment);
-    return () => { window.clearTimeout(timer); window.removeEventListener("focus", refreshEnvironment); };
-  }, []);
+  }, [connectionError, environment, mode, imageMode, options, disabled, onChange]);
   const ready = comfyEnvironmentReady(environment) && (!environment?.mode || environment.mode === mode) && !connectionError;
   const preparing = environment?.phase === "installing" || environment?.phase === "starting";
   const existing = environment?.existing ?? [];
@@ -158,42 +112,25 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
     : `${failed ? `${message}。` : ""}点击下载并安装所需环境，已下载的资源会校验后继续使用。`);
   useEffect(() => { onStatusChange?.({ ready: ready && !checking && !acting, checking, message }); }, [ready, checking, acting, message, onStatusChange]);
   async function selectExisting() {
-    if (actionInFlight.current) return;
-    const selected = await open({ directory: true, multiple: false, title: "选择已有 ComfyUI" }).catch(error => {
-      if (mounted.current) setConnectionError(String(error));
-      return null;
-    });
-    if (typeof selected !== "string" || !mounted.current || actionInFlight.current) return;
-    actionInFlight.current = true;
-    request.current++;
-    setActing(true);
+    setPickerError("");
     try {
-      const state = await comfyEnvironment("select_existing", endpoint, undefined, selected, mode);
-      if (mounted.current) { setDirectory(undefined); accept(state); }
+      const selected = await open({ directory: true, multiple: false, title: "选择已有 ComfyUI" });
+      if (typeof selected !== "string") return;
+      await check.run("select_existing", selected);
+      setDirectory(undefined);
     } catch (error) {
-      if (mounted.current) setConnectionError(String(error));
-    } finally {
-      actionInFlight.current = false;
-      if (mounted.current) { setChecking(false); setActing(false); if (mode !== latest.current.mode) setRefresh(value => value + 1); }
+      setPickerError(String(error));
     }
   }
   async function install() {
-    if (actionDisabled || actionInFlight.current) return;
-    if (recheck) { setChecking(true); setRefresh(value => value + 1); return; }
-    actionInFlight.current = true;
-    request.current++; setChecking(false); setActing(true); setConnectionError("");
+    if (actionDisabled) return;
+    setPickerError("");
+    if (recheck) { void check.refresh(true); return; }
+    if (needsDriver) setDriverOpening(true);
     try {
-      if (needsDriver) setDriverOpening(true);
-      const state = await comfyEnvironment(needsDriver ? "driver" : environment?.canAddModels ? "install" : canPrepare ? "prepare" : "install", endpoint, directory, undefined, mode);
-      if (mounted.current) {
-        accept(state);
-        if (needsDriver && state.driverDownload) await openExternal(state.driverDownload.url);
-      }
-    } catch (error) {
-      if (mounted.current) setEnvironment(previous => previous ? { ...previous, phase: "failed", message: String(error) } : previous);
+      await check.run(needsDriver ? "driver" : environment?.canAddModels ? "install" : canPrepare ? "prepare" : "install", undefined, openExternal);
     } finally {
-      actionInFlight.current = false;
-      if (mounted.current) { setChecking(false); setActing(false); setDriverOpening(false); if (mode !== latest.current.mode) setRefresh(value => value + 1); }
+      setDriverOpening(false);
     }
   }
   return <>
@@ -201,7 +138,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
       aria-label={imageMode && checking ? "本地部署工作流：正在检测环境" : ready ? "本地部署工作流：环境就绪" : "本地部署工作流：环境未就绪，打开环境设置"}
       aria-haspopup="dialog" aria-controls={panelId} title={message} onClick={() => { if (!ready) {
         dialog.current?.showModal();
-        if (!actionInFlight.current && !preparing) { setChecking(true); setRefresh(value => value + 1); }
+        if (!acting && !preparing) { setPickerError(""); void check.refresh(); }
       } }}>
       {imageMode ? (checking ? <Ellipsis size={14} aria-hidden="true" /> : ready ? <Check size={14} aria-hidden="true" /> : <CircleAlert size={14} aria-hidden="true" />) : composer && (!ready || checking) ? <><CircleAlert size={13} aria-hidden="true" /><span className="environment-full">{checking ? "正在检测环境…" : "环境未就绪，点击配置"}</span><span className="environment-short">{checking ? "检测中…" : "配置环境"}</span></> : <span aria-hidden="true" />}
     </button>
@@ -220,16 +157,16 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
       <details><summary>MiniMax H3 使用许可</summary><p>点击安装即同意以下许可（含适用地区及用途限制）。许可与来源文件将保存在安装目录的 licenses 文件夹。</p><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 180, overflow: "auto" }}>{imageMode ? imageLicense : h3License}</pre></details>
       {environment && !ready && !existing.length && !environment.installed && !preparing && <small>下载 {gb(environment.downloadBytes)} · 需空闲 {gb(environment.requiredBytes)}</small>}
       {environment?.phase === "installing" && <>
-        <progress aria-label="环境下载进度" max={environment.totalBytes || 1} value={environment.completedBytes} />
-        <small>{gb(environment.completedBytes)} / {gb(environment.totalBytes)} · 关闭面板后继续安装</small>
+        <progress aria-label="环境下载进度" max={environment.downloadBytes || 1} value={environment.completedBytes} />
+        <small>{gb(environment.completedBytes)} / {gb(environment.downloadBytes)} · 关闭面板后继续安装</small>
       </>}
       <div className="comfy-environment-actions">
         <EnvironmentAction label="选择已有 ComfyUI" disabled={disabled || checking || acting || preparing}
           hint={busyHint || "保存已有 ComfyUI 的位置，供下次检测和启动使用。"} onClick={() => void selectExisting()} />
         <EnvironmentAction label="安装位置" disabled={disabled || checking || acting || preparing || ready}
           hint={busyHint || "选择安装位置后，应用会创建独立目录并检查磁盘空间。"} onClick={async () => {
-          try { const selected = await open({ directory: true, multiple: false, title: "选择本地部署工作流的安装位置" }); if (typeof selected === "string" && selected !== directory) { setChecking(true); setDirectory(selected); } }
-          catch (error) { setConnectionError(String(error)); }
+          try { const selected = await open({ directory: true, multiple: false, title: "选择本地部署工作流的安装位置" }); if (typeof selected === "string") { setPickerError(""); setDirectory(selected); } }
+          catch (error) { setPickerError(String(error)); }
         }} />
         <EnvironmentAction label={actionLabel} disabled={actionDisabled} hint={actionHint} onClick={() => void install()} />
       </div>

@@ -93,6 +93,8 @@ H3 图片文生图／编辑共用直接提示词图谱，`h3_image::reference_pr
 
 本机 H3 使用独立的既有持久任务协议：前端 [comfyVideo.ts](../../apps/desktop/src/lib/comfyVideo.ts) 的 `comfyVideo`／`comfyEnvironment`，Rust [comfy_video.rs](../../apps/desktop/src-tauri/src/commands/comfy_video.rs) 的固定模式 graph 与恢复、[comfy_setup.rs](../../apps/desktop/src-tauri/src/commands/comfy_setup.rs) 的按模式环境准备。`frames`／`reference`／`text` 由显式选择确定，缺省兼容旧首尾帧；[composerLocalVideo.ts](../../apps/desktop/src/lib/composerLocalVideo.ts) 让主屏和画板先保存同一 H3 卡片再执行。模式选择复用 `comfyVideoOptionsForMode`，环境响应的 `mode`／`modelsRequired` 用于当前模式就绪判断，`canAddModels` 仅表示托管环境可以补模型。此接口限定桌面与本机 loopback，不接受任意工作流；见 [三模式契约](../COMFYUI-LOCAL-VIDEO.md)。
 
+卡片与创作框使用 [comfyEnvironmentState.ts](../../apps/desktop/src/lib/comfyEnvironmentState.ts) 共用检测快照、窗口聚焦刷新和安装状态轮询。已有 ComfyUI 的可用模型与节点随模式和端口变化，快照按账号及实际检查参数复用。图片或视频同类控件共用当前安装进度，并在安装结束后重新检查各模式。
+
 普通 H3 视频生成使用现有 `prepare` 启动已选择的环境。取回已提交任务使用 `recover`，绑定原端口、模式与已记录的安装路径，并复用原请求 UUID 和入库记录。进程识别及崩溃恢复统一由 `comfy_setup.rs` 管理。[环境恢复](../COMFYUI-LOCAL-VIDEO.md#h3-视频环境自行恢复桌面源码)
 
 H3 视频三模式共用可选录音素材 ID 与既有媒体连线，`comfy_video.rs` 通过素材原件解析和音频解码验证后送入本机 ComfyUI。首尾帧、文生从第 0 帧加入音频引导，单图采用 Ref2VA 音色参考。入口及实机证据见 [H3 视频参考录音](../COMFYUI-LOCAL-VIDEO.md#2026-11-20-h3-视频参考录音桌面源码)。
