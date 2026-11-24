@@ -216,6 +216,7 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 
 - 生成详情可用 `api.generationDiagnostics(jobId)` 取回本机记录，再按 `turnKey` 匹配失败原因。画布组图用最新失败轮次打开详情，当前预览图片可来自其他任务。见[组图失败轮次](../CANVAS-WORKFLOW.md#2026-11-14-组图最新一轮生成失败桌面源码待发布)。
 - 用途／关键词：错误、中文提示、notify、恢复、原任务、recover、诊断。
+- H3 卡片与底部创作框轮询云端文本改写时共用 `cloudTextRunError`。它从任务快照保留请求或参数校验错误码，供工作流诊断复制及 `userErrorMessage` 展示中文原因。
 - 展示入口：[userError.ts](../../apps/desktop/src/lib/userError.ts) 的 `userErrorMessage`／`generationErrorMessage`，通知用 [notify.ts](../../apps/desktop/src/lib/notify.ts) 的 `notifyError(error, fallback)`。实际调用：[GenerationPanel.tsx](../../apps/desktop/src/components/GenerationPanel.tsx) 用 `generationErrorMessage(turn.error, { provider })` 显示轮次错误，用 `notifyError` 显示取回失败。
 - 恢复入口：[api.ts](../../apps/desktop/src/lib/api.ts) 的 `api.recoverCloudVideo(jobId)`；同一面板的取回按钮按 provider 分流到该方法或 `api.jimengRetrieveOrphan`，成功后 `loadGenJobs`。保持原 job，不能改成 `startGeneration`；只有当前可操作任务才能恢复，历史只读轮次不能操作后续任务。错误转换仅在展示边界执行，不覆盖原始诊断、持久化错误或业务判断。
 - 状态：错误展示 **可跨模块复用**；视频恢复是 **可跨模块复用** 的专用接口，限 Cloud 视频原任务，不能当通用重试。错误契约见 [用户错误提示](../USER-FACING-ERRORS.md)，恢复协议见 [Cloud 视频](../VIDEO-API-INTEGRATION.md)。

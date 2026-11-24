@@ -87,7 +87,7 @@ impl ChatDshSkill {
             if !p.seconds.is_finite() || p.seconds <= 0.0 || p.seconds > 120.0
                 || !matches!(p.ratio.as_str(), "9:16"|"16:9"|"4:3"|"3:4"|"1:1"|"auto")
                 || !matches!((p.mode.as_str(),p.first_frame_count,p.last_frame_count),
-                    ("text",0,0)|("reference",1,0)|("frames",1,0|1)) {
+                    ("text",0,0)|("reference",0|1,0)|("frames",0|1,0|1)) {
                 return Err(error("H3 视频提示词参数无效，请重新设置"));
             }
         }

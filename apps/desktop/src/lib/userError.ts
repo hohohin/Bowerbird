@@ -1,6 +1,20 @@
 import type { ProviderIssue } from "./generationAvailability";
+import type { CloudAgentSnapshot } from "./types";
 
 const DEFAULT_MESSAGE = "操作未完成，请稍后重试。";
+const textSkillValidationMessages = new Map([
+  ["cloud_text_skill_parameters_invalid", "提示词优化参数不符合当前生成模式要求，请检查模式、时长或参考素材设置后重试。"],
+  ["cloud_text_skill_request_invalid", "文本优化请求格式无效，请检查原文和优化设置后重试。"],
+]);
+
+/** Keep the server's validation code in the error saved to the workflow diagnostic. */
+export function cloudTextRunError(run: Pick<CloudAgentSnapshot["run"], "error_code" | "safe_message">, fallback: string): Error {
+  const { error_code: code, safe_message: message } = run;
+  if (code && textSkillValidationMessages.has(code) && !message?.includes(code)) {
+    return new Error(message ? `${message} [code: ${code}]` : code);
+  }
+  return new Error(message || fallback);
+}
 export function hasGenerationFailureReason(error?: string | null): boolean {
   return !!error?.trim() && !/^(?:生成失败|任务失败)[。！!]?$/.test(error.trim());
 }
@@ -46,6 +60,9 @@ export function userErrorMessage(error: unknown, fallback = DEFAULT_MESSAGE): st
   const ended = cloudChatEndedMessage(error);
   if (ended) return ended;
   const message = errorText(error).trim();
+  for (const [code, description] of textSkillValidationMessages) {
+    if (message.includes(code)) return description;
+  }
   // Legacy DSH builds used this provider code for several malformed-response causes.
   if (/^(?:Error: )?本机 DSH 本轮失败[：；]/.test(message) && message.includes("MALFORMED_RESPONSE")) {
     return "本机 DSH 本轮失败：模型回复格式异常，请核对本轮已创建的卡片后重试。";

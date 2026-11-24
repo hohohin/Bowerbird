@@ -1,7 +1,7 @@
 import { assignCanvasCardNames } from "./canvasCardNames";
 import { describeAssetWithNotice } from "./describeNotices";
 import { mergeWorkflowChanges } from "./workflowExternalChanges";
-import { cloudChatEndedMessage } from "./userError";
+import { cloudChatEndedMessage, cloudTextRunError } from "./userError";
 import { activeTriggerSchedule, advanceTriggerSchedule, triggerScheduleOccurrence, workflowTriggerMode } from "./workflowTriggerSchedule";
 import { normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflowCompletionTriggers, h3CardDraft, h3DraftForResult, h3OriginalPrompt, h3PromptPatch, isH3ImageCard } from "./canvasWorkflow";
 import { resolveDynamicVideoFrame, resolveVideoCardOutputs } from "./workflowVideoFrames";
@@ -2134,7 +2134,7 @@ export class CanvasWorkflowController {
           if (halted()) return;
           assertAccount();
           useStore.getState().openCloudAgentRun(current, { navigate: false });
-          if (["failed", "cancelled"].includes(current.status)) { terminalFailure = true; throw new Error(current.snapshot.run.safe_message || "提示词优化未完成，请检查 Agent 任务记录"); }
+          if (["failed", "cancelled"].includes(current.status)) { terminalFailure = true; throw cloudTextRunError(current.snapshot.run, "提示词优化未完成，请检查 Agent 任务记录"); }
           if (current.status.startsWith("awaiting_")) { terminalFailure = true; throw new Error("云端未按文本优化模式执行，请检查 Cloud DSH 服务版本"); }
           if (current.status === "succeeded") {
             terminalFailure = true;

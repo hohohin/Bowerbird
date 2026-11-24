@@ -3,6 +3,7 @@ import { useStore } from "../store";
 import { canStartAnotherAgentRun, canUseAgentRun, canUseByo } from "./entitlement";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import type { CloudAgentRunRecord } from "./types";
+import { cloudTextRunError } from "./userError";
 
 export type TextAgentProvider = "codex-cli" | "cloud";
 export const TEXT_AGENT_LABELS = { "codex-cli": "Codex CLI", cloud: "Cloud DSH" };
@@ -83,7 +84,7 @@ export async function startCloudTextRewrite(input: { instruction: string; source
   };
 }
 function cloudTextAgentResult(current: CloudAgentRunRecord): string | null {
-  if (["failed", "cancelled"].includes(current.status)) throw new Error(current.snapshot.run.safe_message || "Agent 任务已结束，未写入文档。");
+  if (["failed", "cancelled"].includes(current.status)) throw cloudTextRunError(current.snapshot.run, "Agent 任务已结束，未写入文档。");
   if (current.status.startsWith("awaiting_")) throw new Error("Cloud DSH 未按文本模式执行，请在任务中心检查原任务。");
   if (current.status !== "succeeded") return null;
   const payload = current.snapshot.events.find(event => event.type === "text.result")?.display_payload;

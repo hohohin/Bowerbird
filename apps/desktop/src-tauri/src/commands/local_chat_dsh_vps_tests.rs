@@ -461,18 +461,15 @@ fn local_chat_vps_skill_is_validated_per_request_and_omitted_from_later_turns() 
         raw["dshSkill"] = invalid;
         assert!(serde_json::from_value::<ChatSendInput>(raw).is_err());
     }
-    let params =
-        json!({"mode":"frames","seconds":4,"ratio":"16:9","firstFrameCount":1,"lastFrameCount":1});
-    let mut valid = json!({"id":"h3-video-prompt","parameters":params});
-    serde_json::from_value::<ChatDshSkill>(valid.clone())
-        .unwrap()
-        .validate()
-        .unwrap();
-    valid["parameters"]["mode"] = json!("text");
-    assert!(serde_json::from_value::<ChatDshSkill>(valid)
-        .unwrap()
-        .validate()
-        .is_err());
+    for (mode, first, last, valid) in [
+        ("frames", 1, 1, true), ("frames", 0, 0, true), ("frames", 0, 1, true),
+        ("reference", 0, 0, true), ("reference", 0, 1, false),
+        ("text", 1, 1, false), ("frames", 2, 0, false),
+    ] {
+        let params = json!({"mode":mode,"seconds":4,"ratio":"16:9","firstFrameCount":first,"lastFrameCount":last});
+        let skill = json!({"id":"h3-video-prompt","parameters":params});
+        assert_eq!(serde_json::from_value::<ChatDshSkill>(skill).unwrap().validate().is_ok(), valid);
+    }
     let mut wrong = input;
     wrong.conversation_id = None;
     wrong.request_id = "wrong".into();

@@ -18,8 +18,16 @@ try {
     const { api } = await import('/src/lib/api.ts');
     const { CanvasWorkflowController, canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+    const { isDshSkill } = await import('/src/lib/dshSkill.ts');
     const { DEFAULT_COMFY_VIDEO, comfyVideoOptionsForMode } = await import('/src/lib/comfyVideo.ts');
     const check = (ok, message) => { if (!ok) throw Error(message); };
+    for (const [mode, firstFrameCount, lastFrameCount, valid] of [
+      ['frames', 0, 0, true], ['frames', 0, 1, true], ['frames', 2, 0, false],
+      ['reference', 0, 0, true], ['reference', 0, 1, false], ['text', 1, 0, false],
+    ]) {
+      check(isDshSkill({ id: 'h3-video-prompt', parameters: { mode, firstFrameCount, lastFrameCount, seconds: 5, ratio: 'auto' } }) === valid,
+        'desktop DSH skill parameters: ' + [mode, firstFrameCount, lastFrameCount]);
+    }
     const { cleanH3OptimizedPrompt, restoreH3VideoAudioReference, restoreH3R2VReferences, h3R2VPromptReferences, h3OptimizationInstruction } = await import('/src/lib/h3PromptOptimization.ts');
     check(cleanH3OptimizedPrompt('integrated_multimodal_description: 正文') === '正文', 'field label removed');
     check(cleanH3OptimizedPrompt('参考 <Picture 1>\n  integrated_multimodal_description：正文\n下一行') === '参考 <Picture 1>\n正文\n下一行', 'reference and line breaks preserved');
@@ -424,6 +432,68 @@ try {
     const ui = canvasWorkflowController('p'); await ui.load(); await ui.edit([{ ...node, x: 800 }]);
   });
   const card = page.locator('[data-workflow-card="h3"]');
+  const baseFields = '\nintegrated_multimodal_description: [Shot 1] 她回头。\noverall_soundscape: 雨声。\nnon_diegetic_music: N/A';
+  const emptyFrameResult = 'For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.' + baseFields;
+  const tailOnlyResult = 'How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 8.00-second mark of the target video.' + baseFields;
+  const referenceResult = 'subject_definitions: <Picture 1> 的人物。\nsummary: 她回头。\nretention_analysis: 保留主体。\ndetailed_description: 她听见雨声。\noverall_soundscape: 雨声。\nnon_diegetic_music: N/A';
+  for (const [mode, lastFrameCount, text] of [['frames', 0, emptyFrameResult], ['frames', 1, tailOnlyResult], ['reference', 0, referenceResult]]) {
+    await page.evaluate(async ({ mode, lastFrameCount, text }) => {
+      const { api } = await import('/src/lib/api.ts');
+      const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+      const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+      const { DEFAULT_COMFY_VIDEO, comfyVideoOptionsForMode } = await import('/src/lib/comfyVideo.ts');
+      const c = canvasWorkflowController('p');
+      window.restorePreoptTest ??= { nodes: c.document.nodes, get: api.cloudAgentGet };
+      const node = newWorkflowNode('comfy-video', 740, 40, 'comfy-video');
+      node.comfyVideo = comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, mode);
+      await c.edit([{ ...node, id: 'preopt', prompt: '她听见雨声，慢慢回头。', inputs: lastFrameCount ? { 'last-frame': [{ assetId: 'b' }] } : {} }]);
+      api.cloudAgentGet = async runId => ({ runId, status: 'succeeded', snapshot: { run: {}, events: [
+        { type: 'text.result', display_payload: { schemaVersion: 1, text } }] } });
+    }, { mode, lastFrameCount, text });
+    const preoptCard = page.locator('[data-workflow-card="preopt"]');
+    await preoptCard.getByRole('button', { name: '优化提示词', exact: true }).click();
+    await preoptCard.getByText('已生效', { exact: true }).waitFor();
+    const { parameters, prompt } = await page.evaluate(() => ({
+      parameters: JSON.parse(window.optimizeStarts.at(-1).intentPrompt.split('\n')[1]).parameters,
+      prompt: JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].prompt,
+    }));
+    assert.deepEqual([parameters.mode, parameters.firstFrameCount, parameters.lastFrameCount], [mode, 0, lastFrameCount]);
+    assert.equal(parameters.seconds, mode === 'frames' ? 8 : 5);
+    assert.equal(prompt, text);
+    if (mode === 'frames' && !lastFrameCount) {
+      for (const port of ['first-frame', 'last-frame']) {
+        const stale = await page.evaluate(async port => {
+          const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+          const { h3DraftStale } = await import('/src/lib/canvasWorkflow.ts');
+          const c = canvasWorkflowController('p'), n = c.document.nodes[0];
+          await c.edit([{ ...n, inputs: { ...n.inputs, [port]: [{ assetId: port === 'first-frame' ? 'a' : 'b' }] } }]);
+          return h3DraftStale(c.document.nodes[0], n.h3Prompt);
+        }, port);
+        assert.equal(stale, port === 'last-frame');
+        await preoptCard.getByText(stale ? '需重新优化提示词' : '已生效', { exact: true }).waitFor();
+      }
+    }
+  }
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    api.cloudAgentGet = async runId => ({ runId, status: 'failed', snapshot: { run: {
+      safe_message: 'Agent Run 执行失败', error_code: 'cloud_text_skill_parameters_invalid',
+    }, events: [] } });
+  });
+  const preoptCard = page.locator('[data-workflow-card="preopt"]');
+  await preoptCard.getByRole('button', { name: '重新优化提示词', exact: true }).click();
+  await preoptCard.getByRole('alert').filter({ hasText: '提示词优化参数不符合当前生成模式要求' }).waitFor();
+  const issue = page.getByRole('alert', { name: '工作流问题' });
+  await issue.locator('summary').click();
+  assert.match(await issue.locator('pre').innerText(), /cloud_text_skill_parameters_invalid/);
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    c.dismissIssue();
+    api.cloudAgentGet = window.restorePreoptTest.get;
+    await c.edit(window.restorePreoptTest.nodes);
+  });
   async function checkH3Header(card) {
     const header = card.locator(':scope > header');
     await header.getByRole('button', { name: '复制卡片', exact: true }).locator('svg').waitFor();

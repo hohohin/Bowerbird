@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { userErrorMessage } from '../src/lib/userError.ts';
+import { cloudTextRunError, userErrorMessage } from '../src/lib/userError.ts';
 import { cloudAgentStatusLabel } from '../src/lib/cloudAgent.ts';
 
 const fallback = '素材未保存，请稍后重试。';
@@ -50,6 +50,26 @@ test('ambiguous responses never encourage submitting a second paid task', () => 
   for (const raw of ['timeout', 'Failed to fetch', 'HTTP 502', { code: 'ETIMEDOUT' }]) {
     assert.match(userErrorMessage(raw), /请勿重复提交/);
   }
+});
+
+test('text skill validation preserves the server code while exposing an actionable reason', () => {
+  for (const [code, hint] of [
+    ['cloud_text_skill_parameters_invalid', /检查模式、时长或参考素材/],
+    ['cloud_text_skill_request_invalid', /检查原文和优化设置/],
+  ]) {
+    for (const safe_message of [undefined, '任务未完成', code]) {
+      const error = cloudTextRunError({ error_code: code, safe_message }, fallback);
+      assert.ok(error.message.includes(code), 'the raw error is available to workflow diagnostics');
+      if (safe_message) assert.ok(error.message.includes(safe_message));
+      const display = userErrorMessage(error, fallback);
+      assert.match(display, hint);
+      assert.ok(!display.includes(code));
+      assert.equal(userErrorMessage({ error: { code } }, fallback), display);
+      assert.equal(userErrorMessage(display), display);
+    }
+  }
+  const cancelled = cloudTextRunError({ safe_message: '任务已取消', error_code: 'unknown_code' }, fallback);
+  assert.equal(cancelled.message, '任务已取消');
 });
 
 test('clear Chinese validations and product names remain useful', () => {
