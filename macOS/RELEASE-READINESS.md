@@ -39,3 +39,16 @@
 | 外拖与断开重连 | Rust 外拖会话、取消、拖影与目录离线／重接／升级后索引保留夹具通过。拖到 Finder 的实际跨进程交付、真实外盘拔插待验。 |
 
 本机回执保存在 [ARM 验收目录](dist/verification/26.11.2403-aarch64/)，含原始 Rust 工具链、迁移比对、媒体测试和界面测试记录。
+
+#### 安装包与更新归档
+
+冻结源码为 `ac3d2e6a38fa64d90028202ac7f77227aa8d1165`。最终 DMG 使用 `Bowerbird Local Code Signing`，通过 `codesign --verify --deep --strict`，无 Apple 公证。挂载镜像实读窗口 660×400、图标 (180,190)/(480,190)、背景和 /Applications 链接。归档内 85 个文件与挂载 app 字节一致，包内扩展为 0.5.2，更新包通过原 Mac updater 公钥验签。用挂载镜像的迁移工具再次在旧包合成库副本上迁移、重跑，最终 0062、完整性及外键检查通过。[镜像回执](dist/verification/26.11.2403-aarch64/signed-dmg.json)
+
+| 产物 | 字节 | SHA-256 |
+|---|---:|---|
+| `Bowerbird_26.11.2403_aarch64-updater-installer.dmg` | 112,948,689 | `2204a07cb8f79317997bd0d9da1274278b14b8bd604caa032335c5e205e208a6` |
+| `Bowerbird_26.11.2403_aarch64.app.tar.gz` | 112,623,138 | `a3d3c340767d40347b9baea72e65858f57073402106a8a94c409220c40c4d93e` |
+
+R2 独立前缀为 `mac_package/testing/26.11.2403-aarch64-a3d3c340767d/`。7 个对象以禁止覆盖的条件写入，随后从公网完整下载并逐件核对长度、SHA-256，回读的归档及签名通过原公钥验签。[DMG](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/testing/26.11.2403-aarch64-a3d3c340767d/Bowerbird_26.11.2403_aarch64-updater-installer.dmg) · [测试清单](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/testing/26.11.2403-aarch64-a3d3c340767d/darwin-aarch64-26.11.2403.json) · [SHA256SUMS](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/testing/26.11.2403-aarch64-a3d3c340767d/SHA256SUMS) · [逐件回执](dist/verification/26.11.2403-aarch64/r2-readback.json)
+
+官网由另一终端发布。本轮 15:43:58（北京时间）只读复核时，ARM 为 26.10.801，Intel 为 26.10.1501，Windows 为 26.11.2402；两条 Mac 路由 GET/HEAD 均返回 307 与 no-store。现役旧包均经 CDN 分发。[公网基线](dist/verification/26.11.2403-aarch64/public-channels.json)
