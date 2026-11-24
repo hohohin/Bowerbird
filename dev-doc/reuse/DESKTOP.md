@@ -57,6 +57,8 @@
 - **用途／关键词**：触发器、定时、跨画板、执行锁、运行恢复、删除项目后的调度收尾。
 - **画板入口**：`CanvasWorkflowLayer` 的卡头拖动入口复用加号的拖线反馈，调用项目控制器的 `connectCompletionTrigger`，一次保存触发卡与完成／触发连线。
 - **入口**：[canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `canvasWorkflowController(projectId)` 提供项目控制器。[WorkflowScheduleCoordinator](../../apps/desktop/src/components/WorkflowScheduleCoordinator.tsx) 由 `App` 挂载，通过 `setTriggerTimersEnabled` 管理非归档项目计时。
+- [发条调度](../../apps/desktop/src/lib/workflowTriggerScheduler.ts) 管理预约计时和会话完成监听。后台调用跨越异步操作时用 `withProjectWorkflow` 保留控制器。离开项目后，最后一个订阅、保存、执行和待触发事件结束时会释放闲置控制器。
+- 节点执行入口按职责分为[生成](../../apps/desktop/src/lib/workflowGenerationExecutor.ts)、[Agent](../../apps/desktop/src/lib/workflowAgentExecutor.ts)、[本机 H3](../../apps/desktop/src/lib/workflowComfyExecutor.ts)、[声音](../../apps/desktop/src/lib/workflowVoiceExecutor.ts)、[反推与复用](../../apps/desktop/src/lib/workflowDescribeExecutor.ts)、[分层](../../apps/desktop/src/lib/workflowLayersExecutor.ts)和[视觉规范](../../apps/desktop/src/lib/workflowVisualProfileExecutor.ts)。这些执行器通过[工作流执行接口](../../apps/desktop/src/lib/workflowExecutionHost.ts)读取最新步骤、串行保存检查点和交付产物。
 - **调用**：手动和定时运行复用 `start`。Agent 用 `create_canvas_cards` 配置触发卡，用 `runCard` 指定本批运行入口，协调器领取保存的动作，断线后读取原回执。[workflowTriggerSchedule.ts](../../apps/desktop/src/lib/workflowTriggerSchedule.ts) 提供 `workflowTriggerMode` 及 `activeTriggerSchedule`，供表单和运行时兼容旧卡、筛选有效预约。`nextDailyTrigger`／`triggerScheduleOccurrence`／`advanceTriggerSchedule` 计算本机时刻、运行身份及下次预约。
 - **边界／状态**：**工作流内部专用**。应用运行时调度，原生 SQLite 事务保护到点消费，复制清除 `triggerSchedule`。删除沿 `useProjectDeletion` → `ProjectDeleteDialog` → `deleteProjectCanvas`，原生成功后 store 调用 `discardProjectWorkflow`，只停止该项目的本地调度、计时器和后续保存。远端任务沿原身份处理。[工作流预约](../CANVAS-WORKFLOW.md#2026-11-05触发器定时执行源码未发布) · [项目删除](../PROJECT-CANVAS-PLAN.md#2026-11-10确认删除项目后不再由任务状态否决源码待发布)。
 
@@ -72,7 +74,7 @@
 
 - **用途／关键词**：项目对话列表、Agent 卡片、正文增量、工作流等待。
 - **入口**：项目内会话列表或画板卡面使用 [localChatStore.ts](../../apps/desktop/src/lib/localChatStore.ts) 的 `useProjectChatSummaries(projectId)`。打开正文时沿用 `LocalChatPanel` 的 `pinLocalChat` 与 `loadConversation`，读取缺口快照、处理文本增量及保留活跃会话均由 store 负责。
-- **调用**：工作流 Agent 步骤用 `CanvasWorkflowController.waitForChatTurn` 订阅已接受会话。五秒未收到目标更新时通过 `localChat.revision(id)` 读取单个版本号，发现差异才读取正文。
+- **调用**：工作流 Agent 步骤用 `waitForChatTurn` 订阅已接受会话。五秒未收到目标更新时通过 `localChat.revision(id)` 读取单个版本号，发现差异才读取正文。
 - **边界／状态**：工作流停止按提交轮次执行，其他续聊继续运行。
 
 ## 在新面板里嵌入独立素材浏览状态

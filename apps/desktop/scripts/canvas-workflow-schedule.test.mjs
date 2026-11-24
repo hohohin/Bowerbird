@@ -48,46 +48,46 @@ try {
     };
     try {
       const c = await make('timed');
-      await c.checkScheduledTriggers(); check(calls === 0 && c.document.run === null, 'future appointment must not run early');
+      await c.scheduler.checkScheduledTriggers(); check(calls === 0 && c.document.run === null, 'future appointment must not run early');
       const before = structuredClone(c.document.nodes);
       now += 60000;
-      await Promise.all([c.checkScheduledTriggers(), c.checkScheduledTriggers(), c.checkScheduledTriggers()]);
+      await Promise.all([c.scheduler.checkScheduledTriggers(), c.scheduler.checkScheduledTriggers(), c.scheduler.checkScheduledTriggers()]);
       await until(() => c.document.run?.status === 'done');
       check(calls === 1 && c.document.nodes[0].triggerSchedule.status === 'fired', 'one due event starts exactly one downstream request');
       check(c.document.nodes[0].triggerCount === 3, 'timer does not consume completion-loop quota');
       const checkpoint = snapshots.find(doc => doc.run?.scheduleId === before[0].triggerSchedule.id);
       check(checkpoint?.nodes[0].triggerSchedule.status === 'fired' && checkpoint.run.steps.child.status === 'pending', 'run and appointment are durable before provider submission');
-      await c.edit(before); await c.checkScheduledTriggers(); check(calls === 1 && c.document.nodes[0].triggerSchedule.status === 'fired', 'undo does not rearm a consumed appointment');
-      const reloaded = new CanvasWorkflowController('timed'); controllers.push(reloaded); await reloaded.load(); await reloaded.checkScheduledTriggers();
+      await c.edit(before); await c.scheduler.checkScheduledTriggers(); check(calls === 1 && c.document.nodes[0].triggerSchedule.status === 'fired', 'undo does not rearm a consumed appointment');
+      const reloaded = new CanvasWorkflowController('timed'); controllers.push(reloaded); await reloaded.load(); await reloaded.scheduler.checkScheduledTriggers();
       check(calls === 1, 'restored consumed appointment does not submit again');
 
       const cancelled = await make('cancelled');
       await cancelled.edit(cancelled.document.nodes.map(node => ({ ...node, triggerSchedule: undefined })));
-      now += 60000; await cancelled.checkScheduledTriggers(); check(calls === 1, 'cancelled appointment never runs');
-      const deleted = await make('deleted'); await deleted.edit([]); now += 60000; await deleted.checkScheduledTriggers(); check(calls === 1, 'deleted trigger never runs');
+      now += 60000; await cancelled.scheduler.checkScheduledTriggers(); check(calls === 1, 'cancelled appointment never runs');
+      const deleted = await make('deleted'); await deleted.edit([]); now += 60000; await deleted.scheduler.checkScheduledTriggers(); check(calls === 1, 'deleted trigger never runs');
 
       const cold = await make('cold'); cold.setTriggerTimersEnabled(false);
       const coldDoc = structuredClone(cold.document); coldDoc.nodes[0].triggerSchedule.at = originalNow() - 3600000;
       await api.canvasWorkflowSave('cold', cold.revision, coldDoc);
-      const restarted = new CanvasWorkflowController('cold'); controllers.push(restarted); await restarted.load(); await restarted.checkScheduledTriggers();
+      const restarted = new CanvasWorkflowController('cold'); controllers.push(restarted); await restarted.load(); await restarted.scheduler.checkScheduledTriggers();
       check(calls === 1 && restarted.document.nodes[0].triggerSchedule.status === 'missed', 'closed-app deadline is marked missed, not replayed');
 
       const future = await make('future'); future.setTriggerTimersEnabled(false);
       const restored = new CanvasWorkflowController('future'); controllers.push(restored); await restored.load(); now += 60000;
-      await restored.checkScheduledTriggers(); await until(() => restored.document.run?.status === 'done'); check(calls === 2, 'future persisted appointment survives reload');
+      await restored.scheduler.checkScheduledTriggers(); await until(() => restored.document.run?.status === 'done'); check(calls === 2, 'future persisted appointment survives reload');
 
       const locked = await make('locked');
       const busy = { id: 'busy', startId: 'child', threadId: 'busy-thread', order: ['child'], status: 'waiting', lockedNodeIds: ['child'], writeNodeIds: ['child'], steps: { child: { status: 'waiting' } } };
       await locked.save({ ...locked.document, runs: [busy], run: busy }); now += 60000;
-      await locked.checkScheduledTriggers(); check(calls === 2 && locked.document.nodes[0].triggerSchedule.status === 'armed', 'conflicting flow leaves schedule pending');
-      await locked.stop('busy'); await locked.checkScheduledTriggers(); await until(() => locked.document.run?.status === 'done'); check(calls === 3, 'pending schedule starts after lock released');
+      await locked.scheduler.checkScheduledTriggers(); check(calls === 2 && locked.document.nodes[0].triggerSchedule.status === 'armed', 'conflicting flow leaves schedule pending');
+      await locked.stop('busy'); await locked.scheduler.checkScheduledTriggers(); await until(() => locked.document.run?.status === 'done'); check(calls === 3, 'pending schedule starts after lock released');
 
       const invalid = await make('invalid'); deny = true; now += 60000;
-      await invalid.checkScheduledTriggers(); deny = false; await invalid.checkScheduledTriggers();
+      await invalid.scheduler.checkScheduledTriggers(); deny = false; await invalid.scheduler.checkScheduledTriggers();
       check(calls === 3 && invalid.document.nodes[0].triggerSchedule.status === 'failed', 'authorization failure does not retry automatically');
-      const badReload = new CanvasWorkflowController('invalid'); controllers.push(badReload); await badReload.load(); await badReload.checkScheduledTriggers(); check(calls === 3, 'failed appointment stays stopped after reload');
+      const badReload = new CanvasWorkflowController('invalid'); controllers.push(badReload); await badReload.load(); await badReload.scheduler.checkScheduledTriggers(); check(calls === 3, 'failed appointment stays stopped after reload');
 
-      const unsaved = await make('unsaved'); failSave = true; now += 60000; await unsaved.checkScheduledTriggers(); failSave = false;
+      const unsaved = await make('unsaved'); failSave = true; now += 60000; await unsaved.scheduler.checkScheduledTriggers(); failSave = false;
       check(calls === 3 && unsaved.error, 'failed checkpoint never submits provider request');
 
       const copy = await make('copy');
@@ -110,7 +110,7 @@ try {
       controllers.push(observer, removedObserver);
       await until(() => observer.ready && removedObserver.ready);
       window.store.setState({ projects: [...projects, { id: 'background', archived_at: null }, { id: 'archived', archived_at: 1 }] });
-      await until(() => !removedObserver.triggerTimersEnabled);
+      await until(() => !removedObserver.scheduler.triggerTimersEnabled);
       now += 60000;
       // Exercise the real timeout with the canvas still displaying project p.
       await until(() => observer.document.run?.status === 'done');
@@ -187,22 +187,22 @@ try {
     };
     try {
       const c = await make('daily-p'); const before = structuredClone(c.document.nodes);
-      await c.checkScheduledTriggers(); check(calls === 0, 'daily trigger does not run early');
+      await c.scheduler.checkScheduledTriggers(); check(calls === 0, 'daily trigger does not run early');
       now = new Date(2030, 0, 1, 21).getTime();
-      await Promise.all([c.checkScheduledTriggers(), c.checkScheduledTriggers()]);
+      await Promise.all([c.scheduler.checkScheduledTriggers(), c.scheduler.checkScheduledTriggers()]);
       await until(() => c.document.run?.status === 'done');
       check(calls === 1 && c.document.nodes[0].triggerSchedule.at === new Date(2030, 0, 2, 21).getTime(), 'day one arms tomorrow at 21:00');
-      await c.edit(before); await c.checkScheduledTriggers();
+      await c.edit(before); await c.scheduler.checkScheduledTriggers();
       check(calls === 1 && c.document.nodes[0].triggerSchedule.status === 'armed', 'undo keeps the next daily occurrence');
       c.setTriggerTimersEnabled(false);
       const restored = new CanvasWorkflowController('daily-p'); controllers.push(restored); await restored.load();
-      now = new Date(2030, 0, 2, 21).getTime(); await restored.checkScheduledTriggers();
+      now = new Date(2030, 0, 2, 21).getTime(); await restored.scheduler.checkScheduledTriggers();
       await until(() => restored.document.run?.status === 'done' && restored.document.runs.length === 2);
       check(calls === 2 && new Set(restored.document.runs.map(run => run.scheduleId)).size === 2, 'day two runs once under a distinct occurrence identity');
-      now = new Date(2030, 0, 3, 21).getTime(); deny = true; await restored.checkScheduledTriggers(); deny = false;
-      await restored.checkScheduledTriggers();
+      now = new Date(2030, 0, 3, 21).getTime(); deny = true; await restored.scheduler.checkScheduledTriggers(); deny = false;
+      await restored.scheduler.checkScheduledTriggers();
       check(calls === 2 && restored.document.nodes[0].triggerSchedule.at === new Date(2030, 0, 4, 21).getTime(), 'validation failure skips today without disabling tomorrow or retrying');
-      now = new Date(2030, 0, 4, 21).getTime(); await restored.checkScheduledTriggers();
+      now = new Date(2030, 0, 4, 21).getTime(); await restored.scheduler.checkScheduledTriggers();
       await until(() => restored.document.run?.status === 'done' && restored.document.runs.length === 3);
       check(calls === 3, 'daily schedule continues after a prior failed occurrence');
       restored.setTriggerTimersEnabled(false);
@@ -211,11 +211,11 @@ try {
       const old = structuredClone(cold.document); old.nodes[0].triggerSchedule.at = originalNow() - 86400000 * 3;
       await api.canvasWorkflowSave('daily-cold', cold.revision, old);
       const restarted = new CanvasWorkflowController('daily-cold'); controllers.push(restarted); await restarted.load();
-      await restarted.checkScheduledTriggers(); check(calls === 3, 'restart does not catch up missed days');
+      await restarted.scheduler.checkScheduledTriggers(); check(calls === 3, 'restart does not catch up missed days');
       const next = new Date(2030, 0, 5, 21).getTime();
       check(restarted.document.nodes[0].triggerSchedule.at === next && JSON.parse(sessionStorage.getItem('workflow-daily-cold')).document.nodes[0].triggerSchedule.at === next,
         'restart persists the next occurrence before claiming it');
-      now = next; await restarted.checkScheduledTriggers(); await until(() => restarted.document.run?.status === 'done');
+      now = next; await restarted.scheduler.checkScheduledTriggers(); await until(() => restarted.document.run?.status === 'done');
       check(calls === 4, 'restarted daily schedule fires at the next 21:00');
       check(checkpoints.some(doc => doc.run?.scheduleId && doc.run.steps.child.status === 'pending' && doc.nodes[0].triggerSchedule.status === 'armed'), 'next appointment and pending run share a checkpoint');
       return calls;

@@ -328,6 +328,7 @@ test('numbered pipes migrate stale cells on different cards and read current sou
       {id:'two',type:'text',label:'文本 2',input:{canvasNodeId:'unrelated-old-table',cellId:'old'}},
     ]};
     const migrated=normalizeWorkflowInputSlots(n);
+    assert.equal(normalizeWorkflowInputSlots(migrated), migrated, "already normalized cards keep their render identity");
     assert.deepEqual(migrated.promptReferences.map(r=>r.slot),[1,2]);
     const values=workflowInputValues([],generationInputNode(migrated),id=>id==='new-a'?'当前甲':'当前乙');
     if(kind==='generation')assert.equal(compileGenerationPrompt(migrated,values).prompt,'当前甲 / 当前乙');

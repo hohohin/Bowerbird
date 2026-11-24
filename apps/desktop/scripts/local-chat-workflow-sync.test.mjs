@@ -19,6 +19,7 @@ function fixture(initial = doc([node('original')])) {
   const writes = [];
   const modules = new Map();
   const requests = new Map(), sends = [], stops = [];
+  let activeProjectId = 'p';
   const genJobs = {}, generationRequests = [];
   const chatListeners = new Set(), checkpoints = new Map();
   const reads = { checkpoints: 0, full: 0 };
@@ -73,9 +74,10 @@ function fixture(initial = doc([node('original')])) {
       if (specifier === 'zustand') return { createStore };
       if (specifier === './chatCapabilities') return { chatProviderAccessIssue: () => null,
         selectedChatOptions: (...args) => load(resolve(lib, 'chatCapabilities.ts')).selectedChatOptions(...args) };
-      if (specifier === '../store') return { useStore: { getState: () => ({ genJobs,
+      if (specifier === '../store') return { useStore: { getState: () => ({ genJobs, activeProjectId,
         startGeneration: async (...args) => { generationRequests.push(args.at(-1)); return { accepted: true }; } }) } };
       if (specifier === '@tauri-apps/api/event') return { emit: async () => {} };
+      if (/^\.\/workflow(AgentExecutor|ComfyExecutor|GenerationExecutor|VoiceExecutor|DescribeExecutor|LayersExecutor|VisualProfileExecutor|TriggerScheduler)$/.test(specifier)) return load(resolve(lib, specifier + '.ts'));
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
       if (specifier === './workflowLoop') return load(resolve(lib, 'workflowLoop.ts'));
@@ -94,7 +96,7 @@ function fixture(initial = doc([node('original')])) {
   }
   const { CanvasWorkflowController } = load(resolve(lib, 'canvasWorkflowRuntime.ts'));
   const { mergeWorkflowChanges } = load(resolve(lib, 'workflowExternalChanges.ts'));
-  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), writes, requests, sends, stops, chatStore, chatApi, chatListeners, checkpoints, reads, load, genJobs, generationRequests,
+  return { controller: new CanvasWorkflowController('p'), setProject: id => { activeProjectId = id; }, mergeWorkflowChanges, saved: () => plain(saved), writes, requests, sends, stops, chatStore, chatApi, chatListeners, checkpoints, reads, load, genJobs, generationRequests,
     external: document => { saved = { revision: saved.revision + 1, document: clone(document) }; },
     fail: value => { fail = value; }, failRead: value => { failRead = value; },
     interleave: (...changes) => { interleavedChanges.push(...changes); },
@@ -138,7 +140,7 @@ test('Agent execution submits through chat once and resumes the exact original t
   const step = { status: 'pending', agentInput: { prompt: agent.prompt, source: JSON.stringify({ source }), assetIds: [] } };
   const run = { id: 'run', startId: agent.id, threadId: 'thread', order: [agent.id], status: 'running', steps: { [agent.id]: step } };
   const f = fixture({ ...doc([agent]), run }); await f.controller.load();
-  const first = await f.controller.chatResult(run.id, agent, step, [], () => false);
+  const first = await f.load(resolve(lib, 'workflowAgentExecutor.ts')).chatResult(f.controller.executionHost, run.id, agent, step, [], () => false);
   assert.equal(first.text.text, '原轮次输出');
   assert.equal(f.sends.length, 1);
   assert.ok(f.sends[0].text.includes(source));
@@ -148,18 +150,18 @@ test('Agent execution submits through chat once and resumes the exact original t
   const frozen = f.saved().document.run.steps[agent.id];
   const accepted = f.requests.get(frozen.chatInput.requestId);
   accepted.status = 'running'; accepted.messages.push({ turnId: 'later', role: 'assistant', status: 'running', text: '后续轮次', referenceAssetIds: [] });
-  const recovered = await f.controller.chatResult(run.id, agent, frozen, [], () => false);
+  const recovered = await f.load(resolve(lib, 'workflowAgentExecutor.ts')).chatResult(f.controller.executionHost, run.id, agent, frozen, [], () => false);
   assert.equal(recovered.text.text, '原轮次输出'); assert.equal(f.sends.length, 1);
   accepted.messages[0].status = 'interrupted';
-  assert.equal(await f.controller.chatResult(run.id, agent, frozen, [], () => false), null);
+  assert.equal(await f.load(resolve(lib, 'workflowAgentExecutor.ts')).chatResult(f.controller.executionHost, run.id, agent, frozen, [], () => false), null);
   assert.equal(f.saved().document.run.steps[agent.id].status, 'waiting');
   assert.equal(f.sends.length, 1);
   accepted.messages.pop(); // The original failed completion is now the latest turn again.
   accepted.status = 'failed';
   accepted.error = 'chat_no_reply: 上游模型服务返回 HTTP 502。本轮云端任务已结束，没有可取回的回复。';
-  await assert.rejects(() => f.controller.chatResult(run.id, agent, frozen, [], () => false), /HTTP 502/);
+  await assert.rejects(() => f.load(resolve(lib, 'workflowAgentExecutor.ts')).chatResult(f.controller.executionHost, run.id, agent, frozen, [], () => false), /HTTP 502/);
   f.requests.delete(frozen.chatInput.requestId);
-  assert.equal(await f.controller.chatResult(run.id, agent, frozen, [], () => false), null);
+  assert.equal(await f.load(resolve(lib, 'workflowAgentExecutor.ts')).chatResult(f.controller.executionHost, run.id, agent, frozen, [], () => false), null);
   assert.equal(f.sends.length, 1, 'an acknowledged turn that disappeared must never be resubmitted');
 });
 
@@ -176,7 +178,7 @@ test('only clicking run on the Agent itself opts its saved request into bound co
     const run = f.controller.run(f.saved().document.run.id);
     assert.equal(run.manualCardRun, expected);
     await f.controller.step(run.id, agent.id, { agentInput: { prompt: agent.prompt, source: '{}', assetIds: [] } });
-    await f.controller.chatResult(run.id, agent, run.steps[agent.id], [], () => false);
+    await f.load(resolve(lib, 'workflowAgentExecutor.ts')).chatResult(f.controller.executionHost, run.id, agent, run.steps[agent.id], [], () => false);
     const request = f.sends[0];
     assert.equal(request.agentNodeId, agent.id);
     assert.equal(request.conversationId, agent.chatConversationId);
@@ -192,16 +194,16 @@ test('lost chat admission response keeps the request and stops the accepted orig
   const f = fixture({ ...doc([agent]), run }); await f.controller.load();
   const send = f.chatStore.send;
   f.chatStore.send = async input => { await send(input); throw new Error('IPC acknowledgement lost'); };
-  assert.equal(await f.controller.chatResult(run.id, agent, step, [], () => false), null);
+  assert.equal(await f.load(resolve(lib, 'workflowAgentExecutor.ts')).chatResult(f.controller.executionHost, run.id, agent, step, [], () => false), null);
   const frozen = f.saved().document.run.steps[agent.id];
   assert.equal(frozen.status, 'waiting'); assert.ok(frozen.chatInput.requestId);
-  assert.equal((await f.controller.chatResult(run.id, agent, frozen, [], () => false)).text.text, '原轮次输出');
+  assert.equal((await f.load(resolve(lib, 'workflowAgentExecutor.ts')).chatResult(f.controller.executionHost, run.id, agent, frozen, [], () => false)).text.text, '原轮次输出');
   assert.equal(f.sends.length, 1);
   const second = fixture({ ...doc([agent]), run }); await second.controller.load();
   let halted = false;
   const accept = second.chatStore.send;
   second.chatStore.send = async input => { const chat = await accept(input); halted = true; return { ...chat, status: 'running' }; };
-  assert.equal(await second.controller.chatResult(run.id, agent, step, [], () => halted), null);
+  assert.equal(await second.load(resolve(lib, 'workflowAgentExecutor.ts')).chatResult(second.controller.executionHost, run.id, agent, step, [], () => halted), null);
   assert.deepEqual(second.stops, [['chat', 'turn']]);
 });
 
@@ -303,7 +305,7 @@ test('a locally submitted handoff stays owned until its exact new media reaches 
   const old = { ...doc([original]), run: oldRun, runs: [oldRun] };
   const f = fixture(old), c = f.controller;
   await c.load();
-  await c.runWorkflowImageSession(oldRun.id, original, () => false, { prompt: 'new', rawPrompt: 'new', references: [], ratio: null });
+  await f.load(resolve(lib, 'workflowGenerationExecutor.ts')).runWorkflowImageSession(c.executionHost, oldRun.id, original, () => false, { prompt: 'new', rawPrompt: 'new', references: [], ratio: null });
   await c.saveRun({ ...c.document.run, status: 'done' });
   const submitted = plain(c.document), [request] = f.generationRequests;
   assert.equal(submitted.run.steps[original.id].generationSubmission, 'submitted');
@@ -605,8 +607,8 @@ test('parallel workflow waits consume only their target revisions and detach on 
   const make = id => ({ id, revision: 1, status: 'running', messages: [{turnId: id, role: 'assistant', status: 'running'}] });
   const a = make('a'), b = make('b');
   let halted = false;
-  const wa = f.controller.waitForChatTurn(a, 'a', () => halted);
-  const wb = f.controller.waitForChatTurn(b, 'b', () => halted);
+  const wa = f.load(resolve(lib, 'workflowAgentExecutor.ts')).waitForChatTurn(f.controller.executionHost, a, 'a', () => halted);
+  const wb = f.load(resolve(lib, 'workflowAgentExecutor.ts')).waitForChatTurn(f.controller.executionHost, b, 'b', () => halted);
   await new Promise(setImmediate);
   for (let revision = 2; revision <= 51; revision++) {
     f.chatStore.applyConversation({ ...a, revision });
@@ -629,11 +631,73 @@ test('a quiet workflow checks the revision only and recovers a missed terminal s
   f.checkpoints.set('chat', 1);
   const final = { ...running, revision: 2, status: 'idle', messages: [{turnId: 'original', role: 'assistant', status: 'done'}] };
   f.requests.set('key', final);
-  const result = f.controller.waitForChatTurn(running, 'original', () => false);
+  const result = f.load(resolve(lib, 'workflowAgentExecutor.ts')).waitForChatTurn(f.controller.executionHost, running, 'original', () => false);
   await new Promise(resolve => setTimeout(resolve, 5200));
   assert.deepEqual(f.reads, {checkpoints: 1, full: 0});
   f.checkpoints.set('chat', 2);
   assert.equal((await result).revision, 2);
   assert.deepEqual(f.reads, {checkpoints: 2, full: 1});
   assert.equal(f.chatListeners.size, 0);
+});
+
+
+test('project switches retire idle controllers, keep pending owners, and prune removed card sizes', async () => {
+  const f = fixture();
+  const { canvasWorkflowController, existingWorkflowController, releaseInactiveWorkflowControllers, discardProjectWorkflow } =
+    f.load(resolve(lib, 'canvasWorkflowRuntime.ts'));
+  const tick = () => new Promise(resolve => setTimeout(resolve, 10));
+  let leave;
+  for (let index = 0; index < 12; index++) {
+    const projectId = 'board-' + index;
+    leave?.();
+    f.setProject(projectId);
+    releaseInactiveWorkflowControllers();
+    const controller = canvasWorkflowController(projectId);
+    leave = controller.subscribe(() => {});
+    await controller.load();
+    assert.equal(controller.document.nodes[0].id, 'original');
+  }
+  await tick();
+  for (let index = 0; index < 11; index++) assert.equal(existingWorkflowController('board-' + index), undefined);
+
+  const active = existingWorkflowController('board-11');
+  active.measureCard('original', 120, 80);
+  assert.equal(active.measuredSizes.size, 1);
+  const resumeWrite = f.hold();
+  const write = active.edit([]);
+  assert.equal(active.measuredSizes.size, 0);
+  active.measureCard('original', 200, 160);
+  assert.equal(active.measuredSizes.size, 0, 'a stale ResizeObserver entry cannot resurrect a deleted card');
+  f.setProject('elsewhere');
+  releaseInactiveWorkflowControllers();
+  await tick();
+  assert.equal(existingWorkflowController('board-11'), active, 'a live subscriber retains its controller');
+  leave();
+  await tick();
+  assert.equal(existingWorkflowController('board-11'), active, 'in-flight write retains its controller');
+  resumeWrite();
+  await write;
+  await tick();
+  assert.equal(existingWorkflowController('board-11'), undefined);
+
+  f.setProject('board-11');
+  const reopened = canvasWorkflowController('board-11');
+  await reopened.load();
+  assert.notEqual(reopened, active);
+  assert.equal(reopened.document.nodes.length, 0, 'reopen loads the durable edit');
+  const timer = { ...node('timer'), kind: 'trigger', triggerMode: 'once',
+    triggerSchedule: { id: 'appointment', status: 'armed', at: Date.now() + 60000 } };
+  await reopened.edit([timer]);
+  f.setProject('elsewhere');
+  releaseInactiveWorkflowControllers();
+  await tick();
+  assert.equal(existingWorkflowController('board-11'), reopened, 'a live appointment retains its background controller');
+  reopened.setTriggerTimersEnabled(false);
+  await tick();
+  assert.equal(existingWorkflowController('board-11'), undefined, 'archiving the project retires its last timer');
+
+  const next = canvasWorkflowController('board-11');
+  discardProjectWorkflow('board-11');
+  assert.equal(next.ready, false);
+  assert.equal(existingWorkflowController('board-11'), undefined);
 });
