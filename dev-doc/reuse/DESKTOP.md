@@ -55,7 +55,7 @@
 ## 启动工作流或恢复定时预约
 
 - **用途／关键词**：触发器、定时、跨画板、执行锁、运行恢复、删除项目后的调度收尾。
-- **画板入口**：`CanvasWorkflowLayer` 的卡头拖动入口复用加号的拖线反馈，调用项目控制器的 `connectCompletionTrigger`，一次保存触发卡与完成／触发连线。
+- **画板入口**：[WorkflowCard](../../apps/desktop/src/components/WorkflowCard.tsx) 的卡头与加号共用 [useWorkflowConnections](../../apps/desktop/src/components/useWorkflowConnections.tsx) 拖线手势，[WorkflowWires](../../apps/desktop/src/components/WorkflowWires.tsx) 绘制连线，[WorkflowCardMenu](../../apps/desktop/src/components/WorkflowCardMenu.tsx) 处理拖线建卡与空白建卡菜单。完成触发调用项目控制器的 `connectCompletionTrigger`，一次保存触发卡与完成／触发连线。
 - **入口**：[canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `canvasWorkflowController(projectId)` 提供项目控制器。[WorkflowScheduleCoordinator](../../apps/desktop/src/components/WorkflowScheduleCoordinator.tsx) 由 `App` 挂载，通过 `setTriggerTimersEnabled` 管理非归档项目计时。
 - **调用**：手动和定时运行复用 `start`。Agent 用 `create_canvas_cards` 配置触发卡，用 `runCard` 指定本批运行入口，协调器领取保存的动作，断线后读取原回执。[workflowTriggerSchedule.ts](../../apps/desktop/src/lib/workflowTriggerSchedule.ts) 提供 `workflowTriggerMode` 及 `activeTriggerSchedule`，供表单和运行时兼容旧卡、筛选有效预约。`nextDailyTrigger`／`triggerScheduleOccurrence`／`advanceTriggerSchedule` 计算本机时刻、运行身份及下次预约。
 - **边界／状态**：**工作流内部专用**。应用运行时调度，原生 SQLite 事务保护到点消费，复制清除 `triggerSchedule`。删除沿 `useProjectDeletion` → `ProjectDeleteDialog` → `deleteProjectCanvas`，原生成功后 store 调用 `discardProjectWorkflow`，只停止该项目的本地调度、计时器和后续保存。远端任务沿原身份处理。[工作流预约](../CANVAS-WORKFLOW.md#2026-11-05触发器定时执行源码未发布) · [项目删除](../PROJECT-CANVAS-PLAN.md#2026-11-10确认删除项目后不再由任务状态否决源码待发布)。
@@ -149,7 +149,7 @@
 ## 在应用内拖素材，或把原件拖到其他应用
 
 - 用途／关键词：drag、drop、payload、Asset ID、原生拖出、hold。
-- 入口：[dragPayload.ts](../../apps/desktop/src/lib/dragPayload.ts) 的 `setDragAssets`／`getDragAssets` 管应用内身份；[externalDrag.ts](../../apps/desktop/src/lib/externalDrag.ts) 的 `startExternalDrag` 发起系统拖出。[FileMediaCard.tsx](../../apps/desktop/src/components/FileMediaCard.tsx) 通过 `dragAssetIds` 取得 VirtualCatalog／ConnectedCollections／CanvasFrequentAssets 的完整选择并设置载荷；[CanvasWorkflowLayer.tsx](../../apps/desktop/src/components/CanvasWorkflowLayer.tsx) 读取。素材库原地长按复用 [useLibraryDragHold.ts](../../apps/desktop/src/lib/useLibraryDragHold.ts)，与 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 共用 600ms 控制器及 `hold` 原生桥。
+- 入口：[dragPayload.ts](../../apps/desktop/src/lib/dragPayload.ts) 的 `setDragAssets`／`getDragAssets` 管应用内身份；[externalDrag.ts](../../apps/desktop/src/lib/externalDrag.ts) 的 `startExternalDrag` 发起系统拖出。[FileMediaCard.tsx](../../apps/desktop/src/components/FileMediaCard.tsx) 通过 `dragAssetIds` 取得 VirtualCatalog／ConnectedCollections／CanvasFrequentAssets 的完整选择并设置载荷；[WorkflowCard.tsx](../../apps/desktop/src/components/WorkflowCard.tsx) 读取。素材库原地长按复用 [useLibraryDragHold.ts](../../apps/desktop/src/lib/useLibraryDragHold.ts)，与 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 共用 600ms 控制器及 `hold` 原生桥。
 - 边界：模块载荷解决 WKWebView 自定义 MIME 丢失，需配合 `text/plain` 起拖信号并在结束清理；不能用于跨窗口／跨进程传输。系统拖出需 Tauri、登记后的 Asset ID，由 [core/external_drag.rs](../../apps/desktop/src-tauri/src/core/external_drag.rs) 的 `files` 解析图片／视频／音频原件并去重，当前不接受文本文件；画布需传 `source: "canvas"` 与取消 signal。`pickup` 是兼容协议，现行入口用 `hold`。
 - 反馈：两种来源均传 `sourceRect`，共用 `externalDragHud`、两帧绘制等待和取消 ACK。素材库原地长按允许不超过 4px 微抖，传 `externalOnly: true` 后立即持续显示 HUD，并像画布一样拦截同窗投递；普通直接拖动在同窗 `dragenter`／`dragover` 仅隐藏 HUD／模糊，离窗恢复，保持内部落点与原生载荷。`visibility:hidden` 同时让 `SourceBrowserPanel` 恢复原生网页，不另建遮罩或以 `opacity:0` 替代。
 - 状态：**可跨模块复用**；手势、平台和取消边界见 [跨应用拖动](../EXTERNAL-DRAG.md)。
@@ -199,7 +199,7 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 ## 按实际参考素材选择视频模式并校验参数
 
 - 用途／关键词：Seedance、自动识别、首尾帧、多参考、时长、比例、音频参考。
-- 入口：[videoGeneration.ts](../../apps/desktop/src/lib/videoGeneration.ts) 的 `GenerationSettings`、`VideoOptions`、`resolveVideoOptions`、`videoInputError`、`videoRatio`；实际调用：[CreationBoard.tsx](../../apps/desktop/src/components/CreationBoard.tsx)、[GenerationPanel.tsx](../../apps/desktop/src/components/GenerationPanel.tsx) 和 [CanvasWorkflowLayer.tsx](../../apps/desktop/src/components/CanvasWorkflowLayer.tsx) 解析本次引用。
+- 入口：[videoGeneration.ts](../../apps/desktop/src/lib/videoGeneration.ts) 的 `GenerationSettings`、`VideoOptions`、`resolveVideoOptions`、`videoInputError`、`videoRatio`；实际调用：[CreationBoard.tsx](../../apps/desktop/src/components/CreationBoard.tsx)、[GenerationPanel.tsx](../../apps/desktop/src/components/GenerationPanel.tsx) 和 [WorkflowCard.tsx](../../apps/desktop/src/components/WorkflowCard.tsx) 解析本次引用。
 - 工作流视频卡切换供应商使用 [selectWorkflowVideoProvider](../../apps/desktop/src/lib/canvasWorkflow.ts)，由卡面的视频模型选择器调用，负责普通引用与 H3 帧输入的往返转换。
 - H3 多素材参考（R2V）的图片、视频和独立音频端口由 [canvasWorkflow.ts](../../apps/desktop/src/lib/canvasWorkflow.ts) 的 `H3_R2V_INPUT_PORTS` 定义。`workflowExecutionInputs` 只读取当前模式的端口，`selectWorkflowVideoProvider` 保存切换时暂时停用的连线。混合素材自动连线复用 [planAutomaticConnection](../../apps/desktop/src/lib/workflowAutoConnect.ts)，按媒体类型分别绑定端口。
 - 视频卡动态首帧、尾帧与视频素材静态抽帧共用 [workflowVideoFrames.ts](../../apps/desktop/src/lib/workflowVideoFrames.ts)。动态连线保存帧位置，在下游读取输入时调用现有视频解码和图片入库接口。交互约定见[画板工作流](../CANVAS-WORKFLOW.md)。

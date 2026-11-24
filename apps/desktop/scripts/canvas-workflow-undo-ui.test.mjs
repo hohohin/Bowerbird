@@ -102,8 +102,12 @@ try {
   await page.waitForFunction(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); return canvasWorkflowController('p').document.nodes.length === 4; });
   await undo(); assert.equal((await persisted()).nodes.length, 3);
   await page.reload(); await card('producer').waitFor();
-  assert.deepEqual((await state()).runs, restored.runs.map(run => ({ ...run,
-    steps: Object.fromEntries(Object.entries(run.steps).map(([id, step]) => [id, { ...step, comfyStopping: false, comfyProgress: undefined }])) })));
+  const reloadedRuns = (await state()).runs;
+  for (const run of reloadedRuns) for (const step of Object.values(run.steps)) {
+    assert.ok(!step.comfyStopping);
+    assert.equal(step.comfyProgress, undefined);
+  }
+  assert.deepEqual(reloadedRuns, restored.runs);
   assert.deepEqual(errors, []);
   console.log('PASS workflow deletion/writer/wire/history recovery, sequential movement undo, focused-button shortcut, copy/create/parameter undo, active-run protection, form protection and persisted reload.');
 } finally { await browser.close(); await server.close(); }

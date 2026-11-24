@@ -13,6 +13,8 @@ function same(a: unknown, b: unknown): boolean {
   return keys.length === Object.keys(right).filter(key => right[key] !== undefined).length
     && keys.every(key => Object.prototype.hasOwnProperty.call(right, key) && same(left[key], right[key]));
 }
+export { same as sameWorkflowValue };
+
 function mergeValue<T>(before: T, local: T, remote: T): T {
   // Keep live execution objects when the native change only added/removed cards.
   if (same(remote, before) || same(local, remote)) return local;
