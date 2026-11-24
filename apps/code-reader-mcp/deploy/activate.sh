@@ -12,10 +12,12 @@ sha256sum --check SHA256SUMS
 [[ $(ssh-keygen -l -f tunnel.pub | wc -l) == 1 ]]
 grep -Eq '^ssh-ed25519 [A-Za-z0-9+/=]+( .*)?$' tunnel.pub
 [[ $(wc -l < tunnel.pub) == 1 ]]
-[[ ! -e $home && ! -e $site && ! -L $enabled && ! -e $sshd && ! -e $snippet ]]
+for destination in "$home" "$site" "$enabled" "$sshd" "$snippet"; do
+    [[ ! -e $destination && ! -L $destination ]] || { echo "MCP destination exists: $destination" >&2; exit 1; }
+done
 [[ ! -e /etc/letsencrypt/live/mcp.bowerbird.cn ]]
-! getent passwd bowerbird-mcp >/dev/null
-! ss -ltnH 'sport = :48732' | grep -q .
+if getent passwd bowerbird-mcp >/dev/null; then echo 'MCP account already exists.' >&2; exit 1; fi
+[[ -z $(ss -ltnH 'sport = :48732') ]] || { echo 'MCP loopback port is in use.' >&2; exit 1; }
 getent ahostsv4 mcp.bowerbird.cn | awk '{print $1}' | grep -qx 106.55.44.143
 nginx -t
 sshd -t

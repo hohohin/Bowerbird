@@ -9,7 +9,10 @@ import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { digest } from '../core.mjs';
 
-test('Gemini preserves grants across SSH drops and launcher restarts, including durable revocation', async t => {
+for (const [origin, transport, remotePort, sshUser] of [
+  ['https://mcp.bowerbird.cn', {}, 48732, 'bowerbird-mcp'],
+  ['https://mcp-mac.bowerbird.cn', { remotePort: 48734, sshUser: 'bowerbird-mcp-mac' }, 48734, 'bowerbird-mcp-mac'],
+]) test(`${origin} preserves grants across SSH drops and launcher restarts, including durable revocation`, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'bb-reconnect-'));
   t.after(async () => {
     assert.equal(path.dirname(dir), os.tmpdir());
@@ -19,7 +22,7 @@ test('Gemini preserves grants across SSH drops and launcher restarts, including 
     await copyFile(new URL('../' + file, import.meta.url), path.join(dir, file));
   }
   await mkdir(path.join(dir, '.local/gemini'), { recursive: true });
-  await writeFile(path.join(dir, '.local/gemini/config.json'), JSON.stringify({ origin: 'https://mcp.bowerbird.cn', port: 0, adminPassword: 'p'.repeat(43) }));
+  await writeFile(path.join(dir, '.local/gemini/config.json'), JSON.stringify({ origin, port: 0, adminPassword: 'p'.repeat(43), ...transport }));
   await writeFile(path.join(dir, '.local/snapshot.json'), JSON.stringify({ version: 1, createdAt: 'fixture', revision: 'fixture',
     files: [{ path: 'PROJECT.md', content: 'safe', sha256: digest('safe') }] }));
   // Replace only SSH with a simulated failing connection. HTTP remains a real restricted subprocess.
@@ -34,6 +37,7 @@ test('Gemini preserves grants across SSH drops and launcher restarts, including 
         const child=new EventEmitter();
         child.kill=()=>{child.emit('close',0);return true;};
         console.log('TEST_SSH_ATTEMPT '+(++attempts));
+        console.log('TEST_SSH_DEST '+args.slice(-2).join(' '));
         if(attempts===1)setTimeout(()=>child.emit('close',1),200);
         return child;
       }
@@ -69,7 +73,7 @@ test('Gemini preserves grants across SSH drops and launcher restarts, including 
     }
     await until(/TEST_PORT \d+/);
     const base = 'http://127.0.0.1:' + /TEST_PORT (\d+)/.exec(output)[1];
-    return { request: (route, options) => fetch(base + route, { redirect: 'manual', ...options }),
+    return { request: (route, options) => fetch(base + route, { redirect: 'manual', ...options }), port: new URL(base).port,
       until, stop, errors: () => errors };
   }
   let launcher = await start();
@@ -80,7 +84,7 @@ test('Gemini preserves grants across SSH drops and launcher restarts, including 
   await launcher.until(/Retrying in 5 seconds/);
   assert.equal((await launcher.request('/healthz')).status, 204);
   await launcher.until(/TEST_SSH_ATTEMPT 2/);
-  const origin = 'https://mcp.bowerbird.cn';
+  await launcher.until(new RegExp(`TEST_SSH_DEST 127\\.0\\.0\\.1:${remotePort}:127\\.0\\.0\\.1:${launcher.port} ${sshUser}@106\\.55\\.44\\.143`));
   const resource = origin + '/mcp', verifier = 'v'.repeat(43);
   const query = new URLSearchParams({ client_id: client.client_id, redirect_uri: client.redirect_uris[0], response_type: 'code',
     resource, scope: 'code:read', code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url') });

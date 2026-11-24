@@ -202,7 +202,7 @@ test('restricted launcher keeps the HTTP port and authorization during SSH retri
       'package.json', 'run-gemini.mjs', 'setup-gemini.mjs', 'run-local-gemini.mjs', 'setup-local-gemini.mjs', 'gemini-config-mode.mjs'];
     for (const name of names) await copyFile(new URL('../' + name, import.meta.url), path.join(root, name));
     const setup = (...args) => execFileSync(process.execPath, [path.join(root, 'setup-gemini.mjs'), ...args], { stdio: 'pipe' });
-    setup('--origin', origin);
+    execFileSync(process.execPath, [path.join(root, 'setup-local-gemini.mjs'), '--origin', origin], { stdio: 'pipe' });
     setup('--redirect-uri', redirect);
     const fixture = createServer().listen(0, '127.0.0.1');
     await once(fixture, 'listening');
