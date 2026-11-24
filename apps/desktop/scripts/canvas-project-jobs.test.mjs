@@ -11,7 +11,7 @@ test("canvas projections stay stable through progress chunks and update on deliv
   assert.deepEqual(Object.keys(initial), ["active"]);
   for (let count = 0; count < 120; count++) {
     assert.equal(select({ genJobs: {
-      active: { ...active, progress: { stage: "queued", queue_position: count }, streaming: String(count) },
+      active: { ...active, turns: turns.map(turn => ({ ...turn, images: [...turn.images], submitId: String(count) })), progress: { stage: "queued", queue_position: count }, streaming: String(count) },
       background: { ...background, turns: [...turns, { turnKey: String(count) }] },
     } }), initial);
   }
@@ -22,4 +22,18 @@ test("canvas projections stay stable through progress chunks and update on deliv
   assert.equal(retry.active.running, true);
   assert.equal(retry.active.turns.length, 2);
   assert.deepEqual(select({ genJobs: { background } }), {});
+});
+
+test("an exact node or checkpoint restores an unowned job only for its board", () => {
+  const node = (projectId, job_id) => ({ projectId, kind: "prompt", payloadJson: JSON.stringify({ job_id }) });
+  const select = createCanvasProjectJobsSelector("open", [node("open", "old"), node("open", "moved"), node("other", "unrelated")],
+    [{ steps: { image: { jobId: "checkpoint" } } }]);
+  const unowned = { projectId: null, turns: [], running: true };
+  const genJobs = { old: unowned, checkpoint: unowned, unrelated: unowned, moved: { ...unowned, projectId: "other" } };
+  const restored = select({ genJobs });
+  assert.deepEqual(Object.keys(restored).sort(), ["checkpoint", "old"]);
+  const hydrated = select({ genJobs: { ...genJobs, old: { ...unowned, projectId: "open" } } });
+  assert.equal(hydrated.old.projectId, "open");
+  const reassigned = select({ genJobs: { ...genJobs, old: { ...unowned, projectId: "other" } } });
+  assert.deepEqual(Object.keys(reassigned), ["checkpoint"]);
 });

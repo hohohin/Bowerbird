@@ -1,4 +1,5 @@
-import type { CanvasNode, GenJob } from "./types";
+import type { CanvasProjectJob } from "./canvasProjectJobs";
+import type { CanvasNode } from "./types";
 import { canvasNodePayload as payload, canvasOutputIsVideo } from "./canvasNodePayload.ts";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasDocumentTextValue, canvasNoteValue, readCanvasNote, type CanvasNotePayload } from "./canvasNotes";
@@ -73,7 +74,7 @@ export interface WorkflowGenerationActivity {
 
 /** A step hands off generation before the exact turn and its output reach the board. */
 export function workflowGenerationActivity(node: WorkflowNode, run: WorkflowRun | undefined,
-  nodes: readonly CanvasNode[], jobs: Readonly<Record<string, Pick<GenJob, "projectId" | "running" | "turns">>>, displayable?: ReadonlySet<string>): WorkflowGenerationActivity {
+  nodes: readonly CanvasNode[], jobs: Readonly<Record<string, Pick<CanvasProjectJob, "projectId" | "running" | "turns">>>, displayable?: ReadonlySet<string>): WorkflowGenerationActivity {
   if (!collapsibleGenerationCard(node)) return { running: false };
   const step = run?.steps[node.id];
   const submitted = step?.generationSubmission === "submitted";
@@ -188,7 +189,7 @@ function generationOrigins(workflow: readonly WorkflowNode[], nodes: readonly Ca
 
 /** Video cards retain history-only presentation. Do not show an extra placeholder for a first image run. */
 export function hiddenWorkflowSessionIds(workflow: readonly WorkflowNode[], nodes: readonly CanvasNode[] = [],
-  jobs: Readonly<Record<string, Pick<GenJob, "projectId" | "running" | "turns">>> = {}) {
+  jobs: Readonly<Record<string, Pick<CanvasProjectJob, "projectId" | "running" | "turns">>> = {}) {
   const hidden = workflowSessionIds(workflow.filter(videoGenerationCard));
   if (!nodes.length) return hidden;
   const owned = workflowSessionIds(workflow);
