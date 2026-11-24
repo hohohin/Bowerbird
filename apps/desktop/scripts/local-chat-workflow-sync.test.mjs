@@ -62,6 +62,8 @@ function fixture(initial = doc([node('original')])) {
     const module = { exports: {} }; modules.set(path, module);
     const output = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
     const require = specifier => {
+      if (specifier === './newCardImageProvider') return load(resolve(lib, 'newCardImageProvider.ts'));
+      if (specifier === './modelFavorites') return { useModelFavorites: { getState: () => ({ keys: [] }) } };
       if (specifier === './api') return { api };
       if (specifier === './userError') return load(resolve(dirname(path), 'userError.ts'));
       if (specifier === './dshSkill.ts' || specifier === './chatProvider.ts') return load(resolve(dirname(path), specifier));
