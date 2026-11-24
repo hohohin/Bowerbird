@@ -45,7 +45,7 @@ import { resolveWorkflowTaskFocus } from "../lib/workflowTaskFocus";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
 import { restoreCanvasNoteEdit } from "../lib/canvasNoteUndo";
 import { removeWorkflowNodes } from "../lib/workflowRemoval";
-import { WORKFLOW_CARD_DRAG_TYPE, workflowCardWidth, workflowNodeRun, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
+import { WORKFLOW_CARD_DRAG_TYPE, workflowCardWidth, workflowNodeRun, workflowRuns, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
 import { replicationWorkflow } from "../lib/replicationWorkflow";
 import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
@@ -502,7 +502,6 @@ export function CanvasWorkspace({
   const genPanelOpen = useStore((state) => state.genPanelOpen);
   const boardOpen = useStore((state) => state.boardOpen);
   const activeSessionKind = useStore((state) => state.activeSessionKind);
-  const genJobs = useStore(useMemo(() => createCanvasProjectJobsSelector(projectId), [projectId]));
   const activeJobId = useStore((state) => state.activeJobId);
   const openGenerationJob = useStore((state) => state.openGenerationJob);
   const genEditing = useStore((state) => state.genEditing);
@@ -680,23 +679,6 @@ export function CanvasWorkspace({
   const documentSaveTimer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => { setDocumentEditor(null); return () => { documentEditorSession.current++; flushDocumentCard(); }; }, [projectId, viewMode]);
   useEffect(() => { setDocumentPromptLoad(null); }, [projectId]);
-  const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
-  const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
-  const snapshotPrompt = !activeGenerationJob && !activeAgentRun && genPanelOpen
-    ? graphNodes.find(node => node.id === snapshotPromptId && node.hiddenAt == null) ?? null : null;
-  useEffect(() => {
-    if (!genPanelOpen || activeJobId || activeCloudAgentRunId) setSnapshotPromptId(null);
-  }, [genPanelOpen, activeJobId, activeCloudAgentRunId]);
-  const activeInspectorExecution = snapshotPrompt ?? (activeSessionKind === "generation"
-    ? activeGenerationJob
-    : activeAgentRun);
-  const scopedInspectorOpen = resolveProjectInspectorPlacement({
-    open: genPanelOpen,
-    loading,
-    navigationPending: creativeNavigation != null || projectRoutePending,
-    activeProjectId: activeCanvas.id,
-    execution: activeInspectorExecution,
-  }) === "project";
   const promptLoadRequest = useMemo(
     () => creativePromptLoadForProject(launchRequest, activeCanvas.id || projectId),
     [launchRequest, activeCanvas.id, projectId],
@@ -782,6 +764,26 @@ export function CanvasWorkspace({
   const workflowInteractive = !!workflow?.ready && currentWorkflowEntry?.error === null && !loading && !loadFailed
     && !projectRoutePending && activeCanvas.id === projectId;
   const workflowNodes = workflowInteractive ? workflow.document.nodes : [];
+  const workflowDocument = workflowInteractive ? workflow.document : undefined;
+  const genJobs = useStore(useMemo(() => createCanvasProjectJobsSelector(projectId, graphNodes,
+    workflowDocument ? workflowRuns(workflowDocument) : []), [projectId, graphNodes, workflowDocument?.run, workflowDocument?.runs]));
+  const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
+  const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
+  const snapshotPrompt = !activeGenerationJob && !activeAgentRun && genPanelOpen
+    ? graphNodes.find(node => node.id === snapshotPromptId && node.hiddenAt == null) ?? null : null;
+  useEffect(() => {
+    if (!genPanelOpen || activeJobId || activeCloudAgentRunId) setSnapshotPromptId(null);
+  }, [genPanelOpen, activeJobId, activeCloudAgentRunId]);
+  const activeInspectorExecution = snapshotPrompt ?? (activeSessionKind === "generation"
+    ? activeGenerationJob
+    : activeAgentRun);
+  const scopedInspectorOpen = resolveProjectInspectorPlacement({
+    open: genPanelOpen,
+    loading,
+    navigationPending: creativeNavigation != null || projectRoutePending,
+    activeProjectId: activeCanvas.id,
+    execution: activeInspectorExecution,
+  }) === "project";
   const writerFailureKeys = useMemo(() => {
     const byCard = new Map<string, string[]>();
     if (!projectId || !workflowInteractive) return byCard;

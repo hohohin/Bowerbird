@@ -1,6 +1,6 @@
 import { readCanvasNote } from "./canvasNotes.ts";
 import { canvasNodePayload as payload, canvasOutputIsVideo } from "./canvasNodePayload.ts";
-import type { CanvasNode, GenJob } from "./types";
+import type { CanvasNode, GenJob, GenTurn } from "./types";
 
 export interface CanvasConversationCard {
   anchor: CanvasNode;
@@ -20,7 +20,7 @@ export function canvasConversationGroupTarget(card?: CanvasConversationCard) {
 }
 
 /** Presentation only: keep exact turn identities and execution history intact. */
-export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Record<string, Pick<GenJob, "conversationId"> & Partial<Pick<GenJob, "turns">>>, excluded: ReadonlySet<string> = new Set(), contained: ReadonlySet<string> = new Set(), routed: ReadonlySet<string> = new Set()) {
+export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Record<string, Pick<GenJob, "conversationId"> & { turns?: ReadonlyArray<Pick<GenTurn, "turnKey">> }>, excluded: ReadonlySet<string> = new Set(), contained: ReadonlySet<string> = new Set(), routed: ReadonlySet<string> = new Set()) {
   const groups = new Map<string, CanvasConversationCard>();
   const aliases = new Map<string, string>();
   const embeddedSessions = new Map(nodes.filter(node => node.kind === "note" && node.hiddenAt == null)
