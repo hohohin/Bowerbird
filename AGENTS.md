@@ -48,7 +48,7 @@
 | 追溯目标 | 入口 |
 |---|---|
 | 项目变更、复审流水、被替代的约定与验收 | [项目日期日志](project_logs/README.md) · [里程碑归档](dev-doc/进展归档.md) |
-| 跨端同步和旧版本交接 | [Windows 历史交接](Windows/) · [Mac 11 月 24 日累计存档](macOS/CROSS-PLATFORM-SYNC-2026-11-24.md) · [Mac 历史交接](macOS/) · [发布证据](dev-doc/DESKTOP-UPDATES.md) |
+| 跨端同步和旧版本交接 | [Windows 历史交接](Windows/) · [Mac 11 月 24 日累计存档](macOS/CROSS-PLATFORM-SYNC-2026-11-24.md) · [macOS 收口至 dev 验证](macOS/DEV-CONVERGENCE-2026-11-24.md) · [Mac 历史交接](macOS/) · [发布证据](dev-doc/DESKTOP-UPDATES.md) |
 | 视觉确认稿、早期调研与视频原始增量 | [UI 研究与恢复点](dev-doc/ui-studies/) · [素材分类草稿](reference/theory.md) · [早期桌面稿](dev-doc/桌面端UI设计.html) · [竞品调研](dev-doc/Eagle类创意收集工具调查报告.html) · [视频 provenance](dev-doc/VIDEO-API-PROVENANCE.json) · [历史 0058 集成](dev-doc/VIDEO-API-INTEGRATION-V3.md) · [阶段哈希](dev-doc/VIDEO-API-INTEGRATION-V3.json) |
 
 ## 常用验证命令速查

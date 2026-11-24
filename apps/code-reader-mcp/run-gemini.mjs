@@ -66,8 +66,8 @@ if (process.argv[2] === '--ssh' || usesLocalConfig()) {
   }
   let output = '';
   server.stdout.on('data', data => {
-    output += data;
     if (localPort !== undefined) return;
+    output += data;
     const ready = /Gemini MCP listening on loopback\. Port (\d+)\r?\n/.exec(output);
     if (!ready) return;
     localPort = Number(ready[1]);

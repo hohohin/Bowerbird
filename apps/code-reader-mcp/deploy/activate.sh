@@ -17,7 +17,8 @@ for destination in "$home" "$site" "$enabled" "$sshd" "$snippet"; do
 done
 [[ ! -e /etc/letsencrypt/live/mcp.bowerbird.cn ]]
 if getent passwd bowerbird-mcp >/dev/null; then echo 'MCP account already exists.' >&2; exit 1; fi
-[[ -z $(ss -ltnH 'sport = :48732') ]] || { echo 'MCP loopback port is in use.' >&2; exit 1; }
+listeners=$(ss -ltnH 'sport = :48732')
+[[ -z $listeners ]] || { echo 'MCP loopback port is in use.' >&2; exit 1; }
 getent ahostsv4 mcp.bowerbird.cn | awk '{print $1}' | grep -qx 106.55.44.143
 nginx -t
 sshd -t

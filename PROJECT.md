@@ -32,7 +32,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 | 范围 | 当前状态与证据 |
 |---|---|
 | Windows | 公开版 **26.11.2402**，发布源码 7ce371ee0 含 SQLite **0062**。11 月 24 日北京时间 10:25 公网复核通过，Tauri 更新签名有效，按用户授权跳过 Authenticode。[发布与回滚](dev-doc/DESKTOP-UPDATES.md#windows-26112402-已公开发布2026-11-24) |
-| macOS | 公开通道为 Apple Silicon **26.10.801**、Intel **26.10.1501**，Apple Silicon 26.11.2403 本地签名测试包已交付 R2 独立目录，源码已合入本地 `mac`。[桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 正式验收](macOS/RELEASE-READINESS.md) · [跨端存档](macOS/CROSS-PLATFORM-SYNC-2026-11-24.md) |
+| macOS | 公开通道为 Apple Silicon **26.10.801**、Intel **26.10.1501**。Apple Silicon 26.11.2403 本地签名测试包已交付 R2 独立目录。统一 dev 收口候选通过 ARM 构建、Rust 全量和隔离 WKWebView 烟测，专用账号登录与线上 DSH · Cloud v2 待验。[桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 正式验收](macOS/RELEASE-READINESS.md) · [源码收口验证](macOS/DEV-CONVERGENCE-2026-11-24.md) |
 | 浏览器扩展 | **0.5.2**，显示当前项目，采集图片可直入画板。更新后须在浏览器重新加载。[版本与验收](apps/extension/README.md) |
 | Cloud 与官网 | Cloud 网关、原请求恢复和 VPS 定时巡检已上线。微信 Native v3 已开放公开购买，注册及 Pro 月度赠币已启用。Seedance 2.5 已开三档，分层已部署。GPT／Flash 未启价，Studio 未新增销售。[部署](apps/cloud/DEPLOY.md) · [微信支付](apps/cloud/WECHATPAY.md) · [现行定价](dev-doc/Bowerbird定价方案v2-订阅积分制.md) |
 | 对话 | 桌面对话与 Agent 卡片共用本机 Codex、本机 DSH 0.2 和 DSH · Cloud v2。Cloud 仅对标记账号开放 0 Bcoin 试用，0094／0095 已上线，0096 付费版是默认关闭的隔离候选。[桌面契约](dev-doc/CHAT-PROVIDERS.md) · [云端契约](apps/cloud/CHAT.md) |
