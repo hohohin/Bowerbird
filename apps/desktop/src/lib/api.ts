@@ -332,6 +332,12 @@ export const api = {
     }),
   // 读本地图片为 data URL（标注面板 canvas 导出用，规避 asset 协议跨域污染画布）。
   readImageDataUrl: (path: string) => invoke<string>("read_image_data_url", { path }),
+  draftWorkspaceLoad: (assetId: string) => invoke<import("./draftDocument").DraftDocument | null>("draft_workspace_load", { assetId }),
+  saveDraftWorkspace: (request: { document: import("./draftDocument").DraftDocument; dataUrl: string; projectId: string | null; saveId: string }) =>
+    invoke<Asset>("draft_workspace_save", request),
+  draftWorkspaceAssetIds: () => invoke<string[]>("draft_workspace_asset_ids"),
+  draftWorkspaceCanvasUpsert: (request: { projectId: string; documentId: string; assetId: string; sourceNodeId: string | null; newNode: NewCanvasNode }) =>
+    invoke<CanvasNode>("draft_workspace_canvas_upsert", request),
   readAnnotationImageWithHash: (path: string) => invoke<{ url: string; sha256: string }>("read_image_data_url", { path, withHash: true }),
   layerWorkspaceAssetIds: () => invoke<string[]>("layer_workspace_asset_ids"),
   layerExportPsd: (path: string, base64: string) => invoke<void>("layer_export_psd", { path, base64 }),

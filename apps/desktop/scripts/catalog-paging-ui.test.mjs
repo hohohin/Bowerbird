@@ -30,7 +30,7 @@ try {
   await page.waitForFunction(()=>{const img=document.querySelector('[data-asset-id] img');return img?.complete&&img.naturalWidth>0;});
   await page.waitForTimeout(600);
   await page.screenshot({path:'.tmp/catalog-paging/300k-first.png'});
-  await page.locator('[data-asset-id="asset-0"]').click({modifiers:['Control']});
+  await page.locator('[data-asset-id="asset-0"]').click({modifiers:[process.platform === 'darwin' ? 'Meta' : 'Control']});
   // Random access to deep pages must not fetch every intervening page.
   await scroller().evaluate(el=>{el.scrollTop=el.scrollHeight*.7;}); await ready();
   await page.waitForFunction(()=>window.requests.some(r=>r.command==='catalog_page'&&r.args.offset>100000));
@@ -74,12 +74,12 @@ try {
   const searchButton = page.getByRole('button',{name:'搜索素材',exact:true});
   const search = page.getByRole('searchbox',{name:'搜索素材',exact:true});
   await searchButton.click(); await search.fill('small'); await ready();
-  await page.locator('[data-asset-id="asset-0"]').click({modifiers:['Control']});
+  await page.locator('[data-asset-id="asset-0"]').click({modifiers:[process.platform === 'darwin' ? 'Meta' : 'Control']});
   await scroller().evaluate(el=>{el.scrollTop=el.scrollHeight;}); await ready();
   await page.locator('[data-asset-id="asset-179"]').click({modifiers:['Shift']});
   await page.getByText('180 项',{exact:true}).waitFor();
   await page.getByRole('button',{name:'取消选择',exact:true}).click();
-  await cards().first().click({modifiers:['Control']});
+  await cards().first().click({modifiers:[process.platform === 'darwin' ? 'Meta' : 'Control']});
   await page.getByRole('button',{name:'全选',exact:true}).click();
   await page.getByText('180 项',{exact:true}).waitFor();
   await page.getByRole('button',{name:'添加到新项目',exact:true}).click();

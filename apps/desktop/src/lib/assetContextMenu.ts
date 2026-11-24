@@ -11,7 +11,7 @@ const CANVAS_IMAGE_EXTS = [...ANNOTATABLE_EXTS, "avif", "svg", "ico", "tif", "ti
 export type AssetDescribeEngine = "bowerbird-cloud" | "codex";
 export type AssetMenuAction =
   | "move-incomplete" | "add-to-chat" | "open-detail" | "open-transcript" | "edit" | "pinterest" | "select" | "rename"
-  | "describe-cloud" | "describe-codex" | "dimensions" | "artboard" | "reuse" | "layers" | "history"
+  | "describe-cloud" | "describe-codex" | "dimensions" | "artboard" | "reuse" | "edit-draft" | "layers" | "history"
   | "assign" | "project-picker" | "reveal" | "open-system" | "copy-image" | "copy-path" | "references"
   | "show-in-library" | "hide-in-library" | "remove-references" | "remove-from-canvas" | "ungroup"
   | "pin-generation-card" | "continue-image-generation" | "create-image-generation-card"
@@ -181,7 +181,7 @@ export function buildAssetContextMenu(s: AssetMenuSnapshot): {
   if (allImages) creation.push(describeMenu, action("dimensions", "维度", { icon: "scan" }));
   if (canvas?.nodeCount && canvasImage) creation.push(action("artboard", "以此图新建画板", { icon: "board" }));
   if (generated) creation.push(action("reuse", "复用生成提示词", { icon: "clipboard", tour: "ctx-reuse-gen" }));
-  if (annotatable) creation.push(action("layers", "分层编辑", { icon: "layers" }));
+  if (annotatable) creation.push(action("edit-draft", "编辑草稿", { icon: "edit" }), action("layers", "分层编辑", { icon: "layers" }));
   if (generated) creation.push(action("history", "回看所属创作", { icon: "message" }));
 
   const files: AssetMenuItem[] = [assign];

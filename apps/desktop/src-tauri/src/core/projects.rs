@@ -652,6 +652,7 @@ impl Database {
                 }
             }
             let moved_assets = moved_ids.len();
+            let draft_files = super::library::draft_workspace_files(&tx, &moved_ids, None)?;
             for asset_id in &moved_ids {
                 tx.execute(
                     "DELETE FROM assets WHERE id = ?1",
@@ -663,6 +664,7 @@ impl Database {
                 rusqlite::params![project_id],
             )?;
             tx.commit()?;
+            let cleanup_pending = super::library::cleanup_draft_workspace_files(&conn, &draft_files);
             drop(conn);
 
             // 缩略图是 Bowerbird 生成的中间产物，不随文件移出，直接删除。
@@ -671,7 +673,7 @@ impl Database {
             }
 
             return Ok(ProjectDeleteResult {
-                cleanup_pending: Vec::new(),
+                cleanup_pending,
                 removed_members: members.len(),
                 deleted_assets: 0,
                 preserved_shared,
@@ -848,12 +850,14 @@ impl Database {
                         // 兼容旧库/迁移数据中 store_path 直接指向原文件的记录：只删 DB 与独立
                         // 缩略图，绝不能调用 delete_asset 把用户原文件一并物理删除。
                         let tx = conn.unchecked_transaction()?;
+                        let draft_files = super::library::draft_workspace_files(&tx, &[asset_id.to_string()], None)?;
                         crate::core::project_canvas::hide_asset_canvas_nodes(&tx, asset_id, None)?;
                         tx.execute(
                             "DELETE FROM assets WHERE id = ?1",
                             rusqlite::params![asset_id],
                         )?;
                         tx.commit()?;
+                        super::library::cleanup_draft_workspace_files(&conn, &draft_files);
                         let removable_thumb = thumb_path
                             .as_deref()
                             .filter(|path| Some(*path) != origin_path.as_deref());

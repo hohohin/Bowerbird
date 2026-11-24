@@ -68,6 +68,8 @@ try {
   await page.locator('[data-project-inspector="generation"]').getByRole("button", { name: /^继续对话/ }).click();
   const inline = page.locator('[data-generation-composer="inline"] .ProseMirror');
   await inline.fill("续写草稿");
+  await inline.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await inline.focus();
   await page.keyboard.press("Tab");
   await page.waitForFunction(() => window.store.getState().canvasLibraryOpen && document.activeElement?.classList.contains("canvas-source-panel"));
   await page.keyboard.press("Escape");

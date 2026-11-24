@@ -124,11 +124,7 @@ fn local_chat_card_tool_returns_structured_results_and_correctable_failures() {
 }
 
 #[test]
-fn local_chat_h3_tool_contract_exposes_frames_and_local_options_without_endpoint_access() {
-    assert!(
-        CARD_TOOL_VERSION > 1,
-        "existing card-tool threads must migrate"
-    );
+fn local_chat_tool_contract_keeps_sections_and_defers_h3() {
     let tool = card_tool_spec();
     let cards = &tool["inputSchema"]["properties"]["cards"]["items"];
     let kinds = cards["properties"]["kind"]["enum"].as_array().unwrap();

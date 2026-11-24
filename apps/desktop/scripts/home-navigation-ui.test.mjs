@@ -43,8 +43,8 @@ try {
   assert.equal(await page.getByRole('dialog').count(), 0, 'late media resolution never opens a hidden library portal over projects');
   await library.click();
   const cards = page.locator('.library-home [data-asset-id]');
-  await cards.nth(0).click({ modifiers: ['Control'] });
-  await cards.nth(1).click({ modifiers: ['Control'] });
+  await cards.nth(0).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
+  await cards.nth(1).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await page.evaluate(() => { window.holdHomeSelection = true; });
   await cards.nth(1).click({ button: 'right' });
   await page.waitForFunction(() => !!window.releaseHomeSelection);

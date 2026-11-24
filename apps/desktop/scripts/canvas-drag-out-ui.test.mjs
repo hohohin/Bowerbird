@@ -69,7 +69,7 @@ try {
   await open(); await press(node('first')); await page.keyboard.press('Escape'); await page.waitForTimeout(700); assert.equal(await count(), 0); await page.mouse.up();
   await open(); await press(node('first')); await page.evaluate(() => window.changeProject()); await page.waitForTimeout(700); assert.equal(await count(), 0); await page.mouse.up();
   // Multi-select retains every actual asset, not node identities.
-  await open(); await node('first').click({ modifiers: ['Control'] }); await node('second').click({ modifiers: ['Control'] });
+  await open(); await node('first').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] }); await node('second').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   const multiple = await snapshot(); await press(node('first')); await exported(['existing', 'a'], multiple); await finish(false);
   // Both collapsed thumbnails and expanded members target that file, not their siblings.
   await open('group'); const folded = await snapshot(); await press(node('group').locator('[data-frequent-asset-id="a"]'));

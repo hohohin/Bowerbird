@@ -4,14 +4,15 @@ import { once } from 'node:events';
 import { request as httpRequest } from 'node:http';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, copyFile, writeFile, rename, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, copyFile, writeFile, rename, rm, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createMcpHttpServer, googleRedirect } from '../http-app.mjs';
+import { createMcpHttpServer, googleRedirect, validateConfig } from '../http-app.mjs';
 import { createSnapshotReader } from '../snapshot-store.mjs';
 import { digest } from '../core.mjs';
 
 const origin = 'https://mcp.bowerbird.cn';
+const macOrigin = 'https://mcp-mac.bowerbird.cn';
 const resource = origin + '/mcp';
 const password = 'p'.repeat(43);
 const config = { origin, port: 48731, adminPassword: password };
@@ -23,14 +24,17 @@ const challenge = createHash('sha256').update(verifier).digest('base64url');
 
 async function fixture(t, overrides = {}, source = snapshot) {
   let time = Date.now();
-  const server = createMcpHttpServer(source, { ...config, ...overrides }, () => time);
+  const settings = { ...config, ...overrides };
+  const issuer = settings.origin;
+  const audience = issuer + '/mcp';
+  const server = createMcpHttpServer(source, settings, () => time);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => { server.closeAllConnections(); server.close(); });
   async function request(route, { method = 'GET', data, form, headers = {} } = {}) {
     return new Promise((resolve, reject) => {
       const req = httpRequest({ hostname: '127.0.0.1', port: server.address().port, path: route, method,
-        headers: { Host: 'mcp.bowerbird.cn', Accept: 'application/json, text/event-stream',
+        headers: { Host: new URL(issuer).host, Accept: 'application/json, text/event-stream',
           ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
           ...(form === undefined ? {} : { 'Content-Type': 'application/x-www-form-urlencoded' }), ...headers } }, res => {
         const chunks = [];
@@ -49,7 +53,7 @@ async function fixture(t, overrides = {}, source = snapshot) {
     return (await response.json()).client_id;
   }
   async function approval(clientId, overrides = {}) {
-    const query = { client_id: clientId, redirect_uri: callback, response_type: 'code', resource,
+    const query = { client_id: clientId, redirect_uri: callback, response_type: 'code', resource: audience,
       scope: 'code:read', state: 'opaque-state', code_challenge_method: 'S256', code_challenge: challenge, ...overrides };
     const response = await request('/oauth/authorize?' + new URLSearchParams(query));
     return { response, html: await response.text(), query };
@@ -59,7 +63,7 @@ async function fixture(t, overrides = {}, source = snapshot) {
     assert.equal(response.status, 200);
     const nonce = /name="nonce" value="([^"]+)"/.exec(html)[1];
     const result = await request('/oauth/authorize', { method: 'POST', form: { nonce, password },
-      headers: { Origin: origin, Cookie: response.headers.get('set-cookie').split(';')[0] } });
+      headers: { Origin: issuer, Cookie: response.headers.get('set-cookie').split(';')[0] } });
     assert.equal(result.status, 302);
     const redirect = new URL(result.headers.get('location'));
     assert.equal(redirect.origin + redirect.pathname, callback);
@@ -68,7 +72,7 @@ async function fixture(t, overrides = {}, source = snapshot) {
   }
   async function tokens(clientId, authCode, overrides = {}, headers = {}) {
     return request('/oauth/token', { method: 'POST', headers, form: { client_id: clientId, code: authCode,
-      grant_type: 'authorization_code', redirect_uri: callback, code_verifier: verifier, resource, ...overrides } });
+      grant_type: 'authorization_code', redirect_uri: callback, code_verifier: verifier, resource: audience, ...overrides } });
   }
   async function rpc(token, method, params = {}) {
     return request('/mcp', { method: 'POST', data: { jsonrpc: '2.0', id: 1, method, params },
@@ -76,6 +80,47 @@ async function fixture(t, overrides = {}, source = snapshot) {
   }
   return { request, register, approval, code, tokens, rpc, advance: ms => { time += ms; } };
 }
+
+test('configuration permits two exact production issuers and validates optional SSH fields', () => {
+  assert.deepEqual(validateConfig(config), config);
+  const mac = { ...config, origin: macOrigin, remotePort: 48734, sshUser: 'bowerbird-mcp-mac' };
+  assert.deepEqual(validateConfig(mac), mac);
+  for (const value of [null, '48734', 0, -1, 48734.5, 65536, {}, true]) {
+    assert.throws(() => validateConfig({ ...mac, remotePort: value }), /remote port/);
+  }
+  for (const value of [null, 123, [], {}, '', '-option', 'user@host', 'user name', 'user\n', 'a'.repeat(33)]) {
+    assert.throws(() => validateConfig({ ...mac, sshUser: value }), /SSH user/);
+  }
+  for (const value of [macOrigin + '/', macOrigin + ':443', macOrigin + '.example', macOrigin.replace('https:', 'http:'),
+    macOrigin.replace('://', '://user@'), 'https://evil.example', [macOrigin]]) {
+    assert.throws(() => validateConfig({ ...mac, origin: value }), /configuration/);
+  }
+});
+
+test('Mac OAuth discovery, authorization and tools are isolated from the Windows issuer', async t => {
+  const mac = await fixture(t, { origin: macOrigin, remotePort: 48734, sshUser: 'bowerbird-mcp-mac' },
+    { ...snapshot, revision: 'mac-local' });
+  const win = await fixture(t);
+  const metadata = await (await mac.request('/.well-known/oauth-authorization-server')).json();
+  assert.equal(metadata.issuer, macOrigin);
+  assert.equal(metadata.token_endpoint, macOrigin + '/oauth/token');
+  const protectedResource = await (await mac.request('/.well-known/oauth-protected-resource/mcp')).json();
+  assert.equal(protectedResource.resource, macOrigin + '/mcp');
+  assert.deepEqual(protectedResource.authorization_servers, [macOrigin]);
+  const denied = await mac.request('/mcp');
+  assert.equal(denied.status, 401);
+  assert.ok(denied.headers.get('www-authenticate').includes(macOrigin));
+  assert.equal((await mac.request('/healthz', { headers: { Host: new URL(origin).host } })).status, 403);
+  assert.equal((await mac.request('/healthz', { headers: { Origin: origin } })).status, 403);
+  const id = await mac.register();
+  assert.equal((await mac.approval(id, { resource })).response.status, 400);
+  const tokens = await (await mac.tokens(id, await mac.code(id))).json();
+  const tools = await (await mac.rpc(tokens.access_token, 'tools/list')).json();
+  assert.equal(tools.result.tools.length, 4);
+  const result = await (await mac.rpc(tokens.access_token, 'tools/call', { name: 'project_overview' })).json();
+  assert.equal(JSON.parse(result.result.content[0].text).revision, 'mac-local');
+  assert.equal((await win.rpc(tokens.access_token, 'tools/list')).status, 401);
+});
 
 test('atomic snapshot updates preserve access and refresh tokens, retain valid data on failure, and recover', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'bb-mcp-reload-'));
@@ -310,9 +355,10 @@ test('DCR accepts all six official callback families and reports safe rejection 
 });
 
 test('HTTP entrypoint rejects unrestricted execution and starts with read-only permissions', async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'bb-mcp-http-'));
+  const temporaryRoot = await realpath(os.tmpdir());
+  const dir = await mkdtemp(path.join(temporaryRoot, 'bb-mcp-http-'));
   t.after(async () => {
-    assert.equal(path.dirname(dir), os.tmpdir());
+    assert.equal(path.dirname(dir), temporaryRoot);
     await rm(dir, { recursive: true, force: true });
   });
   for (const file of ['http-server.mjs', 'http-app.mjs', 'snapshot-store.mjs', 'core.mjs', 'package.json']) await copyFile(new URL('../' + file, import.meta.url), path.join(dir, file));

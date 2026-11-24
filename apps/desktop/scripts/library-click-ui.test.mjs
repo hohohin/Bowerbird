@@ -24,7 +24,7 @@ async function assertBrowseClicks() {
   await page.locator('.asset-detail-back').click();
   await page.waitForTimeout(350);
   assert.equal(await preview.count(), 0, 'double click cancels the pending preview');
-  await card('existing').click({ modifiers: ['Control'] });
+  await card('existing').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await card('a').click();
   assert.equal(await library.locator('.folder-media-card[aria-pressed="true"]').count(), 2, 'explicit multi-select remains additive');
   await card('existing').click();

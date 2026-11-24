@@ -21,7 +21,7 @@ w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poste
   w.calls.push({command,args});
   if(command==='file_colors') {
     if(w.colorDelay) await new Promise(r=>setTimeout(r,w.colorDelay));
-    if(w.colorFailure) throw new Error('颜色读取失败');
+    if(w.colorFailure || w.colorFailurePath === args.path) throw new Error('颜色读取失败');
     return args.path.endsWith('.mp4')?['blue']:['red'];
   }
   if(command==='file_workspace_status') return {config:fileConfig,proposed_root:'/BowerbirdLibrary',migration:w.fileMove||null};

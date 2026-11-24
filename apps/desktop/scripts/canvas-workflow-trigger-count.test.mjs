@@ -33,7 +33,7 @@ try {
       }
       if (command === 'comfy_video_environment') return { phase: 'ready', endpoint: 'http://127.0.0.1:8000', message: '合成环境' };
       if (command === 'comfy_video') {
-        if (args.action === 'cancel') { cancelCalls++; return { status: cancelDone ? 'done' : 'cancelled', message: '已停止' }; }
+        if (args.action === 'cancel') { cancelCalls++; throw new Error('Mac baseline must only stop waiting'); }
         if (args.action === 'start') { calls.push(args); if (mode === 'hold') await new Promise(resolve => { hold = resolve; }); }
         return mode === 'failed' ? { status: 'failed', message: '模拟失败' } : mode === 'unknown' ? { status: 'unknown', message: '模拟断线' } : { status: 'done', message: '完成', asset: video };
       }
@@ -53,7 +53,7 @@ try {
     await c.start('h3', true);
     check(calls.length === 3 && new Set(calls.map(call => call.requestId)).size === 3, `two repeats use three independent jobs: ${JSON.stringify({ calls: calls.length, run: c.document.run, issue: c.issue })}`);
     check(c.document.nodes[0].triggerCount === 0 && c.document.run.status === 'done', 'counter reaches zero and terminates');
-    check(window.snapshot().nodes.filter(node => node.id.startsWith('workflow-comfy:')).length === 3, 'each result remains on canvas');
+    check(c.document.nodes.find(node => node.id === 'h3').outputs.image.assetIds[0] === video.id, 'Mac baseline retains the inline video result');
     check(snapshots.some(doc => doc.nodes[0]?.triggerCount === 1 && doc.run?.steps.h3.status === 'pending'), 'decrement and next pending task saved atomically');
     await c.continue(); check(calls.length === 3, 'completed run cannot repeat on continue');
 
@@ -123,13 +123,13 @@ try {
     while (!hold) await new Promise(resolve => setTimeout(resolve, 5));
     check(!c.isLocked('repeat'), 'an armed completion receiver stays editable while its source runs');
     const stopping = c.stop(); mode = 'done'; hold(); await Promise.all([running, stopping]);
-    check(calls.length === 1 && cancelCalls === 1 && c.document.nodes[0].triggerCount === 2 && c.document.run.status === 'stopped', 'stop does not trigger or decrement');
+    check(calls.length === 1 && cancelCalls === 0 && c.document.nodes[0].triggerCount === 2 && c.document.run.status === 'stopped', 'stop does not trigger or decrement');
 
-    calls = []; mode = 'hold'; hold = null; cancelDone = true; await c.edit(make(2));
-    const stoppedRepeat = c.start('repeat');
+    calls = []; mode = 'hold'; hold = null; await c.edit(make(2));
+    const stoppedRepeat = c.start('h3', true);
     while (!hold) await new Promise(resolve => setTimeout(resolve, 5));
     const stopRepeat = c.stop(); mode = 'done'; hold(); await Promise.all([stoppedRepeat, stopRepeat]);
-    await c.recoverComfyVideo(c.document.run.id, 'h3');
+    await c.recoverComfyVideo(c.document.run.id);
     check(calls.length === 1 && c.document.nodes[0].triggerCount === 2 && c.document.run.status === 'done', 'retrieving stopped video never rearms repeats');
 
     // Ordinary image generation acknowledges submission before completion; never count that receipt.

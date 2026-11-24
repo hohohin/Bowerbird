@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({ cacheDir: '.tmp/text-workspace-live-vite', server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null } });
+// Observe the production draft without reintroducing the removed source-mode UI.
+const workspaceObserver = { name: 'test-workspace-draft', enforce: 'pre', transform(code, id) {
+  if (id.endsWith('/src/components/TextPlateEditor.tsx')) return code.replace('const blockDrag = useRef<string | null>(null);', 'const blockDrag = useRef<string | null>(null); window.__workspaceEditor = editor;');
+  if (id.endsWith('/src/components/TextWorkspace.tsx')) return code.replace('const { draft, value, update, changeValue } = document;', 'const { draft, value, update, changeValue } = document; window.__workspaceDraft = draft;');
+} };
+const server = await createServer({ plugins: [workspaceObserver], cacheDir: '.tmp/text-workspace-live-vite', server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });

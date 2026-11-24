@@ -6,7 +6,6 @@ import { ProjectManagerPanel } from "./ProjectManagerPanel";
 import { PreservedWorkspace } from "./PreservedWorkspace";
 import "./HomeWorkspace.css";
 import { LibraryComposer } from "./LibraryComposer";
-import { registerLibraryLocalVideo } from "../lib/libraryGenerationRuntime";
 import { CreationImagePreview } from "./CreationImagePreview";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { isVideoPath } from "../lib/videoGeneration";
@@ -50,7 +49,7 @@ export function HomeWorkspace({ active = true, shortcutsEnabled = true, onCreate
       onDragStartCapture={creationImage.cancel} onContextMenuCapture={creationImage.cancel} onKeyDownCapture={keyDown}>
       <PreservedWorkspace suspended={!libraryActive}>
         {active && <LibraryHome active={libraryActive} onCreateProject={onCreateProject} shortcutsEnabled={shortcutsEnabled}/>}
-        {libraryActive && <LibraryComposer onLocalVideoStarted={registerLibraryLocalVideo} onOpenLibrary={openLibrary}/>}
+        {libraryActive && <LibraryComposer onOpenLibrary={openLibrary}/>}
       </PreservedWorkspace>
       {preview && (isVideoPath(preview.asset.store_path) || isAudioPath(preview.asset.store_path)
         ? <LibraryVideoPreview asset={preview.asset} job={preview.job} path={preview.asset.store_path!} sourceKey={videoSourceKey(preview.asset)} projectId={null} onClose={creationImage.close}/>

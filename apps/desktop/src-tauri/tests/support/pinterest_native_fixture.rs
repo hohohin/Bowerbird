@@ -43,7 +43,7 @@ pub fn run_pinterest_search_fixture() {
     let asset = db.index_connected_file(&paths, &original, None).unwrap();
     std::env::set_var("BOWERBIRD_EXPLORER_TEST_DATA_DIR", root.join("sites"));
     std::env::set_var("BOWERBIRD_EXPLORER_TEST_DEBUG_PORT", "9568");
-    let mut context = tauri::generate_context!("tests/fixtures/explorer/tauri.conf.json");
+    let mut context = tauri::generate_context!("tests/fixtures/explorer/tauri.conf.json", test = true);
     context.config_mut().app.windows[0].data_directory = Some(root.join("main"));
     context.config_mut().app.windows[0].additional_browser_args = Some("--remote-debugging-port=9567 --remote-debugging-address=127.0.0.1".into());
     context.config_mut().app.windows[0].visible = false;

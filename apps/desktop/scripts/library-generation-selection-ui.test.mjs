@@ -30,7 +30,7 @@ try {
   assert.equal(await page.evaluate(() => window.parityPicks.length), 1, 'double click attaches exactly once');
   assert.equal(await page.evaluate(() => window.generationCalls.length), 0, 'attachment never submits');
   const count = await editor.locator('[data-asset-id]').count();
-  await cards.nth(1).click({ modifiers: ['Control'] });
+  await cards.nth(1).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   assert.equal(await editor.locator('[data-asset-id]').count(), count, 'multi-selection does not attach');
   await page.locator('.catalog-selection').getByRole('button', { name: /取消/ }).click();
   await page.getByRole('button', { name: '退出创作模式', exact: true }).click();

@@ -66,9 +66,9 @@ async function canvasNode(name) {
 }
 async function canvasPoint(x = .72, y = .42) {
   return stage.evaluate((element, { x, y }) => {
-    const rect = element.getBoundingClientRect(), css = element.style;
-    const zoom = parseFloat(css.backgroundSize) / 24;
-    const [panX, panY] = css.backgroundPosition.split(" ").map(parseFloat);
+    const rect = element.getBoundingClientRect();
+    const matrix = new DOMMatrix(getComputedStyle(document.querySelector(".canvas-plane")).transform);
+    const zoom = matrix.a, panX = matrix.e, panY = matrix.f;
     const clientX = Math.round(rect.left + rect.width * x), clientY = Math.round(rect.top + rect.height * y);
     return { x: clientX, y: clientY, boardX: (clientX - rect.left - panX) / zoom, boardY: (clientY - rect.top - panY) / zoom, zoom };
   }, { x, y });
@@ -92,7 +92,7 @@ try {
   await page.goto("http://127.0.0.1:17936/scripts/fixtures/canvas-reference/preview.html?media-import&source-library&canvas-library&strict");
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.locator('[data-canvas-node-id="old"]').waitFor();
-  await page.waitForFunction(() => Math.abs(parseFloat(document.querySelector(".canvas-stage").style.backgroundSize) / 24 - .9) < .001);
+  await page.waitForFunction(() => Math.abs(new DOMMatrixReadOnly(getComputedStyle(document.querySelector(".canvas-plane")).transform).a - .9) < .001);
   await installImportFixture();
 
   // With the global drawer visible, dropping on canvas still freezes the project,
@@ -103,7 +103,7 @@ try {
   await drop(".canvas-stage", ["画布一.png", "画布二.png"], point);
   await page.waitForFunction(() => !!window.releaseImage);
   await stage.evaluate(element => element.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -260, clientX: 700, clientY: 400 })));
-  await page.waitForFunction(zoom => parseFloat(document.querySelector(".canvas-stage").style.backgroundSize) / 24 !== zoom, point.zoom);
+  await page.waitForFunction(zoom => new DOMMatrix(getComputedStyle(document.querySelector(".canvas-plane")).transform).a !== zoom, point.zoom);
   await page.evaluate(() => { window.holdImage = null; window.releaseImage(); window.releaseImage = null; });
   assertCentered(await canvasNode("画布一.png"), point);
   assertCentered(await canvasNode("画布二.png"), point, 24);

@@ -4,6 +4,10 @@
 
 本地开发与打包见 [Windows](../Windows/README.md) 和 [macOS](../macOS/README.md)。早期 README 中的发版与跨端交接原文保存在 [平台历史记录](../project_logs/2026-11-22-desktop-platform-history.md)。
 
+## Apple Silicon 26.11.2403 R2 测试包交接（2026-11-24）
+
+经本轮确认，仅交付 ARM 本地签名测试包供另一终端统一发布。源码 `ac3d2e6a` 含 `dev@0d044e83`，SQLite 0062。原 Mac updater 签名已验，DMG 使用本地证书，未经 Apple 公证。R2 独立测试目录的 7 个对象均已完整回读。公网 ARM、Intel、Windows 的现役版本分别在交接期间复核为 26.10.801、26.10.1501、26.11.2402。[测试清单](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/testing/26.11.2403-aarch64-a3d3c340767d/darwin-aarch64-26.11.2403.json) · [安装包](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/testing/26.11.2403-aarch64-a3d3c340767d/Bowerbird_26.11.2403_aarch64-updater-installer.dmg) · [校验和](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/testing/26.11.2403-aarch64-a3d3c340767d/SHA256SUMS) · [Mac 验收与包哈希](../macOS/RELEASE-READINESS.md#安装包与更新归档)
+
 ## Windows 全量放行的手工验收
 
 用备用 Windows 设备或隔离虚拟机。准备专用 Bowerbird 账号、至少 1,000 张图片的脱敏旧库副本、一份已连接文件夹和一个可拔插的测试外盘。旧库至少有一个保存过且含图片与连线的项目画板、一条历史任务，若已有在途任务也记下状态。先备份测试数据并记录旧版号、库和外盘路径、样本素材数、项目及任务标识。验证公开版本可用 26.11.1901 → 26.11.2003，实际全量候选另按其冻结版本复验。

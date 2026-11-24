@@ -10,8 +10,8 @@
   border: 1px solid var(--library-glass-edge);
   border-radius: 20px;
   background: linear-gradient(135deg, var(--library-glass-glint), transparent 35%, transparent 63%, var(--library-glass-glint)), var(--composer-fill);
-  -webkit-backdrop-filter: blur(8px) saturate(1.6);
-  backdrop-filter: var(--library-glass-filter, blur(0px)) blur(8px) saturate(1.6);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: inset 0 1.4px 1px var(--library-glass-shine), inset 0 -1px 1.5px var(--library-glass-edge), inset 1px 0 2px var(--library-glass-edge), inset -1px 0 2px rgb(94 114 142 / 13%), 0 18px 38px -12px rgb(var(--bb-shadow-rgb) / 22%);
   transform: none;
   transition: margin-bottom 180ms ease, border-radius 180ms ease;

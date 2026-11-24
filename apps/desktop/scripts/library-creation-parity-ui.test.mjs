@@ -21,7 +21,7 @@ const preview = page.getByRole('dialog', { name: '图片与生成记录预览', 
 const idle = () => page.waitForTimeout(700);
 const pickCount = () => page.evaluate(() => window.parityPicks.length);
 const chipCount = () => editor.locator('[data-asset-id]').count();
-const closePreview = async () => { await page.keyboard.press('Escape'); await preview.waitFor({state:'detached'}); };
+const closePreview = async () => { await page.waitForFunction(() => !!document.activeElement?.closest('[role="dialog"][aria-label="图片与会话预览"]')); await page.keyboard.press('Escape'); await preview.waitFor({state:'detached'}); };
 async function unchangedDraft() { assert.ok((await editor.innerText()).includes('主屏保留的草稿'), 'material navigation keeps the home draft'); }
 async function singlePreview(target) {
   const before = { picks: await pickCount(), chips: await chipCount() };
@@ -100,7 +100,7 @@ try {
   assert.equal(await page.evaluate(() => !!document.activeElement?.closest('.library-home')), false, 'Shift+Tab is not redirected into the library');
   await editor.focus(); await doubleReference(asset);
   const beforeControl = await pickCount();
-  for (const modifier of ['Control', 'Meta', 'Shift']) {
+  for (const modifier of process.platform === 'darwin' ? ['Meta', 'Shift'] : ['Control', 'Meta', 'Shift']) {
     await page.locator('.library-home [data-asset-id]').nth(1).click({modifiers:[modifier]});
     await page.locator('.catalog-selection').waitFor(); await idle();
     assert.equal(await pickCount(), beforeControl, `${modifier} selection does not attach or preview`); assert.equal(await preview.count(),0);
@@ -175,7 +175,7 @@ try {
   const connectedCard = page.locator('[data-connection-entry="parity-entry-2"] .folder-media-card');
   const connectedSelection = page.getByRole('region', { name: '按文件夹浏览素材', exact: true })
     .getByRole('group', { name: '分类素材所选操作', exact: true });
-  for (const modifier of ['Control', 'Meta', 'Shift']) {
+  for (const modifier of process.platform === 'darwin' ? ['Meta', 'Shift'] : ['Control', 'Meta', 'Shift']) {
     await connectedCard.click({ modifiers: [modifier] });
     await connectedSelection.waitFor(); await idle();
     assert.equal(await connectedCard.getAttribute('aria-pressed'), 'true', `${modifier} selects the connected entry`);

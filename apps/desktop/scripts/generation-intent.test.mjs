@@ -68,6 +68,7 @@ test("a deferred prompt compile keeps the provider and visual profile from the s
 // Execute the production store actions with a deferred provider command.
 import { readFileSync } from "node:fs";
 import ts from "typescript";
+import { dreaminaCliVersion } from "../src/lib/genProviders.ts";
 import { acquireCreativeSubmission } from "../src/lib/creativeGeneration.ts";
 
 function startupHarness() {
@@ -88,7 +89,7 @@ function startupHarness() {
   const waiters = new Map();
   const bindings = {
     get: () => state, set: (update) => Object.assign(state, update(state)),
-    normalizeGenerationProvider: (value) => value, generationGateError: () => null,
+    dreaminaCliVersion, normalizeGenerationProvider: (value) => value, generationGateError: () => null,
     normalizeAnnotationPrompt: (value) => value, autoRatioFromReferences: () => null,
     nextGenTurnId: () => 1, crypto: { randomUUID: () => "job-start" },
     generationStartupWaiters: waiters, api: { codexCreateImage: () => provider },

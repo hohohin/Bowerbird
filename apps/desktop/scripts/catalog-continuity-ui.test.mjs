@@ -105,9 +105,9 @@ try {
           return { x, y, hit: document.elementFromPoint(x, y)?.closest('[data-asset-id]')?.dataset.assetId };
         });
         assert.equal(point.hit, 'asset-59', 'Later page wrappers must not intercept the earlier portrait');
-        await page.keyboard.down('Control');
+        await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
         await page.mouse.click(point.x, point.y);
-        await page.keyboard.up('Control');
+        await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
         await page.waitForFunction(() => document.querySelector('[data-asset-id="asset-59"]')?.getAttribute('aria-pressed') === 'true');
         await page.getByRole('button', { name: '取消选择', exact: true }).click();
         await page.mouse.move(0, 0);

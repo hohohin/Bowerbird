@@ -94,7 +94,7 @@ export function useLibraryDragHold(identity: string, prepare: PrepareLibraryDrag
   }, [identity, !!prepare]);
   function onPointerDown(event: PointerEvent<HTMLElement>) {
     gesture.current?.cancel();
-    if (!current.current || !isLibraryPress(event)) return;
+    if (!current.current || !isLibraryPress(event) || event.currentTarget.closest("[data-draft-library]")) return;
     const element = event.currentTarget;
     gesture.current = trackPress(event, externalOnly => {
       const cancel = beginLibraryDrag(element, current.current, externalOnly);
