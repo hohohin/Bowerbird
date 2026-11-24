@@ -4,7 +4,7 @@ import { useCanvasViewport } from "./useCanvasViewport";
 import { DimensionBadge } from "./DimensionBadge";
 import { replicationAnalysisNote } from "../lib/replicationAnalysisNote";
 import { optimizeComposerLocalVideo } from "../lib/composerLocalVideo";
-import { createCanvasProjectJobsSelector } from "../lib/canvasProjectJobs";
+import { createCanvasProjectJobsSelector, workflowCheckpointJobIds } from "../lib/canvasProjectJobs";
 import { CanvasGenerationProgress, CanvasTurnPreview } from "./CanvasGenerationLive";
 import { originalDeletionEpoch, originalDeletionFor, subscribeOriginalDeletionCommits, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { dismissNotices, readDismissedNotices, subscribeDismissedNotices } from "../lib/dismissedNotices";
@@ -765,8 +765,10 @@ export function CanvasWorkspace({
     && !projectRoutePending && activeCanvas.id === projectId;
   const workflowNodes = workflowInteractive ? workflow.document.nodes : [];
   const workflowDocument = workflowInteractive ? workflow.document : undefined;
-  const genJobs = useStore(useMemo(() => createCanvasProjectJobsSelector(projectId, graphNodes,
-    workflowDocument ? workflowRuns(workflowDocument) : []), [projectId, graphNodes, workflowDocument?.run, workflowDocument?.runs]));
+  const selectCanvasJobs = useMemo(() => createCanvasProjectJobsSelector(projectId, graphNodes), [projectId, graphNodes]);
+  const checkpointJobs = useMemo(() => workflowCheckpointJobIds(workflowDocument ? workflowRuns(workflowDocument) : []),
+    [workflowDocument?.run, workflowDocument?.runs]);
+  const genJobs = useStore(useCallback(state => selectCanvasJobs(state, checkpointJobs), [selectCanvasJobs, checkpointJobs]));
   const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
   const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
   const snapshotPrompt = !activeGenerationJob && !activeAgentRun && genPanelOpen

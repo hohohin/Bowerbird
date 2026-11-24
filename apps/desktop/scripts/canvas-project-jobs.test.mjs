@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createCanvasProjectJobsSelector } from "../src/lib/canvasProjectJobs.ts";
+import { createCanvasProjectJobsSelector, workflowCheckpointJobIds } from "../src/lib/canvasProjectJobs.ts";
 
 test("canvas projections stay stable through progress chunks and update on delivery, retry and removal", () => {
   const select = createCanvasProjectJobsSelector("open");
@@ -26,14 +26,16 @@ test("canvas projections stay stable through progress chunks and update on deliv
 
 test("an exact node or checkpoint restores an unowned job only for its board", () => {
   const node = (projectId, job_id) => ({ projectId, kind: "prompt", payloadJson: JSON.stringify({ job_id }) });
-  const select = createCanvasProjectJobsSelector("open", [node("open", "old"), node("open", "moved"), node("other", "unrelated")],
-    [{ steps: { image: { jobId: "checkpoint" } } }]);
+  const select = createCanvasProjectJobsSelector("open", [node("open", "old"), node("open", "moved"), node("other", "unrelated")]);
+  const checkpoints = workflowCheckpointJobIds([{ steps: { image: { jobId: "checkpoint" } } }]);
   const unowned = { projectId: null, turns: [], running: true };
   const genJobs = { old: unowned, checkpoint: unowned, unrelated: unowned, moved: { ...unowned, projectId: "other" } };
-  const restored = select({ genJobs });
+  const restored = select({ genJobs }, checkpoints);
   assert.deepEqual(Object.keys(restored).sort(), ["checkpoint", "old"]);
-  const hydrated = select({ genJobs: { ...genJobs, old: { ...unowned, projectId: "open" } } });
+  assert.equal(select({ genJobs }, new Set(checkpoints)), restored);
+  assert.deepEqual(Object.keys(select({ genJobs }, new Set())), ["old"]);
+  const hydrated = select({ genJobs: { ...genJobs, old: { ...unowned, projectId: "open" } } }, checkpoints);
   assert.equal(hydrated.old.projectId, "open");
-  const reassigned = select({ genJobs: { ...genJobs, old: { ...unowned, projectId: "other" } } });
+  const reassigned = select({ genJobs: { ...genJobs, old: { ...unowned, projectId: "other" } } }, checkpoints);
   assert.deepEqual(Object.keys(reassigned), ["checkpoint"]);
 });

@@ -14,9 +14,17 @@ function sameCanvasTurns(previous: CanvasTurn[], turns: CanvasTurn[]): boolean {
   });
 }
 
+const noCheckpoints: ReadonlySet<string> = new Set();
+
+export function workflowCheckpointJobIds(runs: readonly WorkflowRun[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const run of runs) for (const step of Object.values(run.steps)) if (step.jobId) ids.add(step.jobId);
+  return ids;
+}
+
 // Keep the projection stable across streaming, progress and preview updates.
 // The detail panel and live card leaves subscribe to their own job.
-export function createCanvasProjectJobsSelector(projectId: string | null, nodes: readonly CanvasNode[] = [], runs: readonly WorkflowRun[] = []) {
+export function createCanvasProjectJobsSelector(projectId: string | null, nodes: readonly CanvasNode[] = []) {
   // Recovery can deliver a job before its project owner is hydrated. Only exact
   // job identities from this board can associate such a job with its layout.
   const referenced = new Set<string>();
@@ -26,17 +34,19 @@ export function createCanvasProjectJobsSelector(projectId: string | null, nodes:
     const id = node.kind === "prompt" ? data.job_id : data.execution?.job_id;
     if (id) referenced.add(id);
   }
-  for (const run of runs) for (const step of Object.values(run.steps)) if (step.jobId) referenced.add(step.jobId);
 
   let previous: Record<string, CanvasProjectJob> = {};
   let previousInput: Record<string, GenJob> | undefined;
-  return (state: { genJobs: Record<string, GenJob> }) => {
-    if (previousInput === state.genJobs) return previous;
+  let previousCheckpoints = noCheckpoints;
+  return (state: { genJobs: Record<string, GenJob> }, checkpoints = noCheckpoints) => {
+    if (previousInput === state.genJobs && (previousCheckpoints === checkpoints
+      || previousCheckpoints.size === checkpoints.size && [...checkpoints].every(id => previousCheckpoints.has(id)))) return previous;
     previousInput = state.genJobs;
+    previousCheckpoints = checkpoints;
     const next: Record<string, CanvasProjectJob> = {};
     let changed = false;
     for (const [id, job] of Object.entries(state.genJobs)) {
-      if (!projectId || (job.projectId == null ? !referenced.has(id) : job.projectId !== projectId)) continue;
+      if (!projectId || (job.projectId == null ? !referenced.has(id) && !checkpoints.has(id) : job.projectId !== projectId)) continue;
       const old = previous[id];
       if (old && old.projectId === job.projectId && sameCanvasTurns(old.turns, job.turns) && old.running === job.running && old.conversationId === job.conversationId
         && old.threadId === job.threadId && old.provider === job.provider && old.media === job.media
