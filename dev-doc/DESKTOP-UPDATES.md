@@ -63,6 +63,12 @@ macOS 的双架构回执单独维护。[macOS 全量发布验收](../macOS/RELEA
 
 自 2026-11-21 起，Windows 官网发布按用户授权在缺少 Authenticode 时继续，保留 Tauri 更新签名和公网安装包完整回读验签。下文可信发布者签名验收用于接入该能力时。
 
+## Windows 26.11.2403 已公开发布（2026-11-24）
+
+北京时间 18:02:59 公网核验通过，源码 `8aca9a8c2`，SQLite 0062。折叠生成卡可直接接线并撤销。音频选区裁剪按解码后的时间轴定位，保留受支持的 WAV 编码及位深，覆盖时同步刷新画板波形和时长。配套只读 MCP 分支控制台随存档推送。[源码和验证记录](../project_logs/2026-11-24-canvas-audio-mcp-archive.md)
+
+冻结源码通过 TypeScript、Vite 生产构建、25 项接线测试、3 组桌面界面回归和 1439 项 Windows 原生测试，64 项按配置跳过。官网与 Windows 自动更新清单均指向 26.11.2403。CDN 安装包完整回读并通过 Tauri 更新签名校验，SHA-256 为 `b262ec184994df5a2be5c99f1fbdf1f491b1ada25635c5646c0ae4337350a43e`。按既有授权跳过 Authenticode。回滚目标为 26.11.2402，旧版应用内安装与重启尚待实机验证。回执见 `.tmp/release-windows-26.11.2403/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2403_x64-setup.exe)
+
 ## Windows 26.11.2402 已公开发布（2026-11-24）
 
 北京时间 10:25:53 公网核验通过，源码 `7ce371ee0`，SQLite 0062。H3 提示词优化及写作 Agent 的参数错误提供中文处理提示。客户端支持实际参考槽数量，空槽优化依赖配套 Cloud 校验上线。TypeScript、Vite 生产构建、两组 H3 界面回归、8 项错误提示测试、1439 项 Windows 原生测试通过，62 项按配置跳过。
