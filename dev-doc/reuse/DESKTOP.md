@@ -6,6 +6,8 @@
 
 - **用途／关键词**：平移、缩放、拖动、分批挂载、可见范围。
 - **入口**：[useCanvasFrame](../../apps/desktop/src/lib/useCanvasFrame.ts) 调度输入；[canvasDragPreview](../../apps/desktop/src/lib/canvasDragPreview.ts) 投射拖动位移；[canvasPaintWindow](../../apps/desktop/src/lib/canvasPaintWindow.ts) 裁剪屏外绘制。
+- 平移、缩放和屏幕坐标转换由 [useCanvasViewport](../../apps/desktop/src/components/useCanvasViewport.ts) 管理。框选、拖动投影和吸附使用 [useCanvasSelectionAndDrag](../../apps/desktop/src/components/useCanvasSelectionAndDrag.ts)。生成卡的折叠锚点、悬停计时和固定态由 [useCanvasGenerationCollapse](../../apps/desktop/src/components/useCanvasGenerationCollapse.ts) 维护。
+- 画板会话布局从 [createCanvasProjectJobsSelector](../../apps/desktop/src/lib/canvasProjectJobs.ts) 订阅当前项目的任务归属、轮次与运行状态。单卡的实时进度和本轮预览由 [CanvasGenerationLive](../../apps/desktop/src/components/CanvasGenerationLive.tsx) 按任务 ID 订阅。
 - **调用**：CanvasWorkspace 和 CanvasWorkflowLayer 按已恢复相机共用挂载范围；useWorkflowPortGeometry 随缩放测量受影响卡片。新连线通过 dragWire 登记实际显示端口。浮现的生成卡复用同一次拖动投影，随素材锚点移动。
 - **边界／状态**：未挂载卡片用数据几何，未知拓扑回原计算；最终位置、撤销与持久化由 CanvasWorkspace 执行。[首屏响应](../PROJECT-CANVAS-PLAN.md#2026-11-21项目打开与首屏响应) · [Chrome／WebView2 夹具](../../apps/desktop/scripts/fixtures/canvas-interaction-performance/README.md)。
 
