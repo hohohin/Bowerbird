@@ -167,7 +167,7 @@ function parseChatSkill(value: unknown): ChatSkill {
       typeof p.mode !== "string" || !["text", "reference", "frames"].includes(p.mode) ||
       typeof p.seconds !== "number" || !Number.isFinite(p.seconds) || p.seconds <= 0 || p.seconds > 120 ||
       typeof p.ratio !== "string" || !["9:16", "16:9", "4:3", "3:4", "1:1", "auto"].includes(p.ratio) ||
-      p.firstFrameCount !== (p.mode === "text" ? 0 : 1) ||
+      !(p.firstFrameCount === 0 || (p.mode !== "text" && p.firstFrameCount === 1)) ||
       !(p.lastFrameCount === 0 || (p.mode === "frames" && p.lastFrameCount === 1))) throw invalid();
   return { id: "h3-video-prompt", parameters: { mode: p.mode, seconds: p.seconds, ratio: p.ratio,
     firstFrameCount: p.firstFrameCount, lastFrameCount: p.lastFrameCount } };

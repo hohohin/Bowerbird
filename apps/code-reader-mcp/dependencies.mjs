@@ -16,10 +16,24 @@ function tokens(text, rust) {
   const result = [];
   const pattern = rust
     ? /\/\/[^\n]*|\/\*[\s\S]*?\*\/|r(#+)"[\s\S]*?"\1|r"[^"]*"|"(?:\\[\s\S]|[^"\\])*"|'(?:\\.|[^'\\])'|[A-Za-z_$][\w$]*|[^\s]/g
-    : /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|[A-Za-z_$][\w$]*|[^\s]/g;
-  for (const match of text.matchAll(pattern)) {
+    : /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\\r\n])*"|'(?:\\[\s\S]|[^'\\\r\n])*'|`(?:\\[\s\S]|[^`\\])*`|[A-Za-z_$][\w$]*|=>|\+\+|--|[^\s]/g;
+  const regexp = /\/(?:\\[^\r\n]|\[(?:\\[^\r\n]|[^\]\\\r\n])*\]|[^/\\[\r\n])+\/[a-z]*/y;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
     const value = match[0];
     if (value.startsWith('//') || value.startsWith('/*')) continue;
+    // Slash starts a literal in expression-start position, but is division after an operand.
+    if (!rust && value === '/') {
+      const prev = result.at(-1);
+      if (!prev || (!prev.string && /^(?:[=(\[{:;,!?&|~+*%^/-]|=>|return|throw|case|yield|await|void|typeof|delete|in|of)$/.test(prev.value))) {
+        regexp.lastIndex = match.index;
+        if (regexp.test(text)) {
+          pattern.lastIndex = regexp.lastIndex;
+          result.push({ string: false, value: 'regexp' });
+          continue;
+        }
+      }
+    }
     const raw = /^r(#+)?"/.exec(value);
     if (raw) { result.push({ string: true, value: value.slice(raw[0].length, -(raw[1]?.length ?? 0) - 1) }); continue; }
     const string = /^["'`]/.test(value);
@@ -31,6 +45,7 @@ function tokens(text, rust) {
 
 // Static literals only. Never execute project code or evaluate template expressions.
 export function references(file, text) {
+  if (!js.test(file) && !file.endsWith('.rs')) return [];
   const found = [];
   const list = tokens(text, file.endsWith('.rs'));
   const add = (token, kind) => { if (token?.string) found.push({ specifier: token.value, kind }); };

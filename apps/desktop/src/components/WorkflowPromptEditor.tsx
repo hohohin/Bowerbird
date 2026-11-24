@@ -27,13 +27,14 @@ const schema = new Schema({ nodes: {
 const serialize = (doc: PMNode) => doc.textBetween(0, doc.content.size, "\n", node => node.type.name === "reference" ? workflowReferenceToken(node.attrs.id) : "");
 interface Candidate { reference: Omit<WorkflowPromptReference, "id">; preview: string; assetIds?: string[]; unavailable?: boolean }
 
-export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disabled, readCurrentPrompt, onChange, action, fitContent = false }: {
+export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disabled, readCurrentPrompt, onChange, onUndoConnection, action, fitContent = false }: {
   node: WorkflowNode; nodes: WorkflowNode[]; graphNodes: CanvasNode[]; disabled: boolean;
   action?: ReactNode;
   fitContent?: boolean;
   cardNames?: Record<string, string>;
   readCurrentPrompt: () => string;
   onChange: (prompt: string, references: WorkflowPromptReference[]) => void;
+  onUndoConnection?: () => boolean;
 }) {
   node = rebindGenerationReferences(node);
   const [updatingBoard, updateBoard] = useTransition();
@@ -128,10 +129,13 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
       return schema.node("paragraph", null, children);
     }));
   }
-  const latest = useRef({ node, disabled, onChange }); latest.current = { node, disabled, onChange };
+  const latest = useRef({ node, disabled, onChange, onUndoConnection }); latest.current = { node, disabled, onChange, onUndoConnection };
   useEffect(() => {
     const editor = new EditorView(host.current!, {
-      state: EditorState.create({ schema, doc: toDoc(), plugins: [history(), keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo }), keymap(baseKeymap)] }),
+      state: EditorState.create({ schema, doc: toDoc(), plugins: [history(), keymap({
+        "Mod-z": (state, dispatch) => undo(state, dispatch) || (!latest.current.disabled && !!latest.current.onUndoConnection?.()),
+        "Mod-y": redo, "Mod-Shift-z": redo,
+      }), keymap(baseKeymap)] }),
       attributes: editorAttributes,
       editable: () => !latest.current.disabled,
       dispatchTransaction(tr) {

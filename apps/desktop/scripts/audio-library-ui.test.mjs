@@ -154,8 +154,47 @@ async function audioDetails() {
   const detail = page.getByRole('dialog', { name: '音频详情', exact: true });
   const workspace = page.getByRole('dialog', { name: '音频分析工作区', exact: true });
   await page.evaluate(() => window.store.setState({ cloudAuth: { logged_in: true, user_id: 'audio-test', cloud_available: true } }));
+  await page.evaluate(() => {
+    const observer = new MutationObserver(() => {
+      const surface = document.querySelector('.creation-image-preview[aria-label="音频详情"]');
+      if (!surface) return;
+      observer.disconnect();
+      const focus = document.activeElement;
+      const opening = new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true, cancelable: true });
+      window.audioOpeningFocus = {
+        ready: !!surface.querySelector('.audio-detail-player'),
+        label: focus.getAttribute('aria-label'),
+        spacePrevented: !focus.dispatchEvent(opening),
+      };
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
   await card.locator('.audio-file-meta').click();
   await detail.getByText('转录 · 1 Bcoin', { exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.audioOpeningFocus),
+    { ready: false, label: '关闭预览', spacePrevented: true }, 'Space cannot activate the temporary close-button focus');
+  const player = detail.getByRole('region', { name: '音频播放器' });
+  assert.ok(await player.evaluate(element => document.activeElement === element), 'opening audio details focuses the mounted player');
+  await player.locator('button[aria-label="播放"]:enabled').waitFor();
+  await page.keyboard.press('Space');
+  await progressBeyond(.2);
+  await page.keyboard.press('Space');
+  await stopped();
+  await detail.getByRole('button', { name: '关闭预览' }).click();
+  await detail.waitFor({ state: 'hidden' });
+  await page.evaluate(() => {
+    const observer = new MutationObserver(() => {
+      const shortcut = document.querySelector('.creation-image-preview [aria-label="打开转录文稿"]');
+      if (!shortcut) return;
+      observer.disconnect();
+      shortcut.focus();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+  await card.locator('.audio-file-meta').click();
+  await detail.getByText('转录 · 1 Bcoin', { exact: true }).waitFor();
+  assert.ok(await detail.getByRole('button', { name: '打开转录文稿' }).evaluate(element => document.activeElement === element),
+    'player mount preserves focus already moved to another control');
   assert.equal(await detail.getByRole('button', { name: '放大图片' }).count(), 0);
   assert.equal(await card.evaluate(element => element.classList.contains('is-selected')), false);
   await detail.getByRole('button', { name: '分析', exact: true }).click();
@@ -171,6 +210,8 @@ async function audioDetails() {
   await card.locator('.audio-file-meta').click({ button: 'right' });
   await page.getByRole('menu').getByText('转录文稿', { exact: true }).click();
   await workspace.getByRole('button', { name: /跳转至 .* · 文稿/ }).waitFor();
+  assert.ok(await workspace.getByRole('heading', { name: '音频分析' }).evaluate(element => document.activeElement === element),
+    'opening transcript directly keeps focus in the analysis workspace');
   await workspace.getByRole('button', { name: '关闭音频分析' }).click();
   await workspace.waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'video_analysis_get').length), 0);
@@ -190,6 +231,7 @@ async function audioTrim() {
   const end = player.getByRole('spinbutton', { name: '出点秒数' });
   const progress = player.getByRole('slider', { name: '音频进度' });
   await trim.click();
+  const duration = Number(await progress.getAttribute('aria-valuemax'));
   await start.fill('2.5');
   await end.fill('4.0');
   await end.press('Space');
@@ -197,6 +239,20 @@ async function audioTrim() {
   assert.ok((await playerState()).time < 3.2, 'Space starts from the in point after editing a timecode');
   await player.getByRole('button', { name: '暂停', exact: true }).click();
   assert.equal(await player.getByRole('button', { name: '试听选区' }).count(), 0);
+  const bounds = await progress.boundingBox();
+  const moveCursor = seconds => page.mouse.move(bounds.x + bounds.width * seconds / duration, bounds.y + bounds.height / 2);
+  const scrubTime = async () => Number(await progress.getAttribute('aria-valuenow'));
+  await moveCursor(3.2);
+  await page.mouse.down();
+  await moveCursor(1);
+  assert.equal(await scrubTime(), 2.5);
+  await moveCursor(1.15);
+  assert.ok(await scrubTime() > 2.5, 'the first inward move releases the in point even over the mask');
+  await moveCursor(6);
+  assert.equal(await scrubTime(), 4);
+  await moveCursor(5.85);
+  assert.ok(await scrubTime() < 4, 'the first inward move releases the out point even over the mask');
+  await page.mouse.up();
   await progress.press('End');
   assert.equal(Number(await progress.getAttribute('aria-valuenow')), 4, 'keyboard seeking stops at the selected out point');
   await progress.press('Space');

@@ -162,3 +162,79 @@ fn formats_keep_extensions_and_project_membership() {
         assert!((replacement.duration.unwrap() - 0.5).abs() < 0.12, "{ext}: {:?}", replacement.duration);
     }
 }
+
+fn read_pcm(source: &Path, format: &str) -> Vec<u8> {
+    let result = tools::command(tools::resolve(Tool::Ffmpeg).unwrap())
+        .args(["-nostdin", "-v", "error", "-i"])
+        .arg(source)
+        .args(["-map", "0:a:0", "-f", format, "pipe:1"])
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    result.stdout
+}
+
+#[test]
+#[ignore = "requires local FFmpeg; run with --include-ignored for clip encoding verification"]
+fn wav_overwrite_preserves_pcm_type_and_samples() {
+    let fixture = Fixture::new();
+    let binary = tools::resolve(Tool::Ffmpeg).unwrap();
+    for (codec, raw, bytes_per_sample, kind) in [
+        ("pcm_u8", "u8", 1, CODEC_TYPE_PCM_U8),
+        ("pcm_s16le", "s16le", 2, CODEC_TYPE_PCM_S16LE),
+        ("pcm_s24le", "s24le", 3, CODEC_TYPE_PCM_S24LE),
+        ("pcm_s32le", "s32le", 4, CODEC_TYPE_PCM_S32LE),
+        ("pcm_f32le", "f32le", 4, CODEC_TYPE_PCM_F32LE),
+        ("pcm_f64le", "f64le", 8, CODEC_TYPE_PCM_F64LE),
+    ] {
+        let source = fixture.folder.path().join(format!("{codec}.wav"));
+        let result = tools::command(binary)
+            .args(["-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i",
+                "aevalsrc=1.25*sin(2*PI*997*t):s=48000:d=1", "-c:a", codec])
+            .arg(&source).output().unwrap();
+        assert!(result.status.success(), "{codec}: {}", String::from_utf8_lossy(&result.stderr));
+        let original = fixture.managed(&source);
+        let stored = original.store_path.as_deref().unwrap();
+        trim(&fixture.db, &fixture.paths, stored, 0.125, 0.625, true, None).unwrap();
+        assert_eq!(audio::codec(Path::new(stored)).unwrap(), kind, "{codec}");
+        let original_samples = read_pcm(&source, raw);
+        let trimmed_samples = read_pcm(Path::new(stored), raw);
+        let expected = &original_samples[6000 * bytes_per_sample..30000 * bytes_per_sample];
+        assert!(trimmed_samples == expected, "{codec}: trimmed samples differ from the source interval");
+    }
+}
+
+#[test]
+#[ignore = "requires local FFmpeg; run with --include-ignored for clip encoding verification"]
+fn vbr_mp3_without_xing_and_vorbis_trim_match_decoded_time() {
+    let fixture = Fixture::new();
+    let binary = tools::resolve(Tool::Ffmpeg).unwrap();
+    let signal = r"aevalsrc=if(between(t\,95.375\,95.675)\,0.7*sin(2*PI*1000*t)\,if(between(t\,50\,80)\,random(0)*0.5\,0)):s=44100:d=110";
+    for (extension, encoder, options) in [
+        ("mp3", "libmp3lame", ["-q:a", "3", "-write_xing", "0"].as_slice()),
+        ("ogg", "libvorbis", ["-q:a", "3"].as_slice()),
+    ] {
+        let source = fixture.folder.path().join(format!("source.{extension}"));
+        let result = tools::command(binary)
+            .args(["-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", signal, "-c:a", encoder])
+            .args(options).arg(&source).output().unwrap();
+        assert!(result.status.success(), "{extension}: {}", String::from_utf8_lossy(&result.stderr));
+        if extension == "mp3" {
+            assert!(audio::mp3_gapless_duration(&source).is_none());
+        }
+
+        let output = fixture.folder.path().join(format!("clip.{extension}"));
+        encode(&source, &output, &fixture.folder.path().join("ffmpeg.log"), extension, 95.4, 95.6).unwrap();
+
+        // Filter by sample count in a full decode to check timing independently of seek flags.
+        let reference = fixture.folder.path().join(format!("reference.{extension}"));
+        let result = tools::command(binary)
+            .args(["-nostdin", "-v", "error", "-y", "-i"])
+            .arg(&source)
+            .args(["-af", "atrim=start_sample=4207140:end_sample=4215960,asetpts=PTS-STARTPTS", "-c:a", encoder])
+            .arg(&reference).output().unwrap();
+        assert!(result.status.success(), "{extension}: {}", String::from_utf8_lossy(&result.stderr));
+        let expected = read_pcm(&reference, "f32le");
+        assert!(!expected.is_empty());
+        assert!(read_pcm(&output, "f32le") == expected, "{extension}: clip does not match the decoded interval");
+    }
+}

@@ -50,7 +50,7 @@ const tool = (name, description, properties, required = []) => ({
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 });
 export const TOOLS = [
-  tool('project_overview', 'Get snapshot date, revision, coverage and recommended project entry documents. Read these before interpreting the code.', {}),
+  tool('project_overview', 'Get snapshot date, branch, revision, working tree status, coverage and recommended project entry documents.', {}),
   tool('list_files', 'List exported project files. Prefix is a relative directory or file prefix. Paginated.', { prefix: string(512), offset: integer(0, 100000), limit: integer(1, 200) }),
   tool('read_file', 'Read a relative path from the frozen code snapshot with original line numbers. No filesystem access. At most 200 lines / 24000 characters; use nextLine to continue.', { path: string(512), startLine: integer(1, 1000000), limit: integer(1, 200) }, ['path']),
   tool('search_code', 'Case-insensitive literal search of snapshot paths and text, not regex. Returns numbered line snippets; paginate with offset.', { query: { ...string(200), minLength: 1 }, prefix: string(512), offset: integer(0, 100000), limit: integer(1, 50) }, ['query']),
@@ -58,7 +58,9 @@ export const TOOLS = [
 
 export function validateSnapshot(snapshot) {
   if (snapshot?.version !== 1 || !Array.isArray(snapshot.files) || snapshot.files.length > 10000 ||
-      typeof snapshot.createdAt !== 'string' || typeof snapshot.revision !== 'string') throw new Error('Invalid snapshot');
+      typeof snapshot.createdAt !== 'string' || typeof snapshot.revision !== 'string' ||
+      (snapshot.branch !== undefined && (typeof snapshot.branch !== 'string' || !snapshot.branch.length || /[\x00-\x1f\x7f]/.test(snapshot.branch))) ||
+      (snapshot.isDirty !== undefined && typeof snapshot.isDirty !== 'boolean')) throw new Error('Invalid snapshot');
   const seen = new Set();
   for (const file of snapshot.files) {
     if (!allowedFile(file.path) || seen.has(file.path) || typeof file.content !== 'string' ||
@@ -92,7 +94,8 @@ export function callTool(snapshot, name, args = {}) {
   const offset = args.offset ?? 0;
   if (name === 'project_overview') return {
     project: 'Bowerbird', createdAt: snapshot.createdAt, revision: snapshot.revision,
-    fileCount: snapshot.files.length, coverage: 'Filtered tracked working-tree files, explicit review files, recursively resolved local source dependencies and related tests. Local edits included. Frozen until manually exported and server restarted.',
+    branch: snapshot.branch ?? null, isDirty: snapshot.isDirty ?? null,
+    fileCount: snapshot.files.length, coverage: 'Filtered tracked files, reviewed additions, static local dependencies and related tests from one export. Each tool call uses the latest valid local snapshot.',
     coverageCheck: snapshot.coverage ? { status: snapshot.coverage.status, analysis: snapshot.coverage.analysis,
       dependencyFiles: snapshot.coverage.dependencyFiles.length, relatedTests: snapshot.coverage.relatedTestFiles.length,
       unresolvedCoreDependencyCount: snapshot.coverage.unresolvedCoreDependencies.length,

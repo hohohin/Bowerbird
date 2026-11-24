@@ -36,8 +36,7 @@ function h3Parameters(value: unknown): Record<string, unknown> {
         return typeof count !== "number" || !Number.isSafeInteger(count) || count < 0 || count > limit;
       }))) ||
       (p.mode === "text" && (p.firstFrameCount !== 0 || p.lastFrameCount !== 0)) ||
-      (p.mode === "reference" && (p.firstFrameCount !== 1 || p.lastFrameCount !== 0)) ||
-      (p.mode === "frames" && p.firstFrameCount !== 1)) throw new Error("cloud_text_skill_parameters_invalid");
+      (p.mode === "reference" && p.lastFrameCount !== 0)) throw new Error("cloud_text_skill_parameters_invalid");
   return p;
 }
 

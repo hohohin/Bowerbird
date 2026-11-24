@@ -222,7 +222,7 @@ export function AudioDetailPlayer({ asset, path, sourceKey, duration, onDuration
           event.currentTarget.focus();
           const bounds = event.currentTarget.getBoundingClientRect();
           const secondsPerPixel = seconds / bounds.width;
-          const target = (event.clientX - bounds.left) * secondsPerPixel;
+          const target = clamp((event.clientX - bounds.left) * secondsPerPixel, minimum, maximum);
           seek(target);
           drag.current = { id: event.pointerId, time: target, secondsPerPixel, gesture: startScrub(event.clientX, performance.now()) };
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -231,7 +231,7 @@ export function AudioDetailPlayer({ asset, path, sourceKey, duration, onDuration
           if (current?.id !== event.pointerId) return;
           const delta = moveScrub(current.gesture, event.clientX, performance.now());
           setFine(current.gesture.fine);
-          current.time += delta * current.secondsPerPixel;
+          current.time = clamp(current.time + delta * current.secondsPerPixel, minimum, maximum);
           seek(current.time);
         }} onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}
         onKeyDown={event => {

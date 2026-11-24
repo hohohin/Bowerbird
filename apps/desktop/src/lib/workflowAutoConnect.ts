@@ -1,4 +1,4 @@
-import { assertWorkflowAcyclic, H3_R2V_INPUT_LIMITS, H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowBindingKey, workflowConnectionError, workflowInputs, workflowOutputs, workflowProducesVideo,
+import { assertWorkflowAcyclic, H3_R2V_INPUT_LIMITS, H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowBindingKey, workflowConnectionCycleError, workflowConnectionError, workflowInputs, workflowOutputs, workflowProducesVideo,
   type WorkflowInput, type WorkflowNode, type WorkflowPortType } from "./canvasWorkflow.ts";
 
 export type AutomaticMedia = "image" | "video" | "audio";
@@ -41,7 +41,8 @@ export function automaticInputMedia(node: WorkflowNode, portId?: string): Automa
 }
 
 /** Pure, all-or-nothing plan. Callers assign one autoConnect id when committing. */
-export function planAutomaticConnection(nodes: WorkflowNode[], outputs: AutomaticOutput[], targetId: string): AutomaticConnectionPlan {
+export function planAutomaticConnection(nodes: WorkflowNode[], outputs: AutomaticOutput[], targetId: string,
+  generationOrigins?: ReadonlyMap<string, Pick<WorkflowNode, "id">>): AutomaticConnectionPlan {
   const fail = (error: string): AutomaticConnectionPlan => ({ bindings: [], error });
   const target = nodes.find(node => node.id === targetId);
   if (!target) return fail("接收卡片已不存在");
@@ -58,6 +59,10 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
       return fail("不能连接卡片自身");
     if (output.selectionWireId && target.kind === "trigger") return fail("此卡片不能接收整组选中的素材");
     if (output.type === "session") continue;
+    if (generationOrigins && output.type !== "signal") {
+      const error = workflowConnectionCycleError(nodes, source, targetId, generationOrigins);
+      if (error) return fail(error);
+    }
     const producer = nodes.find(node => node.id === source.nodeId);
     if (source.nodeId && (!producer || !workflowOutputs(producer).some(port => port.id === source.portId && port.type === output.type)))
       return fail("来源卡片或输出已不存在");

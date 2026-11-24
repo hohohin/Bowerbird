@@ -260,6 +260,16 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
     }
   }, [workspaceOpen, videoKey]);
 
+  const audioPlayerMounted = !!audio && contentMounted;
+  useLayoutEffect(() => {
+    if (!audioPlayerMounted || workspaceOpen || closing) return;
+    const surface = surfaceRef.current;
+    const focus = document.activeElement;
+    if (focus === document.body || focus === surface?.querySelector('[aria-label="关闭预览"]')) {
+      surface?.querySelector<HTMLElement>(".audio-detail-player")?.focus({ preventScroll: true });
+    }
+  }, [audioPlayerMounted, workspaceOpen, closing, videoKey]);
+
   function selectAnalysisView(view: VideoAnalysisView | "replication") {
     if (!workspaceOpen) {
       analysisOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -520,7 +530,11 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
     <div ref={hudRef} className="creation-image-preview-hud" hidden={workspaceOpen} aria-hidden={workspaceOpen}>
       <header className="creation-image-preview-image-head">
         <h2>{asset.name}</h2>
-        <button type="button" onClick={close} aria-label="关闭预览" title="关闭预览（Esc）"><X size={17}/></button>
+        <button type="button" onClick={close} aria-label="关闭预览" title="关闭预览（Esc）" onKeyDown={event => {
+          if (!audio || audioPlayerMounted || event.code !== "Space") return;
+          event.preventDefault();
+          event.stopPropagation();
+        }}><X size={17}/></button>
       </header>
       <footer className="creation-image-preview-image-foot">
         <span>{dimensions?.width && dimensions.height ? `${dimensions.width} × ${dimensions.height}` : ""}{asset.ext && <b>{asset.ext.toUpperCase()}</b>}</span>

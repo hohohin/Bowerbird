@@ -9,7 +9,7 @@ use std::{
 };
 use symphonia::core::{
     audio::{AudioBufferRef, SampleBuffer},
-    codecs::{DecoderOptions, CODEC_TYPE_MP3, CODEC_TYPE_NULL},
+    codecs::{CodecType, DecoderOptions, CODEC_TYPE_MP3, CODEC_TYPE_NULL},
     errors::Error as DecodeError,
     formats::{FormatOptions, FormatReader},
     io::MediaSourceStream,
@@ -31,6 +31,14 @@ pub(crate) fn duration(path: &Path) -> AppResult<f64> {
     let (frames, sample_rate, _) = read_frames(path, |_| Ok(()))
         .map_err(|error| AppError::Media(format!("无法读取音频时长：{error:#}")))?;
     Ok(frames as f64 / sample_rate as f64)
+}
+
+pub(crate) fn codec(path: &Path) -> AppResult<CodecType> {
+    let file = File::open(path)?;
+    let format = open_gapless_format(path, file)
+        .map_err(|error| AppError::Media(format!("无法读取音频格式：{error:#}")))?;
+    format.default_track().map(|track| track.codec_params.codec)
+        .ok_or_else(|| AppError::Media("文件没有可读取的音轨".into()))
 }
 
 pub(crate) fn mp3_gapless_duration(path: &Path) -> Option<f64> {

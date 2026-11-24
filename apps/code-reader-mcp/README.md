@@ -17,7 +17,7 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 
 ## Gemini 网页端（已部署，账号连接待验收）
 
-2026-11-19 起，日常快照更新统一使用根目录 `update-mcp.ps1`。它导出一次共享快照并重启 GPT 隧道；正在运行的 Gemini 在下一次工具调用时检查并读取新快照，校验通过后切换，保留原访问／刷新令牌。新文件损坏、超限或暂时缺失时继续使用上一份有效快照，服务日志记录拒绝更新。Gemini 进程未运行时，统一入口会在导出成功后自动后台启动它；已有进程通过健康检查后继续使用，避免清除授权。启动互斥锁防止并发启动重复实例。首次升级旧服务需要重启一次，可能需要重新授权；后续单纯更新快照无需重启。
+根目录 `update-mcp.ps1` 导出当前工作区一次。运行中的 ChatGPT 和 Gemini 在下一次工具调用时校验并读取新快照，Gemini 保留原访问／刷新令牌。新文件损坏、超限或暂时缺失时，两端继续提供上一份有效快照。日志中的 `snapshot-rejected.reason` 区分 `invalid_snapshot`、`size_limit` 和 `read_error`。读错会在下次调用时重试，同一份校验失败的文件只记录一次。Gemini 进程未运行时，统一入口会在导出成功后自动后台启动它。
 
 目标地址为 `https://mcp.bowerbird.cn/mcp`。本机 `http-app.mjs` 复用 `core.mjs` 的四个只读工具与脱敏快照，通过 Streamable HTTP 提供 MCP 2025-03-26／2025-06-18／2025-11-25。HTTP 进程使用与 stdio 相同的 Node 只读文件权限，仅绑定 `127.0.0.1:48731`。公网 Nginx 经受限 SSH 反向转发到本机，VPS 只持有配置和转发公钥。
 
@@ -90,7 +90,21 @@ node --test apps/code-reader-mcp/test/consent.browser.mjs
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\H\Project\Bowerbird\update-mcp.ps1"
 ```
 
-入口复用 `start-tunnel.ps1 -KeyFile ... -UpdateSnapshot`，读取配置后先导出并检查最新快照，成功后停止同一可执行文件、同一项目 profile 的旧隧道，再检查并启动。此本机入口固定使用现有 tunnel ID 和 `http://127.0.0.1:7890` 代理，需保持代理和窗口开启。密钥文件缺失、配置为空或重复时停止操作；导出或覆盖检查失败会保留原快照及原隧道。密钥通过进程环境传给官方隧道客户端，退出时恢复原环境变量。PowerShell 脚本使用 UTF-8 BOM，兼容 Windows PowerShell 5.1；命令中的执行策略只作用于本次 PowerShell 进程。
+入口读取本机配置，导出成功后复用同一可执行文件和项目 profile 的 GPT 隧道，隧道未运行时执行检查并启动。此入口使用现有 tunnel ID 和 `http://127.0.0.1:7890` 代理，首次启动后保持代理和隧道窗口开启。根目录脚本加 `-RestartTunnel` 可强制重启 GPT 端并加载新版服务代码。升级此次修改前已启动的 Gemini 也需重启一次以加载新读取器和元数据字段；有效的持久化授权随启动恢复。日常更新快照无需再重启。密钥文件缺失、配置为空或重复时停止操作。覆盖检查失败时保留原快照和隧道。
+
+## 在本机选择分支
+
+从项目根目录启动控制台，浏览器会自动打开。
+
+```powershell
+pnpm --filter @bowerbird/code-reader-mcp console
+```
+
+在「本地分支」找到目标行并点击「更新快照」。当前分支默认导出工作区中符合筛选规则的文件，勾选「仅导出干净 HEAD」可分享已提交内容。其他本地分支按页面所列的提交在系统临时目录建立 detached worktree，清理后才发布。页面显示导出文件数、脱敏行数和覆盖检查结果。失败时查看页面原因或同目录的覆盖报告。
+
+两端同时使用最近发布的一份快照。调用 `project_overview` 可核对 `branch`、`revision`、`isDirty` 和 `createdAt`。旧快照未记录的分支和工作区状态返回 `null`。直接从 detached 工作区导出时分支标记为 `(detached HEAD)`。控制台只监听本机回环地址，发布操作校验 Host 与同源 Origin。关闭控制台不会停止只读 MCP 服务。
+
+运行 `pnpm --filter @bowerbird/code-reader-mcp test` 可在临时仓库验证切换、失败回退和工作区完整性。已安装 Chrome 和仓库内 Playwright 时，`pnpm --filter @bowerbird/code-reader-mcp test:browser` 还会实际点击分支按钮并验证授权页面。
 
 ## 首次使用（PowerShell）
 
@@ -101,7 +115,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\H\Project\Bowerbird\
    node --test apps/code-reader-mcp/test/security.test.mjs
    ```
 
-   `.local/report.json` 记录筛选结果；`.local/snapshot.json` 是实际会开放给 GPT 的文本。两者都被 Git 忽略。快照可能包含业务源码和内部文档，请在连接前检查分享范围。生成快照不上传任何内容。
+   `.local/report.json` 记录最近一次完成覆盖检查的导出尝试，含门禁失败的诊断。`.local/snapshot.json` 是实际共享给两端的文本，可按 `createdAt` 匹配报告。两者都被 Git 忽略。快照可能包含业务源码和内部文档，请在连接前检查分享范围。生成快照不上传任何内容。
 
 2. 打开官方文档中的 [Platform 隧道设置](https://platform.openai.com/settings/organization/tunnels)，创建私有隧道并关联你使用的 ChatGPT 工作区。记录 `tunnel_id`。创建者需要 Tunnels Read + Manage；运行专用 key 和使用者需要 Tunnels Read + Use。不要直接使用生产服务密钥。
 
@@ -149,7 +163,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\H\Project\Bowerbird\
 
 ## 更新与撤销
 
-委派网页 agent 规划前，先导出当前工作区并重载对应服务，再让规划者实际调用 `project_overview`。核对返回的 `createdAt` 与本地新快照一致，并检查 `coverageCheck`。相同 HEAD 下仍可能有新的未提交改动。
+委派网页 agent 规划前，先导出所需分支，再让规划者调用 `project_overview`。核对分支、提交和导出时间，并检查 `coverageCheck`。相同 HEAD 下仍可能有新的未提交改动。
 
 ### 自动依赖补齐与覆盖检查
 
@@ -161,7 +175,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\H\Project\Bowerbird\
 
 2026-11-16 验证覆盖了 DSH 自动安装／登录／宿主、订阅设置组件和通知消除持久化，以及 Python 原生测试、账户 fixture 和 UI 测试。递归循环、Rust 原始字符串／生命周期、计算路径、关联测试、受限核心依赖失败保留旧快照和旧元数据兼容均有回归。
 
-更新代码后，停止隧道（Ctrl+C），重新运行 `export.mjs`，检查快照后重新启动隧道；运行中的服务保持启动时的内存快照，GPT 无权刷新。`revision` 是导出时 HEAD，**不代表未提交修改已提交**，文件 SHA-256 对应脱敏后内容。
+导出使用随机临时文件并在同目录原子替换，Windows 遇到短暂共享冲突会重试。每个文件在读取和脱敏后分别检查 1 MiB 上限。`revision` 是导出时的 HEAD，`isDirty` 按 Git 工作区状态计算，包含暂存、未暂存和非忽略的未跟踪文件。文件 SHA-256 对应脱敏后实际共享的内容。`project_logs/` 保持排除，该目录存放历史验收和运维记录，代码快照的文档入口是 `PROJECT.md`、`GLOSSARY.md` 和允许的专项文档。
 
 临时停用：Ctrl+C 停隧道。长期撤销：在 ChatGPT 移除连接，并在 Platform 禁用/删除隧道或撤销专用 runtime key。快照是本机副本，可按需删除 `.local`；这不能撤回已进入聊天的文本。
 

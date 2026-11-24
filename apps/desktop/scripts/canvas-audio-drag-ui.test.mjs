@@ -21,16 +21,43 @@ page.setDefaultTimeout(10000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.addInitScript(() => {
-  let bridge;
+  let bridge, overwrittenAudio;
+  let holdFirstOverwriteRefresh = true;
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     get: () => bridge,
     set: value => {
       const invoke = value.invoke;
       value.invoke = async (command, args) => {
+        if (command === 'trim_audio') {
+          if (!args.overwrite) throw new Error('unexpected audio copy');
+          const [original] = await invoke('get_assets_by_ids', { assetIds: ['audio-asset'] });
+          overwrittenAudio = { ...original, duration: args.end - args.start, file_mtime: 2, size: 96044 };
+          window.emitFixtureEvent('library://assets-changed', { overwrittenAudio });
+          return overwrittenAudio;
+        }
+        if (command === 'get_assets_by_ids' && args.assetIds.includes('audio-asset')) {
+          if (window.holdStaleAudioRefresh) {
+            window.holdStaleAudioRefresh = false;
+            const stale = await invoke(command, args);
+            await new Promise(resolve => { window.releaseStaleAudioRefresh = resolve; });
+            window.staleAudioRefreshReturned = true;
+            return stale;
+          }
+          if (!overwrittenAudio) return invoke(command, args);
+          if (holdFirstOverwriteRefresh) {
+            holdFirstOverwriteRefresh = false;
+            // The card should update from the receipt before graph hydration.
+            await new Promise(resolve => { window.releaseAudioRefresh = resolve; });
+          }
+          const assets = await invoke(command, args);
+          window.currentAudioRefreshReturned = true;
+          return assets.map(asset => asset.id === overwrittenAudio.id ? overwrittenAudio : asset);
+        }
         if (command !== 'audio_waveform') return invoke(command, args);
         if (sessionStorage.getItem('hold-audio-waveform')) await new Promise(resolve => { window.releaseWaveform = resolve; });
-        return { sourceVersion: 'fixture-audio', duration: 12, sampleRate: 16000, channels: 1,
-          totalFrames: 192000, framesPerPeak: 1920, peaks: Array.from({ length: 100 }, () => [-.04, .04]) };
+        const seconds = overwrittenAudio?.duration ?? 12, totalFrames = seconds * 16000;
+        return { sourceVersion: overwrittenAudio ? 'fixture-trimmed' : 'fixture-audio', duration: seconds, sampleRate: 16000, channels: 1,
+          totalFrames, framesPerPeak: totalFrames / 100, peaks: Array.from({ length: 100 }, () => [-.04, .04]) };
       };
       bridge = value;
     },
@@ -122,14 +149,44 @@ try {
   });
   await page.reload(); await wave().waitFor();
   assert.deepEqual(await geometry('audio'), beforeAudio, 'saved position survives reload');
+  await page.evaluate(() => {
+    window.holdStaleAudioRefresh = true;
+    window.emitFixtureEvent('external-files://changed');
+  });
+  await page.waitForFunction(() => typeof window.releaseStaleAudioRefresh === 'function');
   await card('audio').locator('.canvas-node-name').click();
   const detail = page.getByRole('dialog', { name: '音频详情', exact: true });
-  await detail.getByRole('region', { name: '音频播放器' }).getByRole('button', { name: '裁剪音频' }).waitFor();
+  const player = detail.getByRole('region', { name: '音频播放器' });
+  await player.getByRole('button', { name: '裁剪音频' }).click();
+  await player.getByRole('spinbutton', { name: '入点秒数' }).fill('2');
+  await player.getByRole('spinbutton', { name: '出点秒数' }).fill('5');
+  await player.getByRole('button', { name: '覆盖原音频', exact: true }).click();
+  await page.getByRole('button', { name: '确认覆盖', exact: true }).click();
+  await player.getByText('已覆盖原音频', { exact: true }).waitFor();
   await detail.getByRole('button', { name: '关闭预览' }).click();
   await detail.waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => typeof window.releaseAudioRefresh === 'function');
+  await card('audio').locator('[data-wave-ready="true"]').waitFor();
+  const bounds = await wave().boundingBox();
+  await wave().hover({ position: { x: bounds.width / 2, y: bounds.height / 2 } });
+  assert.equal(await card('audio').locator('.audio-waveform-time').textContent(), '0:01', 'the card reads the trimmed 3-second waveform');
+  const play = card('audio').locator('.audio-waveform-play');
+  await play.click();
+  await page.waitForFunction(() => {
+    const media = document.querySelector('audio[data-audio-preview]');
+    return media && !media.paused && media.currentSrc.endsWith('audioVersion=fixture-trimmed');
+  });
+  await play.click();
+  await page.evaluate(() => window.releaseAudioRefresh());
+  await page.waitForFunction(() => window.currentAudioRefreshReturned);
+  await page.evaluate(() => window.releaseStaleAudioRefresh());
+  await page.waitForFunction(() => window.staleAudioRefreshReturned);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await wave().hover({ position: { x: bounds.width / 2 - 1, y: bounds.height / 2 } });
+  assert.equal(await card('audio').locator('.audio-waveform-time').textContent(), '0:01', 'a late external-files read cannot restore the old waveform');
   await page.screenshot({ path: `${output}/canvas.png` });
   assert.deepEqual(errors, []);
-  console.log('Canvas audio: loading/ready drag, click seek, playback, cancel, multi-select, undo and reload passed.');
+  console.log('Canvas audio: drag, seek, playback, selection, undo, reload and overwrite waveform refresh passed.');
 } finally {
   await browser.close(); await server.close();
 }

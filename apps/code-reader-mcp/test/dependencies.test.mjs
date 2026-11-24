@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, link } from 'node:fs/promises';
+import fs, { mkdtemp, mkdir, writeFile, readFile, rm, link, readdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { exportSnapshot } from '../export.mjs';
 import { references, candidates } from '../dependencies.mjs';
-import { allowedFile, validateSnapshot, callTool } from '../core.mjs';
+import { allowedFile, validateSnapshot, callTool, MAX_FILE_BYTES, redact } from '../core.mjs';
 
 async function fixture(t) {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'bb-coverage-'));
@@ -84,6 +84,76 @@ test('export closes recursive dependencies and discovers related UI/Python tests
   assert.equal(report.coverage.unresolvedCoreDependencies.length, 0);
   assert.equal(callTool(snapshot, 'project_overview').coverageCheck.relatedTests, 3);
   assert.equal(f.git('status', '--porcelain').toString(), before);
+});
+
+test('regular expressions with quotes, slash classes and escaped slashes do not consume imports', () => {
+  const code = [
+    "const single = /'/g; import './after-single';",
+    'const punctuation = /["//]/u; import "./after-slashes";',
+    String.raw`const match = () => /a\/b"c/i; import './after-escape';`,
+    String.raw`const fake = /from '.\/fake'/; const ratio = 10 / require('./divisor') / 2;`,
+  ].join('\n');
+  assert.deepEqual(references('apps/a/main.ts', code).map(ref => ref.specifier),
+    ['./after-single', './after-slashes', './after-escape', './divisor']);
+});
+
+test('post-redaction size limit preserves the prior snapshot', async t => {
+  const f = await fixture(t);
+  await f.file('PROJECT.md', 'original');
+  await f.track(['PROJECT.md']);
+  await exportSnapshot(f.dir, f.output);
+  const previous = await readFile(f.output);
+  const content = '-----BEGIN PRIVATE KEY-----\n' + 'x\n'.repeat(33000) + '-----END PRIVATE KEY-----';
+  assert.ok(Buffer.byteLength(content) < MAX_FILE_BYTES);
+  assert.ok(Buffer.byteLength(redact(content).content) > MAX_FILE_BYTES);
+  await f.file('PROJECT.md', content);
+  await assert.rejects(exportSnapshot(f.dir, f.output), /Redacted file exceeds 1 MiB/);
+  assert.deepEqual(await readFile(f.output), previous);
+});
+
+test('an unsuccessful rename removes the private temporary file', async t => {
+  const f = await fixture(t);
+  await f.file('PROJECT.md', 'first');
+  await f.track(['PROJECT.md']);
+  await mkdir(f.output);
+  await assert.rejects(exportSnapshot(f.dir, f.output));
+  assert.deepEqual((await readdir(path.dirname(f.output))).sort(), ['repo', 'snapshot.json']);
+});
+
+test('Windows publication retries sharing errors while the old snapshot remains readable', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t);
+  await f.file('PROJECT.md', 'old');
+  await f.track(['PROJECT.md']);
+  await exportSnapshot(f.dir, f.output);
+  const previous = await readFile(f.output);
+  await f.file('PROJECT.md', 'new');
+  const rename = fs.rename;
+  const errors = ['EPERM', 'EBUSY'];
+  const mock = t.mock.method(fs, 'rename', async (from, to) => {
+    assert.deepEqual(await readFile(to), previous);
+    if (errors.length) throw Object.assign(new Error('Sharing conflict'), { code: errors.shift() });
+    return rename(from, to);
+  });
+  await exportSnapshot(f.dir, f.output);
+  assert.equal(mock.mock.callCount(), 3);
+  assert.equal(validateSnapshot(JSON.parse(await readFile(f.output))).files[0].content, 'new');
+  assert.deepEqual((await readdir(path.dirname(f.output))).sort(), ['repo', 'snapshot.json']);
+});
+
+test('direct detached exports record the commit and count untracked working tree changes', async t => {
+  const f = await fixture(t);
+  await f.file('PROJECT.md', 'first');
+  await f.track(['PROJECT.md']);
+  f.git('switch', '--detach', 'HEAD');
+  for (const dirty of [false, true]) {
+    if (dirty) await f.file('untracked.txt', 'not shared');
+    await exportSnapshot(f.dir, f.output);
+    const overview = callTool(JSON.parse(await readFile(f.output)), 'project_overview');
+    assert.equal(overview.branch, '(detached HEAD)');
+    assert.equal(overview.revision, f.git('rev-parse', 'HEAD').toString().trim());
+    assert.equal(overview.isDirty, dirty);
+    assert.equal(overview.fileCount, 1);
+  }
 });
 
 test('an existing linked core dependency fails export and preserves the previous snapshot', async t => {

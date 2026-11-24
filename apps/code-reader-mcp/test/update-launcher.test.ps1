@@ -3,6 +3,7 @@ $fixtureDir = Join-Path ([IO.Path]::GetTempPath()) ('mcp-update-' + [guid]::NewG
 $previousKey = $env:CONTROL_PLANE_API_KEY
 $events = [System.Collections.Generic.List[string]]::new()
 $exportFails = $false
+$hasTunnel = $true
 function Get-Command {
   param($Name, $CommandType, $ErrorAction)
   if ($Name -eq 'node') { [pscustomobject]@{ Source = 'Invoke-FixtureNode' } }
@@ -11,7 +12,7 @@ function Get-Command {
 }
 function Get-CimInstance {
   param($ClassName, $Filter)
-  [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = 'run --profile bowerbird-code-reader-tunnel_fixture'; ProcessId = 123 }
+  if ($hasTunnel) { [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = 'run --profile bowerbird-code-reader-tunnel_fixture'; ProcessId = 123 } }
   [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = 'run --profile other'; ProcessId = 456 }
   [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = 'run --profile bowerbird-code-reader-tunnel_fixture_other'; ProcessId = 789 }
 }
@@ -38,7 +39,7 @@ try {
     [IO.File]::WriteAllText($keyFile, "# local fixture`nMCP_UPDATE_KEY=$value`n")
     $events.Clear()
     & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -KeyFile $keyFile -UpdateSnapshot
-    if (($events -join ',') -ne 'export,stop,doctor,run') { throw 'Incorrect update sequence' }
+    if (($events -join ',') -ne 'export') { throw 'Running tunnel must be reused' }
     if ($env:CONTROL_PLANE_API_KEY -ne 'fixture-original-key') { throw 'Environment not restored' }
   }
   foreach ($invalid in @('', 'MCP_UPDATE_KEY=', "MCP_UPDATE_KEY=a`nMCP_UPDATE_KEY=b")) {
@@ -51,6 +52,14 @@ try {
     if ($env:CONTROL_PLANE_API_KEY -ne 'fixture-original-key') { throw 'Environment not restored on invalid key' }
   }
   [IO.File]::WriteAllText($keyFile, 'MCP_UPDATE_KEY=fixture-file-key')
+  $events.Clear()
+  & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -KeyFile $keyFile -UpdateSnapshot -RestartTunnel
+  if (($events -join ',') -ne 'export,stop,doctor,run') { throw 'Explicit restart sequence failed' }
+  $hasTunnel = $false
+  $events.Clear()
+  & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -KeyFile $keyFile -UpdateSnapshot
+  if (($events -join ',') -ne 'export,doctor,run') { throw 'A stopped tunnel must start after export' }
+  $hasTunnel = $true
   $exportFails = $true
   $events.Clear()
   $rejected = $false

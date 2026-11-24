@@ -65,6 +65,7 @@
 - **用途／关键词**：当前输入、上游结果、预览、自动连线、生成卡投影。
 - **入口**：[canvasSessionOutputs.ts](../../apps/desktop/src/lib/canvasSessionOutputs.ts) 提供 `workflowBindingAssetIds`、`workflowGenerationResultAnchor` 和 `workflowGenerationPreviewIds`。[workflowCanvasCapabilities.ts](../../apps/desktop/src/lib/workflowCanvasCapabilities.ts) 提供 `workflowSourceMediaLabel`。
 - **调用**：从素材、内容格或上游本轮结果解析输入。卡片、引用和断开菜单共用来源名称。绘线和整理取当前可见卡片或单元格的锚点，预览读取当前产物。`workflowGenerationActivity` 根据工作流状态、执行步骤、会话和生成任务识别图片、远程视频与 H3 的运行状态，`workflowGenerationCardProjection` 提供可收纳生成卡的媒体锚点和产物来源。原生读取按实际原件类型区分图片与视频，节点保留原有执行标识。
+- **折叠落点**：拖线到可见产物时，`planAutomaticConnection` 使用 `workflowGenerationOrigins` 提供的实例归属检查自连和循环。`connectAutomatic` 在保存前从原生快照复核，持久化沿原输入绑定。
 - **边界／状态**：精确输入由原端口及编号定位，调度、重跑和提示词引用沿生成卡的输出身份取值。循环、触发器与定向内容写入保留生成卡。悬停预览及固定态沿本轮身份保持运行状态，直到产物可见、失败或取消。[折叠与悬停预览](../CANVAS-WORKFLOW.md#折叠生成卡的悬停预览) · [结果接入下游](../CANVAS-WORKFLOW.md#2026-11-13生成结果接入下游桌面源码待发布)。
 
 ## 读取项目对话摘要和流式正文

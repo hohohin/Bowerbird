@@ -39,8 +39,14 @@ Deno.test("DSH accepts public history, structured skill IDs and minimal card rec
   assertEquals(validateChatInput({ ...base, skill }), { ...base, skill, tools_enabled: false });
   const h3 = { id: "h3-video-prompt", parameters: { mode: "frames", seconds: 5, ratio: "auto", firstFrameCount: 1, lastFrameCount: 0 } } as const;
   assertEquals(validateChatInput({ ...base, skill: h3 }).skill, h3);
+  for (const [mode, lastFrameCount] of [["frames", 0], ["frames", 1], ["reference", 0]] as const) {
+    const draft = { ...h3, parameters: { ...h3.parameters, mode, firstFrameCount: 0, lastFrameCount } };
+    assertEquals(validateChatInput({ ...base, skill: draft }).skill, draft);
+  }
   for (const request of [{ ...base, skill, tools_enabled: true }, { messages, skill }, { ...base, skill: { ...skill, instruction: "override" } },
     { ...base, skill: { ...h3, parameters: { ...h3.parameters, mode: "text" } } },
+    { ...base, skill: { ...h3, parameters: { ...h3.parameters, mode: "reference", firstFrameCount: 0, lastFrameCount: 1 } } },
+    { ...base, skill: { ...h3, parameters: { ...h3.parameters, firstFrameCount: 2 } } },
     { ...base, messages: [{ role: "assistant", content: "old answer" }] },
     { ...base, messages: [{ role: "system", content: "not public" }, ...messages] }]) {
     assertThrows(() => validateChatInput(request), ChatInputError);

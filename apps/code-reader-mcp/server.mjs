@@ -1,7 +1,7 @@
-import { statSync, readFileSync } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { once } from 'node:events';
-import { TOOLS, callTool, validateSnapshot, MAX_SNAPSHOT_BYTES } from './core.mjs';
+import { TOOLS, callTool } from './core.mjs';
+import { createSnapshotReader } from './snapshot-store.mjs';
 
 // Fail closed when someone bypasses the restricted launcher.
 if (!process.permission || process.execArgv.some(arg => /^--(?:allow-fs-write|allow-child-process|allow-worker|allow-addons|allow-wasi|inspect)/.test(arg)) || process.permission.has('fs.write') || process.permission.has('child') ||
@@ -10,10 +10,9 @@ if (!process.permission || process.execArgv.some(arg => /^--(?:allow-fs-write|al
   process.exit(1);
 }
 const snapshotUrl = new URL('./.local/snapshot.json', import.meta.url);
-let snapshot;
+const readSnapshot = createSnapshotReader(snapshotUrl, event => console.error(JSON.stringify(event)));
 try {
-  if (statSync(snapshotUrl).size > MAX_SNAPSHOT_BYTES) throw new Error();
-  snapshot = validateSnapshot(JSON.parse(readFileSync(snapshotUrl, 'utf8')));
+  readSnapshot();
 } catch {
   console.error('Snapshot missing or invalid. Run node export.mjs locally before starting.');
   process.exit(1);
@@ -62,7 +61,7 @@ function dispatch(request) {
   if (request.method !== 'tools/call') return error(-32601, 'Method not found');
   if (!TOOLS.some(t => t.name === request.params?.name)) return error(-32602, 'Unknown tool');
   try {
-    const value = callTool(snapshot, request.params.name, request.params.arguments);
+    const value = callTool(readSnapshot(), request.params.name, request.params.arguments);
     return result({ content: [{ type: 'text', text: JSON.stringify(value) }] });
   } catch (e) {
     return result({ isError: true, content: [{ type: 'text', text: e.message }] });

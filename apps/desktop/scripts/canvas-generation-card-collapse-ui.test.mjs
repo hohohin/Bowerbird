@@ -402,6 +402,225 @@ async function dragMustNotPeek(type) {
   await page.keyboard.press("Escape");
   await preview.waitFor({ state: "detached" });
 }
+
+const resultAnchor = id => stage.locator(`[data-canvas-node-id="${id}"]`);
+const workflowCard = id => stage.locator(`[data-workflow-card="${id}"]`);
+const outputHandle = id => stage.locator(`[data-workflow-material="${id}"] [data-canvas-connect-side="output"], [data-workflow-card="${id}"] [data-canvas-connect-side="output"], [data-canvas-node-id="${id}"] [data-canvas-connect-side="output"]`).first();
+const currentInputs = async () => (await readWorkflow()).nodes.find(node => node.id === "generator").inputs;
+const connectionNotice = page.locator(".canvas-connection-notice");
+
+async function seedConnectionBoard(kind) {
+  await loadInteractionBoard(true);
+  const anchorId = await page.evaluate(async ({ kind }) => {
+    const { newWorkflowNode } = await import("/src/lib/canvasWorkflow.ts");
+    const { DEFAULT_COMFY_VIDEO } = await import("/src/lib/comfyVideo.ts");
+    const { DEFAULT_VIDEO_OPTIONS } = await import("/src/lib/videoGeneration.ts");
+    const { revision, document } = JSON.parse(sessionStorage.getItem("workflow-p"));
+    const canvas = window.snapshot();
+    const base = canvas.nodes.find(node => node.id === "old");
+    const origin = document.nodes.find(node => node.id === "generator");
+    const image = ["image", "menu", "locked"].includes(kind);
+    const local = kind.startsWith("h3"), frames = kind.endsWith("frames");
+    const group = `workflow:${JSON.stringify(["p", origin.id])}`;
+    const anchorId = image ? "generation-session" : local ? "workflow-comfy:fixture-h3" : "gen-output:fixture-video:older:0";
+    const videoConfig = { media: "video", videoChannel: "jimeng", ratio: "16:9", videoOptions: { ...DEFAULT_VIDEO_OPTIONS,
+      kind: frames ? "frames2video" : "multimodal2video", model_version: "seedance2.5" } };
+    canvas.nodes = [
+      { ...base, x: 55, y: 220 },
+      ...canvas.nodes.filter(node => node.id !== "old"),
+      { ...base, id: "second-photo", assetId: "b", x: 150, y: 470,
+        payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: "合成参考 b", width: 190, height: 150 } }) },
+    ];
+    if (!image) {
+      const targetAsset = { id: "output-video", name: "视频产物", ext: "mp4", width: 320, height: 180, duration: 1,
+        store_path: "/fixture/output-video.mp4", thumb_path: window.store.getState().assets.find(asset => asset.id === "a").store_path };
+      const inputAsset = { ...targetAsset, id: "source-video", name: "视频来源", store_path: "/fixture/source-video.mp4" };
+      sessionStorage.setItem("reference-drafts", JSON.stringify([targetAsset, inputAsset]));
+      canvas.nodes = canvas.nodes.filter(node => node.id !== "generation-session" && node.id !== "older-output");
+      const sessionId = "gen-prompt:fixture-video:older:0";
+      const execution = { job_id: "fixture-video", turn_key: "older" };
+      if (!local) canvas.nodes.push({ ...base, id: sessionId, kind: "prompt", role: null, assetId: null, x: origin.x, y: origin.y,
+        payloadJson: JSON.stringify({ ...execution, status: "done", workflow_generation_group: group }) });
+      canvas.nodes.push({ ...base, id: anchorId, role: "output", assetId: targetAsset.id, outputIsVideo: true, x: origin.x, y: origin.y, width: 260, height: 146,
+        payloadJson: JSON.stringify({ schema_version: 1, workflow_source: origin.id, workflow_generation_group: group,
+          ...(!local && { execution }), snapshot: { name: targetAsset.name, width: 320, height: 180 } }) });
+      canvas.nodes.push({ ...base, id: "video-media-source", assetId: inputAsset.id, x: 130, y: 680, width: 260, height: 146,
+        payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: inputAsset.name, width: 320, height: 180 } }) });
+      Object.assign(origin, { ...(local ? { kind: "comfy-video", comfyVideo: { ...DEFAULT_COMFY_VIDEO, mode: frames ? "frames" : "r2v" } }
+        : { generation: videoConfig }), activeSessionNodeId: local ? null : sessionId, sessionNodeIds: local ? [] : [sessionId],
+        resultNodeIds: local ? [anchorId] : [], outputs: { image: { type: "image", assetIds: [targetAsset.id] } } });
+    }
+    document.nodes = [origin];
+    if (kind === "image") {
+      document.nodes.push({ ...newWorkflowNode("generation", 1135, 170, "codex"), id: "dependent",
+        inputs: { image: [{ nodeId: origin.id, portId: "image" }] } });
+      canvas.nodes.push({ ...base, id: "text-source", kind: "note", assetId: null, role: null, x: 1125, y: 590, width: 280, height: 130,
+        payloadJson: JSON.stringify({ schema_version: 1, note_type: "document", title: "文本来源", text: "只连接文字", cells: [], member_ids: [] }) });
+    }
+    if (frames) document.nodes.push({ ...newWorkflowNode("generation", 1110, 183, "jimeng"), id: "video-producer", generation: videoConfig });
+    document.cardNames = { generator: "目标生成卡", [anchorId]: "可见生成结果" };
+    sessionStorage.setItem("workflow-p", JSON.stringify({ revision, document }));
+    sessionStorage.setItem("reference-fixture", JSON.stringify(canvas));
+    return anchorId;
+  }, { kind });
+  await page.reload();
+  await resultAnchor(anchorId).waitFor();
+  await origin.waitFor({ state: "detached" });
+  return anchorId;
+}
+
+async function startConnection(source, target, selection = false) {
+  const sourceControl = selection ? page.getByRole("button", { name: "连接所选素材", exact: true }) : outputHandle(source);
+  if (!selection) await stage.locator(`[data-canvas-node-id="${source}"], [data-workflow-card="${source}"]`).first().hover();
+  const start = await center(sourceControl);
+  const point = await center(resultAnchor(target));
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x, point.y, { steps: 12 });
+  return page.locator(`[data-connection-target="${target}"]`);
+}
+
+async function dropConnection(source, target, selection = false) {
+  const feedback = await startConnection(source, target, selection);
+  try {
+    const label = await feedback.getAttribute("aria-label");
+    assert.equal(label, "可以连接", `${source} over ${target} should target the visible result`);
+    assert.equal(await feedback.evaluate(el => el.classList.contains("is-invalid")), false);
+    assert.equal(await connectionNotice.filter({ hasText: /这张卡片不能接收内容/ }).count(), 0);
+    assert.equal(await origin.count(), 0, "hover validation alone keeps the generator folded");
+  } finally { await page.mouse.up(); }
+}
+
+async function waitForInput(port, expected) {
+  await page.waitForFunction(({ port, expected }) => {
+    const nodes = JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes;
+    return (nodes.find(node => node.id === "generator").inputs[port] ?? []).some(input => Object.entries(expected).every(([key, value]) =>
+      key === "position" ? input.videoFrame?.position === value : input[key] === value));
+  }, { port, expected });
+}
+
+async function assertConnectedAndPinned(anchorId, port, binding) {
+  await waitForInput(port, binding);
+  await stage.locator('[data-workflow-card="generator"][data-workflow-pinned]').waitFor();
+  const [card, anchor] = await Promise.all([origin.boundingBox(), resultAnchor(anchorId).boundingBox()]);
+  assert.ok(card && anchor && card.x + card.width <= anchor.x, "the generator is pinned to the left of its result");
+  await page.waitForFunction(() => document.activeElement?.matches('textarea, [contenteditable="true"]')
+    && document.activeElement.closest('[data-workflow-card="generator"]'));
+}
+
+async function reconnectImageResult() {
+  const anchor = await seedConnectionBoard("image");
+  for (const [source, error, multiple] of [[anchor, null, false], [anchor, /自身/, true], ["dependent", /循环/, false]]) {
+    if (multiple) for (const id of ["old", anchor]) await resultAnchor(id).click({ modifiers: [modifier] });
+    const feedback = await startConnection(source, anchor, multiple);
+    try {
+      if (error || await feedback.count()) assert.match(await feedback.getAttribute("aria-label"), error ?? /自身/);
+    } finally { await page.mouse.up(); }
+    assert.deepEqual(await currentInputs(), {});
+    assert.equal(await origin.count(), 0, "invalid connections leave the generator folded");
+    const point = await blankPoint();
+    await page.mouse.click(point.x, point.y);
+  }
+  await dropConnection("old", anchor);
+  await assertConnectedAndPinned(anchor, "image", { assetNodeId: "old", assetId: "existing" });
+  await origin.locator('[data-workflow-reference-asset="existing"] img').waitFor();
+  await unpin.click();
+  await origin.waitFor({ state: "detached" });
+  await dropConnection("old", anchor);
+  await page.waitForTimeout(250);
+  assert.equal(await origin.count(), 0, "a duplicate binding does not reopen the card");
+  assert.equal((await currentInputs()).image.length, 1);
+  await page.keyboard.press(`${modifier}+z`);
+  await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.find(node => node.id === "generator").inputs.image?.length);
+  const empty = await blankPoint();
+  await page.mouse.click(empty.x, empty.y);
+  for (const id of ["old", "second-photo"]) await resultAnchor(id).click({ modifiers: [modifier] });
+  await dropConnection("old", anchor, true);
+  await assertConnectedAndPinned(anchor, "image", { assetNodeId: "second-photo", assetId: "b" });
+  assert.deepEqual((await currentInputs()).image.map(input => input.assetId), ["existing", "b"]);
+  await origin.locator('[data-workflow-reference-asset="b"] img').waitFor();
+  const prompt = origin.locator('[contenteditable="true"]');
+  const original = await prompt.textContent();
+  await page.keyboard.press("End");
+  await page.keyboard.insertText("校验编辑");
+  await prompt.getByText(/校验编辑/).waitFor();
+  await page.keyboard.press(`${modifier}+z`);
+  await page.waitForFunction(original => document.querySelector('[data-workflow-card="generator"] [contenteditable="true"]')?.textContent === original, original);
+  assert.deepEqual((await currentInputs()).image.map(input => input.assetId), ["existing", "b"], "undoing typed text preserves the most recent connection");
+  await unpin.click();
+  await origin.waitFor({ state: "detached" });
+  await dropConnection("text-source", anchor);
+  await assertConnectedAndPinned(anchor, "text", { canvasNodeId: "text-source" });
+  assert.deepEqual((await currentInputs()).image.map(input => input.assetId), ["existing", "b"]);
+}
+
+async function reconnectWithMenuAndUndo() {
+  const anchor = await seedConnectionBoard("menu");
+  const handle = outputHandle("old");
+  await handle.focus();
+  await handle.press("Enter");
+  await page.getByRole("menu", { name: "添加下游", exact: true }).getByRole("menuitem", { name: "连接已有卡片", exact: true }).click();
+  const items = page.getByRole("menu", { name: "连接已有卡片", exact: true }).getByRole("menuitem");
+  assert.equal(await items.count(), 1, "the folded generator and its current result are one menu candidate");
+  await items.first().click();
+  await assertConnectedAndPinned(anchor, "image", { assetNodeId: "old" });
+  await page.keyboard.press(`${modifier}+z`);
+  await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.find(node => node.id === "generator").inputs.image?.length);
+  assert.equal(await origin.locator('[data-workflow-reference-asset="existing"]').count(), 0);
+  assert.equal(await origin.getAttribute("data-workflow-pinned"), "", "undo keeps the card open for editing");
+}
+
+async function reconnectVideoResult(kind) {
+  const id = await seedConnectionBoard(kind);
+  const local = kind.startsWith("h3"), frames = kind.endsWith("frames");
+  const imagePort = local ? frames ? "first-frame" : "reference-image" : "image";
+  await dropConnection("old", id);
+  await assertConnectedAndPinned(id, imagePort, { assetNodeId: "old", assetId: "existing" });
+  if (local && frames) await origin.locator(".comfy-frame-thumbnail").waitFor();
+  else if (local) await origin.getByRole("group", { name: "参考图片输入" }).getByText("合成参考 existing", { exact: true }).waitFor();
+  else await origin.locator('[data-workflow-reference-asset="existing"] img').waitFor();
+  await unpin.click();
+  await origin.waitFor({ state: "detached" });
+  await dropConnection(frames ? "video-producer" : "video-media-source", id);
+  const menu = page.getByRole("menu", { name: "引用视频", exact: true });
+  await menu.waitFor();
+  const choice = menu.getByRole("menuitem", { name: "引用完整视频", exact: true });
+  assert.equal(await choice.isDisabled(), frames, "the selected mode determines full video support");
+  for (const option of ["引用首帧画面", "引用尾帧画面"]) assert.equal(await menu.getByRole("menuitem", { name: option, exact: true }).isEnabled(), true);
+  assert.equal(await origin.count(), 0, "video choice does not pin an uncommitted connection");
+  const label = local ? "引用尾帧画面" : "引用首帧画面";
+  await (frames ? menu.getByRole("menuitem", { name: label, exact: true }) : choice).click();
+  await assertConnectedAndPinned(id, local ? frames ? "last-frame" : "reference-video" : "image", frames
+    ? { nodeId: "video-producer", portId: "image", position: local ? "last" : "first" }
+    : { assetNodeId: "video-media-source", assetId: "source-video" });
+  if (local && !frames) {
+    await origin.getByRole("group", { name: "参考视频输入" }).getByText("视频来源", { exact: true }).waitFor();
+    assert.equal(await origin.getByRole("textbox", { name: "卡片指令" }).evaluate(input => input === document.activeElement), true);
+    await page.keyboard.press(`${modifier}+z`);
+    await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.find(node => node.id === "generator").inputs["reference-video"]?.length);
+    assert.deepEqual((await currentInputs())["reference-image"].map(input => input.assetId), ["existing"], "first undo in the H3 prompt keeps the earlier image link");
+    assert.equal(await origin.getAttribute("data-workflow-pinned"), "");
+  }
+}
+
+async function rejectConnectionWhileGenerationIsPending() {
+  const anchor = await seedConnectionBoard("locked");
+  await installControlledGeneration();
+  await media.hover();
+  await peek.waitFor();
+  await origin.getByRole("button", { name: "运行此卡片", exact: true }).click();
+  await page.waitForFunction(() => !!window.controlledTurn);
+  await page.evaluate(() => window.controlledTurn.accept());
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem("workflow-p")).document.run?.steps?.generator?.status === "done");
+  assert.equal(await origin.getAttribute("aria-busy"), "true");
+  const feedback = await startConnection("old", anchor);
+  try { assert.match(await feedback.getAttribute("aria-label"), /正在运行|正在使用/); }
+  finally { await page.mouse.up(); }
+  assert.deepEqual(await currentInputs(), {});
+  assert.equal(await origin.getAttribute("data-workflow-pinned"), null, "rejected input leaves the existing Peek presentation intact");
+  await page.evaluate(() => window.controlledTurn.status("failed"));
+  await origin.waitFor({ state: "detached" });
+}
 async function captureThemes(name) {
   for (const theme of ["light", "dark"]) {
     await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
@@ -794,6 +1013,16 @@ try {
   for (const type of ["material", "workflow", "library", "rapid"]) {
     await dragMustNotPeek(type);
     console.log(`PASS ${type}: suppress Peek throughout the drag and on release, then restore hover and click`);
+  }
+  await reconnectImageResult();
+  console.log("PASS folded image target: hover, single and multi-image input, text input, thumbnails, focus, duplicate/self/cycle rejection");
+  await reconnectWithMenuAndUndo();
+  console.log("PASS folded target menu deduplicates the result and Ctrl/Cmd+Z undoes the connection without moving focus first");
+  await rejectConnectionWhileGenerationIsPending();
+  console.log("PASS submitted generation still rejects inputs while its completed workflow step waits for the result");
+  for (const kind of ["remote", "remote-frames", "h3-r2v", "h3-frames"]) {
+    await reconnectVideoResult(kind);
+    console.log(`PASS ${kind} folded result links images and mode-compatible video references, then pins and focuses the source card`);
   }
   assert.deepEqual(errors, []);
 } catch (error) {

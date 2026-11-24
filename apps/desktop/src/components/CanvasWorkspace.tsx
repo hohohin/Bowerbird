@@ -281,7 +281,7 @@ type CanvasUndoEntry =
   | { kind: "names"; projectId: string; before: Record<string, string | undefined> }
   | { kind: "content"; projectId: string; before: ProjectGraphNode; after: ProjectGraphNode; typedAt?: number; restoredMaterials?: CanvasNode[] }
   | { kind: "materials"; projectId: string; before: CanvasNode[]; after: CanvasNode[]; groups: Map<string, CanvasGroup> }
-  | { kind: "workflow"; projectId: string; edit: WorkflowEditUndo }
+  | { kind: "workflow"; projectId: string; edit: WorkflowEditUndo; connectedGenerationId?: string }
   | { kind: "paste"; projectId: string; nodeIds: string[]; groupIds: string[]; workflowIds: string[] }
   | { kind: "removal"; changedFolders?: CanvasFolderNode[]; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup>; workflow?: WorkflowEditUndo | null }
   | { kind: "geometry"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; workflow: WorkflowGeometry[] };
@@ -631,6 +631,7 @@ export function CanvasWorkspace({
   useEffect(() => { if (localFilesOpen) setCanvasLibraryOpen(true); }, [localFilesOpen, setCanvasLibraryOpen]);
 
   const [canvasAssets, setCanvasAssets] = useState<Asset[]>([]);
+  const audioOverwriteRevision = useRef(0);
   const [catalogAssets, setCatalogAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(true);
   const [entryCardIds, setEntryCardIds] = useState<ReadonlySet<string> | null>(EMPTY_ENTRY_CARDS);
@@ -929,6 +930,7 @@ export function CanvasWorkspace({
     (panel?.querySelector<HTMLElement>("textarea") ?? panel)?.focus({ preventScroll: true });
   }, [quickRevision]);
   const [previewMember, setPreviewMember] = useState<{ openedId: string; nodeId: string } | null>(null);
+  const newConnectedTextarea = useRef<HTMLTextAreaElement | null>(null);
   const pinnedCardOffsets = useMemo(() => new Map([...pinnedWorkflowCards].filter(([id]) => generationCardProjection.anchors.has(id) || activeGenerationIds.has(id))),
     [pinnedWorkflowCards, generationCardProjection.anchors, activeGenerationIds]);
   const collapsedGenerationAnchors = useMemo(() => new Map([...generationCardProjection.anchors].filter(([id]) => !pinnedCardOffsets.has(id) && !activeGenerationIds.has(id))),
@@ -937,6 +939,7 @@ export function CanvasWorkspace({
   useEffect(() => {
     const rememberFocus = (event: FocusEvent) => {
       const target = event.target;
+      if (target !== newConnectedTextarea.current) newConnectedTextarea.current = null;
       const id = target instanceof HTMLElement && stageRef.current?.contains(target)
         ? target.closest<HTMLElement>("[data-workflow-card]")?.dataset.workflowCard : undefined;
       lastWorkflowFocus.current = id && target instanceof HTMLElement ? { id, element: target } : null;
@@ -2123,7 +2126,17 @@ export function CanvasWorkspace({
     const unlistenDeletions = subscribeOriginalDeletionCommits(() => {
       if (projectId && activeCanvasRef.current.materialized) scheduleRefresh(projectId, 0);
     });
-    listen("library://assets-changed", () => {
+    listen<{ overwrittenAudio?: Asset } | null>("library://assets-changed", event => {
+      const overwritten = event.payload?.overwrittenAudio;
+      const route = useStore.getState();
+      if (alive && overwritten && projectId && activeCanvasRef.current.id === projectId
+        && isWorkspaceOperationCurrent(projectId, route.activeProjectId, route.projectRoutePending)) {
+        audioOverwriteRevision.current++;
+        // Update the source key immediately, even when graph hydration is deferred.
+        setCanvasAssets(current => current.some(asset => asset.id === overwritten.id)
+          ? current.map(asset => asset.id === overwritten.id ? overwritten : asset)
+          : current);
+      }
       if (projectId && activeCanvasRef.current.materialized) scheduleRefresh(projectId, 40);
     }).then((cleanup) => {
       if (alive) unlistenAssets = cleanup;
@@ -2344,8 +2357,12 @@ export function CanvasWorkspace({
         || !!target.closest('[role="combobox"]')
       );
       if (document.querySelector("[data-context-owner]") || workflowAgentDetail && target?.closest("[data-project-inspector]")) return;
+      const pendingUndo = undoHistoryRef.current[undoHistoryRef.current.length - 1];
+      const connectedPrompt = target instanceof HTMLTextAreaElement && target === newConnectedTextarea.current
+        && pendingUndo?.kind === "workflow" && !!pendingUndo.connectedGenerationId
+        && target.closest("[data-workflow-card]")?.getAttribute("data-workflow-card") === pendingUndo.connectedGenerationId;
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z"
-        && (!editing || !!target?.closest(".canvas-text-grid")) && !event.defaultPrevented && !scopedInspectorOpen && viewModeRef.current === "canvas"
+        && (!editing || connectedPrompt || !!target?.closest(".canvas-text-grid")) && !event.defaultPrevented && !scopedInspectorOpen && viewModeRef.current === "canvas"
         && !nodeDragRef.current && !graphNodeDragRef.current
         && !document.querySelector('[role="dialog"][aria-modal="true"]') && undoHistoryRef.current.length > 0) {
         event.preventDefault();
@@ -3203,8 +3220,15 @@ export function CanvasWorkspace({
     listen("external-files://changed", async () => {
       try {
         const snapshot = await api.projectCanvasGet(targetProjectId);
-        const exact = await api.getAssetsByIds(projectCanvasAssetIds(snapshot.nodes));
-        if (alive) setCanvasAssets(exact);
+        const assetIds = projectCanvasAssetIds(snapshot.nodes);
+        while (alive) {
+          const revision = audioOverwriteRevision.current;
+          const exact = await api.getAssetsByIds(assetIds);
+          // An older file refresh cannot replace a newer overwrite receipt.
+          if (revision !== audioOverwriteRevision.current) continue;
+          if (alive) setCanvasAssets(exact);
+          return;
+        }
       } catch (reason) { if (alive) reportError(reason); }
     }).then(fn => { if (alive) cleanup = fn; else fn(); });
     return () => { alive = false; cleanup?.(); };
@@ -3807,23 +3831,50 @@ export function CanvasWorkspace({
     }
   }
 
-  function pinGenerationCard(nodeId: string) {
+  function focusPinnedGenerationPrompt(nodeId: string, newConnectionPrompt = false) {
+    const stage = stageRef.current;
+    const revision = useStore.getState().projectRouteRevision;
+    requestAnimationFrame(() => {
+      const route = useStore.getState();
+      if (!stage?.isConnected || stageRef.current !== stage || !isWorkspaceOperationCurrent(projectId, route.activeProjectId,
+        route.projectRoutePending, revision, route.projectRouteRevision)) return;
+      const card = stage.querySelector<HTMLElement>(`[data-workflow-card="${CSS.escape(nodeId)}"]`);
+      const prompt = card?.querySelector<HTMLElement>('[aria-label="卡片指令"]:is([contenteditable="true"],textarea:not(:disabled))');
+      if (!prompt) return;
+      if (newConnectionPrompt && prompt instanceof HTMLTextAreaElement) {
+        newConnectedTextarea.current = prompt;
+        // Native text undo consumes its own keystroke after keydown, so only a fresh untouched field can fall back here.
+        prompt.addEventListener("input", () => {
+          if (newConnectedTextarea.current === prompt) newConnectedTextarea.current = null;
+        }, { once: true });
+      }
+      prompt.focus({ preventScroll: true });
+    });
+  }
+
+  function pinGenerationCard(nodeId: string, connectedAnchorId?: string) {
     const anchor = generationCardProjection.anchors.get(nodeId);
     const card = workflowRef.current?.bounds(true).find(item => item.id === nodeId);
     if (!anchor || !card) return;
+    if (connectedAnchorId && (anchor.id !== connectedAnchorId || activeGenerationIds.has(nodeId) || workflow?.startingAction(nodeId))) return;
     if (peekedCard?.nodeId === nodeId && peekAnchorPoint && peekInteraction.current) {
       const { x, y } = peekAnchorPoint;
       const { attemptId } = peekInteraction.current;
       setPinnedWorkflowCards(current => new Map(current).set(nodeId,
         { x: x - card.width - 12 - card.x, y: y - card.y, attemptId }));
       clearPeek();
+      if (connectedAnchorId) {
+        setSelectedCanvasNodeIds(new Set([nodeId]));
+        focusPinnedGenerationPrompt(nodeId);
+      }
       return;
     }
     const anchors = selectionAnchors();
     const imageRect = anchors.find(item => item.id === anchor.id)?.rect ?? anchor;
     const visible = pinnedCardOffsets.has(nodeId) && anchors.find(item => item.id === nodeId)?.rect;
-    const position = visible || placeCanvasCardNearSource({ ...card, x: imageRect.x - card.width - 12, y: imageRect.y },
-      anchors.filter(item => item.id !== card.id).map(item => item.rect));
+    const leftOfMedia = { ...card, x: imageRect.x - card.width - 12, y: imageRect.y };
+    const position = visible || (connectedAnchorId ? leftOfMedia : placeCanvasCardNearSource(leftOfMedia,
+      anchors.filter(item => item.id !== card.id).map(item => item.rect)));
     setPinnedWorkflowCards(current => current.has(nodeId) ? current : new Map(current).set(nodeId,
       { x: position.x - card.x, y: position.y - card.y }));
     setQuickRevision(null);
@@ -3838,13 +3889,15 @@ export function CanvasWorkspace({
         panRef.current, zoomRef.current, true);
       if (next) { panRef.current = next.pan; zoomRef.current = next.zoom; setPan(next.pan); setZoom(next.zoom); markViewDirty(); }
     }
-    requestAnimationFrame(() => stageRef.current?.querySelector<HTMLElement>(`[data-workflow-card="${CSS.escape(nodeId)}"] textarea,[data-workflow-card="${CSS.escape(nodeId)}"] [contenteditable]`)?.focus({ preventScroll: true }));
+    const mountingForConnection = !!connectedAnchorId && !stage?.querySelector(`[data-workflow-card="${CSS.escape(nodeId)}"]`);
+    focusPinnedGenerationPrompt(nodeId, mountingForConnection);
   }
 
   const toggleGenerationPin = useLatestCallback((nodeId: string) => {
     if (pinnedCardOffsets.has(nodeId)) unpinGenerationCard(nodeId);
     else pinGenerationCard(nodeId);
   });
+  const pinConnectedGeneration = useLatestCallback((nodeId: string, anchorId: string) => pinGenerationCard(nodeId, anchorId));
 
   function createCardFromImage(image: CanvasAssetSnapshot, anchorId: string) {
     const anchor = selectionAnchors().find(item => item.id === anchorId)?.rect;
@@ -5359,6 +5412,18 @@ export function CanvasWorkspace({
     });
   }
 
+  const undoGenerationConnection = useLatestCallback((nodeId: string) => {
+    const entry = undoHistoryRef.current[undoHistoryRef.current.length - 1];
+    const route = useStore.getState();
+    if (!entry || entry.kind !== "workflow" || entry.connectedGenerationId !== nodeId
+      || entry.projectId !== activeCanvasRef.current.id || !isWorkspaceOperationCurrent(entry.projectId, route.activeProjectId, route.projectRoutePending)
+      || workspaceRef.current?.closest("[inert]")
+      || scopedInspectorOpen || viewModeRef.current !== "canvas" || nodeDragRef.current || graphNodeDragRef.current
+      || document.querySelector('[data-context-owner], [role="dialog"][aria-modal="true"]')) return false;
+    undoCanvasAction();
+    return true;
+  });
+
   function pushMaterialsUndo(before: CanvasNode[], after: CanvasNode[]) {
     const previous = new Map(before.map(node => [node.id, node])), next = new Map(after.map(node => [node.id, node]));
     const changed = new Set([...previous.keys(), ...next.keys()].filter(id => previous.get(id) !== next.get(id)
@@ -5952,10 +6017,10 @@ export function CanvasWorkspace({
     if (additive) toggleCanvasNodeSelection(id); else setSelectedCanvasNodeIds(new Set([id]));
   });
   const workflowOnNodesChanged = useCallback(() => setWorkflowRevision(value => value + 1), []);
-  const workflowOnEdited = useLatestCallback<Parameters<WorkflowProps["onEdited"]>, void>((before, after) => {
+  const workflowOnEdited = useLatestCallback<Parameters<WorkflowProps["onEdited"]>, void>((before, after, connectedGenerationId) => {
     if (activeCanvasRef.current.id !== projectId) return;
     const edit = workflowEditUndo(before, after);
-    if (edit) pushCanvasUndo({ kind: "workflow", projectId, edit });
+    if (edit) pushCanvasUndo({ kind: "workflow", projectId, edit, connectedGenerationId });
     else {
       const changed = Object.keys(after.cardNames ?? {}).filter(id => before.cardNames?.[id] !== after.cardNames?.[id]);
       if (changed.length) pushCanvasUndo({ kind: "names", projectId, before: Object.fromEntries(changed.map(id => [id, before.cardNames?.[id]])) });
@@ -6439,9 +6504,11 @@ export function CanvasWorkspace({
               "--canvas-workflow-foreground-z": workflowForegroundZ } as CSSProperties}
           >
             {projectId && workflowInteractive && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} getZoom={readCanvasZoom} opening={opening} entryCardIds={entryCardIds} deferredCandidateIds={deferredCandidateIds} graphNodes={nonChatGraphNodes} visibleGraphNodeIds={visibleGraphNodeIds} conversationCards={conversationCards} selectedConversationOutputs={selectedConversationOutputs} imageOnlyConversationIds={imageOnlyConversationIds} sessionHeights={sessionHeights} generationCardAnchors={generationCardProjection.anchors} pinnedCardOffsets={pinnedCardOffsets}
+              generationCardOrigins={generationCardProjection.origins}
               peekCard={peekedCard && peekAnchorPoint ? { ...peekedCard, point: peekAnchorPoint } : undefined}
               generationActivities={generationActivities} activeGenerationIds={activeGenerationIds}
-              onPeekInteraction={onPeekInteraction} onToggleGenerationPin={toggleGenerationPin}
+              onPeekInteraction={onPeekInteraction} onToggleGenerationPin={toggleGenerationPin} onConnectCollapsedGeneration={pinConnectedGeneration}
+              onUndoGenerationConnection={undoGenerationConnection}
               diagnosticTarget={diagnosticTarget} selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={workflowOnSelect}
               onNodesChanged={workflowOnNodesChanged} onEdited={workflowOnEdited}
               onOpenAgent={workflowOnOpenAgent} getChatCardDefaults={agentCardDefaults} onNewAgentChat={workflowOnNewAgentChat} onOpenGeneration={workflowOnOpenGeneration}

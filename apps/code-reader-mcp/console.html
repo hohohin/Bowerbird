@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bowerbird · MCP 快照</title>
+<style>
+:root { color-scheme:light dark; --ink:#212924; --muted:#4e6155; --line:#cdd7ce; --paper:#f5f7f3; --card:white; --button:#235640; }
+@media(prefers-color-scheme:dark) { :root { --ink:#e7eee8; --muted:#afc3b5; --line:#3c4f42; --paper:#161e19; --card:#1d2921; --button:#346c50; } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.55 "Source Sans 3","Microsoft YaHei",sans-serif; }
+main { max-width:1000px; margin:clamp(24px,6vw,80px) auto; padding:0 20px; }
+h1 { font-size:clamp(28px,4vw,42px); letter-spacing:-.04em; margin:0 0 24px; }
+h2 { font-size:19px; margin:0; }
+section { margin:0 0 24px; padding:20px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+dl { display:flex; flex-wrap:wrap; gap:12px 28px; margin:16px 0 0; }
+dt,th { font-size:13px; color:var(--muted); font-weight:500; }
+dd { margin:3px 0 0; overflow-wrap:anywhere; }
+code { font-family:"IBM Plex Mono",Consolas,monospace; }
+header { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+.scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; margin-top:12px; }
+th,td { padding:12px 8px; text-align:left; border-bottom:1px solid var(--line); }
+td:first-child { min-width:125px; overflow-wrap:anywhere; }
+td:last-child { text-align:right; }
+small { display:block; color:var(--muted); }
+button { font:inherit; cursor:pointer; white-space:nowrap; color:white; background:var(--button); border:1px solid var(--line); border-radius:6px; padding:6px 12px; }
+#reload { color:var(--ink); background:var(--card); }
+button:disabled { opacity:.5; cursor:wait; }
+label { font-size:14px; white-space:nowrap; }
+#job { margin:12px 0 0; overflow-wrap:anywhere; }
+#job:empty { margin:0; }
+</style>
+<script src="/console.js" type="module"></script>
+</head>
+<body><main>
+<h1>Bowerbird MCP 快照</h1>
+<section aria-labelledby="published"><h2 id="published">已发布快照</h2><dl id="snapshot"></dl></section>
+<section aria-labelledby="local"><header><h2 id="local">本地分支</h2><button id="reload">刷新列表</button></header>
+<p>更新后，GPT 和 Gemini 在下次读取时使用所选分支的快照。</p>
+<div class="scroll"><table><thead><tr><th>分支</th><th>提交</th><th>提交时间</th><th>导出内容</th><th>操作</th></tr></thead><tbody id="branches"></tbody></table></div>
+<p id="job" role="status" aria-live="polite"></p>
+</section>
+</main></body></html>

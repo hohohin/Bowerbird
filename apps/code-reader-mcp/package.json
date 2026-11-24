@@ -6,8 +6,9 @@
   "engines": { "node": ">=24.10.0" },
   "scripts": {
     "snapshot": "node export.mjs",
+    "console": "node branch-console.mjs",
     "start": "node run.mjs",
     "test": "node --test test/*.test.mjs",
-    "test:browser": "node --test test/consent.browser.mjs"
+    "test:browser": "node --test test/*.browser.mjs"
   }
 }

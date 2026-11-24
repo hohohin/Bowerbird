@@ -22,7 +22,7 @@
 | 异步 Agent Run、DSH/ACP、Tool Gateway、扩围与退役恢复 | [统一 Harness](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) · [Worker README](apps/agent-worker/README.md) · [运维与回退](apps/agent-worker/UNIFIED-HARNESS-RUNBOOK.md) |
 | Agent Kernel、内置 Skill、独立视觉规范与临时工作区 | [Agent Runtime](dev-doc/AGENT-RUNTIME-PLAN.md) · [品牌提示词维护](apps/agent-worker/src/prompts/brand-visual/README.md) |
 | 受限 HTML 排版、离线 renderer、整页和切片 | [HTML Render](dev-doc/HTML-RENDER-PLAN.md) |
-| 源码只读分享、GPT 隧道、Gemini OAuth、快照脱敏及刷新 | [代码 MCP](apps/code-reader-mcp/README.md) |
+| 源码只读分享、本机分支控制台、GPT 隧道、Gemini OAuth、快照脱敏及刷新 | [代码 MCP](apps/code-reader-mcp/README.md) |
 | 画板、项目、线程、历史迁移及 SQLite 模型 | [项目画板](dev-doc/PROJECT-CANVAS-PLAN.md) |
 | 工作流卡片、端口、发条、循环及运行恢复 | [画板工作流](dev-doc/CANVAS-WORKFLOW.md) |
 | 本机目录、连接、分身、随图资料、共享原件与删除 | [文件工作区](dev-doc/FOLDER-MODE.md) |

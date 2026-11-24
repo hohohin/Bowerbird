@@ -44,6 +44,43 @@ try {
     };
     api.projectThreadCreate = async () => { runs++; throw Error('connecting must not execute'); };
     api.getAssetsByIds = async ids => ids.map(id => ({ id, duration: ['video', 'audio'].includes(id) ? 10 : null, store_path: `${id}.${id === 'video' ? 'mp4' : id === 'audio' ? 'mp3' : 'png'}` }));
+    {
+      const projectId = 'collapsed-runtime', checkpoint = 'gen-prompt:job:turn:0';
+      const generated = { ...newWorkflowNode('generation', 0, 0, 'codex'), id: 'generated', sessionNodeIds: [checkpoint] };
+      const gallery = { ...table, projectId, id: checkpoint, threadId: null, kind: 'prompt',
+        payloadJson: JSON.stringify({ job_id: 'job', turn_key: 'turn', status: 'done' }) };
+      const original = { ...table, projectId, id: 'generated-photo', threadId: null, kind: 'asset', assetId: 'photo', role: 'output',
+        payloadJson: JSON.stringify({ execution: { job_id: 'job', turn_key: 'turn' } }) };
+      const copied = { ...original, id: 'copied-photo', role: 'reference', payloadJson: '{}' };
+      const unrelated = { ...newWorkflowNode('generation', 0, 0, 'codex'), id: 'unrelated' };
+      const exact = { type: 'image', media: 'image', binding: { assetId: original.assetId, assetNodeId: original.id } };
+      const duplicate = { ...exact, binding: { ...exact.binding, assetNodeId: copied.id } };
+      const reader = { ...newWorkflowNode('generation', 0, 0, 'codex'), id: 'reader', inputs: { image: [exact.binding] } };
+      canvas.nodes.push(gallery, original, copied);
+      const collapsed = new CanvasWorkflowController(projectId);
+      await collapsed.load();
+      await collapsed.edit([generated, reader, unrelated]);
+      const target = { nodeId: generated.id, collapsedAnchorId: gallery.id };
+      const rejectConnection = async (output, receiver, reason) => {
+        const saved = saves;
+        let message;
+        try { await collapsed.connectAutomatic([output], receiver); } catch (error) { message = String(error); }
+        check(message?.includes(reason) && saves === saved, `collapsed connection rejects ${reason} without a save: ${message}`);
+      };
+      await rejectConnection(exact, target, '自身');
+      await rejectConnection({ type: 'image', binding: { nodeId: reader.id, portId: 'image' } }, target, '循环');
+      await rejectConnection(duplicate, { ...target, nodeId: unrelated.id }, '接收卡片已变化');
+      await rejectConnection(duplicate, { ...target, collapsedAnchorId: copied.id }, '接收卡片已变化');
+      await collapsed.saveRun({ id: 'pending-output', startId: generated.id, threadId: 'thread', status: 'done', order: [generated.id],
+        steps: { [generated.id]: { status: 'done', generationSubmission: 'submitted', jobId: 'new', turnKey: 'new-turn' } } });
+      await rejectConnection(duplicate, target, '正在运行');
+      await collapsed.save({ ...collapsed.document, run: null, runs: [] });
+      await collapsed.connectAutomatic([duplicate], target);
+      const binding = collapsed.document.nodes.find(node => node.id === generated.id).inputs.image[0];
+      check(binding.assetId === original.assetId && binding.assetNodeId === copied.id && !binding.nodeId,
+        'the same Asset ID in a separately placed copy remains an exact static input');
+      canvas.nodes.splice(1);
+    }
     const controller = new CanvasWorkflowController('auto-runtime'); await controller.load();
     const source = { ...newWorkflowNode('instruction', 0, 0, 'codex'), id: 'source', action: 'reuse',
       outputs: { text: { type: 'text', text: 'reference text' }, image: { type: 'image', assetIds: ['photo'] } } };

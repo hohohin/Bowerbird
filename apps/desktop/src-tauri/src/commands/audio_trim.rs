@@ -6,6 +6,11 @@ use std::{
 };
 
 use rusqlite::{params, OptionalExtension};
+use symphonia::core::codecs::{
+    CODEC_TYPE_ADPCM_IMA_WAV, CODEC_TYPE_ADPCM_MS, CODEC_TYPE_PCM_ALAW, CODEC_TYPE_PCM_F32LE,
+    CODEC_TYPE_PCM_F64LE, CODEC_TYPE_PCM_MULAW, CODEC_TYPE_PCM_S16LE, CODEC_TYPE_PCM_S24LE,
+    CODEC_TYPE_PCM_S32LE, CODEC_TYPE_PCM_U8,
+};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tempfile::Builder;
 
@@ -47,7 +52,11 @@ pub async fn trim_audio(
             tracing::warn!(%error, asset_id = %asset.id, "could not add trimmed audio to preview scope");
         }
     }
-    let _ = app.emit("library://assets-changed", ());
+    if overwrite {
+        let _ = app.emit("library://assets-changed", serde_json::json!({"overwrittenAudio": &asset}));
+    } else {
+        let _ = app.emit("library://assets-changed", ());
+    }
     Ok(asset)
 }
 
@@ -134,7 +143,16 @@ fn trim(
 
 fn encode(source: &Path, output: &Path, log: &Path, extension: &str, start: f64, end: f64) -> AppResult<()> {
     let encoder = match extension {
-        "wav" => "pcm_s24le",
+        "wav" => match audio::codec(source)? {
+            CODEC_TYPE_PCM_U8 => "pcm_u8",
+            CODEC_TYPE_PCM_S16LE | CODEC_TYPE_PCM_ALAW | CODEC_TYPE_PCM_MULAW
+            | CODEC_TYPE_ADPCM_IMA_WAV | CODEC_TYPE_ADPCM_MS => "pcm_s16le",
+            CODEC_TYPE_PCM_S24LE => "pcm_s24le",
+            CODEC_TYPE_PCM_S32LE => "pcm_s32le",
+            CODEC_TYPE_PCM_F32LE => "pcm_f32le",
+            CODEC_TYPE_PCM_F64LE => "pcm_f64le",
+            _ => return Err(AppError::Media("此 WAV 编码不支持裁剪".into())),
+        },
         "mp3" => "libmp3lame",
         "flac" => "flac",
         "m4a" => "aac",
@@ -144,9 +162,10 @@ fn encode(source: &Path, output: &Path, log: &Path, extension: &str, start: f64,
     let binary = tools::resolve(Tool::Ffmpeg)
         .map_err(|error| AppError::Media(format!("裁剪音频需要本机 FFmpeg：{error}")))?;
     let mut command = tools::command(binary);
-    command.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-ss", &format!("{start:.6}"), "-i"])
+    command.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"])
         .arg(source)
-        .args(["-t", &format!("{:.6}", end - start), "-map", "0:a:0", "-vn", "-sn", "-dn", "-c:a", encoder])
+        // Trim decoded samples at the requested time without depending on demuxer seek points.
+        .args(["-ss", &format!("{start:.6}"), "-t", &format!("{:.6}", end - start), "-map", "0:a:0", "-vn", "-sn", "-dn", "-c:a", encoder])
         .arg(output);
     media_trim::run_encoder(&mut command, log, "音频")
 }

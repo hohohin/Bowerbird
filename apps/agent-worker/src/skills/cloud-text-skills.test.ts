@@ -1,5 +1,5 @@
 import { test } from "node:test";
-import { equal, ok, throws } from "node:assert/strict";
+import { deepEqual, equal, ok, throws } from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +32,30 @@ test("legacy H3 clients use the server method, never their submitted skill body"
   const prompt = textRewritePrompt(legacy, "cat", skill);
   ok(!prompt.includes("CLIENT_BODY_MUST_NOT_EXECUTE"));
   ok(prompt.includes("Ref2VA"));
+});
+
+test("H3 pre-optimization preserves empty picture slots and the selected mode across resume", () => {
+  for (const [mode, lastFrameCount, route] of [
+    ["frames", 0, "`lastFrameCount === 0` → I2VA"],
+    ["frames", 1, "`lastFrameCount === 1` → FL2VA"],
+    ["reference", 0, "单图 Ref2VA，使用六字段并引用 `<Picture 1>`"],
+  ] as const) {
+    const params = { ...parameters, mode, firstFrameCount: 0, lastFrameCount };
+    const goal = request("h3-video-prompt", params);
+    const skill = resolveCloudTextSkill(goal)!;
+    const resumed = validateCloudTextSkillSnapshot(JSON.parse(JSON.stringify(skill)));
+    deepEqual(resumed.parameters, params);
+    const prompt = textRewritePrompt(goal, "镜头缓缓拉远", resumed);
+    ok(prompt.includes(route));
+    ok(prompt.includes('"firstFrameCount":0'));
+    ok(prompt.includes(`"lastFrameCount":${lastFrameCount}`));
+  }
+  for (const invalid of [
+    { mode: "frames", firstFrameCount: 2 }, { mode: "frames", firstFrameCount: "0" },
+    { mode: "frames", lastFrameCount: 2 }, { mode: "reference", firstFrameCount: 0, lastFrameCount: 1 },
+  ]) {
+    throws(() => resolveCloudTextSkill(request("h3-video-prompt", { ...parameters, ...invalid })), /cloud_text_skill_parameters_invalid/);
+  }
 });
 
 test("H3 optimization carries only the presence of a recording in all video modes", () => {

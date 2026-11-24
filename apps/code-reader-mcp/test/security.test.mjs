@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, symlink, link, rm, copyFile } from 'node:fs/promises';
+import fs from 'node:fs';
+import { mkdtemp, mkdir, writeFile, readFile, symlink, link, rm, copyFile, rename, truncate } from 'node:fs/promises';
+import { once } from 'node:events';
+import { createInterface } from 'node:readline';
 import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { allowedFile, safePath, redact, digest, validateSnapshot, callTool, TOOLS } from '../core.mjs';
+import { allowedFile, safePath, redact, digest, validateSnapshot, callTool, TOOLS, MAX_SNAPSHOT_BYTES } from '../core.mjs';
+import { createSnapshotReader } from '../snapshot-store.mjs';
 import { readSource, exportSnapshot } from '../export.mjs';
 
 const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -31,6 +35,7 @@ test('path policy rejects escapes, secrets, generated data and binary files', ()
   assert.equal(allowedFile('apps/desktop/src-tauri/src/commands/projects.rs'), true);
   assert.equal(allowedFile('GLOSSARY.md'), true);
   assert.equal(allowedFile('unreviewed.md'), false);
+  assert.equal(allowedFile('project_logs/README.md'), false);
 });
 
 test('credential filtering preserves line numbers and removes private key blocks', () => {
@@ -45,6 +50,9 @@ test('credential filtering preserves line numbers and removes private key blocks
 
 test('snapshot rejects corrupted, duplicated and forbidden files', () => {
   assert.doesNotThrow(() => validateSnapshot(sample()));
+  assert.equal(callTool(sample(), 'project_overview').isDirty, null);
+  assert.equal(callTool(sample(), 'project_overview').branch, null);
+  for (const metadata of [{ branch: '' }, { isDirty: 'false' }]) assert.throws(() => validateSnapshot({ ...sample(), ...metadata }));
   for (const file of [makeFile('../secret', 'x'), makeFile('apps/a/.env', 'x'), { ...makeFile('PROJECT.md', 'x'), sha256: 'wrong' }]) {
     assert.throws(() => validateSnapshot({ ...sample(), files: [file] }));
   }
@@ -75,7 +83,7 @@ test('responses remain bounded for very long source lines', () => {
   assert.ok(result.lines[0].text.endsWith('[LINE TRUNCATED]'));
 });
 
-test('export includes the tracked glossary and reviewed untracked files while enforcing redaction and exclusions', async t => {
+test('export includes tracked review files, excludes unrelated untracked files and records working tree metadata', async t => {
   const dir = await temporary(t);
   const root = path.join(dir, 'repo');
   await mkdir(root);
@@ -100,11 +108,15 @@ test('export includes the tracked glossary and reviewed untracked files while en
     await mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await writeFile(path.join(root, file), 'reviewed source\nAPI_KEY=abcdefghijklmnop');
   }
+  git('add', '--', ...reviewFiles);
   await writeFile(path.join(root, 'apps/desktop/src/lib/unreviewed.ts'), 'excluded');
   const status = git('status', '--porcelain').toString();
   const out = path.join(dir, 'snapshot.json');
   const report = await exportSnapshot(root, out);
   const snapshot = validateSnapshot(JSON.parse(await readFile(out, 'utf8')));
+  const overview = callTool(snapshot, 'project_overview');
+  assert.equal(overview.branch, git('branch', '--show-current').toString().trim());
+  assert.equal(overview.isDirty, true);
   assert.equal(report.exportedFiles, 2 + reviewFiles.length);
   assert.equal(snapshot.files.find(file => file.path === 'PROJECT.md').content, 'current edit');
   assert.deepEqual(callTool(snapshot, 'read_file', { path: 'GLOSSARY.md' }).lines.map(line => line.text), [
@@ -140,7 +152,7 @@ test('export rejects junction traversal, hardlinks, binary and oversize files', 
 
 async function fixtureServer(t) {
   const dir = await temporary(t);
-  for (const name of ['run.mjs', 'server.mjs', 'core.mjs', 'package.json']) await copyFile(path.join(here, name), path.join(dir, name));
+  for (const name of ['run.mjs', 'server.mjs', 'core.mjs', 'snapshot-store.mjs', 'package.json']) await copyFile(path.join(here, name), path.join(dir, name));
   await mkdir(path.join(dir, '.local'));
   await writeFile(path.join(dir, '.local', 'snapshot.json'), JSON.stringify(sample()));
   return dir;
@@ -159,6 +171,61 @@ async function converse(dir, input) {
 const rpc = (id, method, params) => JSON.stringify({ jsonrpc: '2.0', ...(id === undefined ? {} : { id }), method, params });
 const init = rpc(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
 const ready = rpc(undefined, 'notifications/initialized');
+
+test('transient failures retry the same signature, invalid snapshots are logged once without file details', async t => {
+  const dir = await temporary(t);
+  const file = path.join(dir, 'snapshot.json');
+  const events = [];
+  const reader = createSnapshotReader(file, event => events.push(event));
+  await writeFile(file, JSON.stringify(sample()));
+  let previous = reader();
+  for (const code of ['EPERM', 'EBUSY', 'ENOENT']) {
+    await writeFile(file + '.new', JSON.stringify({ ...sample(), revision: code }));
+    await rename(file + '.new', file);
+    const mock = t.mock.method(fs, 'readFileSync', () => { throw Object.assign(new Error(file), { code }); });
+    try { assert.equal(reader(), previous); }
+    finally { mock.mock.restore(); }
+    assert.deepEqual(events.at(-1), { event: 'snapshot-rejected', reason: 'read_error', retainedCreatedAt: previous.createdAt });
+    previous = reader();
+    assert.equal(previous.revision, code);
+  }
+  for (const [data, reason] of [['{', 'invalid_snapshot'], [JSON.stringify({ ...sample(), files: [{ ...sample().files[0], sha256: 'wrong' }] }), 'invalid_snapshot'], [null, 'size_limit']]) {
+    await writeFile(file + '.new', data ?? '');
+    if (data === null) await truncate(file + '.new', MAX_SNAPSHOT_BYTES + 1);
+    await rename(file + '.new', file);
+    const count = events.length;
+    assert.equal(reader(), previous);
+    assert.equal(reader(), previous);
+    assert.deepEqual(events.slice(count), [{ event: 'snapshot-rejected', reason, retainedCreatedAt: previous.createdAt }]);
+  }
+});
+
+test('one restricted stdio session hot-loads an atomic replacement and retains it after a bad export', { timeout: 15000 }, async t => {
+  const dir = await fixtureServer(t);
+  const child = spawn(process.execPath, [path.join(dir, 'run.mjs')], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+  const done = once(child, 'close');
+  t.after(async () => { child.stdin.end(); await done; });
+  const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+  async function tool(id, name, args = {}) {
+    child.stdin.write(rpc(id, 'tools/call', { name, arguments: args }) + '\n');
+    const { value } = await lines.next();
+    return JSON.parse(JSON.parse(value).result.content[0].text);
+  }
+  child.stdin.write(init + '\n' + ready + '\n');
+  assert.equal(JSON.parse((await lines.next()).value).id, 1);
+  assert.equal((await tool(2, 'project_overview')).branch, null);
+  const file = path.join(dir, '.local', 'snapshot.json');
+  const next = { ...sample(), branch: 'feature/new', isDirty: false, revision: 'new', files: [makeFile('PROJECT.md', 'New branch contents')] };
+  await writeFile(file + '.tmp', JSON.stringify(next));
+  await rename(file + '.tmp', file);
+  const overview = await tool(3, 'project_overview');
+  assert.deepEqual([overview.branch, overview.revision, overview.isDirty], ['feature/new', 'new', false]);
+  await writeFile(file + '.tmp', '{bad');
+  await rename(file + '.tmp', file);
+  assert.equal((await tool(4, 'read_file', { path: 'PROJECT.md' })).lines[0].text, 'New branch contents');
+  child.stdin.end();
+  assert.equal((await done)[0], 0);
+});
 
 test('real restricted stdio process negotiates MCP and rejects writes/escapes', async t => {
   const dir = await fixtureServer(t);

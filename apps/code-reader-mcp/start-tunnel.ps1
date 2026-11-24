@@ -6,6 +6,7 @@
   [string]$ControlPlaneProxy = '',
   [string]$KeyFile = '',
   [switch]$UpdateSnapshot,
+  [switch]$RestartTunnel,
   [switch]$Configure,
   [switch]$EnsureGemini
 )
@@ -61,6 +62,7 @@ try {
     try { $env:CONTROL_PLANE_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyPointer) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($keyPointer); $secureKey.Dispose() }
   }
+  $reuseTunnel = $false
   if ($UpdateSnapshot) {
     & $nodeCommand (Join-Path $PSScriptRoot 'export.mjs')
     if ($LASTEXITCODE -ne 0) { throw '快照导出失败，现有隧道继续使用原快照。' }
@@ -68,9 +70,16 @@ try {
       $_.ExecutablePath -eq $tunnelCommand -and $_.CommandLine -match ([regex]::Escape($profileName) + '(?![A-Za-z0-9_-])') -and $_.CommandLine -match '\brun\b'
     })
     if ($targets.Count -gt 1) { throw '发现多个同项目隧道，请先关闭多余窗口。' }
-    foreach ($target in $targets) { Stop-Process -Id $target.ProcessId -ErrorAction Stop }
+    if ($targets.Count -eq 1) {
+      if ($RestartTunnel) { Stop-Process -Id $targets[0].ProcessId -ErrorAction Stop }
+      else { $reuseTunnel = $true }
+    }
   }
   if ($EnsureGemini) { & (Join-Path $PSScriptRoot 'ensure-gemini.ps1') }
+  if ($reuseTunnel) {
+    Write-Host 'Snapshot updated. The running tunnel will load it on the next tool call.'
+    return
+  }
   & $tunnelCommand doctor --profile $profileName --profile-dir $profileDir --mcp.stdio-send-initialized-notification --explain @proxyArgs
   if ($LASTEXITCODE -ne 0) { throw '隧道检查未通过；首次运行或隧道 ID 变化时请加 -Configure。' }
   & $tunnelCommand run --profile $profileName --profile-dir $profileDir --mcp.stdio-send-initialized-notification --health.listen-addr 127.0.0.1:0 --health.url-file (Join-Path $PSScriptRoot '.local/health.url') @proxyArgs

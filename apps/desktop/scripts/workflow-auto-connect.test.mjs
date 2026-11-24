@@ -67,6 +67,43 @@ const connect = (target, outputs) => {
   return { ...target, inputs };
 };
 
+test('a collapsed receiver rejects its exact generated instances and edges from their downstream readers', () => {
+  const target = node('generator');
+  const original = { type: 'image', media: 'image', binding: { assetId: 'image', assetNodeId: 'generated-image' } };
+  const copy = { ...original, binding: { ...original.binding, assetNodeId: 'copied-image' } };
+  const gallery = { type: 'image', binding: { canvasNodeId: 'gallery', cellId: 'image' } };
+  const reader = node('reader', 'generation', { inputs: { image: [original.binding] } });
+  const origins = new Map([['generated-image', target], ['gallery', target], ['reader-result', reader]]);
+  const plan = output => planAutomaticConnection([target, reader], [output], target.id, origins);
+  assert.match(plan(original).error, /自身/);
+  assert.match(plan(gallery).error, /自身/);
+  assert.match(plan({ ...original, binding: { nodeId: reader.id, portId: 'image' } }).error, /循环/);
+  assert.match(plan({ ...original, binding: { assetId: 'other', assetNodeId: 'reader-result' } }).error, /循环/);
+  assert.deepEqual(plan(copy).bindings[0].binding, { ...copy.binding, mediaFilter: ['image'] });
+  assert.equal(plan({ ...original, binding: { assetId: 'image' } }).bindings.length, 1);
+  assert.equal(planAutomaticConnection([target], [original], target.id).bindings.length, 1, 'ordinary static reference keeps its existing contract');
+  const oldStaticReference = { ...target, inputs: { image: [original.binding] } };
+  assert.equal(planAutomaticConnection([oldStaticReference], [copy], target.id, origins).bindings.length, 1,
+    'an existing static reference does not prevent a different source from being connected');
+});
+
+test('collapsed video self-connection is rejected for the full video and both saved frame positions', () => {
+  const target = node('video', 'generation', { generation: { media: 'video' } });
+  const output = { type: 'image', media: 'video', binding: { assetId: 'clip', assetNodeId: 'generated-video' } };
+  const origins = new Map([['generated-video', target]]);
+  const firstOrLast = position => ({ ...output, media: 'image', binding: { ...output.binding, videoFrame: { position, assetId: `${position}-frame` } } });
+  for (const candidate of [output, firstOrLast('first'), firstOrLast('last')]) {
+    const plan = planAutomaticConnection([target], [candidate], target.id, origins);
+    assert.match(plan.error, /自身/);
+    assert.deepEqual(plan.bindings, []);
+  }
+  const copy = firstOrLast('last');
+  copy.binding.assetNodeId = 'copied-video';
+  const plan = planAutomaticConnection([target], [copy], target.id, origins);
+  assert.deepEqual(plan.bindings[0].binding.videoFrame, { position: 'last', assetId: 'last-frame' });
+  assert.equal(plan.bindings[0].binding.assetNodeId, 'copied-video');
+});
+
 test('completion accepts separate native conversations, deduplicates each and rejects content cards', () => {
   const first = { type: 'image', binding: { canvasNodeId: 'conversation-1', cellId: 'image' } };
   const second = { type: 'image', binding: { canvasNodeId: 'conversation-2', cellId: 'image' } };

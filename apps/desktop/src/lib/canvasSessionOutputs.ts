@@ -231,11 +231,15 @@ export function contentRoutedWorkflowSessionIds(nodes: readonly CanvasNode[], wo
   return workflowSessionIds(workflow.filter(node => sources.has(node.id) && node.generation?.media !== "video"));
 }
 
+/** Exact generation ownership is also used when a collapsed result serves as a connection target. */
+export function workflowGenerationOrigins(document: CanvasWorkflow, nodes: readonly CanvasNode[]) {
+  return generationOrigins(document.nodes.filter(collapsibleGenerationCard), nodes, workflowRuns(document));
+}
+
 /** Compute the current projected media without mutating workflow or generation history. */
 export function workflowGenerationCardProjection(document: CanvasWorkflow, nodes: readonly CanvasNode[],
   conversations: ReturnType<typeof canvasConversationCards>, unavailable: ReadonlySet<string> = new Set()) {
-  const runs = workflowRuns(document);
-  const origins = generationOrigins(document.nodes.filter(collapsibleGenerationCard), nodes, runs);
+  const origins = workflowGenerationOrigins(document, nodes);
   const exempt = contentRoutedWorkflowSourceIds(nodes, document.nodes);
   const descendants = new Set(document.nodes.filter(node => node.kind === "loop" || node.kind === "trigger").map(node => node.id));
   if (descendants.size) {
@@ -250,7 +254,7 @@ export function workflowGenerationCardProjection(document: CanvasWorkflow, nodes
     for (const id of descendants) for (const child of followers.get(id) ?? []) descendants.add(child);
   }
   for (const id of descendants) exempt.add(id);
-  for (const run of runs) if (workflowRunActive(run)) for (const id of run.loop?.bodyIds ?? []) exempt.add(id);
+  for (const run of workflowRuns(document)) if (workflowRunActive(run)) for (const id of run.loop?.bodyIds ?? []) exempt.add(id);
   for (const trigger of document.nodes.filter(node => node.kind === "trigger")) for (const input of Object.values(trigger.inputs).flat()) {
     const source = input.nodeId ?? origins.get(input.canvasNodeId ?? input.pendingCompletionSession ?? "")?.id;
     if (source) exempt.add(source);

@@ -340,14 +340,30 @@ export function workflowConnectionError(nodes: WorkflowNode[], fromId: string, p
   if (to.kind === "trigger" && inputId === "completion") return output && from.kind !== "trigger" && !from.textSource ? null : "请连接执行卡片的输出端口";
   const input = inputId === "signal" && to.kind !== "trigger" && to.kind !== "planner" ? { type: "signal" } : workflowInputs(to).find(port => port.id === inputId);
   if (!output || !input || input.type !== output.type) return "只能连接相同类型的端口";
+  return workflowConnectionCycleError(nodes, { nodeId: fromId }, toId);
+}
+
+/** Connection validation may follow generated-media provenance without changing how saved inputs execute. */
+export function workflowConnectionCycleError(nodes: WorkflowNode[], source: WorkflowInput, targetId: string,
+  generationOrigins?: ReadonlyMap<string, Pick<WorkflowNode, "id">>): string | null {
+  const sourceIds = (input: WorkflowInput) => {
+    const ids = workflowInputProducers(nodes, input);
+    const materialId = input.assetNodeId ?? input.canvasNodeId;
+    const origin = materialId ? generationOrigins?.get(materialId) : undefined;
+    return origin && !ids.includes(origin.id) ? [...ids, origin.id] : ids;
+  };
+  const producers = sourceIds(source);
+  if (producers.includes(targetId)) return "不能连接卡片自身";
+  const byId = new Map(nodes.map(node => [node.id, node]));
   const visited = new Set<string>();
   const visit = (id: string): boolean => {
-    if (id === fromId) return true;
+    if (id === targetId) return true;
     if (visited.has(id)) return false;
     visited.add(id);
-    return nodes.some(node => Object.values(workflowExecutionInputs(node)).flat().some(binding => workflowInputProducers(nodes, binding).includes(id)) && visit(node.id));
+    const node = byId.get(id);
+    return !!node && Object.values(workflowExecutionInputs(node)).flat().some(binding => sourceIds(binding).some(visit));
   };
-  return visit(toId) ? "这条连接会形成循环" : null;
+  return producers.some(visit) ? "这条连接会形成循环" : null;
 }
 
 /** Invalidate descendants when a definition changes; stale values never cross a wire. */

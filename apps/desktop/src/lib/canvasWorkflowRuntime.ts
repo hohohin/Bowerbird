@@ -27,7 +27,7 @@ import { canStartAnotherAgentRun, canUseAgentRun, understandProvider } from "./e
 import { renderLayerDocument } from "./layerDocument";
 import { workflowLayerDecompose } from "./workflowLayerDecompose";
 import { readCanvasNote, emptyCanvasCell, canvasGridWeights, canvasTextMinSize } from "./canvasNotes";
-import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationCells, latestWorkflowSessionImage, completedCanvasSessions, canvasSessionCompleted, canvasSessionCompletionLookup, submittedTurnState, workflowGenerationActivity } from "./canvasSessionOutputs";
+import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationCells, latestWorkflowSessionImage, completedCanvasSessions, canvasSessionCompleted, canvasSessionCompletionLookup, submittedTurnState, workflowGenerationActivity, workflowGenerationOrigins } from "./canvasSessionOutputs";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasContentInput, contentInputAxisIndex } from "./canvasContentInput";
 import { agentResultValue } from "./workflowAgentResult";
@@ -802,18 +802,27 @@ export class CanvasWorkflowController {
   }
 
   /** A single gesture produces one durable edit, even when it carries several content types. */
-  async connectAutomatic(outputs: AutomaticOutput[], target: { nodeId?: string; canvasNodeId?: string; cellId?: string },
+  async connectAutomatic(outputs: AutomaticOutput[], target: { nodeId?: string; canvasNodeId?: string; cellId?: string; collapsedAnchorId?: string },
     options: { createNodes?: WorkflowNode[]; connectionId?: string; onEdited?: (before: CanvasWorkflow, after: CanvasWorkflow) => void } = {}) {
     return this.withResource("canvas", async () => {
       await this.flush();
       const nativeIds = new Set(outputs.map(({ binding }) => binding.assetNodeId ?? binding.canvasNodeId).filter((id): id is string => !!id));
       if (target.canvasNodeId) nativeIds.add(target.canvasNodeId);
       const trigger = this.document.nodes.find(node => node.id === target.nodeId) ?? options.createNodes?.find(node => node.id === target.nodeId);
-      // Only session completion needs older turns and outputs grouped at read time.
+      // Completion and a collapsed receiver need the exact provenance of earlier turns.
       const needsSessions = trigger?.kind === "trigger" && (nativeIds.size > 0 || outputs.some(({ binding }) =>
         this.document.nodes.some(node => node.id === binding.nodeId && (node.outputs.image?.nodeIds?.length || node.activeSessionNodeId))));
-      const canvasNodes = needsSessions ? (await api.projectCanvasGet(this.projectId)).nodes
+      const snapshot = needsSessions || target.collapsedAnchorId ? await api.projectCanvasGet(this.projectId) : undefined;
+      const canvasNodes = snapshot ? snapshot.nodes
         : nativeIds.size ? await api.projectCanvasVisibleNodes(this.projectId, [...nativeIds]) : [];
+      const generationOrigins = target.collapsedAnchorId ? workflowGenerationOrigins(this.document, canvasNodes) : undefined;
+      if (target.collapsedAnchorId) {
+        const anchor = canvasNodes.find(node => node.id === target.collapsedAnchorId);
+        if (!target.nodeId || !anchor || anchor.hiddenAt != null || generationOrigins?.get(anchor.id)?.id !== target.nodeId
+          || snapshot?.threads.some(thread => thread.id === anchor.threadId && thread.archivedAt != null)) {
+          throw new Error("接收卡片已变化，请重新连接");
+        }
+      }
       const before = structuredClone(this.document);
       const createdNodeIds: string[] = [];
       let nodes = [...this.document.nodes];
@@ -837,9 +846,15 @@ export class CanvasWorkflowController {
       if (target.nodeId) {
         const receiver = nodes.find(node => node.id === target.nodeId);
         if (!receiver) throw new Error("接收卡片已不存在");
+        if (target.collapsedAnchorId) {
+          const run = workflowNodeRun(this.document, receiver.id);
+          const activity = workflowGenerationActivity(receiver, run, canvasNodes, useStore.getState().genJobs);
+          if (this.startingAction(receiver.id) || activity.running
+            || activity.awaitingOutput && run && this.liveGenerationCheckpoint(receiver.id, run)) throw new Error("这张卡片正在运行");
+        }
         if (this.isLocked(receiver.id) && !signalOnly) throw new Error("关联工作流正在运行，请先停止");
         if (!signalOnly && receiver.kind === "visual-profile" && receiver.profileId) throw new Error("请先切换到从输入提炼");
-        const plan = planAutomaticConnection(nodes, outputs, receiver.id);
+        const plan = planAutomaticConnection(nodes, outputs, receiver.id, generationOrigins);
         if (plan.error) throw new Error(plan.error);
         if (receiver.kind === "trigger" && plan.bindings.some(({ binding }) => binding.canvasNodeId
           && !canvasNodes.some(node => node.id === binding.canvasNodeId && node.kind === "prompt"))) throw new Error("请选择执行卡片或生成会话");
