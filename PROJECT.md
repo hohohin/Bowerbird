@@ -53,11 +53,11 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 ### 近期里程碑
 
+- **2026-11-24｜macOS 收口至 dev 候选通过本机验证。** 保留 Mac 原生桥接及更新公钥，完成 ARM 构建、Rust 全量与隔离 WKWebView 烟测。独立 Gemini 隧道通过本机双域及热刷新验证，真实账号验收和 Mac 端点上线待完成。[收口与验收](macOS/DEV-CONVERGENCE-2026-11-24.md)
+
 - **2026-11-24｜Apple Silicon 26.11.2403 源码存档及 R2 测试包交接。** 合入 `dev@0d044e83`，SQLite 升至 0062，修复语义索引路径别名与 HEIC 预览色彩。ARM 本地签名候选完成隔离迁移及 R2 回读验签。[跨端存档](macOS/CROSS-PLATFORM-SYNC-2026-11-24.md) · [候选验收](macOS/RELEASE-READINESS.md)
 
 - **2026-11-24｜Windows 26.11.2402 已公开发布。** 改进 H3 提示词优化与写作 Agent 的错误提示，客户端接收实际参考槽数量。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112402-已公开发布2026-11-24)
-
-- **2026-11-24｜Windows 26.11.2401 已公开发布。** 写作工具栏、富文本草稿恢复、分页 PDF 导出，以及画板 H3 提示词和视频工作流。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112401-已公开发布2026-11-24)
 
 ## 关键约定
 
