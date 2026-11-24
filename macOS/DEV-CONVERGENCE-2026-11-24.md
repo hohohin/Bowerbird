@@ -6,7 +6,7 @@
 - 合并保留 dev 新增的分支快照控制台和 stdio 热切换。stdio 与 Gemini 继续复用同一只读工具协议。Windows OAuth 回环夹具由当前 dev 创建授权，切换候选进程后保留原配置、访问令牌和刷新令牌，并成功调用四个工具。
 - 固定版 pnpm 的冻结安装、lint、Vite 生产构建及 Cloud 路由契约通过。画板逻辑套件 140 通过、10 失败。对 dev 对照副本仅补齐 Node 直跑所需的 `.ts` 导入后，复现同名 10 项画板夹具失败。音频菜单、素材交付与画板边界的 Chrome 夹具通过。
 - Node 24.22.3 下的 MCP 测试 44 通过、0 失败、1 项 Windows 文件共享测试跳过，两项 Chrome 回归均通过。
-- Apple Silicon 使用 Rust 1.97.1（`aarch64-apple-darwin`），开发签名、隔离钥匙串、`cargo check --locked` 通过。Rust 全量与原生音频裁剪复验进行中。
+- Apple Silicon 使用 Rust 1.97.1（`aarch64-apple-darwin`），开发签名、隔离钥匙串、`cargo check --locked` 通过。Rust 全量 **1427 通过、0 失败、57 忽略**。启用本机 FFmpeg／FFprobe 后另跑 3 项原生音频裁剪，全部通过，覆盖 VBR MP3／Vorbis 时间轴、WAV 编码位深保留和跨格式登记。
 - 隔离 `pnpm tauri dev` 通过合成图片导入、WKWebView 原生预览、画板创建移动删除及 DSH 未登录保护。隔离库 `user_version=62`、`integrity_check=ok`。定向发送的合成系统登录回调到达 WKWebView。真实账号登录成功、线上 DSH · Cloud v2 对话及历史原单查询还需用专用账号验收。Intel 依用户指示跳过。
 - `mac` 作为历史归档保留，收口 PR 合入后继续在 `dev` 开发。此次范围为源码和本地验证。专用 Gemini 公网端点及正式桌面发版按各自的部署流程处理。
 
