@@ -134,6 +134,9 @@ html .app-popover.model-select-menu { border:1px solid var(--bb-line);border-rad
 .cloud-agent-event>div:last-child { border-color:transparent;background:transparent; }
 .local-agent-panel :is(.border-edge,.border-accent\/35) { border-color:transparent; }
 .local-agent-panel :is(.rounded-lg,.rounded-full) { border-radius:3px; }
+.cloud-agent-progress { height:4px; flex-shrink:0; background:var(--bb-line); }
+.cloud-agent-progress-fill { height:100%; background:var(--bb-blue); transition:width 150ms ease; }
+@media (prefers-reduced-motion: reduce) { .cloud-agent-progress-fill { transition:none; } }
 .local-agent-panel .bg-accent { background:var(--holo-primary);color:var(--holo-on-primary); }
 .local-agent-panel .bg-accent\/5 { background:transparent; }
 .local-agent-panel .text-accent { color:var(--bb-ink-soft); }

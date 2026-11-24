@@ -46,15 +46,41 @@ test('snapshots are bounded by LRU and isolate query scopes', async () => {
   assert.equal(cache.peek('project:B:images'), undefined);
   assert.deepEqual(cache.entries('project:A:').map(([, snapshot]) => snapshot.value), [['A'], ['document']]);
 });
-test('aged snapshots remain displayable but are revalidated on the next read', async () => {
-  const cache = createCatalogCache(2, 0);
-  await cache.read('page', async () => ['before']);
-  assert.equal(cache.fresh(cache.peek('page')), false);
-  assert.deepEqual(cache.peek('page').value, ['before']);
-  assert.deepEqual(await cache.read('page', async () => ['after']), ['after']);
+test('paging cannot evict the folder tree', async () => {
+  const cache = createCatalogCache(1);
+  const tree = [{ id: 'root' }];
+  await cache.read('folders:all', async () => tree);
+  await cache.read('pages:all:0', async () => ({ assets: [], groups: {} }));
+  await cache.read('pages:all:1', async () => ({ assets: [], groups: {} }));
+  assert.equal(cache.peek('pages:all:0'), undefined);
+  assert.equal(cache.peek('folders:all').value, tree);
 });
 
 const asset = (id, thumb = null) => ({ id, name: `${id}.png`, store_path: `/${id}.png`, file_mtime: 1, width: 10, height: 10, thumb_path: thumb });
+test('exact folder changes keep sibling and unrelated in-flight pages and preview patches', async () => {
+  const cache = createCatalogCache(), pending = deferred(), original = asset('one');
+  const root = { id: 'root', rootId: 'root' }, child = { id: 'child', rootId: 'root' };
+  const second = { id: 'second', rootId: 'second' };
+  const page = { assets: [original], groups: {} };
+  await cache.read('pages:root:0', async () => page, false, root);
+  await cache.read('pages:child:0', async () => page, false, child);
+  await cache.read('folders:all', async () => []);
+  const read = cache.read('pages:second:0', () => pending.promise, false, second);
+  cache.updatePreviews({ assets: [{ ...original, thumb_path: '/ready.jpg' }] });
+  cache.invalidate({ rootIds: ['root'], folderIds: ['root'] });
+  assert.equal(cache.fresh(cache.peek('pages:root:0')), false);
+  assert.equal(cache.fresh(cache.peek('pages:child:0')), true);
+  assert.equal(cache.fresh(cache.peek('folders:all')), false);
+  assert.equal(cache.read('pages:second:0', () => assert.fail('should share pending read'), false, second), read);
+  pending.resolve(page);
+  assert.equal((await read).assets[0].thumb_path, '/ready.jpg');
+  assert.equal(cache.fresh(cache.peek('pages:second:0')), true);
+  cache.invalidate({ rootIds: ['root'] });
+  assert.equal(cache.fresh(cache.peek('pages:child:0')), false);
+  assert.equal(cache.fresh(cache.peek('pages:second:0')), true);
+  cache.invalidate(null);
+  assert.equal(cache.fresh(cache.peek('pages:second:0')), false);
+});
 test('preview patch updates heads, group members and references without changing identities or names', () => {
   const original = asset('shared');
   const entry = { id: 'reference', asset_id: original.id, asset: original, version: 'v1', is_reference: true, name: 'custom.bowerbird' };
@@ -98,4 +124,24 @@ test('progress patches cached and pending folder snapshots without invalidating 
   assert.deepEqual(await read, [{ ...folder, scanning: false }]);
   assert.deepEqual(cache.peek('folders:cached').value, [{ ...folder, scanning: false }]);
   assert.equal(cache.fresh(cache.peek('folders:cached')), true);
+});
+
+test('scoped progress preserves sibling errors and whole-root progress tracks the active directory', async () => {
+  const cache = createCatalogCache(), pending = deferred();
+  const folders = [
+    { id: 'A', root_id: 'root', scanning: false, error: 'A read failed' },
+    { id: 'B', root_id: 'root', scanning: true, error: 'B read failed' },
+  ];
+  await cache.read('folders:cached', async () => folders);
+  const read = cache.read('folders:pending', () => pending.promise);
+  cache.updateConnectionProgress({ rootId: 'root', folderId: 'B', scanning: false, error: null });
+  pending.resolve(folders);
+  const scoped = [folders[0], { ...folders[1], scanning: false, error: null }];
+  assert.deepEqual(await read, scoped);
+  assert.deepEqual(cache.peek('folders:cached').value, scoped);
+
+  cache.updateConnectionProgress({ rootId: 'root', activeFolderId: 'B', scanning: true, error: null });
+  assert.deepEqual(cache.peek('folders:cached').value.map(folder => folder.scanning), [false, true]);
+  cache.updateConnectionProgress({ rootId: 'root', activeFolderId: 'A', scanning: true, error: null });
+  assert.deepEqual(cache.peek('folders:cached').value.map(folder => folder.scanning), [true, false]);
 });

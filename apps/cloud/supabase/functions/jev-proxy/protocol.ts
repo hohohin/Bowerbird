@@ -69,6 +69,26 @@ export async function hash(value: string | Uint8Array): Promise<string> {
   ).join("");
 }
 
+const videoSourceKeys = ["transcript", "description"] as const;
+const videoTextBytes = 24_000;
+
+export function videoTextInput(raw: unknown) {
+  const source = object(raw);
+  if (Object.keys(source).some((key) => !videoSourceKeys.some((known) => key === known))) invalid();
+  const encoder = new TextEncoder();
+  const parts: Partial<Record<typeof videoSourceKeys[number], string>> = {};
+  let bytes = 0;
+  for (const key of videoSourceKeys) {
+    if (!Object.hasOwn(source, key)) continue;
+    const part = text(source[key], videoTextBytes);
+    bytes += encoder.encode(part).length;
+    if (bytes > videoTextBytes) invalid("视频文本超过分类长度限制");
+    parts[key] = part;
+  }
+  if (!bytes) invalid("请先转录文稿或生成画面描述");
+  return parts;
+}
+
 // Reconstruct the only allowed upstream operation. No URLs, tools, model overrides,
 // arbitrary questions, or client-selected upstream headers are forwarded.
 export function judgeInput(body: any) {

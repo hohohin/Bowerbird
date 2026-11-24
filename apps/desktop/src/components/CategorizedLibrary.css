@@ -5,7 +5,8 @@
 .is-tag-catalog .catalog-sidebar-heading { padding:8px; }
 .is-tag-catalog .catalog-sort-note { padding-inline:8px; font-size:10px; }
 .catalog-sidebar-resize { position:absolute; inset:0 -4px 0 auto; width:8px; cursor:col-resize; touch-action:none; z-index:15; }
-.catalog-sidebar-resize:hover,.catalog-sidebar-resize:focus-visible { background:color-mix(in srgb, var(--bb-blue) 25%, transparent); outline:none; }
+.catalog-sidebar-resize:hover,.catalog-sidebar-resize:focus-visible { background:color-mix(in srgb, var(--bb-blue) 25%, transparent); }
+.catalog-sidebar-resize:focus-visible { outline:2px solid var(--bb-blue); outline-offset:-2px; }
 .catalog-contact-index { position:relative; display:flex; flex:1; min-height:0; }
 .catalog-alphabet { display:flex; flex:0 0 20px; flex-direction:column; padding:4px 0; min-height:0; touch-action:none; user-select:none; }
 .catalog-alphabet button { flex:1; min-height:0; max-height:22px; font-size:10px; line-height:1; font-weight:600; color:var(--bb-blue); }
@@ -21,7 +22,7 @@
 .catalog-tag-list .catalog-row { padding:8px 5px; }
 .catalog-row[aria-current=location] { background:var(--bb-selection-bg); color:var(--bb-blue); }
 .catalog-letter-heading { padding:10px 5px 3px; font-size:11px; color:var(--bb-muted); }
-.catalog-letter-bubble { position:absolute; left:28px; top:40%; display:grid; place-items:center; width:48px; height:48px; border-radius:12px; background:var(--bb-blue); color:white; font-size:26px; pointer-events:none; z-index:20; box-shadow:0 4px 16px rgb(var(--bb-shadow-rgb) / 20%); }
+.catalog-letter-bubble { position:absolute; left:28px; top:40%; display:grid; place-items:center; width:48px; height:48px; border-radius:12px; background:var(--bb-blue); color:var(--bb-surface); font-size:26px; pointer-events:none; z-index:20; box-shadow:0 4px 16px rgb(var(--bb-shadow-rgb) / 20%); }
 .catalog-sections > section::after { content:""; display:block; height:16px; }
 .catalog-section-heading { position:sticky; top:0; z-index:2; height:40px; padding:12px 8px 0; pointer-events:none; }
 .catalog-section-title { display:inline-block; height:28px; max-width:var(--catalog-title-max-width, 100%); padding:0 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; line-height:26px; font-weight:600; pointer-events:auto; }
@@ -39,9 +40,11 @@
 .catalog-row > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .catalog-row:hover,.catalog-sidebar-heading button:hover { background:var(--bb-surface-hover); }
 .catalog-row[aria-pressed=true],.catalog-row[aria-selected=true] { background:var(--bb-selection-bg); color:var(--bb-blue); }
-.catalog-tree-scroll { container-type:inline-size; container-name:collection-tree; }
 .catalog-tree-row { position:relative; gap:3px; min-height:28px; padding-block:2px; padding-right:4px; margin:0; font-size:11px; border-radius:4px; }
-.catalog-tree-row > .catalog-tree-toggle { display:grid; place-items:center; width:12px; height:24px; padding:0; flex-shrink:0; border-radius:3px; }
+.catalog-tree-row > .catalog-tree-toggle,
+.catalog-tree-row:not([aria-expanded])::before { flex:0 0 12px; }
+.catalog-tree-row:not([aria-expanded])::before { content:""; }
+.catalog-tree-row > .catalog-tree-toggle { display:grid; place-items:center; height:24px; padding:0; border-radius:3px; }
 .catalog-tree-toggle:hover { background:var(--bb-surface-hover); }
 .catalog-tree-row > svg { flex-shrink:0; }
 .catalog-tree-name { flex:1; min-width:0; }
@@ -50,9 +53,6 @@
 .catalog-tree-row-actions button:hover { background:var(--bb-surface-hover); color:var(--bb-ink); }
 .catalog-tree-row:hover .catalog-tree-row-actions,.catalog-tree-row:focus-within .catalog-tree-row-actions,.catalog-tree-row.is-menu-open .catalog-tree-row-actions { opacity:1; pointer-events:auto; }
 .catalog-tree-row:hover .catalog-tree-name,.catalog-tree-row:focus-within .catalog-tree-name,.catalog-tree-row.is-menu-open .catalog-tree-name { padding-right:48px; }
-@container collection-tree (max-width:180px) {
-  .catalog-tree-icon { display:none; }
-}
 .catalog-gallery { flex:1; min-width:0; min-height:0; position:relative; display:flex; flex-direction:column; }
 .catalog-scroll { flex:1; min-height:0; }
 .catalog-scroller { height:100%; overflow:auto; padding:0 0 100px; }
@@ -89,3 +89,4 @@
   .catalog-index { padding-inline:2px; }
   .catalog-row { padding-inline:7px; }
 }
+.categorized-library[data-catalog-searching] .catalog-sidebar { display:none; }

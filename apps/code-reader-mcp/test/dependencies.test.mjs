@@ -1,51 +1,121 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, readFile, rm, link } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { callTool } from '../core.mjs';
 import { exportSnapshot } from '../export.mjs';
+import { references, candidates } from '../dependencies.mjs';
+import { allowedFile, validateSnapshot, callTool } from '../core.mjs';
 
-test('export completes literal JS and Rust dependencies and related tests without sweeping private files', async t => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'bowerbird-coverage-'));
-  t.after(() => rm(root, { force: true, recursive: true }));
-  const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
-  const write = async (name, content) => {
-    const file = path.join(root, name);
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, content);
-  };
-  await write('apps/demo/src/widget.ts', "import { helper } from './helper.js';\nexport { helper };");
-  await write('apps/demo/src-tauri/src/lib.rs', '#[path = "worker.rs"]\nmod worker;');
-  await write('.gitignore', 'ignored.ts\n');
+async function fixture(t) {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'bb-coverage-'));
+  const dir = path.join(temporary, 'repo');
+  await mkdir(dir);
+  t.after(async () => {
+    assert.equal(path.dirname(temporary), os.tmpdir());
+    await rm(temporary, { recursive: true, force: true });
+  });
+  const git = (...args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe', windowsHide: true });
   git('init');
-  git('add', '.');
-  git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture');
-  await write('apps/demo/src/helper.ts', "import './nested';\nexport const helper = 1;");
-  await write('apps/demo/src/nested/index.ts', 'export const nested = 1;');
-  await write('apps/demo/src-tauri/src/worker.rs', 'pub fn example() {}');
-  await write('apps/demo/tests/widget.test.py', '# relevant mechanically associated test');
-  await write('apps/demo/tests/unrelated.test.py', '# private example');
-  await write('apps/demo/src/.env', 'private file');
-  const out = path.join(root, '.local', 'snapshot.json');
-  const report = await exportSnapshot(root, out);
-  assert.deepEqual(report.coverageCheck, { dependencyFiles: 3, relatedTests: 1, unresolvedReferences: 0 });
-  const frozen = await readFile(out, 'utf8');
-  const snapshot = JSON.parse(frozen);
-  const files = snapshot.files.map(file => file.path);
-  assert.ok(files.includes('apps/demo/src/nested/index.ts'));
-  assert.ok(files.includes('apps/demo/src-tauri/src/worker.rs'));
-  assert.ok(files.includes('apps/demo/tests/widget.test.py'));
-  assert.ok(!files.some(file => /unrelated|\.env/.test(file)));
-  assert.deepEqual(callTool(snapshot, 'project_overview').coverageCheck, report.coverageCheck);
+  async function file(name, content) {
+    await mkdir(path.dirname(path.join(dir, name)), { recursive: true });
+    await writeFile(path.join(dir, name), content);
+  }
+  async function track(names) {
+    git('add', '--', ...names);
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture');
+  }
+  return { dir, file, track, git, output: path.join(temporary, 'snapshot.json') };
+}
 
-  await write('apps/demo/src/ignored.ts', 'must never be exported');
-  await write('apps/demo/src/widget.ts', "import './ignored';");
-  await assert.rejects(exportSnapshot(root, out), /coverage check failed/);
-  assert.equal(await readFile(out, 'utf8'), frozen, 'failed coverage keeps the last snapshot');
-  await write('apps/demo/src/widget.ts', "import './linked';");
-  await symlink(path.join(root, 'apps/demo/src/ignored.ts'), path.join(root, 'apps/demo/src/linked.ts'));
-  await assert.rejects(exportSnapshot(root, out), /coverage check failed/);
-  assert.equal(await readFile(out, 'utf8'), frozen);
+test('literal scanner handles JS/TS forms, Rust attributes, lifetimes and raw strings without executing code', () => {
+  const refs = references('apps/a/src/main.ts', `
+    // import './comment.ts';
+    const text = "from './string.ts'";
+    import type { A } from './a.js'; export * from './b';
+    import './style.css'; require('./c'); import('./d');
+    import('package'); import('./' + name); import(\`./\${name}\`);
+  `);
+  // Computed import('./' + name) must not be mistaken for a literal module.
+  assert.deepEqual(refs.filter(ref => ref.kind !== 'dynamic').map(ref => ref.specifier), ['./a.js', './b', './style.css', './c', './d']);
+  assert.equal(refs.filter(ref => ref.kind === 'dynamic').length, 2);
+  assert.ok(candidates('apps/a/src/main.ts', refs[0]).includes('apps/a/src/a.ts'));
+  const rust = references('apps/a/src/lib.rs', `
+    pub fn lifetime<'a>(s: &'a str) -> &'a str { s }
+    let windows = r"\\?\\";
+    #[cfg(test)] #[path = "local_chat_dsh_host.rs"] mod host;
+    const DATA: &str = include_str!(r#"dsh-install/package.json"#);
+    mod nested;
+  `);
+  assert.deepEqual(rust.map(ref => ref.specifier), ['local_chat_dsh_host.rs', 'dsh-install/package.json', 'nested']);
+  assert.deepEqual(candidates('apps/a/src/lib.rs', rust[2]), ['apps/a/src/nested.rs', 'apps/a/src/nested/mod.rs']);
+});
+
+test('export closes recursive dependencies and discovers related UI/Python tests while preserving Git state', async t => {
+  const f = await fixture(t);
+  const main = 'apps/desktop/src/main.ts';
+  const rust = 'apps/desktop/src-tauri/src/lib.rs';
+  await f.file(main, "import './NotificationBell'; import './DshSubscriptionCard.js';");
+  await f.file(rust, '#[path = "local_chat_dsh_host.rs"] mod host;');
+  await f.track([main, rust]);
+  const expected = {
+    'apps/desktop/src/NotificationBell.tsx': "export { value } from './lib/dismissedNotices';",
+    'apps/desktop/src/lib/dismissedNotices.ts': "import '../NotificationBell'; export const value = 1;",
+    'apps/desktop/src/lib/dismissedNotices.test.ts': "import './dismissedNotices';",
+    'apps/desktop/src/DshSubscriptionCard.tsx': 'export const card = 1;',
+    'apps/desktop/src-tauri/src/local_chat_dsh_host.rs': '#[path = "local_chat_dsh_install.rs"] mod install;',
+    'apps/desktop/src-tauri/src/local_chat_dsh_install.rs': 'const PACKAGE: &str = include_str!("dsh-install/package.json");',
+    'apps/desktop/src-tauri/src/dsh-install/package.json': '{"name":"fixture"}',
+    'apps/desktop/src-tauri/tests/dsh-auto-host.py': '# DSH automatic host test\nAPI_KEY=abcdefghijklmnop',
+    'apps/desktop/scripts/notification-bell-dismiss-ui.test.mjs': '// notice dismissal test',
+  };
+  for (const [name, text] of Object.entries(expected)) await f.file(name, text);
+  await f.file('apps/desktop/src/unrelated.ts', 'unrelated');
+  await f.file('apps/desktop/scripts/unrelated-network.test.mjs', 'unrelated');
+  await f.file('.env.tunnel', 'MCP_UPDATE_KEY=abcdefghijklmnop');
+  const before = f.git('status', '--porcelain').toString();
+  const report = await exportSnapshot(f.dir, f.output);
+  const snapshot = validateSnapshot(JSON.parse(await readFile(f.output, 'utf8')));
+  for (const name of Object.keys(expected)) assert.ok(snapshot.files.some(file => file.path === name), name);
+  assert.equal(snapshot.files.some(file => file.path.includes('unrelated') || file.path.startsWith('.env')), false);
+  assert.ok(snapshot.files.find(file => file.path.endsWith('dsh-auto-host.py')).content.includes('[REDACTED'));
+  assert.equal(report.coverage.status, 'checked');
+  assert.equal(report.coverage.unresolvedCoreDependencies.length, 0);
+  assert.equal(callTool(snapshot, 'project_overview').coverageCheck.relatedTests, 3);
+  assert.equal(f.git('status', '--porcelain').toString(), before);
+});
+
+test('an existing linked core dependency fails export and preserves the previous snapshot', async t => {
+  const f = await fixture(t);
+  const main = 'apps/a/src/main.ts';
+  await f.file(main, "import './linked';");
+  await f.track([main]);
+  await f.file('outside.ts', 'private sentinel');
+  await link(path.join(f.dir, 'outside.ts'), path.join(f.dir, 'apps/a/src/linked.ts'));
+  await writeFile(f.output, 'previous valid snapshot');
+  await assert.rejects(exportSnapshot(f.dir, f.output), error => {
+    assert.equal(error.report.coverage.status, 'incomplete');
+    assert.equal(error.report.coverage.unresolvedCoreDependencies[0].target, 'apps/a/src/linked.ts');
+    return true;
+  });
+  assert.equal(await readFile(f.output, 'utf8'), 'previous valid snapshot');
+});
+
+test('intentional exclusions and unresolved runtime references are visible, with legacy coverage marked unknown', async t => {
+  const f = await fixture(t);
+  await f.file('apps/a/src/main.ts', "import './fixtures/demo.ts'; import './runtime-generated.mjs';");
+  await f.file('apps/a/src/fixtures/demo.ts', 'excluded');
+  await f.track(['apps/a/src/main.ts']);
+  const report = await exportSnapshot(f.dir, f.output);
+  assert.equal(report.coverage.excludedDependencies.length, 1);
+  assert.equal(report.coverage.unresolvedReferences.length, 1);
+  assert.equal(report.coverage.status, 'checked');
+  const snapshot = JSON.parse(await readFile(f.output, 'utf8'));
+  delete snapshot.coverage;
+  assert.equal(callTool(snapshot, 'project_overview').coverageCheck.status, 'not_recorded');
+  assert.ok(allowedFile('apps/a/src/auth.ts'));
+  assert.ok(allowedFile('apps/a/tests/host.py'));
+  assert.equal(allowedFile('apps/a/auth.json'), false);
+  assert.equal(allowedFile('apps/a/passwords.py'), false);
 });

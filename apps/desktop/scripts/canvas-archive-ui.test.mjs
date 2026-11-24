@@ -86,7 +86,11 @@ try {
   await page.waitForFunction(() => window.archiveNotices.some(n => n.tone === "success"));
   assert.deepEqual(await page.evaluate(() => window.archiveCalls[0]), { assetIds: ["existing", "a"], path: "D:/export/所选内容.zip" });
   // Blank-canvas menu shares the same selection and does not package outside images.
-  await page.mouse.click(rect.x + 800, rect.y + 350, { button: "right" });
+  const openBlankSelection = async () => {
+    await page.mouse.click(rect.x + 800, rect.y + 350, { button: "right" });
+    await menuItem("所选 3 项").click();
+  };
+  await openBlankSelection();
   await openExport();
   await item().click();
   await page.waitForFunction(() => window.archiveCalls.length === 2);
@@ -96,20 +100,20 @@ try {
   assert.equal(await page.evaluate(() => window.directoryDialogs[0].options.directory), true);
   assert.deepEqual(await page.evaluate(() => window.directoryExports), []);
   await page.evaluate(() => { window.directoryPath = "D:/export"; });
-  await page.mouse.click(rect.x + 800, rect.y + 350, { button: "right" });
+  await openBlankSelection();
   await openExport();
   await menuItem("将所选内容导出到..").click();
   await page.waitForFunction(() => window.directoryExports.length === 1);
   assert.deepEqual(await page.evaluate(() => window.directoryExports[0]), { assetIds: ["existing", "a"], path: "D:/export" });
   for (const action of ["移动到项目", "移动到文件夹"]) {
-    await page.mouse.click(rect.x + 800, rect.y + 350, { button: "right" });
+    await openBlankSelection();
     await menuItem(action).click();
     const dialog = page.getByRole("dialog", { name: action, exact: true });
     await dialog.waitFor();
     await page.keyboard.press("Escape");
     await dialog.waitFor({ state: "detached" });
   }
-  await page.mouse.click(rect.x + 800, rect.y + 350, { button: "right" });
+  await openBlankSelection();
   await menuItem("移动到项目").click();
   const projectDialog = page.getByRole("dialog", { name: "移动到项目" });
   await projectDialog.getByRole("radio", { name: "目标项目 B" }).check();

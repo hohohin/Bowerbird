@@ -11,15 +11,17 @@ await mkdir(directory, { recursive: true });
 const ffmpeg = process.env.BOWERBIRD_FFMPEG_BINARY || resolve('../../.tmp/video-integration/tools/local/ffmpeg.exe');
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=red:s=320x180:r=25:d=1',
   '-vf', "drawbox=color=yellow:t=fill:enable='gte(t,0.96)'", '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', `${directory}/clip.mp4`]);
-const server = await createServer({ cacheDir: `${directory}/vite`, optimizeDeps: { entries: [entry] },
+const server = await createServer({ configFile: false, resolve: { alias: { '@': resolve('src') } },
+  cacheDir: `${directory}/vite`, optimizeDeps: { entries: [entry] },
   server: { host: '127.0.0.1', port: 18557, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
-  page.setDefaultTimeout(8000);
+  page.setDefaultTimeout(10000);
+  page.setDefaultNavigationTimeout(60000);
   await page.goto(server.resolvedUrls.local[0] + entry);
-  await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await page.locator('[data-canvas-node-id="old"]').waitFor({ timeout: 30000 });
   await page.evaluate(async path => {
     const snapshot = window.snapshot(), base = snapshot.nodes[0];
     const asset = { id: 'clip', name: '测试视频', ext: 'mp4', width: 320, height: 180, duration: 1, store_path: path, source: 'imported' };
@@ -135,5 +137,104 @@ try {
   await page.getByRole('button', { name: '撤销画布操作' }).click();
   await savedFrameCount(2);
   await imageReceiver.locator(`[data-workflow-reference-asset="${tail.videoFrame.assetId}"] img`).waitFor();
-  console.log('PASS: video reference choices, exact source instances, original-size first/tail pixels, persisted frame thumbnails, disconnect and undo');
-} finally { await browser.close(); await server.close(); }
+  const cover = await page.evaluate(async () => {
+    const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+    const nodes = ['a', 'b'].map((id, i) => ({ ...newWorkflowNode('comfy-video', 160 + i * 490, 100, 'codex'), id }));
+    const snapshot = window.snapshot();
+    const drafts = JSON.parse(sessionStorage.getItem('reference-drafts'));
+    const video = drafts.find(asset => asset.id === 'clip');
+    const thumb = document.createElement('canvas').toDataURL();
+    const original = window.store.getState().assets.find(asset => asset.id === 'existing').store_path;
+    drafts.push({ ...video, id: 'covered-clip', name: '带封面的视频', thumb_path: thumb },
+      { id: 'photo', name: '普通图片', ext: 'svg', source: 'external', store_path: original, thumb_path: thumb });
+    sessionStorage.setItem('reference-drafts', JSON.stringify(drafts));
+    sessionStorage.setItem('reference-fixture', JSON.stringify({ ...snapshot, nodes: [], edges: [] }));
+    sessionStorage.setItem('workflow-p', JSON.stringify({ revision: 0, document: { schema_version: 1, nodes, run: null } }));
+    return { thumb, original };
+  });
+  await page.reload();
+  const workflowCard = id => page.locator(`[data-workflow-card="${id}"]`);
+  async function dragVideoWire(id, end) {
+    const source = workflowCard(id);
+    await source.locator('header').hover();
+    const port = await source.getByRole('button', { name: '添加下游', exact: true }).boundingBox();
+    await page.mouse.move(port.x + port.width / 2, port.y + port.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y, { steps: 18 });
+    await page.mouse.up();
+  }
+  const targetHeader = await workflowCard('b').locator('header').boundingBox();
+  await dragVideoWire('a', { x: targetHeader.x + targetHeader.width / 2, y: targetHeader.y + 10 });
+  assert.ok(await option('引用完整视频').isDisabled());
+  await option('引用尾帧画面').click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'b').inputs['first-frame']?.length === 1);
+  await page.reload();
+  const frameSlot = workflowCard('b').locator('.h3-frame-group').first();
+  await frameSlot.getByText('待输入', { exact: true }).waitFor();
+  await frameSlot.getByText('尾帧画面', { exact: true }).waitFor();
+  const input = await page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'b').inputs['first-frame'][0]);
+  assert.deepEqual(input.videoFrame, { position: 'last' });
+  assert.equal(input.nodeId, 'a');
+  assert.equal(input.portId, 'image');
+  assert.equal(input.assetId, undefined);
+  await workflowCard('b').getByRole('combobox', { name: 'H3 模式' }).click();
+  await page.getByRole('option', { name: /多素材参考/ }).click();
+  await dragVideoWire('a', { x: targetHeader.x + targetHeader.width / 2, y: targetHeader.y + 10 });
+  await option('引用完整视频').click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'b').inputs['reference-video']?.[0]?.nodeId === 'a');
+  await dragVideoWire('a', { x: targetHeader.x + targetHeader.width / 2, y: targetHeader.y + 10 });
+  await option('引用首帧画面').click();
+  const referenceImages = workflowCard('b').getByRole('group', { name: '参考图片输入' });
+  await referenceImages.getByText('1 / 9', { exact: true }).waitFor();
+  await referenceImages.getByText('<Picture 1>', { exact: true }).waitFor();
+  await referenceImages.getByText('首帧画面 · 等待上游素材', { exact: true }).waitFor();
+  await dragVideoWire('a', { x: 1190, y: 450 });
+  await page.getByRole('menu', { name: '添加下游', exact: true }).getByRole('menuitem', { name: '图片生成', exact: true }).click();
+  await option('引用首帧画面').click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(
+    n => n.kind === 'generation' && n.inputs.image?.[0].nodeId === 'a' && n.inputs.image[0].videoFrame?.position === 'first'));
+
+  const setVideoOutput = assetId => page.evaluate(async assetId => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(c.document.nodes.map(node => node.id === 'a'
+      ? { ...node, outputs: { image: { type: 'image', assetIds: [assetId] } } } : node));
+  }, assetId);
+  async function chooseMode(name) {
+    await workflowCard('b').getByRole('combobox', { name: 'H3 模式' }).click();
+    await page.getByRole('option', { name, exact: true }).click();
+  }
+  async function checkFrameImages(slot, thumbPath, previewPath) {
+    const thumb = slot.locator('.comfy-frame-thumbnail');
+    assert.equal(await thumb.getAttribute('src'), thumbPath);
+    await thumb.evaluate(img => img.decode());
+    await thumb.hover();
+    const preview = slot.locator('.comfy-frame-preview');
+    assert.equal(await preview.getAttribute('src'), previewPath);
+    await preview.evaluate(img => img.decode());
+    await workflowCard('b').locator('header').hover();
+  }
+  await setVideoOutput('covered-clip');
+  await referenceImages.getByText('首帧画面 · 带封面的视频', { exact: true }).waitFor();
+  await referenceImages.getByText('1 / 9', { exact: true }).waitFor();
+  await referenceImages.getByText('<Picture 1>', { exact: true }).waitFor();
+  await workflowCard('b').getByRole('group', { name: '参考视频输入' }).getByText('带封面的视频', { exact: true }).waitFor();
+  for (const mode of ['首尾帧', '单图']) {
+    await chooseMode(mode);
+    await setVideoOutput('covered-clip');
+    await checkFrameImages(frameSlot, cover.thumb, cover.thumb);
+    await setVideoOutput('clip');
+    await frameSlot.locator('.comfy-frame-placeholder').filter({ hasText: /^尾帧画面$/ }).waitFor();
+    assert.equal(await frameSlot.locator('img').count(), 0);
+  }
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(c.document.nodes.map(node => node.id === 'b'
+      ? { ...node, inputs: { ...node.inputs, 'first-frame': [{ assetId: 'photo' }] } } : node));
+  });
+  await checkFrameImages(frameSlot, cover.thumb, cover.original);
+  assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'import_image_bytes').length), 0);
+  console.log('PASS: static video boundary pixels, dynamic H3 frame wires, R2V references, covered and coverless frame previews, reload, disconnect and undo');
+} catch (error) { console.error(error); throw error; }
+finally { await browser.close(); await server.close(); }

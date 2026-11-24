@@ -87,15 +87,23 @@ P0–P8 基础代码、P6.1 多层权益门控、P9-T2/T3/T4/T5 的既有回归/
 
 - 素材库、长期提示词与视觉规范在本地；云端只处理授权任务。publishable key/URL 构建期内置，refresh token 在 OS keychain；服务端 secret 不下发桌面，Worker 不持数据库 service role。
 - 免费仅 Cloud，Pro/Studio 才可用本机 CLI；UI、store、Rust 命令与恢复路径都复核权限。只有签名可信的权益快照才允许 7 天离线 Pro 宽限。
-- 模型算力使用真实方舟；真实支付仍暂停，`BOWERBIRD_PAYMENT_MOCK=true`。兑换码不是支付渠道已完成的证明。
+- 模型算力使用真实方舟。11 月 13 日隔离生产单完成 ¥1 微信 Native 付款、验签解密回调、20 Bcoin 单次到账及 ¥1 原路全退。VPS 两个定时器已启用，分钟补偿自然执行成功。11 月 17 日用户确认对账通过后已开启公开购买，登录查询读回 `enabled=true`。[支付回执](../apps/cloud/WECHATPAY.md#验证记录) · [停机后逐日补核与留证](../apps/cloud/ops/WECHATPAY-MAINTENANCE.md#停机多日后的日账补核)
 - DSH 保持 test-only；已知未知结果任务保留审计，不自动重发、退款或清账。
 
 ## 剩余验收
 
-1. P9-T1 真实购买/到账：2026-10-25 已确认商户资质完成及微信直连方向，官方资料已核对；按新版 P7 完成 Native 配置、下单／通知／查单／退款对账及真实验收。Pro 兑换码发放已验证；Studio、到期降级、历史任务阻断仍需单独验收。
-2. 视频：三档启用和一次 480p 文生视频服务端闭环已通过；其余分辨率／参考模式真实生成、Cloud→故障电脑下载入库、重启恢复与供应商账单仍待核对；旧 unknown 提交不能凭时间/相似参数认领。
+1. **权益到期与离线恢复。** Pro 兑换码发放和生产 Studio 禁售已有隔离验收。11 月 20 日复跑 9 项 Deno 权益策略／签名、13 项 Windows 冻结版 Rust 权益与 6 项策略测试，覆盖到期返免费档、签名快照的在线刷新／离线宽限／过期、有签名但未通过校验、时钟回拨、切号迟到响应和免费档拒绝 BYO。Cloud 签发时将刷新和离线宽限截止限制在订阅结束时间内。仍需用已授权测试账号完成生产到期前后的桌面刷新、断网重启、历史任务只读及新受限操作拒绝。Studio 的正式销售与权益准入另需验收。[Cloud 权益接口](../apps/cloud/supabase/functions/entitlement/index.ts) · [策略测试](../apps/cloud/supabase/functions/_shared/feature-policy_test.ts) · [签名测试](../apps/cloud/supabase/functions/_shared/entitlement-signing_test.ts) · [Windows 权益测试](../apps/desktop/src-tauri/src/cloud/entitlement.rs) · [生产隔离验收](../apps/cloud/DEPLOY.md#2026-10-23-bcoin-计费已上线)
+2. **供应商成本与平台结算。** 11 月 20 日复跑 26 项隔离 Worker 测试，覆盖视频只提交一次、沿原任务恢复、验证产物后结算，以及 Seedream 5.5 分档路由、参考图与透明 PNG 请求。三条路线均缺供应商实际扣费回执。优先读取已授权的供应商账单或脱敏明细，以模型、规格、请求关联或可核验时段匹配实际扣费与内部流水。旧未知任务沿原任务身份核对。[Worker 视频回归](../apps/agent-worker/src/cloud-generation/video.test.ts) · [方舟视频适配](../apps/agent-worker/src/cloud-generation/ark-video.test.ts) · [生图运行时回归](../apps/agent-worker/src/cloud-generation/runtime.test.ts)
+
+   | 路线 | 已有实测证据 | 待补证据 |
+   |---|---|---|
+   | Seedance 2.5 | 10 月 28 日真实 5 秒、16:9、480p 文生视频通过官网交付、原键取回和一次 110 Bcoin 结算。方舟响应含 48,437 个输出 token，另有内部刊例价估算。 | 该笔方舟实际扣费、720p／1080p 和参考模式的真实样本，以及桌面下载入库和重启恢复。 [视频部署与回执](../apps/cloud/DEPLOY.md#2026-10-28-seedance-25-三档启用与真实验收) |
+   | Seedream 5.5 | 11 月 13 日真实 2K 透明 PNG 通过官网交付、原键取回和同键重放，内部只有一次 20 Bcoin 结算。1K／1.5K 报价与参考图加价已有隔离验证。 | 该笔方舟实际扣费及 1K／1.5K、参考图模式的真实样本。 [Seedream 5.5 部署与回执](../apps/cloud/DEPLOY.md#2026-11-13-seedream-55-已部署) |
+   | Jev／Cloud 托管分类 | 10 月 20 日有四次真实 Jev 判断和一次 Cloud 补标签，采用当时五图一积分规则。现行规则为每张成功图 1 Bcoin，方舟补标签与规则翻译各有独立用量记录。11 月 20 日复跑 10 项隔离 Edge 测试，覆盖同图重放、翻译单独计量与失败退款。 | 当前报价生产样本、Jev 和方舟实际账单，以及成本预算与账本的核对。 [历史真实验收](../apps/cloud/DEPLOY.md#jev-同步托管分类2026-10-20-历史初次部署) · [当前报价](Bowerbird定价方案v2-订阅积分制.md) · [分类用量账本](LOCAL-CLASSIFICATION.md#2026-10-22-cloud-补标签真实-token-账本已上线) · [协议回归](../apps/cloud/supabase/functions/jev-proxy/protocol_test.ts) · [翻译回归](../apps/cloud/supabase/functions/jev-proxy/translation_test.ts) |
+
 3. 分层：正式定价和原生桌面完整链路。云端真实测试通过不能代替桌面验收。
-4. 微信登录真实联调；DSH 自然小名单质量观察与供应链问题收口。上次 4 CRITICAL / 18 HIGH 没有后续扫描/接受证据，不扩大开放。
+4. **微信登录及权益回归。** 邮件验证、令牌刷新和权益签名已在生产隔离账号验证，`wechat-login` v21 的公网验证覆盖无效正文。2026-11-21 复跑了官网回调与账号网关 19 项、Cloud OAuth 参数／权益策略／权益签名 16 项，均通过。测试使用合成回调和模拟上游，覆盖拦截自动回跳后手动打开应用、网站 `state` 与会话写入、签名有效载荷及到期降级。曾失败的 Windows 环境仍需用授权微信账号扫码，再核对桌面深链回跳、会话刷新与重启后登录态恢复。[官网回调回归](../website/scripts/wechat-desktop-callback.test.mjs) · [账号网关](../apps/cloud/DEPLOY.md#55-桌面账号官网网关2026-10-22) · [v21 部署回执](../project_logs/2026-11-15-worker-control-deployment.md)
+5. DSH 自然小名单质量观察与供应链问题收口。上次 4 CRITICAL / 18 HIGH 没有后续扫描/接受证据，不扩大开放。
 
 ### 2026-10-23 视频复刻语音转写
 

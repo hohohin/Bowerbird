@@ -65,7 +65,7 @@ export interface Serialized {
 export function serializeDoc(
   doc: PmNode,
   assetById: Map<string, PromptedAsset>,
-  opts: { unfold?: boolean } = {}
+  opts: { unfold?: boolean; assetToken?: (assetId: string) => string | undefined } = {}
 ): Serialized {
   // unfold=true（默认）= 发 provider 的铺开 prompt（维度展开 body）；false = 原始编辑框文本
   // （维度只出【title】，不铺开 body），存 generation_meta.prompt_raw 供复用还原 chip。
@@ -106,6 +106,11 @@ export function serializeDoc(
     }
     if (n.kind === "image") {
       if (n.silent) continue; // 还原的参考图：正文已含，不重复输出 @图名（references 仍收集）
+      const token = opts.assetToken?.(n.assetId);
+      if (token !== undefined) {
+        out += token;
+        continue;
+      }
       currentImageId = n.assetId;
       // 标签优先用消歧后的；asset 不在 assetById（查不到）时回退 attrs 快照 name / assetId
       const label = labels.get(n.assetId) ?? (n.name || n.assetId);

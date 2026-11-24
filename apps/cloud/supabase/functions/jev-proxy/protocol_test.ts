@@ -5,11 +5,29 @@ import {
   hasMatches,
   judgeInput,
   readJson,
+  videoTextInput,
 } from "./protocol.ts";
 import { handler } from "./index.ts";
 
 const image = btoa(String.fromCharCode(255, 216, 255, 217));
 const target = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+
+Deno.test("video sources accept either current text or both, with a shared byte budget", () => {
+  assertEquals(videoTextInput({ transcript: " 第一条 " }), { transcript: "第一条" });
+  assertEquals(videoTextInput({ description: "球员挥拍" }), { description: "球员挥拍" });
+  assertEquals(videoTextInput({ transcript: "球".repeat(4000), description: "拍".repeat(4000) }), {
+    transcript: "球".repeat(4000), description: "拍".repeat(4000),
+  });
+  assertThrows(() => videoTextInput({ transcript: "球".repeat(4000), description: "拍".repeat(4001) }));
+});
+
+Deno.test("video sources reject missing text, media fields and non-text values", () => {
+  for (const source of [{}, { transcript: " " }, { description: 123 }, { transcript: "示例", images: [] },
+    { description: "示例", asset: { type: "image" } }, { description: "示例", video_url: "https://example.invalid/" }]) {
+    assertThrows(() => videoTextInput(source));
+  }
+});
+
 function input() {
   return {
     action: "judge",
@@ -151,7 +169,7 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
     Object.keys(vars).map((k) => [k, Deno.env.get(k)]),
   );
   Object.entries(vars).forEach(([k, v]) => Deno.env.set(k, v));
-  let upstreamCalls = 0, cloudCalls = 0;
+  let upstreamCalls = 0, cloudCalls = 0, billingCalls = 0;
   let failed = false, matched = true;
   let probability: number | undefined;
   let limit: string | null = null;
@@ -175,6 +193,7 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
         return json({ tier: "free", status: "active" });
       }
       const rpc = url.pathname.split("/").at(-1), args = await req.json();
+      billingCalls++;
       if (rpc === "cleanup_classification") return json(null);
       if (rpc === "ensure_daily_credits") return json([{ daily_balance: 30 }]);
       if (rpc === "begin_classification") {
@@ -250,6 +269,15 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
   try {
     assertEquals((await call(input(), false)).status, 401);
     assertEquals(upstreamCalls, 0);
+    const closed = await call({ action: "video_text_capabilities" });
+    assertEquals(await closed.json(), { available: false, credits: null });
+    assertEquals((await call({
+      action: "video_text_judge", idempotency_key: "video-v1", sources: { transcript: "测试口播" },
+    })).status, 503);
+    assertEquals((await call({
+      action: "video_text_judge", idempotency_key: "video-v1", sources: { transcript: "测试口播" }, images: [image],
+    })).status, 400);
+    assertEquals([upstreamCalls, cloudCalls, billingCalls], [0, 0, 0]);
     const result = await call(input());
     assertEquals(result.status, 200);
     assertEquals((await result.json()).classification_id, target);

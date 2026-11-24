@@ -221,7 +221,10 @@ try {
     await compareTransform(cropped, croppedFlipped, "vertical");
     if (mode === "asset") {
       const temp = await capture("插入创作板");
-      assert.deepEqual(temp, croppedFlipped, "both material annotation outputs preserve every tool and mirror");
+      const { editable, source_sha256, ...referenceMeta } = croppedFlipped.meta;
+      assert.ok(editable.shapes.length);
+      assert.match(source_sha256, /^[a-f0-9]{64}$/);
+      assert.deepEqual(temp, { dataUrl: croppedFlipped.dataUrl, meta: referenceMeta }, "both exits preserve the same pixels and prompt coordinates");
     }
     await dialog.getByRole("button", { name: "清空", exact: true }).click();
     assert.equal((await capture(saveButton)).meta.shapes.length, 0);

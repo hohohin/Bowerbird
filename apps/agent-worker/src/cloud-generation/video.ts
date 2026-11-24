@@ -12,32 +12,76 @@ import type { WorkerFetch } from "./runtime.ts";
 type Control = (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
 const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 
-export async function probeVideo(bytes: Uint8Array, image: boolean | "audio" = false): Promise<{ duration: number; width: number; height: number; fps: number }> {
+interface ProbeStream {
+  codec_type?: string;
+  codec_name?: string;
+  sample_rate?: string;
+  channels?: number;
+  width?: number;
+  height?: number;
+  avg_frame_rate?: string;
+}
+
+async function probeMedia(bytes: Uint8Array): Promise<{ format?: { duration?: string; format_name?: string }; streams?: ProbeStream[] }> {
   const folder = await mkdtemp(join(tmpdir(), "bowerbird-video-probe-"));
   try {
     const path = join(folder, "video.mp4");
     await writeFile(path, bytes);
     const output = await new Promise<string>((resolve, reject) => {
-      execFile("ffprobe", ["-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration,format_name:stream=codec_type,width,height,avg_frame_rate", "-of", "json", path], { timeout: 30_000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout) => error ? reject(new Error("video_probe_failed")) : resolve(String(stdout)));
+      execFile("ffprobe", ["-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration,format_name:stream=codec_type,codec_name,width,height,avg_frame_rate,sample_rate,channels", "-of", "json", path], { timeout: 30_000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout) => error ? reject(new Error("video_probe_failed")) : resolve(String(stdout)));
     });
-    const info = JSON.parse(output);
-    if (image === "audio") {
-      if (!["wav", "mp3"].includes(info.format?.format_name) || !info.streams?.some((item: { codec_type?: string }) => item.codec_type === "audio") || !Number.isFinite(Number(info.format?.duration)) || Number(info.format.duration) <= 0) throw new Error("video_audio_probe_invalid");
-      return { duration: Number(info.format.duration), width: 0, height: 0, fps: 0 };
-    }
-    const stream = info.streams?.find((item: { codec_type?: string }) => item.codec_type === "video");
-    const [num, den] = String(stream?.avg_frame_rate).split("/").map(Number);
-    const result = { duration: Number(info.format?.duration), width: Number(stream?.width), height: Number(stream?.height), fps: num / den };
-    const required = image ? [result.width, result.height] : Object.values(result);
-    if (required.some(number => !Number.isFinite(number) || number <= 0)) throw new Error("video_probe_invalid");
-    return result;
+    return JSON.parse(output);
   } finally { await rm(folder, { recursive: true, force: true }); }
 }
 
-async function download(fetch: WorkerFetch, url: string, limit: number): Promise<Uint8Array> {
+export async function probeVideo(bytes: Uint8Array, image: boolean | "audio" = false): Promise<{ duration: number; width: number; height: number; fps: number }> {
+  const info = await probeMedia(bytes);
+  if (image === "audio") {
+    if (!["wav", "mp3"].includes(info.format?.format_name ?? "") || !info.streams?.some(item => item.codec_type === "audio") || !Number.isFinite(Number(info.format?.duration)) || Number(info.format?.duration) <= 0) throw new Error("video_audio_probe_invalid");
+    return { duration: Number(info.format?.duration), width: 0, height: 0, fps: 0 };
+  }
+  const stream = info.streams?.find(item => item.codec_type === "video");
+  const [num, den] = String(stream?.avg_frame_rate).split("/").map(Number);
+  const result = { duration: Number(info.format?.duration), width: Number(stream?.width), height: Number(stream?.height), fps: num / den };
+  const required = image ? [result.width, result.height] : Object.values(result);
+  if (required.some(number => !Number.isFinite(number) || number <= 0)) throw new Error("video_probe_invalid");
+  return result;
+}
+
+export async function probeMonoSpeechMp3(bytes: Uint8Array): Promise<number> {
+  const info = await probeMedia(bytes);
+  const stream = info.streams?.[0];
+  const duration = Number(info.format?.duration);
+  if (info.format?.format_name !== "mp3" || info.streams?.length !== 1 ||
+      stream?.codec_type !== "audio" || stream.codec_name !== "mp3" || stream.sample_rate !== "16000" ||
+      stream.channels !== 1 || !Number.isFinite(duration) || duration <= 0) {
+    throw new Error("invalid_file_speech_media");
+  }
+  return duration;
+}
+
+export async function probeSilentH264Mp4(bytes: Uint8Array): Promise<{ durationMs: number; width: number; height: number; fps: number }> {
+  const info = await probeMedia(bytes);
+  const stream = info.streams?.[0];
+  const [num, den] = String(stream?.avg_frame_rate).split("/").map(Number);
+  const result = {
+    durationMs: Math.round(Number(info.format?.duration) * 1000),
+    width: Number(stream?.width),
+    height: Number(stream?.height),
+    fps: num / den,
+  };
+  if (!info.format?.format_name?.split(",").includes("mp4") || info.streams?.length !== 1 ||
+      stream?.codec_type !== "video" || stream.codec_name !== "h264" ||
+      Object.values(result).some(n => !Number.isFinite(n) || n <= 0)) {
+    throw new Error("invalid_silent_video_media");
+  }
+  return result;
+}
+
+export async function downloadBoundedMedia(fetch: WorkerFetch, url: string, limit: number, signal?: AbortSignal): Promise<Uint8Array> {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hostname === "localhost" || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(parsed.hostname)) throw new Error("video_url_invalid");
-  const response = await fetch(url, { method: "GET", redirect: "error" });
+  const response = await fetch(url, { method: "GET", redirect: "error", signal });
   if (!response.ok) throw new Error("video_download_failed");
   const length = Number(response.headers.get("content-length"));
   if (length > limit) throw new Error("video_download_limit");
@@ -80,7 +124,7 @@ export async function executeVideo(input: VideoInput, job: { id: string; leaseId
       for (const reference of input.reference_videos) {
         const signed = await control({ action: "video_input_url", ...identity, objectKey: reference.object_key, bytes: reference.bytes });
         if (typeof signed.url !== "string") throw new Error("video_input_url_invalid");
-        const bytes = await download(fetch, signed.url, reference.bytes);
+        const bytes = await downloadBoundedMedia(fetch, signed.url, reference.bytes);
         if (bytes.length !== reference.bytes) throw new Error("video_input_size_mismatch");
         const info = await probe(bytes);
         if (reference.duration !== undefined && Math.abs(info.duration - reference.duration) > 0.05) throw new Error("video_reference_quoted_duration_mismatch");
@@ -95,7 +139,7 @@ export async function executeVideo(input: VideoInput, job: { id: string; leaseId
       for (const reference of input.reference_audios ?? []) {
         const signed = await control({ action: "video_input_url", ...identity, objectKey: reference.object_key, bytes: reference.bytes });
         if (typeof signed.url !== "string") throw new Error("video_audio_url_invalid");
-        const bytes = await download(fetch, signed.url, reference.bytes);
+        const bytes = await downloadBoundedMedia(fetch, signed.url, reference.bytes);
         if (bytes.length !== reference.bytes) throw new Error("video_audio_size_mismatch");
         const info = await probe(bytes, "audio");
         // Decoder gapless duration and MP3 container duration may differ; enforce actual bytes here.
@@ -123,7 +167,7 @@ export async function executeVideo(input: VideoInput, job: { id: string; leaseId
       await control({ action: task.status === "cancelled" ? "cancelled" : "fail", ...identity, safeErrorCode: task.errorCode ?? `video_${task.status}`, safeMessage: "方舟视频任务未成功，冻结积分将退回" });
       return;
     }
-    const bytes = await download(fetch, task.videoUrl!, MAX_VIDEO_BYTES);
+    const bytes = await downloadBoundedMedia(fetch, task.videoUrl!, MAX_VIDEO_BYTES);
     await probe(bytes);
     const upload = await control({ action: "output_upload", ...identity, mime: "video/mp4" });
     if (typeof upload.uploadUrl !== "string" || typeof upload.objectKey !== "string") throw new Error("video_output_upload_invalid");

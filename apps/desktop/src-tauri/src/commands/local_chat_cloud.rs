@@ -86,6 +86,9 @@ pub(super) async fn request_for_user(cloud: &CloudClient, auth: &AuthClient, bod
         .map_err(|_| error("Cloud 对话响应读取失败"))?;
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| error("Cloud 对话响应无效"))?;
     if !status.is_success() {
+        if status.as_u16() == 409 && value["error"]["code"] == "quote_changed" {
+            return Err(error("云端对话报价已变化，请先核对原请求及当前报价。"));
+        }
         let message = value["error"]["message"]
             .as_str()
             .unwrap_or("Cloud 对话暂时不可用，请稍后重试");

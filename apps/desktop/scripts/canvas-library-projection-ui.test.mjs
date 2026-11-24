@@ -11,11 +11,12 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 page.setDefaultTimeout(8000);
 const errors = [];
+page.setDefaultNavigationTimeout(60000);
 page.on('pageerror', error => errors.push(error.message));
 await page.addInitScript(() => localStorage.setItem('bowerbird.canvasLibraryWidth', new URL(location.href).searchParams.get('test-library-width') ?? '480'));
 await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
 const panel = page.locator('.canvas-source-panel');
-const nav = panel.getByRole('tablist', { name: '素材视图切换条', exact: true });
+const nav = panel.getByRole('tablist', { name: '素材库来源', exact: true });
 const more = panel.getByRole('button', { name: '更多素材库控件', exact: true });
 const types = panel.locator('.library-media-switch[aria-label="素材类型"]');
 async function assertClosedControlsHidden() {
@@ -29,7 +30,7 @@ async function openControls() {
   await page.waitForTimeout(450);
 }
 async function assertIconVisible(button) {
-  const icon = await button.locator('svg').evaluate(svg => {
+  const icon = await button.locator('svg').first().evaluate(svg => {
     const style = getComputedStyle(svg), box = svg.getBoundingClientRect();
     return { visibility: style.visibility, display: style.display, opacity: Number(style.opacity), stroke: style.stroke, width: box.width, height: box.height };
   });
@@ -45,6 +46,14 @@ try {
     if (await open.isVisible()) await open.click();
     await nav.waitFor();
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    const activeSource = nav.getByRole('tab', { selected: true });
+    const activeLabel = activeSource.locator('.library-view-label');
+    const fits = await activeLabel.evaluate(label => {
+      const button = label.closest('button'), bounds = button.closest('.canvas-source-panel').getBoundingClientRect();
+      const box = label.getBoundingClientRect();
+      return getComputedStyle(label).opacity === '1' && box.width > 0 && box.left >= bounds.left && box.right <= bounds.right;
+    });
+    assert.equal(fits, true, 'the active source label fits before hover');
     await nav.hover(); await page.waitForTimeout(550);
     assert.equal(await more.isVisible(), width === 480, 'exercise both overflow and inline controls');
     await assertClosedControlsHidden();

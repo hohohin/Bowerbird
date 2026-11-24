@@ -11,6 +11,35 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { ClassificationPlayback } from "./ClassificationPlayback";
 import { ClassificationDiagnostics } from "./ClassificationDiagnostics";
 import { ClassificationLabelDetails, classificationOrigin } from "./ClassificationLabelDetails";
+import { materialCatalog } from "../lib/materialCatalog";
+import { VideoTextTags } from "./VideoTextTags";
+
+function VideoTaggingTarget({ projectId }: { projectId: string | null }) {
+  const [query, setQuery] = useState("");
+  const [videos, setVideos] = useState<{ id: string; name: string }[]>([]);
+  const [assetId, setAssetId] = useState("");
+  const [status, setStatus] = useState("loading");
+  useEffect(() => {
+    let current = true;
+    const timer = setTimeout(() => {
+      void materialCatalog.page({ kind: "all", id: null, projectId, media: "videos", query: query.trim(), generated: null, color: null }, 0, 30)
+        .then(items => { if (current) { setVideos(items); setStatus("ready"); } })
+        .catch(() => { if (current) setStatus("error"); });
+    }, 175);
+    return () => { current = false; clearTimeout(timer); };
+  }, [projectId, query]);
+  return <section aria-label="选择打标签的视频" className="classification-section space-y-2">
+    <h3 className="font-medium">视频文本打标签</h3>
+    <input type="search" className="w-full rounded border border-edge bg-panel2 px-3 py-2" aria-label="搜索视频素材" placeholder="搜索视频素材"
+      value={query} onChange={event => { setQuery(event.target.value); setAssetId(""); setStatus("loading"); }}/>
+    {status === "error" ? <p role="alert">无法读取视频素材。</p> : status === "loading" ? <p role="status">正在读取视频素材…</p> : <select className="w-full rounded border border-edge bg-panel2 px-3 py-2"
+      aria-label="选择视频素材" value={assetId} onChange={event => setAssetId(event.target.value)}>
+      <option value="">{videos.length ? "选择视频素材" : "暂无匹配视频"}</option>
+      {videos.map(video => <option key={video.id} value={video.id}>{video.name}</option>)}
+    </select>}
+    {assetId && <VideoTextTags assetId={assetId} key={assetId} placement="classification"/>}
+  </section>;
+}
 
 function JevResults({ progress }: { progress: NonNullable<LocalClassificationStatus["jev_progress"]> }) {
   const report = progress.report;
@@ -324,6 +353,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         </div>
       </section>
     </div>
+    {view === "labels" && !folder && !globalScope && <VideoTaggingTarget key={projectId ?? ""} projectId={projectId ?? null}/>}
   </ModalShell>
     <ConfirmDialog open={confirmRescan} title="确认重新分类" danger
       message={<>此操作会删除当前范围内参与重分类素材的已有自动标签，再重新分类，是否确认？已有人工归类的素材会跳过，人工正反例及来源不明的旧版归属会保留。

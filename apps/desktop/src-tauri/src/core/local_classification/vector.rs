@@ -82,7 +82,7 @@ pub fn uninstall(root: &Path) -> Result<(), String> {
     }
 }
 
-fn verify(path: &Path, hash: &str) -> Result<(), String> {
+pub(in crate::core) fn verify(path: &Path, hash: &str) -> Result<(), String> {
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 128 * 1024];
@@ -100,7 +100,7 @@ fn verify(path: &Path, hash: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn cancellable<T>(
+pub(in crate::core) async fn cancellable<T>(
     cancel: &AtomicBool,
     future: impl std::future::Future<Output = Result<T, reqwest::Error>>,
 ) -> Result<T, String> {
@@ -126,6 +126,18 @@ async fn download(
     cancel: &AtomicBool,
     progress: &impl Fn(&str, u64, u64),
 ) -> Result<(), String> {
+    download_with_io(root, urls, (name, hash, expected), cancel, progress, |error| error.to_string()).await
+}
+
+pub(in crate::core) async fn download_with_io(
+    root: &Path,
+    urls: &[&str],
+    artifact: (&str, &str, u64),
+    cancel: &AtomicBool,
+    progress: &impl Fn(&str, u64, u64),
+    io_error: fn(std::io::Error) -> String,
+) -> Result<(), String> {
+    let (name, hash, expected) = artifact;
     let destination = root.join(name);
     if destination.exists() {
         let path = destination.clone();
@@ -138,9 +150,7 @@ async fn download(
             progress(name, expected, expected);
             return Ok(());
         }
-        tokio::fs::remove_file(&destination)
-            .await
-            .map_err(|e| e.to_string())?;
+        tokio::fs::remove_file(&destination).await.map_err(io_error)?;
     }
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
@@ -168,9 +178,7 @@ async fn download(
         format!("下载 {name} 失败：{last_error}。请检查系统代理是否可用，以及当前网络能否访问 Hugging Face 镜像 / GitHub。")
     })?;
     let partial = root.join(format!("{name}.part"));
-    let mut file = tokio::fs::File::create(&partial)
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut file = tokio::fs::File::create(&partial).await.map_err(io_error)?;
     use futures_util::StreamExt;
     let mut stream = response.bytes_stream();
     let mut digest = Sha256::new();
@@ -190,21 +198,19 @@ async fn download(
         if done > expected {
             return Err("下载文件大小与固定版本不符".into());
         }
-        file.write_all(&bytes).await.map_err(|e| e.to_string())?;
+        file.write_all(&bytes).await.map_err(io_error)?;
         digest.update(&bytes);
         if last.elapsed() > std::time::Duration::from_millis(250) {
             progress(name, done, expected);
             last = std::time::Instant::now();
         }
     }
-    file.flush().await.map_err(|e| e.to_string())?;
+    file.flush().await.map_err(io_error)?;
     drop(file);
     if done != expected || format!("{:x}", digest.finalize()) != hash {
         return Err("下载文件校验失败，请重试安装".into());
     }
-    tokio::fs::rename(partial, destination)
-        .await
-        .map_err(|e| e.to_string())?;
+    tokio::fs::rename(partial, destination).await.map_err(io_error)?;
     progress(name, done, expected);
     Ok(())
 }

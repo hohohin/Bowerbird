@@ -1,4 +1,5 @@
-import { workflowRuns, type CanvasWorkflow } from "./canvasWorkflow";
+import { workflowNodeRun, workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowRun } from "./canvasWorkflow";
+import { generationPromptNodeId } from "./projectNodeIds";
 
 function same(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -20,10 +21,47 @@ function mergeValue<T>(before: T, local: T, remote: T): T {
 }
 
 /** Merge additions/removals from chat without dropping queued edits or execution state. */
-export function mergeWorkflowChanges(before: CanvasWorkflow, local: CanvasWorkflow, remote: CanvasWorkflow): CanvasWorkflow {
+export function mergeWorkflowChanges(before: CanvasWorkflow, local: CanvasWorkflow, remote: CanvasWorkflow,
+  liveGeneration?: (nodeId: string, run: WorkflowRun) => boolean): CanvasWorkflow {
   const baseNodes = new Map(before.nodes.map(node => [node.id, node]));
   const localNodes = new Map(local.nodes.map(node => [node.id, node]));
   const remoteNodes = new Map(remote.nodes.map(node => [node.id, node]));
+  const baseRuns = new Map(workflowRuns(before).map(run => [run.id, run]));
+  const localRuns = new Map(workflowRuns(local).map(run => [run.id, run]));
+  const remoteRuns = new Map(workflowRuns(remote).map(run => [run.id, run]));
+  const staleSteps = new Map<string, Set<string>>();
+  const staleLoopRuns = new Set<string>();
+  for (const node of liveGeneration ? local.nodes : []) {
+    if (node.kind !== "generation" && node.kind !== "comfy-video") continue;
+    const run = workflowNodeRun(local, node.id), step = run?.steps[node.id];
+    if (!run || !step) continue;
+    const baseRun = baseRuns.get(run.id), externalRun = remoteRuns.get(run.id);
+    if (!liveGeneration?.(node.id, run) && !(baseRun && liveGeneration?.(node.id, baseRun))) continue;
+    const loop = run.loop, externalLoop = externalRun?.loop;
+    const iterationDelta = loop && externalLoop?.nodeId === loop.nodeId ? externalLoop.index - loop.index : 0;
+    if (iterationDelta > 0) continue;
+    const external = externalRun?.steps[node.id];
+    const sameAttempt = !!external && (!step.jobId || external.jobId === step.jobId) && (!step.turnKey || external.turnKey === step.turnKey);
+    const terminal = external?.status === "done" || external?.status === "failed" || externalRun?.status === "stopped";
+    const behind = iterationDelta < 0 || !sameAttempt || run.status === "done" && !!externalRun && workflowRunActive(externalRun) && same(run.order, externalRun.order)
+      || !terminal && (step.generationSubmission === "submitted" && external?.generationSubmission !== "submitted"
+      || step.status !== "pending" && external?.status === "pending"
+      || (step.status === "done" || step.status === "failed" || run.status === "stopped") && externalRun && workflowRunActive(externalRun));
+    if (behind) {
+      const ids = staleSteps.get(run.id) ?? new Set<string>();
+      ids.add(node.id);
+      staleSteps.set(run.id, ids);
+      if (iterationDelta < 0) staleLoopRuns.add(run.id);
+    }
+    // An external add may carry an older execution checkpoint for this card.
+    // Rebase only execution data; geometry and editable fields still use the ordinary merge.
+    const base = baseNodes.get(node.id), other = remoteNodes.get(node.id);
+    const session = step.jobId && step.turnKey ? generationPromptNodeId(step.jobId, step.turnKey) : undefined;
+    const behindSession = session && node.activeSessionNodeId === session && other?.activeSessionNodeId !== session;
+    if (!base || !behind && !behindSession) continue;
+    remoteNodes.set(node.id, other ? { ...other, activeSessionNodeId: base.activeSessionNodeId, sessionNodeIds: base.sessionNodeIds,
+      outputs: base.outputs, resultNodeIds: base.resultNodeIds } : base);
+  }
   const nodes = [...new Set([...localNodes.keys(), ...remoteNodes.keys()])].flatMap(id => {
     const base = baseNodes.get(id), localNode = localNodes.get(id), remoteNode = remoteNodes.get(id);
     // A drag and a native execution checkpoint can update the same card concurrently.
@@ -56,11 +94,20 @@ export function mergeWorkflowChanges(before: CanvasWorkflow, local: CanvasWorkfl
     const name = mergeValue(before.cardNames?.[id], local.cardNames?.[id], remote.cardNames?.[id]);
     return name === undefined ? [] : [[id, name]];
   }));
-  const baseRuns = new Map(workflowRuns(before).map(run => [run.id, run]));
-  const localRuns = new Map(workflowRuns(local).map(run => [run.id, run]));
-  const remoteRuns = new Map(workflowRuns(remote).map(run => [run.id, run]));
   const runs = [...new Set([...localRuns.keys(), ...remoteRuns.keys()])].flatMap(id => {
-    const run = mergeValue(baseRuns.get(id), localRuns.get(id), remoteRuns.get(id));
+    const base = baseRuns.get(id), current = localRuns.get(id), external = remoteRuns.get(id), stale = staleSteps.get(id);
+    if (stale && current && external && !staleLoopRuns.has(id)) {
+      const steps = Object.fromEntries([...new Set([...Object.keys(current.steps), ...Object.keys(external.steps)])].flatMap(nodeId => {
+        const previous = base?.steps[nodeId];
+        const ours = current.steps[nodeId], theirs = external.steps[nodeId];
+        const regressed = !theirs || theirs.status === "pending" && ours && ours.status !== "pending"
+          || (ours?.status === "done" || ours?.status === "failed") && (theirs.status === "running" || theirs.status === "waiting");
+        const step = mergeValue(previous, ours, stale.has(nodeId) || regressed ? previous : theirs);
+        return step ? [[nodeId, step]] : [];
+      }));
+      return [{ ...current, steps }];
+    }
+    const run = mergeValue(base, current, stale ? base : external);
     return run ? [run] : [];
   });
   return { schema_version: 1, nodes, cardNames,

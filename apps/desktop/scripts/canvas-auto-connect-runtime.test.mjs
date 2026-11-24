@@ -13,7 +13,10 @@ try {
   const result = await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { CanvasWorkflowController, filterAutomaticMediaValues } = await import('/src/lib/canvasWorkflowRuntime.ts');
-    const { emptyWorkflow, newWorkflowNode, compileGenerationPrompt, compileAgentPrompt, workflowInputValues, generationInputNode } = await import('/src/lib/canvasWorkflow.ts');
+    const { emptyWorkflow, newWorkflowNode, compileGenerationPrompt, compileAgentPrompt, workflowInputValues, generationInputNode,
+      assertWorkflowAcyclic, h3RunReferences, H3_R2V_INPUT_PORTS, selectWorkflowVideoProvider, workflowExecutionInputs } = await import('/src/lib/canvasWorkflow.ts');
+    const { planAutomaticConnection } = await import('/src/lib/workflowAutoConnect.ts');
+    const { DEFAULT_COMFY_VIDEO, comfyVideoOptionsForMode } = await import('/src/lib/comfyVideo.ts');
     const { videoFrameInputValues } = await import('/src/lib/workflowVideoFrames.ts');
     const { captureWorkflowTemplate, instantiateWorkflowTemplate, reconfigureTemplateInstance, parseWorkflowTemplate } = await import('/src/lib/workflowTemplates.ts');
     const { includeTemplateContent } = await import('/src/lib/workflowTemplateContent.ts');
@@ -44,6 +47,40 @@ try {
     const controller = new CanvasWorkflowController('auto-runtime'); await controller.load();
     const source = { ...newWorkflowNode('instruction', 0, 0, 'codex'), id: 'source', action: 'reuse',
       outputs: { text: { type: 'text', text: 'reference text' }, image: { type: 'image', assetIds: ['photo'] } } };
+    {
+      const r2v = { ...newWorkflowNode('comfy-video', 0, 0, ''), id: 'r2v', comfyVideo: comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, 'r2v'),
+        inputs: { 'reference-audio': [{ assetId: 'old' }] } };
+      const mixed = { binding: { groupId: 'group', assetIds: ['photo', 'video', 'audio'] }, type: 'image', media: ['image', 'video', 'audio'] };
+      const plan = planAutomaticConnection([r2v], [mixed], r2v.id);
+      check(!plan.error && plan.bindings.length === 3, 'one R2V group feeds all three media ports');
+      for (const { inputId, binding } of plan.bindings) {
+        const type = binding.mediaFilter[0];
+        check(H3_R2V_INPUT_PORTS[type] === inputId, 'each R2V media port filters its own type');
+        r2v.inputs[inputId] = [binding];
+      }
+      check(!workflowExecutionInputs(r2v)['reference-audio'], 'R2V keeps legacy audio inactive');
+      check(!planAutomaticConnection([r2v], [mixed], r2v.id).bindings.length, 'reconnecting the same mixed group is a no-op');
+      const remote = selectWorkflowVideoProvider(r2v, 'jimeng');
+      const restored = selectWorkflowVideoProvider(remote, 'h3');
+      check(!remote.inputs[H3_R2V_INPUT_PORTS.video] && restored.inputs[H3_R2V_INPUT_PORTS.video][0].groupId === 'group', 'switching providers parks and restores R2V sources');
+      check(restored.inputs['reference-audio'][0].assetId === 'old', 'R2V provider round trip preserves legacy audio');
+      const frames = { ...restored, comfyVideo: { ...restored.comfyVideo, mode: 'frames' } };
+      check(!workflowExecutionInputs(frames)[H3_R2V_INPUT_PORTS.audio] && workflowExecutionInputs(frames)['reference-audio'][0].assetId === 'old', 'legacy modes ignore R2V sources');
+      const downstream = { ...newWorkflowNode('generation', 0, 0, ''), id: 'downstream', inputs: { image: [{ nodeId: r2v.id, portId: 'image' }] } };
+      const parkedR2V = { ...frames, inputs: { [H3_R2V_INPUT_PORTS.video]: [{ nodeId: downstream.id, portId: 'image' }] } };
+      assertWorkflowAcyclic([parkedR2V, downstream], parkedR2V.id, true);
+      const activeR2V = { ...parkedR2V, comfyVideo: r2v.comfyVideo };
+      await rejects(() => assertWorkflowAcyclic([activeR2V, downstream], activeR2V.id, true), 'restoring an R2V edge cannot make a cycle');
+      const parkedFrames = { ...r2v, inputs: { 'first-frame': [{ nodeId: downstream.id, portId: 'image' }] } };
+      assertWorkflowAcyclic([parkedFrames, downstream], parkedFrames.id, true);
+      const legacyText = { ...parkedFrames, comfyVideo: comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, 'text') };
+      await rejects(() => assertWorkflowAcyclic([legacyText, downstream], legacyText.id, true), 'legacy modes still check cycles through hidden frames on save');
+      const videos = Array.from({ length: 3 }, (_, index) => ({ assetId: `clip-${index}` }));
+      const full = { ...r2v, inputs: { [H3_R2V_INPUT_PORTS.video]: videos } };
+      check(!!planAutomaticConnection([full], [mixed], full.id).error, 'a mixed group is rejected atomically if its video socket is full');
+      const r2vValues = Object.fromEntries(plan.bindings.map(({ inputId, binding }) => [inputId, [{ type: 'image', assetIds: binding.mediaFilter }]]));
+      check(h3RunReferences(r2vValues, 'r2v').flat().join() === 'image,video,audio', 'R2V references preserve separate ordered media lists');
+    }
     const target = { ...newWorkflowNode('generation', 400, 0, 'codex'), id: 'target', prompt: 'draw' };
     const imageOnly = { ...newWorkflowNode('instruction', 400, 300, 'codex'), id: 'image-only', action: 'reuse' };
     await controller.edit([source, target, imageOnly]);

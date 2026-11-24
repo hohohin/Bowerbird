@@ -3,14 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } }, cacheDir: '.tmp/composer-h3-optimization/vite', server: { host: '127.0.0.1', port: 1711, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } }, optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html', 'scripts/fixtures/composer-h3-optimization.tsx'] }, cacheDir: '.tmp/composer-h3-optimization/vite', server: { host: '127.0.0.1', port: 1711, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
 page.setDefaultTimeout(10000);
 const errors = []; page.on('pageerror', error => errors.push(error.message));
 try {
-  await page.goto('http://127.0.0.1:1711/scripts/fixtures/canvas-reference/preview.html');
+  await page.goto('http://127.0.0.1:1711/scripts/fixtures/canvas-reference/preview.html', { timeout: 60000 });
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(async () => {
     const { React, createRoot } = await import('/scripts/fixtures/composer-h3-optimization.tsx');
@@ -85,7 +85,9 @@ try {
       };
       api.getAssetsByIds = async ids => ids.map(id => ({ id, ext: id === 'h3-video' ? 'mp4' : 'png', store_path: `/synthetic.${id === 'h3-video' ? 'mp4' : 'png'}` }));
       api.cloudAgentStart = async request => { window.cloudCalls.push(request); return { runId: `cloud-${window.cloudCalls.length}` }; };
-      api.cloudAgentGet = async runId => ({ runId, status: 'succeeded', snapshot: { run: {}, events: [{ type: 'text.result', display_payload: { schemaVersion: 1, text: 'integrated_multimodal_description: 先固定镜头，再缓慢后拉。' } }] } });
+      api.cloudAgentGet = async runId => window.failOptimization
+        ? { runId, status: 'failed', snapshot: { run: { safe_message: 'Agent Run 执行失败', error_code: 'cloud_text_skill_parameters_invalid' }, events: [] } }
+        : { runId, status: 'succeeded', snapshot: { run: {}, events: [{ type: 'text.result', display_payload: { schemaVersion: 1, text: 'integrated_multimodal_description: 先固定镜头，再缓慢后拉。' } }] } };
       if (host === 'library') {
         const { React, createRoot } = await import('/scripts/fixtures/composer-h3-optimization.tsx');
         const { LibraryComposer } = await import('/src/components/LibraryComposer.tsx');
@@ -100,16 +102,34 @@ try {
     await actual.getByRole('button', { name: '视频', exact: true }).click();
     await actual.getByTitle('选择视频模型', { exact: true }).click();
     await page.locator('[data-model-key="local:h3"]').click();
+    for (const [mode, label] of [['frames', '首尾帧'], ['reference', '单图']]) {
+      await actual.getByLabel('本地视频模式', { exact: true }).click();
+      await page.getByRole('option', { name: label, exact: true }).click();
+      await actual.locator('.ProseMirror').fill('雨中慢慢转身。');
+      await actual.getByRole('button', { name: '优化提示词', exact: true }).click();
+      await actual.locator('.ProseMirror').filter({ hasText: '先固定镜头，再缓慢后拉。' }).waitFor();
+      const params = await page.evaluate(() => JSON.parse(window.cloudCalls.at(-1).intentPrompt.split('\n')[1]).parameters);
+      assert.deepEqual([params.mode, params.firstFrameCount, params.lastFrameCount], [mode, 0, 0]);
+    }
+    if (host === 'canvas') {
+      await page.evaluate(() => { window.failOptimization = true; });
+      await actual.locator('.ProseMirror').fill('中文原文保留。');
+      await actual.getByRole('button', { name: '优化提示词', exact: true }).click();
+      await page.getByText(/提示词优化参数不符合当前生成模式要求/).first().waitFor();
+      assert.equal((await actual.locator('.ProseMirror').innerText()).trim(), '中文原文保留。');
+      await page.evaluate(() => { window.failOptimization = false; });
+    }
+    const beforeText = await page.evaluate(() => window.cloudCalls.length);
     await actual.getByLabel('本地视频模式', { exact: true }).click();
     await page.getByRole('option', { name: '文生视频', exact: true }).click();
     await actual.locator('.ProseMirror').fill('镜头先固定，然后后拉');
     await actual.getByRole('button', { name: '优化提示词', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('.composer-glass .ProseMirror')?.textContent.includes('先固定镜头')); 
+    await page.waitForFunction(() => document.querySelector('.composer-glass .ProseMirror')?.textContent.includes('先固定镜头'));
     assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p') ?? '{"document":{"nodes":[]}}').document.nodes.length), 0, 'optimizing a draft must not add H3/workflow cards');
-    assert.equal(await page.evaluate(() => window.cloudCalls.length), 1);
+    assert.equal(await page.evaluate(() => window.cloudCalls.length), beforeText + 1);
     assert.equal(await page.evaluate(() => window.localCalls.length), 0);
-    assert.equal(await page.evaluate(() => window.cloudCalls[0].projectId), host === 'canvas' ? 'p' : undefined);
-    assert.equal(await page.evaluate(() => window.cloudCalls[0].references.length), 0);
+    assert.equal(await page.evaluate(() => window.cloudCalls.at(-1).projectId), host === 'canvas' ? 'p' : undefined);
+    assert.equal(await page.evaluate(() => window.cloudCalls.at(-1).references.length), 0);
     assert.equal((await actual.locator('.ProseMirror').innerText()).trim(), '先固定镜头，再缓慢后拉。');
     for (const theme of ['light', 'dark']) {
       await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
@@ -119,10 +139,10 @@ try {
     await actual.getByRole('button', { name: '生成视频', exact: true }).click();
     await page.waitForFunction(() => window.localCalls.length === 1);
     assert.equal(await page.evaluate(() => window.localCalls[0].input.prompt), '编辑过的优化结果');
-    assert.equal(await page.evaluate(() => window.cloudCalls.length), 1, 'manual generation must not optimize again');
+    assert.equal(await page.evaluate(() => window.cloudCalls.length), beforeText + 1, 'manual generation must not optimize again');
     const persisted = await page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')).document);
     assert.equal(persisted.nodes.length, 1, 'only the explicitly generated H3 card is created');
-    assert.equal(await page.evaluate(() => window.cloudCalls[0].threadId), undefined, 'pure text does not request a creative thread');
+    assert.equal(await page.evaluate(() => window.cloudCalls.at(-1).threadId), undefined, 'pure text does not request a creative thread');
   }
   assert.deepEqual(errors, []);
   console.log('H3 composer: explicit optimization, direct replacement, no automatic generation, project isolation passed');

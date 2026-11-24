@@ -4,6 +4,9 @@
 mod native;
 #[cfg(windows)]
 pub use native::{Decision, Gesture};
+#[cfg(windows)]
+#[path = "../src/windows_shell.rs"]
+mod windows_shell;
 
 #[cfg(windows)]
 mod app {

@@ -80,7 +80,7 @@ fn instruction(labels: &[Label]) -> Result<String, String> {
     Ok(text)
 }
 
-fn parse(text: &str, existing: &[Label]) -> Result<Discovery, String> {
+pub(super) fn parse(text: &str, existing: &[Label]) -> Result<Discovery, String> {
     let text = text.trim();
     let text = text.strip_prefix("```json").or_else(|| text.strip_prefix("```"))
         .and_then(|s| s.trim().strip_suffix("```")).unwrap_or(text).trim();

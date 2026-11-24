@@ -19,7 +19,17 @@ static HRESULT open_local_reader(const wchar_t* source, IMFAttributes* attribute
     return MFCreateSourceReaderFromByteStream(stream.Get(), attributes, reader);
 }
 
-static HRESULT extract_frame(const wchar_t* source, const wchar_t* destination, UINT32* rotation) {
+static HRESULT read_duration(IMFSourceReader* reader, double* duration) {
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    const HRESULT result = reader->GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &value);
+    if (SUCCEEDED(result) && value.vt == VT_UI8) *duration = value.uhVal.QuadPart / 10000000.0;
+    PropVariantClear(&value);
+    return result;
+}
+
+static HRESULT extract_frame(const wchar_t* source, const wchar_t* destination, UINT32* rotation,
+                             UINT32* original_width, UINT32* original_height, double* duration) {
     ComPtr<IMFAttributes> attributes;
     CHECK_HR(MFCreateAttributes(&attributes, 1));
     CHECK_HR(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE));
@@ -62,6 +72,12 @@ static HRESULT extract_frame(const wchar_t* source, const wchar_t* destination, 
         display_width = area.Area.cx; display_height = area.Area.cy;
     }
     if (!display_width || !display_height || UINT64(left) + display_width > width || UINT64(top) + display_height > height) return E_INVALIDARG;
+    if (duration) {
+        const bool turned = *rotation == 90 || *rotation == 270;
+        *original_width = turned ? display_height : display_width;
+        *original_height = turned ? display_width : display_height;
+        read_duration(reader.Get(), duration);
+    }
     ComPtr<IMFMediaBuffer> buffer;
     CHECK_HR(sample->ConvertToContiguousBuffer(&buffer));
     // Lock exposes the contiguous representation; honor signed RGB row stride.
@@ -97,13 +113,14 @@ static HRESULT extract_frame(const wchar_t* source, const wchar_t* destination, 
     return output ? S_OK : E_FAIL;
 }
 
-extern "C" int bowerbird_windows_video_frame(const wchar_t* source, const wchar_t* destination, UINT32* rotation) {
+extern "C" int bowerbird_windows_video_frame(const wchar_t* source, const wchar_t* destination, UINT32* rotation,
+                                             UINT32* width, UINT32* height, double* duration) {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(com)) return com;
     const HRESULT media = MFStartup(MF_VERSION, MFSTARTUP_FULL);
     HRESULT result = media;
     if (SUCCEEDED(media)) {
-        try { result = extract_frame(source, destination, rotation); }
+        try { result = extract_frame(source, destination, rotation, width, height, duration); }
         catch (...) { result = E_FAIL; }
         MFShutdown();
     }
@@ -122,12 +139,7 @@ static HRESULT probe_video(const wchar_t* source, UINT32* width, UINT32* height,
     if (rotation == 90 || rotation == 270) {
         const UINT32 previous_width = *width; *width = *height; *height = previous_width;
     }
-    PROPVARIANT value;
-    PropVariantInit(&value);
-    const HRESULT result = reader->GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &value);
-    if (SUCCEEDED(result) && value.vt == VT_UI8) *duration = value.uhVal.QuadPart / 10000000.0;
-    PropVariantClear(&value);
-    return result;
+    return read_duration(reader.Get(), duration);
 }
 
 extern "C" int bowerbird_windows_video_probe(const wchar_t* source, UINT32* width, UINT32* height, double* duration) {

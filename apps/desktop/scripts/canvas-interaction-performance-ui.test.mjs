@@ -11,18 +11,11 @@ const root = process.cwd(), frozen = path.join(root, '.tmp/canvas-interaction-pe
 const out = '.tmp/canvas-interaction-performance'; await mkdir(out, { recursive: true });
 const slash = value => value.replaceAll('\\', '/');
 const renderedSourceHashes = {};
-// The isolated Tauri host owns a read-only IPC bridge. Test modules and the prebundled
-// Tauri JS client use a distinct mock bridge, exactly as in the Chrome fixture.
-const bridge = { __TAURI_INTERNALS__: '__CANVAS_TEST_IPC__', __TAURI_EVENT_PLUGIN_INTERNALS__: '__CANVAS_TEST_EVENTS__' };
+const runtime = native ? await import('./fixtures/canvas-interaction-performance/webview2.mjs') : null;
+const ipc = runtime?.isolatedCanvasIpc();
 const server = await createServer({ root, cacheDir: '.tmp/canvas-interaction-performance-vite' + (native ? '-native' : ''),
-  optimizeDeps: { entries: ['scripts/fixtures/canvas-interaction-performance/preview.html'], ...(native ? { esbuildOptions: {
-    define: Object.fromEntries(Object.entries(bridge).map(([a,b]) => ['window.' + a, 'window.' + b])),
-  } } : {}) }, plugins: [{
-  name: 'isolated-canvas-ipc', enforce: 'pre', transform(code, id) {
-    if (native && !id.includes('node_modules') && /\.[jt]sx?$/.test(id) && code.includes('__TAURI_'))
-      return code.replace(/__TAURI_INTERNALS__|__TAURI_EVENT_PLUGIN_INTERNALS__/g, key => bridge[key]);
-  },
-}, {
+  optimizeDeps: { entries: ['scripts/fixtures/canvas-interaction-performance/preview.html'], esbuildOptions: ipc?.esbuildOptions },
+  plugins: [...(ipc ? [ipc.plugin] : []), {
   name: 'interaction-instrumentation', enforce: 'pre',
   resolveId(source, importer) {
     if (!baseline || !importer || !source.startsWith('.')) return;
@@ -42,7 +35,7 @@ const server = await createServer({ root, cacheDir: '.tmp/canvas-interaction-per
   },
 }], server: { host: '127.0.0.1', port: 1628, strictPort: true, hmr: false, watch: null } });
 await server.listen();
-const host = native ? await (await import('./fixtures/canvas-interaction-performance/webview2.mjs')).openWebView(server.resolvedUrls.local[0]) : null;
+const host = runtime ? await runtime.openWebView(server.resolvedUrls.local[0]) : null;
 const browser = host?.browser ?? await chromium.launch({ channel: 'chrome', headless: true });
 const page = host?.page ?? await browser.newPage({ viewport: { width: 1800, height: 1200 } });
 if (native) await page.setViewportSize({ width: 1800, height: 1200 });
@@ -54,6 +47,12 @@ const workflow = page.locator('[data-workflow-card="workflow-0"]');
 const frame = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 const snapshot = () => page.evaluate(() => ({ canvas: window.snapshot(), workflow: JSON.parse(sessionStorage.getItem('workflow-p')).document }));
 const samples = [];
+async function waitForMountedBoard(count) {
+  await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
+  await page.waitForFunction(count => document.querySelectorAll('.canvas-plane [data-canvas-node]').length === count
+    && document.querySelectorAll('[data-workflow-target]').length === count / 3 * 2, count);
+  await frame();
+}
 async function resetStats() { await frame(); await page.evaluate(() => window.resetInteractionStats()); }
 async function collect(label, events) {
   await frame();
@@ -141,7 +140,7 @@ async function checkTyping() {
 }
 async function checkGeometry() {
   await page.goto('http://127.0.0.1:1628/scripts/fixtures/canvas-interaction-performance/preview.html');
-  await material.waitFor(); await workflow.waitFor(); await page.waitForTimeout(1200);
+  await material.waitFor(); await workflow.waitFor(); await waitForMountedBoard(300);
   assert.equal(await page.locator('.canvas-plane [data-canvas-node]').count(), 300);
   assert.equal(await page.locator('[data-workflow-target]').count(), 200);
   const initial = await snapshot();
@@ -275,7 +274,7 @@ async function checkMotion() {
   const large = process.argv.includes('--large'), groups = large ? 334 : 100;
   await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html' + (large ? '?large' : ''));
   await workflow.waitFor();
-  await page.waitForTimeout(1200);
+  await waitForMountedBoard(groups * 3);
   assert.equal(await page.locator('.canvas-plane [data-canvas-node]').count(), groups * 3);
   assert.equal(await page.locator('[data-workflow-target]').count(), groups * 2);
   const stage = page.locator('.canvas-stage'), bounds = await stage.boundingBox();
@@ -326,7 +325,7 @@ async function checkMotion() {
   }
   if (large) {
     await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html?large&overview');
-    await workflow.waitFor(); await page.waitForTimeout(1200);
+    await workflow.waitFor(); await waitForMountedBoard(groups * 3);
     const inView = await stage.evaluate(stage => {
       const view = stage.getBoundingClientRect();
       return [...stage.querySelectorAll('[data-canvas-node]')].filter(el => {

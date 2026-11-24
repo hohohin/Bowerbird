@@ -128,3 +128,33 @@ fn heic_import_rejects_excessive_size_before_decoding() {
     assert!(ingest_file(&paths, &db, &source).is_err());
     assert!(walk_media(&paths.images).is_empty());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn heic_color_managed_p3_and_pq_produce_sdr_previews() {
+    use image::{ImageDecoder, ImageReader};
+    let (directory, paths, db) = setup();
+    let p3 = include_bytes!("../../tests/fixtures/heic/synthetic-p3.heic").as_slice();
+    let pq = include_bytes!("../../tests/fixtures/heic/synthetic-pq.heic").as_slice();
+    for (name, bytes) in [("p3", p3), ("pq", pq)] {
+        let source = directory.path().join(format!("{name}.heic"));
+        fs::write(&source, bytes).unwrap();
+        let asset = ingest_file(&paths, &db, &source).unwrap();
+        let full = crate::core::external_files::compatible_image(&paths, &source).unwrap();
+        let mut decoder = ImageReader::open(&full).unwrap().into_decoder().unwrap();
+        assert!(decoder.icc_profile().unwrap().is_some(), "{name} PNG has no output color space");
+        let png = image::open(&full).unwrap().to_rgb8();
+        let thumb = image::open(asset.thumb_path.unwrap()).unwrap().to_rgb8();
+        assert_eq!(png.dimensions(), (384, 128));
+        assert_eq!(thumb.dimensions(), (384, 128));
+        if name == "p3" {
+            // The center of the green patch is near 0.9 linear, above 230 in either SDR encoding.
+            assert!(png.get_pixel(288, 64)[1] > 230 && thumb.get_pixel(288, 64)[1] > 230);
+        } else {
+            // Tone-mapped reference white and 4x white. Treating raw PQ codes as sRGB yields 148/186.
+            assert!(png.get_pixel(96, 64)[0] > 185 && thumb.get_pixel(96, 64)[0] > 185);
+            assert!(png.get_pixel(160, 64)[0] > 230 && thumb.get_pixel(160, 64)[0] > 230);
+        }
+        assert_eq!(fs::read(&source).unwrap().as_slice(), bytes);
+    }
+}

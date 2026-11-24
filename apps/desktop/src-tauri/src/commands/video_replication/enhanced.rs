@@ -114,17 +114,39 @@ pub(super) async fn prepare(root: PathBuf, project: String, reference_id: String
 
 /// Each paid stage has its own immutable receipt. An uncertain submission is queried,
 /// never silently replaced by a new request key.
-async fn stage(root: &Path, id: &str, name: &str, mut request: Value, cloud: &CloudClient, auth: &AuthClient) -> AppResult<Value> {
+async fn stage(root: &Path, id: &str, name: &str, request: Value, cloud: &CloudClient, auth: &AuthClient) -> AppResult<Value> {
     let owner = field(&read(root,id)?,"cloudUserId").to_owned();
-    if owner.is_empty() || auth.snapshot().user_id.as_deref() != Some(owner.as_str()) { return Err(error("账号已切换，请登录此强化复刻任务原账号后恢复")); }
-    let receipt_root = folder(root, id)?.join("stages");
-    fs::create_dir_all(&receipt_root)?;
-    let key = format!("replication:{id}:{name}");
-    let receipt_id = format!("{:x}", Sha256::digest(name.as_bytes()))[..32].to_owned();
-    let digest = format!("{:x}", Sha256::digest(serde_json::to_vec(&request)?));
+    stage_for_owner(&folder(root, id)?.join("stages"), &format!("replication:{id}:{name}"), name, Some(request), &owner, cloud, auth, None).await
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StageRecovery { New, Pending, Finished, Retryable }
+
+fn receipt_id(name: &str) -> String {
+    format!("{:x}", Sha256::digest(name.as_bytes()))[..32].to_owned()
+}
+
+pub(crate) fn stage_recovery(root: &Path, name: &str) -> AppResult<StageRecovery> {
+    let id = receipt_id(name);
+    match read(root, &id) {
+        Ok(receipt) if receipt["retryable"] == true => Ok(StageRecovery::Retryable),
+        Ok(receipt) if !receipt["result"].is_null() || receipt["terminal"] == true => Ok(StageRecovery::Finished),
+        Ok(receipt) if receipt["pending"] == true || !field(&receipt, "remoteTaskId").is_empty() => Ok(StageRecovery::Pending),
+        Ok(_) => Ok(StageRecovery::New),
+        Err(_) if !folder(root, &id)?.join("record.json").exists() => Ok(StageRecovery::New),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) async fn stage_for_owner(receipt_root: &Path, key: &str, name: &str, request: Option<Value>, owner: &str, cloud: &CloudClient, auth: &AuthClient, expected_credits: Option<i64>) -> AppResult<Value> {
+    if owner.is_empty() || auth.snapshot().user_id.as_deref() != Some(owner) { return Err(error("账号已切换，请登录任务原账号后恢复")); }
+    fs::create_dir_all(receipt_root)?;
+    let receipt_id = receipt_id(name);
+    let digest = request.as_ref().map(|request| serde_json::to_vec(request)
+        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))).transpose()?;
     let mut receipt = match read(&receipt_root, &receipt_id) {
         Ok(value) => {
-            if value["inputHash"] != digest { return Err(error("此步骤的输入已改变，请建立新的强化复刻任务")); }
+            if digest.as_deref().is_some_and(|expected| value["inputHash"] != expected) { return Err(error("此步骤的输入已改变，请建立新的强化复刻任务")); }
             value
         },
         Err(_) if !folder(&receipt_root, &receipt_id)?.join("record.json").exists() => {
@@ -134,15 +156,26 @@ async fn stage(root: &Path, id: &str, name: &str, mut request: Value, cloud: &Cl
         Err(e) => return Err(e),
     };
     if !receipt["result"].is_null() { return Ok(receipt["result"].clone()); }
+    let url = cloud.config().endpoint("understand-proxy").ok_or_else(|| error("当前构建未配置 Bowerbird Cloud"))?;
+    let query = |request: Value| stage_query(cloud, auth, owner, &url, request);
     let mut response = if !field(&receipt,"remoteTaskId").is_empty() {
-        cloud_request(cloud,auth,json!({"action":"get","job_id":receipt["remoteTaskId"]})).await?
+        query(json!({"action":"get","job_id":receipt["remoteTaskId"]})).await?
     } else if receipt["pending"] == true {
-        cloud_request(cloud,auth,json!({"action":"get-by-key","idempotency_key":key})).await?
+        query(json!({"action":"get-by-key","idempotency_key":key})).await?
     } else {
+        let mut request = request.ok_or_else(|| error("未找到待恢复的原任务，请重新检查转录状态"))?;
+        if let Some(expected) = expected_credits {
+            let capabilities = query(json!({"action":"replication-capabilities"})).await?;
+            let price = capabilities["services"].as_array().and_then(|services| services.iter().find(|service|
+                service["operation"] == request["operation"] && service["available"] == true))
+                .and_then(|service| service["credits"].as_i64());
+            if price != Some(expected) {
+                return Err(error("语音转录价格已变更或服务不可用，请刷新后重新确认"));
+            }
+        }
         receipt["pending"] = json!(true); save(&receipt_root,&receipt)?;
         request["action"] = json!("create"); request["idempotency_key"] = json!(key);
-        let url = cloud.config().endpoint("understand-proxy").ok_or_else(|| error("当前构建未配置 Bowerbird Cloud"))?;
-        let response = auth.send_authorized_for_user(cloud.http().post(url).json(&request),"强化复刻 Cloud 请求失败",&owner).await?;
+        let response = auth.send_authorized_for_user(cloud.http().post(&url).json(&request),"Cloud 任务提交失败",owner).await?;
         let status = response.status();
         let result: Value = response.json().await.map_err(|_| error("Cloud 返回格式无效"))?;
         if !status.is_success() {
@@ -160,18 +193,36 @@ async fn stage(root: &Path, id: &str, name: &str, mut request: Value, cloud: &Cl
         match field(&response,"status") {
             "succeeded" => {
                 let text = field(&response,"text");
+                receipt["terminal"] = json!(true);
+                if text.is_empty() { save(receipt_root, &receipt)?; }
                 if text.is_empty() { return Err(error("Cloud 结果为空或已过期")); }
                 receipt["result"] = serde_json::from_str(text).unwrap_or(json!({"text":text}));
                 receipt["charge"] = response["charge"].clone(); save(&receipt_root,&receipt)?;
                 return Ok(receipt["result"].clone());
             },
             "uploading" | "queued" | "leased" | "running" | "cancel_requested" => (),
+            "failed" | "cancelled" => {
+                receipt["terminal"] = json!(true);
+                receipt["retryable"] = json!(true);
+                save(receipt_root, &receipt)?;
+                return Err(error(response.pointer("/error/message").and_then(Value::as_str).unwrap_or("Cloud 任务未完成，可以重新转录")));
+            },
             _ => return Err(error(response.pointer("/error/message").and_then(Value::as_str).unwrap_or("Cloud 任务尚未完成"))),
         }
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        response = cloud_request(cloud,auth,json!({"action":"get","job_id":receipt["remoteTaskId"]})).await?;
+        response = query(json!({"action":"get","job_id":receipt["remoteTaskId"]})).await?;
     }
     Err(error("等待已结束，可稍后恢复原任务"))
+}
+
+async fn stage_query(cloud: &CloudClient, auth: &AuthClient, owner: &str, url: &str, request: Value) -> AppResult<Value> {
+    let response = auth.send_authorized_for_user(cloud.http().post(url).json(&request), "Cloud 任务查询失败", owner).await?;
+    let status = response.status();
+    let result: Value = response.json().await.map_err(|_| error("Cloud 返回格式无效"))?;
+    if !status.is_success() {
+        return Err(error(result.pointer("/error/message").and_then(Value::as_str).unwrap_or("Cloud 任务查询失败")));
+    }
+    Ok(result)
 }
 
 async fn analyze(root: &Path, id: &str, project: &str, cloud: &CloudClient, auth: &AuthClient) -> AppResult<Value> {
@@ -205,30 +256,11 @@ async fn analyze(root: &Path, id: &str, project: &str, cloud: &CloudClient, auth
 }
 
 async fn speech(root: &Path, id: &str, name: &str, source: &Path, cloud: &CloudClient, auth: &AuthClient) -> AppResult<Value> {
-    // Probe audio presence explicitly: a failed decoder must not masquerade as silence.
-    let mut probe = tokio::process::Command::new(crate::media::tools::resolve(crate::media::tools::Tool::Ffprobe)?);
-    #[cfg(windows)] probe.creation_flags(0x08000000);
-    probe.kill_on_drop(true).args(["-v","error","-select_streams","a:0","-show_entries","stream=index","-of","json"]).arg(source);
-    let output = tokio::time::timeout(std::time::Duration::from_secs(30),probe.output()).await
-        .map_err(|_| error("检查音轨超时"))??;
-    if !output.status.success() { return Err(error("无法检查视频音轨")); }
-    let info: Value = serde_json::from_slice(&output.stdout)?;
-    if info["streams"].as_array().is_some_and(|streams| streams.is_empty()) {
-        return Ok(json!({"text":"","utterances":[],"timingSource":"no-audio-track"}));
-    }
     let target = folder(root,id)?.join(format!("{name}.wav"));
-    if !target.exists() {
-        let mut args: Vec<std::ffi::OsString> = ["-hide_banner","-loglevel","error","-nostdin","-y","-i"].iter().map(|v| (*v).into()).collect();
-        args.push(source.into());
-        args.extend(["-map","0:a:0","-vn","-ac","1","-ar","16000","-c:a","pcm_s16le"].iter().map(|v| (*v).into()));
-        let temporary = target.with_extension("pending.wav");
-        args.push(temporary.clone().into_os_string()); run(args).await?;
-        fs::rename(temporary,&target)?;
+    match super::speech::prepare(source, &target).await? {
+        Some(request) => stage(root, id, name, request, cloud, auth).await,
+        None => Ok(json!({"text":"","utterances":[],"timingSource":"no-audio-track"})),
     }
-    let duration = crate::media::audio::decode(&target)?.duration;
-    if duration <= 0.0 || duration > 120.2 { return Err(error("提取音轨时长超出两分钟限制")); }
-    stage(root,id,name,json!({"operation":"speech-transcription","image":null,"audio":{"mime":"audio/wav",
-        "duration":duration,"base64":base64::engine::general_purpose::STANDARD.encode(fs::read(target)?)}}),cloud,auth).await
 }
 
 pub(super) fn handle(app: &tauri::AppHandle, root: PathBuf, project: String, action: &str, data: Value) -> AppResult<Value> {
@@ -283,6 +315,60 @@ pub(super) fn handle(app: &tauri::AppHandle, root: PathBuf, project: String, act
 
 #[cfg(test)] mod tests {
     use super::*;
+    #[tokio::test]
+    async fn video_transcript_cloud_price_and_uncertain_receipt_prevent_duplicate_creation() {
+        use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+        type Calls = Arc<Mutex<Vec<Value>>>;
+        async fn mock(State(calls): State<Calls>, Json(request): Json<Value>) -> (StatusCode, Json<Value>) {
+            calls.lock().unwrap().push(request.clone());
+            match field(&request, "action") {
+                "replication-capabilities" => (StatusCode::OK, Json(json!({
+                    "services":[{"operation":"speech-transcription","available":true,"credits":5}]
+                }))),
+                "create" => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":{"message":"response lost"}}))),
+                "get-by-key" => (StatusCode::OK, Json(json!({
+                    "status":"succeeded","job_id":"original-job","text":"{\"text\":\"\",\"utterances\":[]}","charge":{"actual":5}
+                }))),
+                _ => (StatusCode::BAD_REQUEST, Json(json!({}))),
+            }
+        }
+        let calls: Calls = Arc::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let router = Router::new().route("/functions/v1/understand-proxy", post(mock)).with_state(calls.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
+        let cloud = CloudClient::new(crate::cloud::config::CloudConfig {
+            supabase_url: Some(url), supabase_publishable_key: Some("local-test".into()), account_api_url: None,
+        }).unwrap();
+        let auth = AuthClient::with_test_session(cloud.clone());
+        let root = tempfile::tempdir().unwrap();
+        let name = "speech";
+        let key = "replication:transcript-test";
+        let request = json!({"operation":"speech-transcription","image":null,"audio":{"base64":"test"}});
+
+        let wrong_price = stage_for_owner(root.path(), key, name, Some(request.clone()), "test-user", &cloud, &auth, Some(9)).await;
+        assert!(wrong_price.unwrap_err().to_string().contains("价格已变更"));
+        assert_eq!(stage_recovery(root.path(), name).unwrap(), StageRecovery::New);
+        assert_eq!(calls.lock().unwrap().len(), 1);
+
+        let uncertain = stage_for_owner(root.path(), key, name, Some(request), "test-user", &cloud, &auth, Some(5)).await;
+        assert!(uncertain.is_err());
+        assert_eq!(stage_recovery(root.path(), name).unwrap(), StageRecovery::Pending);
+        auth.set_test_user("different-user");
+        assert!(stage_for_owner(root.path(), key, name, None, "test-user", &cloud, &auth, None).await.is_err());
+        assert_eq!(calls.lock().unwrap().len(), 3);
+        auth.set_test_user("test-user");
+        let recovered = stage_for_owner(root.path(), key, name, None, "test-user", &cloud, &auth, None).await.unwrap();
+        assert_eq!(recovered["text"], "");
+        assert_eq!(stage_recovery(root.path(), name).unwrap(), StageRecovery::Finished);
+        let cached = stage_for_owner(root.path(), key, name, None, "test-user", &cloud, &auth, None).await.unwrap();
+        assert_eq!(cached, recovered);
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[2]["idempotency_key"], key);
+        assert_eq!(calls[3], json!({"action":"get-by-key","idempotency_key":key}));
+        server.abort();
+    }
     #[tokio::test]
     #[ignore = "requires local FFmpeg; synthetic files only"]
     async fn real_scene_detection_prepares_contiguous_verified_clips() {

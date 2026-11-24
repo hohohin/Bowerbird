@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod audio;
+pub mod audio_trim;
 pub mod voice;
 pub mod voice_setup;
 pub mod text_documents;
@@ -20,6 +21,7 @@ mod macos_terminal;
 pub mod library;
 pub mod media_import;
 pub mod material_catalog;
+pub(crate) mod semantic_search;
 pub mod asset_archive;
 pub mod layers;
 pub mod drafts;
@@ -79,8 +81,12 @@ pub mod dreamina_account;
 
 pub mod video_poster;
 pub mod canvas_image_preview;
+mod media_trim;
 pub mod video_trim;
 pub mod video_audio;
+pub mod video_analysis;
+mod video_asset_revision;
+pub mod video_transcript;
 pub mod comfy_video;
 pub mod comfy_setup;
 mod comfy_discovery;

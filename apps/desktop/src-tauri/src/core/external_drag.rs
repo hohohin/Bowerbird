@@ -1,12 +1,11 @@
 //! Resolve registered originals for native outgoing drag. Never materialize copies.
 use crate::{
-    core::external_files,
     db::Database,
     error::{AppError, AppResult},
 };
 use std::{
     collections::HashSet,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 pub fn files(db: &Database, ids: &[String]) -> AppResult<Vec<PathBuf>> {
@@ -17,12 +16,10 @@ pub fn files(db: &Database, ids: &[String]) -> AppResult<Vec<PathBuf>> {
     if assets.len() != ids.iter().collect::<HashSet<_>>().len() {
         return Err(AppError::Other("部分素材已不存在，请刷新后重新选择".into()));
     }
-    let unavailable = || AppError::Other("部分原文件不可用，请重新定位后再拖出".into());
     let mut paths = Vec::with_capacity(assets.len());
     let mut seen = HashSet::new();
     for asset in assets {
-        let stored = Path::new(asset.store_path.as_deref().ok_or_else(unavailable)?);
-        let path = external_files::original(stored).map_err(|_| unavailable())?;
+        let path = db.resolve_asset_original(&asset.id)?;
         if seen.insert(path.clone()) {
             paths.push(path);
         }

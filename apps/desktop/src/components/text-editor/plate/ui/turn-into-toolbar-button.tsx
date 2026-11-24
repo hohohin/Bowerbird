@@ -9,21 +9,13 @@ import type { TElement } from 'platejs';
 import { DropdownMenuItemIndicator } from '@radix-ui/react-dropdown-menu';
 import {
   CheckIcon,
-  ChevronRightIcon,
-  Code2,
-  Columns3Icon,
-  FileCodeIcon,
   Heading1Icon,
   Heading2Icon,
   Heading3Icon,
   Heading4Icon,
   Heading5Icon,
   Heading6Icon,
-  ListIcon,
-  ListOrderedIcon,
   PilcrowIcon,
-  QuoteIcon,
-  SquareIcon,
 } from 'lucide-react';
 import { KEYS } from 'platejs';
 import { useEditorRef, useSelectionFragmentProp } from 'platejs/react';
@@ -41,7 +33,7 @@ import {
 
 import { ToolbarButton, ToolbarMenuGroup } from './toolbar';
 
-export const turnIntoItems = [
+const turnIntoItems = [
   {
     icon: <PilcrowIcon />,
     keywords: ['paragraph'],
@@ -84,60 +76,7 @@ export const turnIntoItems = [
     label: '标题 6',
     value: 'h6',
   },
-  {
-    icon: <ListIcon />,
-    keywords: ['unordered', 'ul', '-'],
-    label: '无序列表',
-    value: KEYS.ul,
-  },
-  {
-    icon: <ListOrderedIcon />,
-    keywords: ['ordered', 'ol', '1'],
-    label: '有序列表',
-    value: KEYS.ol,
-  },
-  {
-    icon: <SquareIcon />,
-    keywords: ['checklist', 'task', 'checkbox', '[]'],
-    label: '待办列表',
-    value: KEYS.listTodo,
-  },
-  {
-    icon: <ChevronRightIcon />,
-    keywords: ['collapsible', 'expandable'],
-    label: '折叠列表',
-    value: KEYS.toggle,
-  },
-  {
-    icon: <FileCodeIcon />,
-    keywords: ['```'],
-    label: '代码块',
-    value: KEYS.codeBlock,
-  },
-  {
-    icon: <Code2 />,
-    keywords: [
-      'code-drawing',
-      'diagram',
-      'plantuml',
-      'graphviz',
-      'flowchart',
-      'mermaid',
-    ],
-    label: '代码绘图',
-    value: KEYS.codeDrawing,
-  },
-  {
-    icon: <QuoteIcon />,
-    keywords: ['citation', 'blockquote', '>'],
-    label: '引用',
-    value: KEYS.blockquote,
-  },
-  {
-    icon: <Columns3Icon />,
-    label: '三栏',
-    value: 'action_three_columns',
-  },
+
 ];
 
 export function TurnIntoToolbarButton(props: DropdownMenuProps) {
@@ -159,9 +98,9 @@ export function TurnIntoToolbarButton(props: DropdownMenuProps) {
     <DropdownMenu open={open} onOpenChange={setOpen} modal={false} {...props}>
       <DropdownMenuTrigger asChild>
         <ToolbarButton
-          className="min-w-[125px]"
+          className="text-plate-block-type"
           pressed={open}
-          tooltip="段落类型"
+          tooltip="正文或标题"
           isDropdown
         >
           {selectedItem.label}
@@ -185,7 +124,13 @@ export function TurnIntoToolbarButton(props: DropdownMenuProps) {
               key={itemValue}
               className="min-w-[180px] pl-2 *:first:[span]:hidden"
               value={itemValue}
-              onSelect={() => setBlockType(editor, itemValue)}
+              onSelect={() => {
+                if (!editor.selection) {
+                  const end = editor.api.end([]);
+                  if (end) editor.tf.select(end);
+                }
+                setBlockType(editor, itemValue);
+              }}
             >
               <span className="pointer-events-none absolute right-2 flex size-3.5 items-center justify-center">
                 <DropdownMenuItemIndicator>

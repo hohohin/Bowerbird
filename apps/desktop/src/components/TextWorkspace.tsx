@@ -9,6 +9,7 @@ import { textWorkspaceRequestId } from "../lib/textWorkspaceSave";
 import type { Asset, Project } from "../lib/types";
 import { userErrorMessage } from "../lib/userError";
 import { TextPlateEditor, type TextPlateHandle } from "./TextPlateEditor";
+import { TextDocumentStateChoice } from "./TextDocumentStateChoice";
 import { TextWorkspaceLibrary } from "./TextWorkspaceLibrary";
 import { PortalTargetContext } from "../lib/portalTarget";
 import "./TextDocumentEditor.css";
@@ -134,12 +135,31 @@ function workspaceKeyDown(event: React.KeyboardEvent, panel: HTMLDivElement, clo
   if (event.key === "Tab") trapWorkspaceFocus(event, panel);
 }
 
+type WorkspaceSaveMenu = "collection" | "project" | "destinations" | null;
+const saveDestinations = [['collection', '保存到文件夹'], ['project', '保存到项目']] as const;
+
 function WorkspaceActions({ projectId, busy, menu, setMenu, save, add }: {
-  projectId?: string; busy: boolean; menu: "collection" | "project" | null;
-  setMenu(kind: "collection" | "project" | null): void;
+  projectId?: string; busy: boolean; menu: WorkspaceSaveMenu;
+  setMenu(kind: WorkspaceSaveMenu): void;
   save(destination: TextDocumentDestination, label: string): void; add(): void;
 }) {
-  return <div className="text-workspace-actions">{([['collection', '保存到文件夹'], ['project', '保存到项目']] as const).map(([kind, label]) => <div className="text-workspace-action" key={kind}><button disabled={busy} aria-expanded={menu === kind} onClick={() => setMenu(menu === kind ? null : kind)}>{label}<ChevronDown size={12}/></button>{menu === kind && <SaveDestinations kind={kind} projectId={projectId} busy={busy} onSelect={save}/>}</div>)}<button className="text-workspace-primary" disabled={busy} onClick={add}>添加到生成对话框<ArrowUp size={14}/></button></div>;
+  const compactTrigger = useRef<HTMLButtonElement>(null);
+  return <div className="text-workspace-actions">
+    <div className="text-workspace-action">
+      <div className="text-workspace-save-wide">
+        {saveDestinations.map(([kind, label]) => <button key={kind} disabled={busy} aria-expanded={menu === kind} onClick={() => setMenu(menu === kind ? null : kind)}>{label}<ChevronDown size={12}/></button>)}
+      </div>
+      <button ref={compactTrigger} className="text-workspace-save-compact" disabled={busy} aria-expanded={menu !== null} onClick={() => setMenu(menu ? null : 'destinations')}>保存到<ChevronDown size={12}/></button>
+      {menu === 'destinations' && <div className="text-workspace-destinations text-workspace-save-compact" role="group" aria-label="选择保存位置">
+        {saveDestinations.map(([kind, label]) => <button key={kind} onClick={() => {
+          setMenu(kind);
+          compactTrigger.current?.focus();
+        }}>{label}</button>)}
+      </div>}
+      {menu && menu !== 'destinations' && <SaveDestinations key={menu} kind={menu} projectId={projectId} busy={busy} onSelect={save}/>}
+    </div>
+    <button className="text-workspace-primary" disabled={busy} onClick={add}>添加到生成对话框<ArrowUp size={14}/></button>
+  </div>;
 }
 
 function useToolbarHeight(panel: { current: HTMLDivElement | null }, ready: boolean) {
@@ -154,7 +174,7 @@ function useToolbarHeight(panel: { current: HTMLDivElement | null }, ready: bool
 
 export function TextWorkspace({ initialDocument, projectId, origin, onChange, onClose, onAddToComposer, onPendingInput }: Props) {
   const document = useRecentTextDocument(initialDocument, origin, onChange, onPendingInput);
-  const [library, setLibrary] = useState(true), [menu, setMenu] = useState<"collection" | "project" | null>(null);
+  const [library, setLibrary] = useState(true), [menu, setMenu] = useState<WorkspaceSaveMenu>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [portalTarget, setPortalTarget] = useState<HTMLDivElement | null>(null);
   const mounted = useRef(true), pending = useRef(false), panel = useRef<HTMLDivElement>(null), plate = useRef<TextPlateHandle>(null);
@@ -166,8 +186,12 @@ export function TextWorkspace({ initialDocument, projectId, origin, onChange, on
   useToolbarHeight(panel, document.ready);
   const { media, resolveMedia } = useWorkspaceMedia(document.value, mounted, setNotice);
   const activity = { current: document.current, mounted, pending, setBusy, setError, setNotice };
-  const close = () => { if (!document.ready) { onClose(initialDocument); return; } void document.flush().then(() => onClose(document.bound.current.document)).catch(() => {}); };
+  const close = () => { if (!document.ready) { onClose(document.bound.current.document); return; } void document.flush().then(() => onClose(document.bound.current.document)).catch(() => {}); };
   const closeTop = () => { if (menu) setMenu(null); else close(); };
+  const openLibrary = () => {
+    setLibrary(true);
+    requestAnimationFrame(() => panel.current?.querySelector<HTMLElement>(".text-workspace-library")?.focus());
+  };
   const insertAsset = (asset: Asset) => { void insertWorkspaceAsset(activity, plate.current, resolveMedia, asset); };
   const save = (destination: TextDocumentDestination, label: string) => { document.capture(); setMenu(null); void saveWorkspace(activity, destination, label); };
   const add = () => {
@@ -183,12 +207,16 @@ export function TextWorkspace({ initialDocument, projectId, origin, onChange, on
   return createPortal(<div className="text-workspace" ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label="文本编辑器" onKeyDown={keyDown} onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
     <PortalTargetContext.Provider value={portalTarget}>
 
-    {(error || document.error) && <div className="text-workspace-feedback is-error" role="alert">{error || document.error}{document.error && <><button onClick={() => void document.retry()?.catch(() => {})}>重试自动保存</button>{document.ready && <button onClick={() => void document.copy()}>另存草稿</button>}</>}</div>}{notice && <div className="text-workspace-feedback" role="status">{notice}</div>}
+    {(error || document.error) && <div className="text-workspace-feedback is-error" role="alert">{error || document.error}{document.error && !document.stateChoice && <><button onClick={() => void document.retry()?.catch(() => {})}>重试自动保存</button>{document.ready && <button onClick={() => void document.copy()}>另存草稿</button>}</>}</div>}{notice && <div className="text-workspace-feedback" role="status">{notice}</div>}
     <div className={`text-workspace-layout canvas-workspace canvas-tactical${library ? "" : " is-source-collapsed"}`}><TextWorkspaceLibrary open={library} projectId={projectId} onInsert={insertAsset} onClose={() => setLibrary(false)} onNavigate={close} onReusePrompt={text => plate.current?.insertMarkdown(text)}/>
       <main className="text-workspace-writing">
         <section className="text-document-editor">{document.ready ? <TextPlateEditor key={draft.id} ref={plate} agent={{ projectId }} value={value} media={media} onChange={changeValue} onDropAssets={resolveMedia}
+          insertSource={{ label: "从素材库插入", run: openLibrary }}
           toolbarStart={<div className="text-workspace-name"><button className="text-workspace-icon" aria-label="返回" title="返回" onClick={close}><ArrowLeft size={18}/></button><FileText size={16}/><input aria-label="文档名称" title="重命名文档" value={draft.title} placeholder="空白文档" onChange={event => rename(event.target.value)}/><TextAutosaveStatus status={document.status}/><RecentTextDocuments currentId={draft.id} disabled={busy} beforeOpen={document.flush} onChoose={id => { setMenu(null); setError(""); setNotice(""); void document.choose(id); }}/>{!library && <button className="text-workspace-icon" aria-label="打开素材库" title="打开素材库" onClick={() => setLibrary(true)}><PanelLeft size={16}/></button>}</div>}
-          toolbarEnd={<WorkspaceActions projectId={projectId} busy={busy} menu={menu} setMenu={setMenu} save={save} add={add}/>}/> : <div><button onClick={close}>返回</button><p role="status">{document.error ? "文档暂时无法打开，请重试。" : "正在打开文档…"}</p></div>}</section>
+          toolbarEnd={<WorkspaceActions projectId={projectId} busy={busy} menu={menu} setMenu={setMenu} save={save} add={add}/>}/>
+          : <div><button onClick={close}>返回</button>{document.stateChoice
+            ? <TextDocumentStateChoice saving={document.recovering} onOpenLatest={document.openLatest} onSaveDraft={() => void document.keepRichDraft().then(saved => { if (saved) setNotice("原富状态已另存到工作区的最近文档。"); })}/>
+            : <p role="status">{document.error ? "文档暂时无法打开，请重试。" : "正在打开文档…"}</p>}</div>}</section>
       </main>
     </div>
     </PortalTargetContext.Provider>

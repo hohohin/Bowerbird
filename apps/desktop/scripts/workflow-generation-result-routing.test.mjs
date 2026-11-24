@@ -23,14 +23,25 @@ async function connectWithPlus(sourceId, targetName) {
 }
 
 async function checkWire(sourceId, targetId) {
-  const path = page.locator(`[data-workflow-target="${targetId}"]`);
-  await path.waitFor();
+  const path = page.locator(`path[data-workflow-target="${targetId}"]`);
+  // A horizontal SVG path has zero bounding-box height but still draws a valid wire.
+  await path.waitFor({ state: 'attached' });
   const source = page.locator(`[data-workflow-card="${sourceId}"],[data-canvas-node-id="${sourceId}"]`);
   await source.waitFor();
-  const x = await path.evaluate(el => el.getPointAtLength(0).matrixTransform(el.getScreenCTM()).x);
+  const { d, length, start, end } = await path.evaluate(el => {
+    const matrix = el.getScreenCTM();
+    const length = el.getTotalLength();
+    if (!matrix) throw new Error('Workflow wire has no screen transform');
+    const start = el.getPointAtLength(0).matrixTransform(matrix);
+    const end = el.getPointAtLength(length).matrixTransform(matrix);
+    return { d: el.getAttribute('d'), length, start: { x: start.x, y: start.y }, end: { x: end.x, y: end.y } };
+  });
+  assert.match(d, /^M\s/);
+  assert.ok(Number.isFinite(length) && length > 0 && [start.x, start.y, end.x, end.y].every(Number.isFinite),
+    `${targetId} has a non-empty wire with finite screen endpoints`);
   const box = await source.boundingBox();
-  assert.ok(Math.abs(x - box.x - box.width) <= 2,
-    `${targetId} starts at ${x.toFixed(1)} instead of ${sourceId}'s right edge ${(box.x + box.width).toFixed(1)}`);
+  assert.ok(Math.abs(start.x - box.x - box.width) <= 2,
+    `${targetId} starts at ${start.x.toFixed(1)} instead of ${sourceId}'s right edge ${(box.x + box.width).toFixed(1)}`);
 }
 
 try {
@@ -52,7 +63,7 @@ try {
   });
   // Use the visible add/connect menu on a fresh card, alongside two saved precise bindings.
   await connectWithPlus('draw', '下游加号');
-  await page.locator('[data-workflow-target="plus"]').waitFor();
+  await page.locator('path[data-workflow-target="plus"]').waitFor({ state: 'attached' });
   const connected = await page.evaluate(() => ({
     ids: JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.map(n => n.id),
     newContent: window.snapshot().nodes.filter(n => n.kind === 'note' && n.id !== 'far').length,
@@ -79,6 +90,11 @@ try {
         await publishGeneration(args, paths);
         const session = `gen-prompt:${jobId}:${turnKey}:0`;
         await api.projectCanvasNodeUpdate(session, { x: producing ? 510 + 45 * round : 1500, y: 100 + 55 * round, width: 240, height: 190 });
+        const [asset] = await api.getAssetsByIds([await api.localAgentFindAssetId(paths[0])]);
+        await api.projectCanvasNodeUpdate(`gen-output:${jobId}:${turnKey}:0`, { payloadJson: JSON.stringify({
+          schema_version: 1, snapshot: { name: asset.name, width: asset.width, height: asset.height },
+          execution: { job_id: jobId, turn_key: turnKey },
+        }) });
         return { accepted: true };
       },
     });
@@ -95,16 +111,27 @@ try {
     };
   });
 
+  const drawCard = page.locator('[data-workflow-card="draw"]');
   let latest;
   for (const [asset, single] of [['a', false], ['b', true]]) {
     const { session, inputs } = await page.evaluate(single => window.runChain(single), single);
     assert.notEqual(session, latest, 'each production run has a fresh identity');
     latest = session;
-    await page.locator(`[data-workflow-session-link="${session}"]`).waitFor();
+    const result = page.locator(`[data-canvas-node-id="${session}"]`);
+    await result.locator(`[data-conversation-image="${asset}"]`).waitFor();
+    await drawCard.waitFor({ state: 'detached' });
     for (const sink of sinks) {
       await checkWire(session, sink);
       assert.deepEqual(inputs[sink], [asset], `${sink} receives the result of this run`);
     }
+    const sessionWire = page.locator(`path[data-workflow-session-link="${session}"]`);
+    assert.equal(await sessionWire.count(), 0, 'collapsed producer does not draw an internal wire to its own result');
+    await result.hover();
+    await drawCard.getByRole('button', { name: '固定在画板上', exact: true }).click();
+    await sessionWire.waitFor({ state: 'attached' });
+    assert.match(await sessionWire.getAttribute('d'), /^M\s/);
+    await drawCard.getByRole('button', { name: '取消固定并收起', exact: true }).click();
+    await drawCard.waitFor({ state: 'detached' });
   }
   await page.reload();
   for (const sink of sinks) await checkWire(latest, sink);
@@ -130,6 +157,7 @@ try {
   });
   await page.reload();
   await connectWithPlus('clip', '视频下游');
+  await page.getByRole('menu', { name: '引用视频', exact: true }).getByRole('menuitem', { name: '引用完整视频', exact: true }).click();
   await checkWire('clip', 'edit-clip');
   const clipCard = page.locator('[data-workflow-card="clip"]');
   const editCard = page.locator('[data-workflow-card="edit-clip"]');
@@ -141,18 +169,22 @@ try {
     const { publishGeneration } = await import('/scripts/fixtures/canvas-reference/generation.ts');
     const c = canvasWorkflowController('p');
     const calls = [];
-    let clipResultId;
+    const results = {};
     api.localAgentFindAssetId = async path => path.split('/').pop().replace('.mp4', '-asset');
     window.store.setState({ dreaminaHealth: { ok: true },
       cloudEntitlement: { policy: { can_use_byo: true, max_parallel_jobs: 10 }, balances: { daily: 0, sub: 0, topup: 0 } },
       startGeneration: async (...args) => {
         const { jobId, turnKey } = args[12];
         const id = args[0], path = '/fixture/' + id + '.mp4';
+        if (id === 'edit-clip' && window.holdEditRun) {
+          window.holdingEditRun = true;
+          await window.holdEditRun;
+        }
         calls.push({ inputs: args[1].map(asset => asset.store_path), kind: args[11].videoOptions.kind });
         await publishGeneration(args, [path]);
         const resultId = `gen-output:${jobId}:${turnKey}:0`;
-        if (id === 'clip') clipResultId = resultId;
-        await api.projectCanvasNodeUpdate(resultId, { x: id === 'clip' ? 560 : 1500, y: 100, width: 240, height: 135, positionLocked: true,
+        results[id] = resultId;
+        await api.projectCanvasNodeUpdate(resultId, { x: id === 'clip' ? 560 : 1000, y: 100, width: 240, height: 135, positionLocked: true,
           payloadJson: JSON.stringify({ schema_version: 1, execution: { job_id: jobId, turn_key: turnKey }, snapshot: { name: id, width: 320, height: 180 } }) });
         window.store.setState({ genJobs: { [jobId]: { turns: [{ turnKey, images: [path] }] } } });
         return { accepted: true };
@@ -162,20 +194,114 @@ try {
     if (c.document.run.status !== 'done') throw Error(JSON.stringify(c.issue));
     window.save();
     window.emitChange();
-    return { calls, clipResultId };
+    return { calls, clipResultId: results.clip, editResultId: results['edit-clip'] };
   });
   assert.deepEqual(video.calls, [
     { inputs: [], kind: 'text2video' },
     { inputs: ['/fixture/clip.mp4'], kind: 'multimodal2video' },
   ], 'the downstream request includes the original video file');
-  await page.locator(`[data-workflow-generated-link="${video.clipResultId}"]`).waitFor();
+  await page.locator(`path[data-workflow-generated-link="${video.clipResultId}"]`).waitFor({ state: 'attached' });
   await checkWire(video.clipResultId, 'edit-clip');
   await checkWire('clip', 'completion');
+  const editedClip = page.locator(`[data-canvas-node-id="${video.editResultId}"]`);
+  await editedClip.waitFor();
+  await editCard.waitFor({ state: 'detached' });
+  assert.equal(await page.locator(`path[data-workflow-generated-link="${video.editResultId}"]`).count(), 0, 'a collapsed video does not draw a wire to itself');
+  const incoming = page.locator('path[data-workflow-target="edit-clip"]');
+  const end = await incoming.evaluate(el => el.getPointAtLength(el.getTotalLength()).matrixTransform(el.getScreenCTM()).x);
+  assert.ok(Math.abs(end - (await editedClip.boundingBox()).x) <= 2, 'the incoming link ends at the collapsed video');
+  assert.equal(await editedClip.locator('.canvas-generation-actions,.canvas-video-badge').count(), 0, 'the video preview carries no generation corner actions');
+  await editedClip.hover();
   await editCard.locator('[data-workflow-reference-asset="clip-asset"]').waitFor();
-  assert.equal(await clipCard.locator('.workflow-preview').count(), 0, 'the producer keeps its result on the canvas');
+  assert.equal(await clipCard.locator('.workflow-preview').count(), 0, 'the completion trigger keeps its producer on the canvas');
   assert.equal(await editCard.locator('.workflow-preview > *').count(), 1, 'only the upstream clip is shown inside the downstream generator');
+  await editedClip.click();
+  const preview = page.getByRole('dialog', { name: '视频与生成记录预览', exact: true });
+  await preview.waitFor();
+  assert.equal(await preview.getByRole('button', { name: /在画布.*生成卡/ }).count(), 0);
+  await page.keyboard.press('Escape');
+  await preview.waitFor({ state: 'detached' });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.locator('.canvas-zoom-controls').getByRole('button', { name: '缩小', exact: true }).click();
+  await editCard.waitFor({ state: 'detached' });
+  await editedClip.hover();
+  await editCard.waitFor();
+  const zoom = await editedClip.evaluate(el => new DOMMatrix(getComputedStyle(el.closest('.canvas-plane')).transform).a);
+  assert.ok(zoom >= 0.35 && zoom < 1, 'exercise Peek against a zoomed video material');
+  const clipBeforeDrag = await editedClip.boundingBox();
+  const checkPeekGap = async () => {
+    const card = await editCard.boundingBox(), anchor = await editedClip.boundingBox();
+    assert.ok(Math.abs(anchor.x - card.x - card.width - 12 * zoom) < 1);
+    assert.ok(Math.abs(anchor.y - card.y) < 1);
+  };
+  await checkPeekGap();
+  await editedClip.evaluate(el => {
+    // The shared drag renderer falls back to data geometry when a loop frame is present.
+    const frame = document.createElement('div');
+    frame.className = 'workflow-loop-frame';
+    frame.hidden = true;
+    frame.dataset.testLoopFrame = '';
+    el.closest('.canvas-plane').append(frame);
+  });
+  const grip = { x: clipBeforeDrag.x + 55, y: clipBeforeDrag.y + 40 };
+  await page.mouse.move(grip.x, grip.y);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 64, grip.y + 50, { steps: 5 });
+  await page.waitForFunction(({ id, previous }) => {
+    const material = document.querySelector(`[data-canvas-node-id="${id}"]`);
+    return material && Math.abs(material.getBoundingClientRect().x - previous) > 30 && !material.style.translate;
+  }, { id: video.editResultId, previous: clipBeforeDrag.x });
+  await checkPeekGap();
+  await page.mouse.up();
+  await checkPeekGap();
+  await page.locator('[data-test-loop-frame]').evaluate(frame => frame.remove());
+  await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+z`);
+  await page.waitForFunction(({ id, previous }) => {
+    const material = document.querySelector(`[data-canvas-node-id="${id}"]`);
+    return material && Math.abs(material.getBoundingClientRect().x - previous) < 1;
+  }, { id: video.editResultId, previous: clipBeforeDrag.x });
+  await checkPeekGap();
+
+  const resizeVideo = editedClip.getByRole('button', { name: '调整素材大小', exact: true });
+  await editedClip.hover();
+  assert.equal(await resizeVideo.evaluate(el => getComputedStyle(el).opacity), '1');
+  const handle = await resizeVideo.boundingBox();
+  const gripX = handle.x + handle.width / 2, gripY = handle.y + handle.height / 2;
+  await page.mouse.move(gripX, gripY);
+  await page.mouse.down();
+  await page.mouse.move(gripX + 51, gripY + 24, { steps: 4 });
+  await page.mouse.up();
+  await page.waitForFunction(({ id, width }) => window.snapshot().nodes.find(node => node.id === id)?.width > width,
+    { id: video.editResultId, width: clipBeforeDrag.width / zoom + 50 });
+  const resizedVideo = await page.evaluate(id => window.snapshot().nodes.find(node => node.id === id), video.editResultId);
+  assert.ok(Math.abs((resizedVideo.height - 32) / (resizedVideo.width - 2) - 9 / 16) < 0.001);
+  const clipAfterResize = await editedClip.boundingBox();
+  assert.ok(Math.abs(clipAfterResize.width - clipBeforeDrag.width - 51) < 1);
+  assert.equal(clipAfterResize.x, clipBeforeDrag.x);
+  assert.equal(clipAfterResize.y, clipBeforeDrag.y);
+  assert.equal(await preview.count(), 0);
+  await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+z`);
+  await page.waitForFunction(({ id, width }) => Math.abs(window.snapshot().nodes.find(node => node.id === id)?.width - width) < 1,
+    { id: video.editResultId, width: clipBeforeDrag.width / zoom });
+  await editedClip.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '固定生成卡', exact: true }).click();
+  await editCard.getByRole('button', { name: '取消固定并收起' }).waitFor();
+  await page.evaluate(() => { window.holdEditRun = new Promise(resolve => { window.resumeEditRun = resolve; }); });
+  await editCard.getByRole('button', { name: /^(运行|重试)$/ }).click();
+  await page.waitForFunction(() => window.holdingEditRun);
+  assert.equal(await editCard.getAttribute('aria-busy'), 'true');
+  assert.equal(await editCard.getByRole('button', { name: '取消固定并收起' }).isDisabled(), true);
+  await page.evaluate(() => window.resumeEditRun());
+  await page.waitForFunction(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { workflowNodeRun } = await import('/src/lib/canvasWorkflow.ts');
+    return workflowNodeRun(canvasWorkflowController('p').document, 'edit-clip')?.status === 'done';
+  });
+  assert.equal(await editCard.count(), 1, 'the pinned card remains until the board receives its result');
+  await page.evaluate(() => { window.save(); window.emitChange(); });
+  await editCard.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
-  console.log('PASS new + and saved direct inputs, image/video result wires, whole video delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');
+  console.log('PASS new + and saved direct inputs, image/video result wires, video material Peek drag/resize/undo at zoom, whole video delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');
 } finally {
   await browser.close();
   await server.close();

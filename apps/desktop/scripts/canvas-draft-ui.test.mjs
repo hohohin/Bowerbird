@@ -67,7 +67,12 @@ try {
   await dialog.waitFor({ state: "hidden" });
   assert.equal((await saves()).length, 0, "closing an unchanged draft must not create an asset");
 
+  const currentZoom = await page.locator(".canvas-plane").evaluate(element => new DOMMatrix(getComputedStyle(element).transform).a);
   await page.getByRole("button", { name: "放大", exact: true }).click();
+  await page.waitForFunction(zoom => {
+    const plane = document.querySelector(".canvas-plane");
+    return plane && new DOMMatrix(getComputedStyle(plane).transform).a > zoom;
+  }, currentZoom);
   const point = await openDraft();
   await page.waitForFunction(() => document.querySelector("[data-draft-canvas]")?.getContext("2d").getImageData(10, 10, 1, 1).data[3] === 255);
   const white = await dialog.locator("[data-draft-canvas]").evaluate(canvas => ({

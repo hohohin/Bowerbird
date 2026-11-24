@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { gunzipSync, gzipSync } from "node:zlib";
+import type { ChatModelObservation } from "../../../cloud/supabase/functions/_shared/chat.ts";
 import type { DeepSeekConfig } from "../providers/deepseek/backend.ts";
 import {
   AgentControlError,
@@ -20,6 +21,9 @@ const REQUEST_PATH = "/chat/completions";
 const DEFAULT_MAX_MODEL_TURNS = 32;
 const MAX_UPSTREAM_ATTEMPTS = 2;
 const RETRYABLE_UPSTREAM_STATUSES = new Set([502, 503, 504]);
+const DEEPSEEK_CHAT_API_BASE_URL = "https://api.deepseek.com";
+const DEEPSEEK_CHAT_CONTEXT_TOKENS = 1_048_576;
+export const DEEPSEEK_CHAT_MAX_OUTPUT_TOKENS = 393_216;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -49,7 +53,7 @@ export type MeteredDeepSeekProxyControl = DurableToolControl & {
 
 export type MeteredDeepSeekProxyFetch = (
   url: string,
-  init: { method: "POST"; headers: Record<string, string>; body: string; signal?: AbortSignal },
+  init: { method: "POST"; headers: Record<string, string>; body: string; signal?: AbortSignal; redirect?: "error" },
 ) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
 export type MeteredDeepSeekProxyOptions = {
@@ -62,6 +66,7 @@ export type MeteredDeepSeekProxyOptions = {
   maxModelTurns?: number;
   signal?: { readonly aborted: boolean };
   allowedToolNames?: readonly string[];
+  systemPolicy?: string;
   fetch?: MeteredDeepSeekProxyFetch;
   /** Optional test-only observer for unexpected local persistence/control errors. */
   onUnexpectedError?: (error: unknown, identity: {
@@ -72,9 +77,13 @@ export type MeteredDeepSeekProxyOptions = {
 };
 
 // Chat has its own job/lease and settlement ledger; no Agent Run artifacts are created.
-export type ChatModelProxyOptions = Omit<MeteredDeepSeekProxyOptions, "phase" | "control" | "maxModelTurns"> & {
+export type ChatModelProxyOptions = Omit<MeteredDeepSeekProxyOptions, "phase" | "control" | "maxModelTurns" | "signal"> & {
   phase: "chat";
+  signal?: AbortSignal;
+  paidMaxOutputTokens?: number;
   beforeModel(request: Record<string, unknown>): Promise<void>;
+  onModelSubmit(callId: string, paidOutputTokens?: number): Promise<void>;
+  onModelObservation(callId: string, observation: ChatModelObservation): Promise<void>;
   onUsage(usage: { inputUnits: number; outputUnits: number }): void;
   onModelError(error: unknown): void;
 };
@@ -86,6 +95,10 @@ type ProxyResult = {
   body: string;
   usage: { inputUnits: number; outputUnits: number };
   providerRequestId?: string;
+  providerModel?: string;
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
+  completeChatUsage?: boolean;
 };
 type PersistedProxyResult = {
   schemaVersion: 2;
@@ -213,7 +226,22 @@ function validateUpstream(config: DeepSeekConfig, allowInsecureLoopback: boolean
   return { apiKey, model, baseUrl, timeoutMs };
 }
 
-function parseSse(body: string): Pick<ProxyResult, "usage" | "providerRequestId"> {
+export function isOfficialDeepSeekChatUpstream(baseUrl: string): boolean {
+  return baseUrl.trim().replace(/\/+$/, "") === DEEPSEEK_CHAT_API_BASE_URL;
+}
+
+function applyPaidOutputLimit(request: ProxyRequest, limit: number): number {
+  const requested = request.max_tokens;
+  if (request.max_completion_tokens !== undefined || (request.n !== undefined && request.n !== 1) ||
+      (requested !== undefined && (typeof requested !== "number" || !Number.isSafeInteger(requested) || requested < 1))) {
+    throw new ProxyHttpError(400, "paid_model_request_invalid");
+  }
+  const effective = typeof requested === "number" ? Math.min(limit, requested) : limit;
+  request.max_tokens = effective;
+  return effective;
+}
+
+function parseSse(body: string): Pick<ProxyResult, "usage" | "providerRequestId" | "providerModel" | "cacheHitTokens" | "cacheMissTokens" | "completeChatUsage"> {
   const lines = body.split(/\r?\n/);
   const doneIndex = lines.findIndex((line) => line === "data: [DONE]");
   if (doneIndex < 0 || lines.slice(doneIndex + 1).some((line) => line.length > 0)) {
@@ -222,26 +250,61 @@ function parseSse(body: string): Pick<ProxyResult, "usage" | "providerRequestId"
   let inputUnits: number | undefined;
   let outputUnits: number | undefined;
   let providerRequestId: string | undefined;
+  let providerModel: string | undefined;
+  let cacheHitTokens: number | undefined;
+  let cacheMissTokens: number | undefined;
+  let finalEventHasUsage = false, conflictedUsage = false;
+  let priorUsage: string | undefined;
   for (const line of lines.slice(0, doneIndex)) {
     if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+    finalEventHasUsage = false;
     let event: unknown;
     try { event = JSON.parse(line.slice(6)); } catch { throw new DurableProviderError("unknown", "deepseek_stream_invalid"); }
     if (!event || typeof event !== "object" || Array.isArray(event)) continue;
     const record = event as JsonRecord;
-    if (typeof record.id === "string" && record.id.length <= 200) providerRequestId = record.id;
-    if (!record.usage || typeof record.usage !== "object" || Array.isArray(record.usage)) continue;
-    const usage = record.usage as JsonRecord;
-    if (Number.isSafeInteger(usage.prompt_tokens) && Number(usage.prompt_tokens) >= 0) {
-      inputUnits = Number(usage.prompt_tokens);
+    if (typeof record.id === "string" && record.id.length <= 200) {
+      if (providerRequestId !== undefined && providerRequestId !== record.id) conflictedUsage = true;
+      providerRequestId = record.id;
     }
-    if (Number.isSafeInteger(usage.completion_tokens) && Number(usage.completion_tokens) >= 0) {
+    if (typeof record.model === "string" && /^[A-Za-z0-9._:/-]{1,120}$/.test(record.model)) {
+      if (providerModel !== undefined && providerModel !== record.model) conflictedUsage = true;
+      providerModel = record.model;
+    }
+    if (!record.usage || typeof record.usage !== "object" || Array.isArray(record.usage)) {
+      if (record.usage != null) conflictedUsage = true;
+      continue;
+    }
+    const usage = record.usage as JsonRecord;
+    const haveInput = Number.isSafeInteger(usage.prompt_tokens) && Number(usage.prompt_tokens) >= 0;
+    const haveOutput = Number.isSafeInteger(usage.completion_tokens) && Number(usage.completion_tokens) >= 0;
+    if (haveInput) {
+      inputUnits = Number(usage.prompt_tokens);
+      const cacheCount = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) &&
+        value >= 0 && value <= Number(usage.prompt_tokens) ? value : undefined;
+      cacheHitTokens = cacheCount(usage.prompt_cache_hit_tokens ?? (usage.prompt_tokens_details as JsonRecord | undefined)?.cached_tokens);
+      cacheMissTokens = cacheCount(usage.prompt_cache_miss_tokens);
+      if (cacheHitTokens !== undefined && cacheMissTokens !== undefined && cacheHitTokens + cacheMissTokens !== inputUnits) {
+        cacheHitTokens = cacheMissTokens = undefined;
+      }
+    }
+    if (haveOutput) {
       outputUnits = Number(usage.completion_tokens);
+    }
+    // Keep legacy result parsing compatible. A confirmed token observation requires
+    // both counts in the same final SSE event and no conflicting usage events.
+    finalEventHasUsage = haveInput && haveOutput;
+    if (!finalEventHasUsage) conflictedUsage = true;
+    else {
+      const signature = JSON.stringify([inputUnits, outputUnits, cacheHitTokens, cacheMissTokens]);
+      if (priorUsage !== undefined && priorUsage !== signature) conflictedUsage = true;
+      priorUsage = signature;
     }
   }
   if (inputUnits === undefined || outputUnits === undefined || inputUnits > 10_000_000 || outputUnits > 10_000_000) {
     throw new DurableProviderError("unknown", "deepseek_usage_missing");
   }
-  return { usage: { inputUnits, outputUnits }, ...(providerRequestId ? { providerRequestId } : {}) };
+  return { usage: { inputUnits, outputUnits }, providerRequestId, providerModel, cacheHitTokens, cacheMissTokens,
+    completeChatUsage: finalEventHasUsage && !conflictedUsage };
 }
 
 function encodePersistedResult(result: ProxyResult): string {
@@ -302,7 +365,7 @@ function decodePersistedResult(value: unknown): ProxyResult {
 }
 
 async function requestModelStream(request: ProxyRequest, upstream: Required<DeepSeekConfig>, fetchImpl: MeteredDeepSeekProxyFetch,
-  signal: AbortSignal, maxAttempts: number, recordUnknown: () => Promise<void>): Promise<ProxyResult> {
+  signal: AbortSignal, maxAttempts: number, recordUnknown: () => Promise<void>, forbidRedirects = false): Promise<ProxyResult> {
   let response: Awaited<ReturnType<MeteredDeepSeekProxyFetch>> | undefined;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
@@ -316,6 +379,7 @@ async function requestModelStream(request: ProxyRequest, upstream: Required<Deep
         body: JSON.stringify(request),
         // Cancellation/lease loss closes this proxy; long output has no wall-clock deadline.
         signal: signal,
+        ...(forbidRedirects ? { redirect: "error" } : {}),
       });
     } catch {
       await recordUnknown();
@@ -359,6 +423,34 @@ async function requestModelStream(request: ProxyRequest, upstream: Required<Deep
     throw error;
   }
   return { schemaVersion: 1, status: 200, body, ...parsed };
+}
+
+async function observeChatRequest(options: ChatModelProxyOptions, callId: string, request: ProxyRequest,
+  upstream: Required<DeepSeekConfig>, signal: AbortSignal, paidOutputTokens?: number): Promise<ProxyResult> {
+  let result: ProxyResult;
+  try {
+    result = await requestModelStream(request, upstream, options.fetch ?? fetch, signal, 1, async () => {}, paidOutputTokens !== undefined);
+  } catch (error) {
+    const code = error instanceof DurableProviderError ? error.safeCode : "";
+    const status = code === "deepseek_context_limit" ? "400" : /^deepseek_http_([45][0-9]{2})$/.exec(code)?.[1];
+    await options.onModelObservation(callId, status ? { status: "http_error", http_status: Number(status) } : { status: "unknown" });
+    throw error;
+  }
+  await options.onModelObservation(callId, result.completeChatUsage ? {
+    status: "observed",
+    input_tokens: result.usage.inputUnits,
+    output_tokens: result.usage.outputUnits,
+    ...(result.cacheHitTokens === undefined ? {} : { cache_hit_tokens: result.cacheHitTokens }),
+    ...(result.cacheMissTokens === undefined ? {} : { cache_miss_tokens: result.cacheMissTokens }),
+    ...(result.providerModel ? { provider_model: result.providerModel } : {}),
+    ...(result.providerRequestId && /^[A-Za-z0-9._:/-]{1,200}$/.test(result.providerRequestId)
+      ? { provider_request_id: result.providerRequestId } : {}),
+  } : { status: "unknown" });
+  if (paidOutputTokens !== undefined && (result.usage.outputUnits > paidOutputTokens ||
+      result.usage.inputUnits + result.usage.outputUnits > DEEPSEEK_CHAT_CONTEXT_TOKENS)) {
+    throw new DurableProviderError("unknown", "deepseek_paid_usage_outside_authorization");
+  }
+  return result;
 }
 
 class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResult> {
@@ -513,6 +605,12 @@ export class MeteredDeepSeekProxy {
 
 export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOptions | ChatModelProxyOptions): Promise<MeteredDeepSeekProxy> {
   const upstream = validateUpstream(options.upstream, options.allowInsecureLoopback === true);
+  const paidMaxOutputTokens = options.phase === "chat" ? options.paidMaxOutputTokens : undefined;
+  if (paidMaxOutputTokens !== undefined && (!Number.isSafeInteger(paidMaxOutputTokens) || paidMaxOutputTokens < 1 ||
+      paidMaxOutputTokens > DEEPSEEK_CHAT_MAX_OUTPUT_TOKENS || !isOfficialDeepSeekChatUpstream(upstream.baseUrl) ||
+      (upstream.model !== "deepseek-flash" && upstream.model !== "deepseek-v4-pro"))) {
+    throw new Error("dsh_paid_model_proxy_config_invalid");
+  }
   const maxModelTurns = options.phase === "chat" ? 12 : options.maxModelTurns ?? DEFAULT_MAX_MODEL_TURNS;
   if (!Number.isSafeInteger(maxModelTurns) || maxModelTurns < 1 || maxModelTurns > 128) {
     throw new Error("dsh_model_proxy_turn_limit_invalid");
@@ -524,6 +622,8 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
     onUnexpectedError: options.onUnexpectedError,
   }) : undefined;
   const chatAbort = new AbortController();
+  const chatSignal = options.phase === "chat" && options.signal
+    ? AbortSignal.any([chatAbort.signal, options.signal]) : chatAbort.signal;
   let active = true;
   let inFlight = false;
   const distinctCalls = new Set<string>();
@@ -548,6 +648,10 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
         });
       }
       if (options.phase === "chat") await options.beforeModel(modelRequest);
+      else if (options.systemPolicy) {
+        modelRequest.messages = [{ role: "system", content: options.systemPolicy }, ...(modelRequest.messages as unknown[])];
+      }
+      const paidOutputTokens = paidMaxOutputTokens === undefined ? undefined : applyPaidOutputLimit(modelRequest, paidMaxOutputTokens);
       const requestHash = sha256Hex(canonicalJson(modelRequest));
       const callId = sha256Hex(canonicalJson({
         schemaVersion: 1,
@@ -560,13 +664,17 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
         if (distinctCalls.size >= maxModelTurns) throw new ProxyHttpError(429, "model_turn_budget_exhausted");
         distinctCalls.add(callId);
       }
+      if (options.phase === "chat") {
+        if (chatSignal.aborted) throw new ProxyHttpError(409, "agent_run_cancelled");
+        await options.onModelSubmit(callId, paidOutputTokens);
+        if (chatSignal.aborted) throw new ProxyHttpError(409, "agent_run_cancelled");
+      }
       // Keep DSH's idle watchdog alive while the complete result is durably saved.
       heartbeat = setInterval(() => {
         if (!response.headersSent) response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
         response.write(": keep-alive\n\n");
       }, 15_000);
-      const result = options.phase === "chat" ? await requestModelStream(modelRequest, upstream,
-        options.fetch ?? fetch, chatAbort.signal, 1, async () => {}) : await dispatcher!.dispatch({
+      const result = options.phase === "chat" ? await observeChatRequest(options, callId, modelRequest, upstream, chatSignal, paidOutputTokens) : await dispatcher!.dispatch({
         runId: options.runId,
         leaseId: options.leaseId,
         callId,
@@ -625,8 +733,8 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
     server.close(() => undefined);
     throw new Error("dsh_model_proxy_address_invalid");
   }
-  if (options.signal) cancellation = setInterval(() => {
-    if (options.signal?.aborted) { adapter?.close(); chatAbort.abort(); }
+  if (adapter && options.signal) cancellation = setInterval(() => {
+    if (options.signal?.aborted) adapter.close();
   }, 250);
   const waitForIdle = async (): Promise<void> => {
     while (activeRequests.size > 0) {

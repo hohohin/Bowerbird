@@ -20,6 +20,29 @@ try {
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
+    const { CanvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+    const projectId = 'immutable-recovery';
+    const node = newWorkflowNode('generation', 0, 0, 'codex');
+    const step = Object.freeze({ status: 'running', jobId: 'original-request', comfyStopping: true });
+    const run = Object.freeze({ id: 'interrupted', startId: node.id, order: [node.id], status: 'running',
+      steps: Object.freeze({ [node.id]: step }) });
+    const document = Object.freeze({ schema_version: 1, nodes: [node], run });
+    const previous = api.canvasWorkflowGet;
+    try {
+      api.canvasWorkflowGet = id => id === projectId ? Promise.resolve({ revision: 1, document }) : previous(id);
+      const controller = new CanvasWorkflowController(projectId);
+      await controller.load(false, Promise.resolve({ canvas: { projectId }, nodes: [] }));
+      const restored = controller.document.run;
+      if (!controller.ready || restored?.status !== 'waiting' || restored.steps[node.id].status !== 'waiting'
+          || restored.steps[node.id].jobId !== step.jobId || restored.steps[node.id].comfyStopping !== false
+          || run.status !== 'running' || step.status !== 'running' || step.comfyStopping !== true) {
+        throw Error('Recovery must copy transient state, keep the saved snapshot immutable and preserve the original request');
+      }
+    } finally { api.canvasWorkflowGet = previous; }
+  });
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     const c = canvasWorkflowController('p'); await c.load();

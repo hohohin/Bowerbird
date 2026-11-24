@@ -379,7 +379,7 @@ try {
     const snapshot = window.snapshot(); snapshot.nodes = [];
     sessionStorage.setItem('reference-fixture', JSON.stringify(snapshot));
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
-    const nodes = ['a', 'b'].map((id, index) => ({ ...newWorkflowNode('instruction', 100 + index * 550, 140, 'codex'), id, action: 'reuse' }));
+    const nodes = ['a', 'b', 'c'].map((id, index) => ({ ...newWorkflowNode('instruction', 100 + index * 460, 140, 'codex'), id, action: 'reuse' }));
     sessionStorage.setItem('workflow-p', JSON.stringify({ revision: 0, document: { schema_version: 1, nodes, run: null } }));
   });
   await page.reload();
@@ -402,8 +402,8 @@ try {
   beforeRejected = await state();
   assert.match(await dragHandleToCard('a', 'output', 'b'), /运行|停止/);
   assert.deepEqual(await state(), beforeRejected, 'a running receiver refuses connection changes');
-  await hoverCard('b');
-  assert.ok(await handle('b', 'output').isDisabled(), 'a running source disables its connection handle');
+  assert.match(await dragHandleToCard('b', 'output', 'c'), /来源卡片正在使用/);
+  assert.deepEqual(await state(), beforeRejected, 'the handle stays available for control wires, but a writing source refuses a new data wire');
 
   // Scoped menus retain the simple handles while allowing precise table destinations.
   await page.evaluate(async () => {

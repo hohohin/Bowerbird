@@ -1,151 +1,170 @@
-import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer } from 'vite';
-import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+import { createServer } from "vite";
+import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-const output = '.tmp/library-navigation';
-const server = await createServer({ cacheDir: `${output}/vite`, server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null } });
+const output = ".tmp/library-navigation";
+await mkdir(output, { recursive: true });
+const server = await createServer({ cacheDir: `${output}/vite`, server: { host: "127.0.0.1", port: 0, hmr: false, watch: null } });
 await server.listen();
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
-const page = await browser.newPage({ viewport: { width: 1000, height: 800 }, reducedMotion: 'reduce' });
-page.setDefaultTimeout(8000);
+const browser = await chromium.launch({ channel: "chrome", headless: true });
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" });
 const errors = [];
-page.on('pageerror', e => errors.push(e.message));
-await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
-const primary = () => page.getByRole('tablist', { name: '素材视图切换条', exact: true });
-const scope = () => page.getByRole('tablist', { name: '标签素材范围', exact: true });
-const choose = name => primary().getByRole('tab', { name, exact: true }).click();
-const selected = () => primary().getByRole('tab', { selected: true }).getAttribute('aria-label');
-async function assertFloatingNavigation(root = page.locator('.library-catalog-layer:not([data-outgoing]) .categorized-library').first()) {
-  const geometry = await root.evaluate(element => {
-    const heading = element.querySelector('.file-view-heading');
-    const rect = selector => {
-      const box = element.querySelector(selector).getBoundingClientRect();
-      return { top: box.top, height: box.height };
-    };
-    const measure = () => ['.catalog-body', '.catalog-gallery', '.catalog-scroller'].map(rect);
-    const shown = measure(), top = element.getBoundingClientRect().top;
-    const previous = heading.style.display;
-    heading.style.display = 'none';
-    const hidden = measure();
-    heading.style.display = previous;
-    return { top, shown, hidden };
-  });
-  assert.ok(geometry.shown.every(box => Math.abs(box.top - geometry.top) < 1), 'floating navigation must not reserve a header band or content padding');
-  assert.deepEqual(geometry.shown, geometry.hidden, 'showing navigation must not move or shrink the content viewport');
-}
-async function filter(kind, projectId, media = 'images') {
-  await page.waitForFunction(({ kind, projectId, media }) => {
-    const state = window.mode.getState();
-    const currentKind = state.view === 'tags' ? 'tags' : 'all';
-    const currentProject = (state.view === 'project' || state.view === 'tags' && state.tagSource === 'project') ? state.browseProjectId : null;
-    return currentKind === kind && currentProject === projectId && state.media === media
-      && window.requests.some(r => r.command === 'catalog_overview' && r.args.filter.kind === kind && r.args.filter.projectId === projectId && r.args.filter.media === media);
-  }, { kind, projectId, media });
-}
+page.on("pageerror", error => errors.push(error.message));
+await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
+await page.addInitScript(() => { window.total = 4; });
+const open = path => page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/${path}`);
+const sidebar = () => page.getByRole("complementary", { name: "素材库导航", exact: true }).first();
+const click = name => sidebar().getByRole("button", { name, exact: true }).click();
+const sections = () => page.locator(".catalog-scroller:visible [data-catalog-section]").evaluateAll(values => values.map(node => node.dataset.catalogSection));
+const sameGeometry = async expected => {
+  const bounds = await Promise.all([sidebar().boundingBox(), page.locator(".catalog-scroller:visible").first().boundingBox()]);
+  if (expected) assert.deepEqual(bounds, expected);
+  return bounds;
+};
+const selected = count => page.getByRole("group", { name: "分类素材所选操作" }).getByText(`${count} 项`, { exact: true }).waitFor();
+
 try {
-  await mkdir(output, { recursive: true });
-  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?navigation`);
-  assert.deepEqual(await primary().getByRole('tab').allTextContents(), ['文件夹', '项目素材', '标签分类', '全部素材']);
-  await choose('全部素材');
-  await filter('all', null);
-  await assertFloatingNavigation();
-  assert.equal(await scope().count(), 0);
-  await choose('项目素材'); await filter('all', 'p');
-  assert.equal(await page.locator('.catalog-sidebar').count(), 0);
-  await choose('标签分类'); await filter('tags', 'p');
-  assert.equal(await scope().getByRole('tab', { name: '项目素材' }).getAttribute('aria-selected'), 'true');
-  await scope().getByRole('tab', { name: '全部素材', exact: true }).click(); await filter('tags', null);
-  assert.equal(await selected(), '标签分类');
-  await choose('标签分类'); assert.equal(await selected(), '标签分类');
-  await scope().getByRole('tab', { name: '项目素材' }).click(); await filter('tags', 'p');
-  await choose('文件夹');
-  await page.waitForFunction(() => window.requests.filter(r => r.command === 'folder_connections').at(-1)?.args.projectId === null);
-  assert.equal(await scope().count(), 0);
-  await choose('标签分类'); await filter('tags', 'p');
-  for (const media of ['videos', 'audios', 'texts', 'images']) {
-    await page.evaluate(media => window.mode.getState().setMedia(media), media);
-    await filter('tags', 'p', media);
-    assert.equal(await selected(), '标签分类');
-    await page.getByRole('complementary', { name: '标签分类' }).waitFor();
-  }
-  await page.evaluate(async () => {
-    const { showImportedMedia } = await import('/src/lib/mediaImport.ts');
-    showImportedMedia([{ id: 'imported-video', store_path: '/fixture/imported.mp4', ext: 'mp4' }], window.mode);
-  });
-  await filter('all', 'p', 'videos');
-  assert.equal(await selected(), '项目素材', 'imported video returns to its scoped flat view');
-  await page.evaluate(() => window.mode.getState().setMedia('images'));
-  await choose('标签分类'); await filter('tags', 'p');
-  for (const width of [1000, 600, 400, 320]) {
-    await page.setViewportSize({ width, height: 800 });
-    for (const theme of ['dark', 'light']) {
-      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
-      const nav = await primary().boundingBox();
-      assert.ok(nav.x >= 0 && nav.x + nav.width <= width, `navigation fits ${width}`);
-      await assertFloatingNavigation();
-      await page.screenshot({ path: `${output}/tags-${width}-${theme}.png` });
-    }
-  }
-  await choose('全部素材'); await filter('all', null);
-  await primary().getByRole('tab', { name: '全部素材', exact: true }).focus();
-  await page.keyboard.press('ArrowRight'); assert.equal(await selected(), '文件夹');
-  await page.keyboard.press('End'); assert.equal(await selected(), '全部素材');
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await page.keyboard.press('ArrowLeft');
-  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '标签分类'
-    && !document.activeElement.closest('[data-outgoing]'));
-  await page.locator('.library-catalog-transition[aria-busy="false"]').waitFor();
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.keyboard.press('Home'); assert.equal(await selected(), '文件夹');
+  await open("catalog-paging/preview.html?split");
+  await page.locator('[data-asset-id="asset-0"]').waitFor();
+  assert.deepEqual(await sections(), ["all"]);
+  assert.deepEqual(await page.locator(".catalog-scroller [data-asset-id]").evaluateAll(cards => cards.map(card => card.dataset.assetId)), ["asset-0","asset-1","asset-2","asset-3"]);
+  const projects = sidebar().getByRole("button", { name: "项目", exact: true });
+  assert.equal(await projects.locator("svg:not(.library-sidebar-chevron)").count(), 1);
+  assert.equal(await sidebar().getByRole("button", { name: "项目A", exact: true }).locator("svg").count(), 0);
+  const initial = await sameGeometry();
+  const tag = sidebar().getByRole("button", { name: "标签模式", exact: true });
+  assert.equal(await tag.locator("span").isVisible(), false);
+  await tag.hover();
+  await tag.locator("span", { hasText: "标签模式" }).waitFor();
+  assert.equal(await tag.locator("span svg").count(), 1);
+  await sameGeometry(initial);
 
-  await page.setViewportSize({ width: 1000, height: 800 });
-  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?split`);
-  const left = page.locator('[data-library-pane="home-left"]');
-  await left.getByRole('button', { name: '向右分栏', exact: true }).click();
-  const right = page.locator('[data-library-pane="home-pane-1"]');
-  await right.getByRole('tab', { name: '标签分类', exact: true }).click();
-  assert.equal(await left.getByRole('tablist', { name: '素材视图切换条' }).getByRole('tab', { selected: true }).getAttribute('aria-label'), '全部素材');
-  await page.screenshot({ path: `${output}/split.png` });
-  await assertFloatingNavigation(left.locator('.library-catalog-layer:not([data-outgoing]) .categorized-library'));
-  await assertFloatingNavigation(right.locator('.library-catalog-layer:not([data-outgoing]) .categorized-library'));
+  await projects.click({ position: { x: 32, y: 14 } });
+  assert.equal(await projects.getAttribute("aria-expanded"), "false");
+  assert.equal(await projects.locator(".lucide-chevron-right").count(), 1);
+  await sidebar().getByRole("button", { name: "项目A", exact: true }).waitFor({ state: "hidden" });
+  assert.deepEqual(await sections(), ["all"]);
+  await projects.press("Space");
+  assert.equal(await projects.getAttribute("aria-expanded"), "true");
+  assert.equal(await projects.locator(".lucide-chevron-down").count(), 1);
+  await click("全部项目素材");
+  await page.locator('[data-catalog-section="p"] .library-reference-badge').first().waitFor();
+  assert.deepEqual(await sections(), ["p","q"]);
+  await page.locator('[data-catalog-section="q"] [data-asset-id="asset-0"]').first().waitFor();
+  assert.equal(await page.locator('[data-catalog-section="q"] .library-reference-badge').first().textContent(), "分身");
+  assert.equal(await page.evaluate(() => window.requests.filter(request => request.command === "catalog_project_counts").length), 1);
+  await sameGeometry(initial);
+  await page.keyboard.press("Control+a");
+  await selected(4);
+  assert.deepEqual(await page.evaluate(() => window.requests.filter(request => request.command === "catalog_ids").map(request => request.args.filter.projectId)), ["p","q"]);
+  await click("项目B");
+  await page.waitForFunction(() => window.requests.some(request => request.command === "catalog_page" && request.args.filter.projectId === "q"));
+  await page.locator('.catalog-scroller:visible [data-catalog-section="all"]').waitFor();
+  assert.equal(await sidebar().getByRole("button", { name: "项目B", exact: true }).getAttribute("aria-current"), "true");
+  await projects.click();
+  assert.equal(await projects.getAttribute("aria-expanded"), "false");
+  assert.deepEqual(await sections(), ["all"]);
+  await page.keyboard.press("e");
+  await sidebar().getByRole("navigation", { name: "标签首字母索引" }).waitFor();
+  await sameGeometry(initial);
+  await page.waitForFunction(() => window.requests.some(request => request.command === "catalog_overview" && request.args.filter.kind === "tags" && request.args.filter.projectId === null));
+  await sidebar().getByRole("button", { name: "Z 末尾", exact: true }).click();
+  await sidebar().getByRole("button", { name: "Z 末尾", exact: true, current: "location" }).waitFor();
+  const tagDisclosure = sidebar().getByRole("button", { name: "拼音 A–Z", exact: true });
+  const tagScrollTop = await page.locator(".catalog-scroller:visible").evaluate(el => el.scrollTop);
+  await tagDisclosure.click({ position: { x: 12, y: 14 } });
+  assert.equal(await tagDisclosure.getAttribute("aria-expanded"), "false");
+  assert.equal(await tagDisclosure.locator(".lucide-chevron-right").count(), 1);
+  await sidebar().getByRole("navigation", { name: "标签首字母索引" }).waitFor({ state: "hidden" });
+  assert.equal(await sidebar().getByRole("button", { name: "管理标签", exact: true }).isVisible(), true);
+  assert.equal(await page.locator(".catalog-scroller:visible").evaluate(el => el.scrollTop), tagScrollTop);
+  await tagDisclosure.press("Enter");
+  assert.equal(await tagDisclosure.getAttribute("aria-expanded"), "true");
+  await sidebar().getByRole("button", { name: "Z 末尾", exact: true, current: "location" }).waitFor();
+  await page.locator(".catalog-scroller:visible").evaluate(el => { el.scrollTop = 0; });
+  await sidebar().getByRole("button", { name: "A 素材", exact: true, current: "location" }).waitFor();
+  await page.keyboard.press("Tab");
+  assert.equal(await tag.getAttribute("aria-pressed"), "true");
+  await page.keyboard.press("q");
+  assert.equal(await projects.getAttribute("aria-expanded"), "false");
+  await projects.click();
+  assert.equal(await sidebar().getByRole("button", { name: "项目B", exact: true }).getAttribute("aria-current"), "true");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const stableSidebar = await sidebar().elementHandle();
+  for (const key of ["e", "q", "e", "q"]) await page.keyboard.press(key);
+  assert.equal(await stableSidebar.evaluate(element => element === document.querySelector(".library-sidebar")), true);
+  assert.equal(await page.locator(":popover-open").count(), 0);
+  await sameGeometry(initial);
+  await page.screenshot({ path: `${output}/project.png` });
 
-  await page.setViewportSize({ width: 1280, height: 840 });
-  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/canvas-reference/preview.html?source-library&local-files`);
-  await page.locator('[data-canvas-node-id="old"]').waitFor();
-  await page.getByRole('button', { name: '打开素材库', exact: true }).click();
-  await choose('项目素材');
-  await primary().getByRole('tab', { name: '项目素材' }).focus();
-  await page.keyboard.press('Escape'); // Close the project scope submenu before using global Tab navigation.
-  await page.keyboard.press('Tab');
-  await scope().waitFor(); assert.equal(await selected(), '标签分类');
-  await page.keyboard.press('Tab'); assert.equal(await selected(), '全部素材');
-  await page.keyboard.press('Tab');
-  await page.getByRole('complementary', { name: '文件夹目录' }).waitFor();
-  assert.equal(await selected(), '文件夹');
-  await page.keyboard.press('q');
-  assert.equal(await selected(), '全部素材');
-  await page.keyboard.press('e');
-  assert.equal(await selected(), '项目素材');
-  await choose('标签分类');
-  await assertFloatingNavigation();
-  await page.screenshot({ path: `${output}/canvas-tags.png` });
-
-  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/connected-collections/preview.html`);
-  await choose('文件夹');
-  await page.getByRole('treeitem', { name: '风景', exact: true }).click();
+  await open("connected-collections/preview.html");
+  await sidebar().getByRole("treeitem", { name: "风景", exact: true }).waitFor();
+  assert.equal(await sidebar().getByRole("treeitem", { name: "素材目录", exact: true }).locator("svg[data-folder-glyph]").count(), 1);
+  assert.equal(await sidebar().getByRole("treeitem", { name: "风景", exact: true }).locator("svg[data-folder-glyph]").count(), 0);
+  assert.deepEqual(await sections(), ["root","child","nested","empty","second","offline"]);
+  const folders = sidebar().getByRole("button", { name: "文件夹", exact: true });
+  await folders.click({ position: { x: 34, y: 14 } });
+  assert.equal(await folders.getAttribute("aria-expanded"), "false");
+  assert.equal(await folders.locator(".lucide-chevron-right").count(), 1);
+  await sidebar().getByRole("tree", { name: "文件夹层级" }).waitFor({ state: "hidden" });
+  assert.deepEqual(await sections(), ["root","child","nested","empty","second","offline"]);
+  await folders.press("Space");
+  assert.equal(await folders.getAttribute("aria-expanded"), "true");
+  await sidebar().getByRole("treeitem", { name: "风景", exact: true }).click();
   await page.locator('[data-connection-entry="child-0"]').waitFor();
-  await choose('全部素材');
-  await page.locator('[data-asset-id]').first().waitFor();
-  await choose('文件夹');
-  assert.equal(await page.getByRole('treeitem', { name: '风景', exact: true }).getAttribute('aria-selected'), 'true');
-  await assertFloatingNavigation();
-  await page.screenshot({ path: `${output}/collections.png` });
+  assert.deepEqual(await sections(), ["child","nested"]);
+  await page.locator('[data-connection-entry="child-0"] button').first().click({ modifiers: ["Control"] });
+  await page.locator('[data-connection-entry="nested-0"] button').first().click({ modifiers: ["Shift"] });
+  await selected(4);
+  await page.keyboard.press("Control+a");
+  await page.waitForFunction(() => window.requests.some(request => request.command === "connection_entry_ids" && request.args.subtree && request.args.folderId === "child"));
+  await selected(4);
+  assert.equal(await page.locator('[data-connection-entry^="root-"],[data-connection-entry="second-0"]').count(), 0);
+  await page.screenshot({ path: `${output}/subtree.png` });
+  await sidebar().getByRole("button", { name: "收起素材目录" }).click();
+  await page.evaluate(async () => (await import("/src/lib/folderConnections.ts")).navigateConnectedFolder("nested"));
+  await sidebar().getByRole("treeitem", { name: "晨间", exact: true, selected: true }).waitFor();
+  await page.locator('[data-connection-entry="nested-0"]').waitFor();
+  assert.deepEqual(await sections(), ["nested"]);
+
+  await folders.click();
+  assert.equal(await folders.getAttribute("aria-expanded"), "false");
+  assert.deepEqual(await sections(), ["nested"]);
+  await page.keyboard.press("e");
+  await sidebar().getByRole("button", { name: "拼音 A–Z", exact: true }).waitFor();
+  await page.keyboard.press("q");
+  assert.equal(await folders.getAttribute("aria-expanded"), "false");
+  assert.equal(await sidebar().getByRole("button", { name: "连接文件夹", exact: true }).count(), 0);
+  await page.locator(".app-topbar").getByRole("button", { name: "建立连接", exact: true }).waitFor();
+  await click("新建文件夹");
+  const newFolder = page.getByRole("dialog", { name: "新建文件夹", exact: true });
+  await newFolder.getByRole("textbox", { name: "文件夹名称" }).fill("空白测试目录");
+  await newFolder.getByText("保存位置 /fixture/BowerbirdLibrary/空白测试目录", { exact: true }).waitFor();
+  assert.equal(await newFolder.getByRole("button", { name: "更改父目录" }).count(), 0);
+  assert.equal(await folders.getAttribute("aria-expanded"), "false");
+  await newFolder.getByRole("button", { name: "保存", exact: true }).click();
+  const created = sidebar().getByRole("treeitem", { name: "空白测试目录", exact: true, selected: true });
+  await created.waitFor();
+  assert.equal(await folders.getAttribute("aria-expanded"), "true");
+  const createdId = await created.getAttribute("data-collection-id");
+  await page.locator(`[data-catalog-section="${createdId}"]`).waitFor();
+  assert.deepEqual(await sections(), [createdId]);
+  assert.equal(await page.locator(".catalog-scroller:visible [data-connection-entry]").count(), 0);
+  assert.deepEqual(await page.evaluate(() => window.requests.filter(({ command }) =>
+    ["create_connected_collection", "connect_folder", "plugin:dialog|open"].includes(command))), [
+    { command: "create_connected_collection", args: { parentId: null, name: "空白测试目录", path: null, projectId: null } },
+  ]);
+
+  await sidebar().getByRole("button", { name: "收起侧栏", exact: true }).click();
+  await page.reload();
+  await sidebar().getByRole("button", { name: "展开侧栏", exact: true }).waitFor();
+  await click("展开侧栏");
   assert.deepEqual(errors, []);
-  await writeFile(`${output}/result.json`, JSON.stringify({ passed: true, widths: [1000, 600, 400, 320], errors }, null, 2));
-  console.log('PASS flat navigation, tag scopes, collections, media, keyboard, themes and pane isolation');
+  console.log("PASS stable navigation, icon placement, project sections and deduplication, global tags, folder subtree and remembered sidebar");
 } catch (error) {
-  await page.screenshot({ path: `${output}/failure.png` });
-  console.error(errors);
+  await page.screenshot({ path: `${output}/failure.png` }).catch(() => {});
   throw error;
-} finally { await browser.close(); await server.close(); }
+} finally {
+  await browser.close(); await server.close();
+}

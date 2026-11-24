@@ -13,7 +13,7 @@ page.on('pageerror', error => errors.push(error.message));
 await page.route('**/*', route => { if (new URL(route.request().url()).hostname !== '127.0.0.1') { remote.push(route.request().url()); return route.abort(); } return route.continue(); });
 await page.route('**/fixture/reference.png', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="160"><rect width="400" height="160" fill="#90a3a4"/></svg>' }));
 try {
-  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-library/preview.html`);
+  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-library/preview.html`, { timeout: 60000 });
   await page.locator('[data-text-document-editor]').waitFor();
   assert.equal(await page.locator('.asset-detail-toolbar').count(), 1);
   assert.equal(await page.locator('.asset-detail-panel').count(), 1);
@@ -67,6 +67,7 @@ try {
   await page.waitForFunction(() => window.snapshots.get('md').text.includes('重开后继续编辑'));
   await page.getByRole('button', { name: '正文', exact: true }).click();
   await page.getByRole('button', { name: '插入素材', exact: true }).click();
+  await page.getByRole('menuitem', { name: '从电脑连接素材原件', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.text-document-block figure').length === 3);
   await page.getByRole('textbox', { name: '素材说明', exact: true }).first().fill('配色参考');
   const waveform = page.locator('.text-document-block [data-audio-preview]');
@@ -102,6 +103,31 @@ try {
       await page.screenshot({ path: `.tmp/text-library/${theme}-${width}.png` });
     }
   }
+  const externalVersion = await page.evaluate(async () => {
+    const { serializeMarkdown } = await import('/src/lib/documentCodec.ts');
+    const original = serializeMarkdown([{ id: 'rich', type: 'p', align: 'center', children: [{ text: '本机富文本' }] }]);
+    const text = original.replace('本机富文本', '外部正文');
+    window.snapshots.set('md', { ...window.snapshots.get('md'), text, version: 'external-edit' });
+    return text;
+  });
+  await page.getByRole('button', { name: '重新读取原文件' }).click();
+  await page.getByRole('alert').filter({ hasText: '正文已在外部修改' }).waitFor();
+  assert.equal(await editor.count(), 0);
+  await page.getByRole('button', { name: '保留原富状态另存草稿' }).click();
+  await editor.getByText('外部正文', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '保存', exact: true }).isDisabled(), true);
+  const recovered = await page.evaluate(async () => {
+    const { listRecentTextDocuments, visitRecentTextDocument } = await import('/src/lib/recentTextDocuments.ts');
+    const { parseMarkdown } = await import('/src/lib/documentCodec.ts');
+    const copy = (await listRecentTextDocuments()).find(item => item.title.includes('富状态草稿'));
+    return parseMarkdown((await visitRecentTextDocument(copy.id)).markdown)[0];
+  });
+  assert.equal(recovered.children[0].text, '本机富文本');
+  assert.equal(recovered.align, 'center');
+  assert.equal(await page.evaluate(() => window.snapshots.get('md').text), externalVersion);
+  await page.getByRole('button', { name: '重新读取原文件' }).click();
+  await page.getByRole('button', { name: '按最新正文打开' }).click();
+  await editor.getByText('外部正文', { exact: true }).waitFor();
   const calls = await page.evaluate(() => window.calls);
   assert.equal(calls.some(call => ['external_files_media', 'external_files_preview'].includes(call.command)), false);
   assert.equal(calls.some(call => /generate|local_chat_send|start_agent/.test(call.command)), false);
@@ -111,6 +137,6 @@ try {
   await mkdir('.tmp/text-library', { recursive: true });
   await page.screenshot({ path: '.tmp/text-library/failure.png' });
 
-  console.error(errors);
+  console.error(error, errors);
   throw error;
 } finally { if(process.env.BOWERBIRD_DEMO_COVERAGE)await writeFile('.tmp/text-library/coverage.json',JSON.stringify((await page.coverage.stopJSCoverage()).filter(e=>e.url.includes('/src/')))); await browser.close(); await server.close(); }

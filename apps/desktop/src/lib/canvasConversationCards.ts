@@ -1,9 +1,6 @@
 import { readCanvasNote } from "./canvasNotes.ts";
+import { canvasNodePayload as payload, canvasOutputIsVideo } from "./canvasNodePayload.ts";
 import type { CanvasNode, GenJob } from "./types";
-
-function payload(node: CanvasNode) {
-  try { return JSON.parse(node.payloadJson); } catch { return {}; }
-}
 
 export interface CanvasConversationCard {
   anchor: CanvasNode;
@@ -31,7 +28,7 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
       ? [[cell.generation_ref.session_node_id, { nodeId: node.id, cellId: cell.id! }] as const] : []))));
   const conversationId = (node: CanvasNode) => {
     const turn = payload(node);
-    return turn.conversation_id || jobs[turn.job_id]?.conversationId || turn.job_id;
+    return turn.conversation_id || (turn.job_id && jobs[turn.job_id]?.conversationId) || turn.job_id;
   };
   // Explicit content cells keep their own sessions. Repeated workflow runs may
   // populate different rows; producer grouping must not merge those destinations.
@@ -44,7 +41,7 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
   ordered.forEach((node, slot) => {
     if (node.kind !== "prompt") return;
     const turn = payload(node);
-    const rank = jobs[turn.job_id]?.turns?.findIndex(item => item.turnKey === turn.turn_key) ?? -1;
+    const rank = turn.job_id ? jobs[turn.job_id]?.turns?.findIndex(item => item.turnKey === turn.turn_key) ?? -1 : -1;
     if (rank < 0) return;
     const key = JSON.stringify([node.projectId, turn.job_id, node.createdAt]);
     const tied = tiedTurns.get(key) ?? [];
@@ -111,7 +108,7 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
       return [JSON.stringify([turn.job_id, turn.turn_key]), index];
     }));
     const compare = (a: CanvasNode, b: CanvasNode) => {
-      const left = payload(a).execution, right = payload(b).execution;
+      const left = payload(a).execution!, right = payload(b).execution!;
       return (left.job_id === right.job_id ? ranks.get(JSON.stringify([left.job_id, left.turn_key]))! - ranks.get(JSON.stringify([right.job_id, right.turn_key]))! : 0)
         || a.createdAt - b.createdAt || a.assetId!.localeCompare(b.assetId!);
     };
@@ -126,7 +123,8 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
     const group = payload(node).workflow_generation_group;
     if (payload(node).generation_group_dissolved) continue;
     if (typeof group !== "string") continue;
-    const key = JSON.stringify([node.projectId, group]);
+    const key = JSON.stringify(group.startsWith("workflow:") && canvasOutputIsVideo(node)
+      ? [node.projectId, group, "video"] : [node.projectId, group]);
     const card = groups.get(key) ?? { anchor: node, latest: node, sessions: [], outputs: [], allOutputs: [] };
     card.outputs.push(node);
     card.allOutputs.push(node);

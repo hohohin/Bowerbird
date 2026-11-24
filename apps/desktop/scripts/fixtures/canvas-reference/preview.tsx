@@ -41,10 +41,11 @@ const sourceLibrary = new URLSearchParams(location.search).has("source-library")
 const canvasLibrary = new URLSearchParams(location.search).has("canvas-library");
 const strictCanvas = new URLSearchParams(location.search).has("strict-canvas");
 const detailRoute = new URLSearchParams(location.search).has("detail-route");
-let canvasExists = !strictCanvas;
+let canvasExists = !strictCanvas || !!sessionStorage.getItem("reference-fixture");
 w.store = useStore;
 const callbacks = new Map();
 const listeners = new Map();
+const annotationSnapshots = new Map<string, { id: string; dataUrl: string; meta: any }>();
 const project = { id: "p", name: "引用布局合成验收", kind: "blank", workspace_path: "blank:p", asset_count: 5,
   title_source: "manual", created_at: 1, updated_at: 1 };
 if (new URLSearchParams(location.search).has("provisional") && !sessionStorage.getItem("reference-fixture")) Object.assign(project, { provisional: true, title_source: "default" });
@@ -87,9 +88,10 @@ w.save = () => {
   sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation" || asset.source === "draft" || asset.source === "external" || asset.source === "video-frame" || asset.ext === "mp4")));
   sessionStorage.setItem("reference-draft-workspaces", JSON.stringify([...draftWorkspaces]));
 };
-w.emitChange = () => {
-  for (const [handler, event] of listeners) if (event === "creative://changed") callbacks.get(handler)?.({ event, id: handler, payload: { projectId: "p" } });
+w.emitFixtureEvent = (name: string, payload: unknown) => {
+  for (const [handler, event] of listeners) if (event === name) callbacks.get(handler)?.({ event, id: handler, payload });
 };
+w.emitChange = () => w.emitFixtureEvent("creative://changed", { projectId: "p" });
 w.emitAssetsChanged = () => {
   for (const [handler, event] of listeners) if (event === "library://assets-changed") callbacks.get(handler)?.({ event, id: handler, payload: null });
 };
@@ -118,6 +120,10 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "start_external_drag" && w.holdNativeLibraryDrag) {
+      return await new Promise(resolve => { w.finishNativeLibraryDrag = resolve; });
+    }
+    if (command === "list_gen_jobs") return [];
     if (detailRoute) {
       if (command === "create_blank_project") {
         w.libraryProject = { ...project, id: "library-project", name: args.name, workspace_path: "/BowerbirdLibrary/项目/library-project", asset_count: 0 };
@@ -257,7 +263,11 @@ w.__TAURI_INTERNALS__ = {
       if (args.createdContent && !snapshot.nodes.some((node: any) => node.id === args.createdContent.id)) snapshot.nodes.push({ ...args.createdContent, hiddenAt: null, createdAt: 10, updatedAt: 10 });
       sessionStorage.setItem(`workflow-${args.projectId}`, JSON.stringify({ revision, document: args.document })); return revision;
     }
-    if (command === "generation_history") return { turns: [{ prompt: "保持产品主体，生成清晨场景" }], references: [assets[0]] };
+    if (command === "generation_history") return {
+      session_id: null,
+      turns: [{ prompt: "保持产品主体，生成清晨场景", images: assets.filter(asset => asset.id === args.assetId).map(asset => asset.store_path) }],
+      references: [assets[0]],
+    };
     if (command === "project_thread_create") return args.value;
     if (command === "get_settings") return JSON.parse(sessionStorage.getItem("canvas-settings") || "{}");
     if (command === "update_settings") { sessionStorage.setItem("canvas-settings", JSON.stringify(args.settings)); return null; }
@@ -407,9 +417,26 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "save_annotated_image") {
       if (w.failDraftSave) throw "模拟草稿保存失败";
-      const asset = { id: `draft-${assets.length}`, name: args.fileName, ext: "png", width: 1600, height: 1200,
-        store_path: args.dataUrl, source: "annotation" };
-      assets.push(asset);
+      const meta = JSON.parse(args.annotationJson);
+      const bytes = await (await fetch(args.dataUrl)).arrayBuffer();
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      meta.output_sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+      const geometry = { width: meta.image.width, height: meta.image.height, thumb_path: args.dataUrl };
+      let asset;
+      if (args.overwrite) {
+        asset = assets.find(item => item.id === args.overwrite.assetId);
+        const previous = annotationSnapshots.get(args.overwrite.assetId);
+        if (!asset || !previous || previous.meta.output_sha256 !== args.overwrite.sourceHash || previous.id !== args.overwrite.annotationId) {
+          throw "原图片已变化，请重新打开后再保存";
+        }
+        meta.save_mode = "revision";
+        Object.assign(asset, geometry);
+      } else {
+        asset = { id: `draft-${assets.length}`, name: args.fileName, ext: "png", ...geometry,
+          store_path: args.dataUrl, source: "annotation" };
+        assets.push(asset);
+      }
+      annotationSnapshots.set(asset.id, { id: crypto.randomUUID(), dataUrl: args.dataUrl, meta });
       return asset;
     }
     if (command === "draft_workspace_load") return structuredClone(draftWorkspaces.get(args.assetId) ?? null);
@@ -442,6 +469,10 @@ w.__TAURI_INTERNALS__ = {
       if (w.loseNodeSaveReply) throw "模拟草稿卡片确认失败";
       return structuredClone(node);
     }
+    if (command === "list_analyses_by_asset") {
+      const entry = annotationSnapshots.get(args.assetId);
+      return entry ? [{ id: entry.id, asset_id: args.assetId, kind: "annotation", payload: JSON.stringify(entry.meta) }] : [];
+    }
     if (command === "import_image_bytes" && args.source === "workflow-template") {
       const asset = { ...assets[0], id: `template-${assets.length}`, name: args.fileName, store_path: args.dataUrl, source: args.source };
       assets.push(asset); return asset;
@@ -465,7 +496,10 @@ w.__TAURI_INTERNALS__ = {
       if (args.overwrite) Object.assign(original, asset); else assets.push(asset);
       return asset;
     }
-    if (command === "read_image_data_url") return w.templateImageData ?? args.path;
+    if (command === "read_image_data_url") {
+      const asset = assets.find(item => item.store_path === args.path && annotationSnapshots.has(item.id));
+      return asset ? annotationSnapshots.get(asset.id)?.dataUrl : w.templateImageData ?? args.path;
+    }
     if (command === "project_canvas_ensure") {
       if (strictCanvas) await new Promise(resolve => setTimeout(resolve, 150));
       canvasExists = true;
@@ -498,8 +532,17 @@ w.__TAURI_INTERNALS__ = {
     if (sourceLibrary && command === "search_assets") return assets.filter(asset => asset.name.includes(args.query));
     if (sourceLibrary && command === "list_assets") return assets.filter((asset: any) => !asset.library_hidden && (!args.folderId || asset.id === "existing") && (args.projectId !== "library-project" || w.libraryMembers?.includes(asset.id)));
     if (sourceLibrary && command === "count_assets") return assets.filter((asset: any) => !asset.library_hidden).length;
-    if (command === "material_catalog") return { tags: [], collections: [], prompts: [] };
-    if (command === "material_catalog_assets") return canvasLibrary ? assets.filter((asset: any) => !asset.library_hidden) : [];
+    if (command === "material_catalog") return { tags: sourceLibrary ? [{ id: "sample", name: "A 参考", description: "", projectCount: 0, count: assets.length }] : [],
+      collections: [], prompts: [], tag_asset_ids: sourceLibrary ? { sample: assets.map(asset => asset.id) } : {} };
+    if (command === "material_catalog_assets") return canvasLibrary || sourceLibrary ? assets.filter((asset: any) => !asset.library_hidden) : [];
+    if (canvasLibrary && sourceLibrary && ["folder_connections", "connection_entries", "connection_entry_ids"].includes(command)) {
+      const visible = assets.filter((asset: any) => !asset.library_hidden && (!args.filter?.query || asset.name.includes(args.filter.query)));
+      if (command === "folder_connections") return [{ id: "test-root", root_id: "test-root", parent_id: null, name: "测试目录", path: "/sample", count: visible.length, available: true }];
+      const slice = visible.slice(args.offset, args.offset + args.limit);
+      if (command === "connection_entry_ids") return slice.map(asset => `entry-${asset.id}`);
+      return slice.map(asset => ({ id: `entry-${asset.id}`, folder_id: "test-root", asset_id: asset.id, name: asset.name,
+        path: asset.store_path, available: true, is_reference: false, asset }));
+    }
     if (command === "folder_connections" || command === "connection_entries") return [];
     if (command === "count_assets") return 0;
     if (command.startsWith("list_")) return [];
@@ -542,5 +585,6 @@ function Fixture() {
 installCatalogPagingMock(window);
 if (mediaImport) installMediaImportMock(w, assets);
 installDeletionTaskMock();
+const content = detailRoute ? <App /> : <Fixture />;
 createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("strict")
-  ? <React.StrictMode>{detailRoute ? <App /> : <Fixture />}</React.StrictMode> : detailRoute ? <App /> : <Fixture />);
+  ? <React.StrictMode>{content}</React.StrictMode> : content);

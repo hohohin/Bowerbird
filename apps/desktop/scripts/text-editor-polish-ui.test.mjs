@@ -34,7 +34,7 @@ await check('Tab and Shift+Tab nest lists and preserve nesting after reopening',
  await page.keyboard.type('- parent');await page.keyboard.press('Enter');await page.keyboard.type('child');
  const child=editor.locator('[data-slate-string]').filter({hasText:'child'}),parent=editor.locator('[data-slate-string]').filter({hasText:'parent'});
  await page.keyboard.press('Tab');assert.ok((await child.boundingBox()).x>(await parent.boundingBox()).x+20);
- assert.match(await page.evaluate(()=>window.draft.markdown),/\n\s{2,}[-*] child/);
+ await page.waitForFunction(()=>/\n\s{2,}[-*] child/.test(window.draft?.markdown));
  await reopen();assert.equal(await editor.locator('[role=listitem], ol').count(),2);assert.equal(await editor.locator('pre').count(),0);
  await child.click();await page.keyboard.press('End');await page.keyboard.press('Shift+Tab');assert.ok(Math.abs((await child.boundingBox()).x-(await parent.boundingBox()).x)<2);
  await page.keyboard.press('Enter');await page.keyboard.press('Enter');await page.keyboard.type('body');assert.equal(await editor.locator('[role=listitem], ol').count(),2);
@@ -51,11 +51,11 @@ await check('quote paragraphs each have one handle, copy and delete safely',asyn
 await check('block type picker changes heading levels and returns to body without losing selection',async()=>{
  await page.keyboard.type('change heading');await page.keyboard.press('Home');await page.keyboard.press('Shift+End');
  const toolbar=page.getByRole('toolbar',{name:'文字格式',exact:true});
- await toolbar.locator('[aria-label="段落类型"]').click();
+ await toolbar.locator('[aria-label="正文或标题"]').click();
  await page.getByRole('menuitemradio',{name:'标题 1',exact:true}).click();
  assert.equal(await editor.locator('h1').innerText(),'change heading');
- await toolbar.locator('[aria-label="段落类型"]').click();await page.getByRole('menuitemradio',{name:'标题 3',exact:true}).click();assert.equal(await editor.locator('h3').innerText(),'change heading');
- await toolbar.locator('[aria-label="段落类型"]').click();await page.getByRole('menuitemradio',{name:'正文',exact:true}).click();assert.equal(await editor.locator('h1,h2,h3').count(),0);
+ await toolbar.locator('[aria-label="正文或标题"]').click();await page.getByRole('menuitemradio',{name:'标题 3',exact:true}).click();assert.equal(await editor.locator('h3').innerText(),'change heading');
+ await toolbar.locator('[aria-label="正文或标题"]').click();await page.getByRole('menuitemradio',{name:'正文',exact:true}).click();assert.equal(await editor.locator('h1,h2,h3').count(),0);
  await editor.locator('[data-slate-string]').click();await page.keyboard.press('Home');await page.keyboard.press('Shift+End');
  await page.getByRole('toolbar',{name:'选中文字格式'}).locator('[aria-label="加粗"]').click();assert.equal(await editor.locator('strong').innerText(),'change heading');
 });
@@ -67,7 +67,7 @@ await check('drag has visible insertion position and preserves paragraph undo',a
  await page.waitForTimeout(60);await page.mouse.move(b.x+81,b.y+b.height-2);
  await editor.locator('.slate-dropLine').waitFor();assert.equal(await editor.locator('.slate-dropLine').count(),1);await page.mouse.up();
  await page.waitForFunction(()=>window.draft.markdown.indexOf('second')<window.draft.markdown.indexOf('first'));
- await page.keyboard.press('Control+z');assert.match(await page.evaluate(()=>window.draft.markdown),/first[\s\S]*second/);
+ await page.keyboard.press('Control+z');await page.waitForFunction(()=>/first[\s\S]*second/.test(window.draft?.markdown));
  assert.equal(await editor.locator('.slate-dropLine').count(),0);
 });
 await check('nested list parent copies, moves and deletes with its children',async()=>{

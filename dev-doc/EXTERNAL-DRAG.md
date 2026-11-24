@@ -31,7 +31,7 @@
 - `start_external_drag({ assetIds, mode, sessionId })` 仅接受主 WebView 调用。素材库和画布长按均使用 `hold`；后台保留旧 `pickup` 协议以兼容既有调用，正式画布已无该入口。每次 sessionId 独立。
 - 前端 `startExternalDrag(ids, mode, { source, signal, sourceRect, externalOnly })` 默认来源为素材库；`FileMediaCard` 与画布均传入源素材边界，共用 HUD 和两帧绘制等待。画布传 `source: "canvas"`，素材库长按传 `externalOnly: true`，两者均拦截同窗投递；素材库普通直接拖动保留同窗目标及清晰显示。生命周期取消仍传 signal。
 - `cancel_pending_external_drag` 返回 bool：true 确认该请求不会再进入原生拖动，可提前恢复界面；false 表示已经交给系统，外拖反馈生命周期持续到原生完成（素材库同窗悬停期间暂时隐藏）。只取消对应尚未开始的手势，支持取消先到、启动后到；不干预已交给系统的拖放。确认取消后不再吞掉新操作的 Esc，不弹出旧准备请求迟到的错误；载荷锁仍等待原启动调用终态释放。松手、Esc、失焦和终态的取消／清理规则不因两种来源共用 HUD 而改变。
-- `core/external_drag.rs` 从数据库解析所选素材的当前原件，保留选择顺序、合并重复路径。失效身份、缺失原件或非法文件拒绝整个拖动。
+- `core/external_drag.rs` 按所选素材 ID 复用 `Database::resolve_asset_original`，保留选择顺序并合并重复路径。定位、外拖和导出优先读取当前登记原件。登记路径缺失时，只接受该 ID 独占、与登记 SHA-256 一致的历史路径。回收或清理标记也参与核验。删除继续按确认时登记的原件路径独立校验。
 - 连接分身使用现有 Asset ID，因此输出原件，不输出 `.bowerbird` 描述文件。缩略图不作为交付内容。解析不解码媒体、不复制、不移动或删除原文件。
 - 系统只提供 Copy 传输效果，接收程序自行决定导入方式。返回 `dropped: true` 只表示系统接受了投递，不等于第三方已完成上传、解码或导入。
 - 后台线程解析路径；主线程执行原生拖动。单会话占用持续至原生完成或失败，防止嵌套系统拖动。
@@ -39,6 +39,8 @@
 ## Windows
 
 使用 Shell item array 的 `IDataObject` 提供标准 `CF_HDROP` 文件列表；`IDropSource::QueryContinueDrag` 管理鼠标状态。当前素材库与画布均使用普通 hold，松手完成，Esc／右键取消。兼容分支 pickup 允许初始未按键，等下一次按下并松开才完成，本次不改写已验证的系统协议。
+
+素材右键「打开所在文件夹」与 OLE 外拖共用 Shell 路径解析。定位使用 `SHOpenFolderAndSelectItems`，保留文件名中的中文、空格与逗号，并把 Windows 返回的失败传给界面。
 
 从 `fs::canonicalize` 得到的 `\\?\` 路径不能直接交给 Shell。本次实际复现 E_INVALIDARG 后，按 `std::path::Prefix` 转换磁盘及 UNC 共享路径，不使用丢失 Unicode 或破坏共享前缀的字符串截取。起拖前最后一次检查实际鼠标按钮，避免准备期间已经松手后误投递。
 

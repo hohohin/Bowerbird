@@ -6,6 +6,8 @@
 
 interface ImportMeta { readonly dirname: string; }
 
+declare function structuredClone<T>(value: T): T;
+
 declare module "node:test" {
   export function test(name: string, fn: () => void | Promise<void>): void;
   export function test(
@@ -22,6 +24,7 @@ declare module "node:assert/strict" {
   export function notEqual(a: unknown, b: unknown, message?: string): void;
   export function deepEqual(a: unknown, b: unknown, message?: string): void;
   export function deepStrictEqual(a: unknown, b: unknown, message?: string): void;
+  export function match(actual: string, expected: RegExp, message?: string | Error): void;
   export function throws(fn: () => unknown, matcher?: unknown, message?: string): void;
   export function rejects(fn: () => Promise<unknown>, matcher?: unknown, message?: string): Promise<void>;
   export function fail(message?: string): never;
@@ -55,7 +58,7 @@ declare module "node:fs" {
   export function symlinkSync(target: string, path: string, type?: "dir" | "junction"): void;
   export function unlinkSync(path: string): void;
   export function existsSync(path: string): boolean;
-  export function rmSync(path: string, options: { recursive: boolean; force: boolean }): void;
+  export function rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
   export function readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
   export function statSync(path: string): { mtimeMs: number };
   export function statfsSync(path: string): { blocks: number; bsize: number; bavail: number };
@@ -101,6 +104,11 @@ declare module "node:url" {
 
 declare module "node:child_process" {
   export function execFile(command: string, args: string[], options: { timeout: number; maxBuffer: number; windowsHide: boolean }, callback: (error: Error | null, stdout: string) => void): void;
+  export function execFileSync(
+    command: string,
+    args: readonly string[],
+    options?: { windowsHide?: boolean; maxBuffer?: number },
+  ): import("node:buffer").Buffer;
   export interface ChildProcess {
     readonly exitCode: number | null;
     readonly signalCode: string | null;
@@ -215,7 +223,7 @@ declare class TextEncoder {
 
 declare class TextDecoder {
   constructor(encoding?: string, options?: { fatal?: boolean; ignoreBOM?: boolean });
-  decode(input?: Uint8Array): string;
+  decode(input?: Uint8Array, options?: { stream?: boolean }): string;
 }
 
 interface AbortSignal {
@@ -227,7 +235,7 @@ declare class AbortController {
   readonly signal: AbortSignal;
   abort(): void;
 }
-declare const AbortSignal: { timeout(milliseconds: number): AbortSignal };
+declare const AbortSignal: { timeout(milliseconds: number): AbortSignal; any(signals: AbortSignal[]): AbortSignal };
 
 declare class URL {
   constructor(input: string);
@@ -235,7 +243,9 @@ declare class URL {
   readonly hostname: string;
   readonly username: string;
   readonly password: string;
+  readonly pathname: string;
   readonly search: string;
+  readonly searchParams: { get(name: string): string | null; getAll(name: string): string[] };
   readonly hash: string;
 }
 

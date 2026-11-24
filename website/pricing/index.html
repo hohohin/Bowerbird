@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#100e0e" />
+    <meta name="description" content="比较 Bowerbird 免费版与 Pro 的功能、订阅价格和赠币规则，查看 Bcoin 充值包并估算自定义充值金额。" />
+    <title>订阅与充值 · Bowerbird 园丁鸟</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../styles.css" />
+    <link rel="stylesheet" href="../homepage-upgrade.css" />
+    <link rel="stylesheet" href="../billing.css" />
+    <script src="/billing.js" defer></script>
+  </head>
+  <body class="pricing-page">
+    <a class="skip" href="#main">跳到正文</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="/" aria-label="Bowerbird 首页">
+          <span class="brand-mark"><img src="../assets/logo.png" alt="" /></span><span>Bowerbird</span>
+        </a>
+        <button class="menu-toggle" id="menu-toggle" type="button" aria-label="导航菜单" aria-expanded="false" aria-controls="site-nav"><span></span><span></span></button>
+        <nav class="site-nav" id="site-nav" aria-label="主导航">
+          <a href="/#features">桌面功能</a><a href="/#projects">项目画板</a>
+          <a href="/pricing/" aria-current="page">订阅与充值</a>
+          <a class="nav-download" href="/#download">下载桌面版 <span aria-hidden="true">↓</span></a>
+        </nav>
+      </div>
+    </header>
+    <main id="main">
+      <section class="module price-intro" aria-labelledby="page-title">
+        <h1 id="page-title">订阅与<span>充值。</span></h1>
+      </section>
+
+      <section class="module price-section" id="subscription" aria-labelledby="plans">
+        <div class="billing-lead">
+          <h2 id="plans">订阅方案</h2>
+        </div>
+        <div class="comparison">
+          <table>
+            <caption class="visually-hidden">免费版与 Pro 的价格和权益</caption>
+            <colgroup><col class="feature-col" /><col class="free-col" /><col class="pro-col" /></colgroup>
+            <thead><tr>
+              <th scope="col"><span class="feature-title">功能与价格</span><small class="payment-state">在线购买暂未开放</small></th>
+              <th scope="col"><span class="plan">免费版</span><div class="amount"><small>¥</small>0</div></th>
+              <th scope="col"><span class="plan">Pro</span><div class="amount"><small>¥</small>39<span> / 月</span></div><div class="yearly">¥359 / 年</div><small class="renewal">一次购买，到期手动续购</small></th>
+            </tr></thead>
+            <tbody>
+              <tr><th scope="row">工作流卡片<small>连接多个创作步骤</small></th><td class="unavailable">不含</td><td><span class="included">支持</span></td></tr>
+              <tr><th scope="row">接入自有订阅<small>需自备 ChatGPT 或即梦订阅</small></th><td class="unavailable">不含</td><td><span class="included">支持</span></td></tr>
+              <tr><th scope="row">本地生成<small>需兼容设备</small></th><td class="unavailable">不含</td><td><span class="included">支持</span></td></tr>
+              <tr><th scope="row">每订阅月赠币<small>年付分 12 次发放</small></th><td class="unavailable">无</td><td><strong class="grant">800 Bcoin</strong><small>到账后 30 天有效</small></td></tr>
+              <tr><th scope="row">素材管理与普通画板</th><td><span class="included">支持</span></td><td><span class="included">支持</span></td></tr>
+              <tr><th scope="row">Cloud 云端服务<small>按任务报价扣除 Bcoin</small></th><td>按量计费</td><td>按量计费</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="module recharge" id="recharge" aria-labelledby="recharge-title">
+        <div class="billing-lead">
+          <div><h2 id="recharge-title">Bcoin 充值</h2><p>为云端任务补充余额。充值 Bcoin 永久有效，免费版与 Pro 同价。</p></div>
+          <span class="payment-state">在线充值暂未开放</span>
+        </div>
+        <div class="pack-panel">
+          <ul class="denominations" aria-label="充值包金额与 Bcoin 数量">
+            <li data-yuan="5"><strong>100 <small>Bcoin</small></strong><span>¥5</span></li>
+            <li data-yuan="10"><strong>200 <small>Bcoin</small></strong><span>¥10</span></li>
+            <li data-yuan="20"><strong>400 <small>Bcoin</small></strong><span>¥20</span></li>
+            <li data-yuan="50"><strong>1,000 <small>Bcoin</small></strong><span>¥50</span></li>
+            <li data-yuan="100"><strong>2,000 <small>Bcoin</small></strong><span>¥100</span></li>
+            <li data-yuan="500"><strong>10,000 <small>Bcoin</small></strong><span>¥500</span></li>
+          </ul>
+          <p class="custom-note" id="custom-note">自定义金额可从 1 元起，按整数元换算。</p>
+          <div class="calculator" id="calculator" hidden>
+            <label for="custom-yuan">金额换算</label>
+            <div class="conversion"><div class="amount-box"><span aria-hidden="true">¥</span><input id="custom-yuan" type="text" inputmode="numeric" pattern="[0-9]+" value="20" aria-label="自定义金额，单位元" aria-describedby="amount-hint" autocomplete="off" /></div><span aria-hidden="true">→</span><output id="coin-total" for="custom-yuan" aria-label="换算结果">400 Bcoin</output></div>
+            <p class="hint" id="amount-hint">选择充值包，或输入自定义整数金额。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+    <footer class="site-footer">
+      <div class="footer-main">
+        <div><a class="brand" href="/"><span class="brand-mark"><img src="../assets/logo.png" alt="" /></span><span>Bowerbird</span></a><p>本地素材库与 AI 创作画板。</p></div>
+        <div class="footer-links"><div><strong>产品</strong><a href="/#features">功能</a><a href="/#projects">项目</a><a href="/#download">下载</a></div>
+          <div><strong>了解更多</strong><a href="/pricing/" aria-current="page">订阅与充值</a><a href="/#faq">常见问题</a></div></div>
+      </div>
+      <div class="footer-bottom"><span>© 猫九条科技有限公司</span><span>ICP备案/许可证号：<a class="footer-record-link" href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">粤ICP备2026118842号-1</a></span></div>
+    </footer>
+  </body>
+</html>

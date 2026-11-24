@@ -6,8 +6,6 @@
 .draft-library-heading span { flex: 1; color: var(--bb-ink-soft); font-size: 11px; }
 .draft-library-heading button { width: 28px; height: 28px; border-radius: 5px; }
 .draft-library-heading button:hover { background: var(--bb-surface-muted); }
-.draft-library-search { display: flex; gap: 8px; align-items: center; padding: 0 12px 10px; color: var(--bb-ink-soft); }
-.draft-library-search input { flex: 1; min-width: 60px; padding: 7px 8px; border: 1px solid var(--bb-line); border-radius: 6px; background: var(--bb-surface-muted); color: var(--bb-ink); font-size: 12px; }
 .draft-library-content { position: relative; flex: 1; min-height: 0; }
 .draft-library .categorized-library { --catalog-sidebar-default: 150px; }
 .draft-library .folder-media-card { display: block; }

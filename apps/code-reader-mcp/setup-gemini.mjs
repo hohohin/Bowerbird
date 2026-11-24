@@ -1,30 +1,52 @@
-import { mkdir, lstat, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { token, validGoogleRedirect } from './gemini-oauth.mjs';
-import { publicOrigin } from './http-app.mjs';
+import { usesLocalConfig } from './gemini-config-mode.mjs';
 
-const directory = new URL('./.local/gemini/', import.meta.url);
-const file = new URL('config.json', directory);
-const [mode, value, ...extra] = process.argv.slice(2);
-if (extra.length || !value || !['--origin', '--redirect-uri'].includes(mode)) {
-  throw new Error('Usage: node setup-gemini.mjs --origin https://your-host OR --redirect-uri <exact Google redirect>');
-}
-
-if (mode === '--origin') {
-  publicOrigin(value);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await writeFile(file, JSON.stringify({ origin: value, port: 48731, adminPassword: token(), clients: [] }, null, 2),
-    { mode: 0o600, flag: 'wx' });
+if (process.argv[2] === '--origin' || usesLocalConfig()) {
+  await import('./setup-local-gemini.mjs');
 } else {
-  if (!validGoogleRedirect(value)) throw new Error('Use the exact Google redirect URI shown by Gemini.');
-  const info = await lstat(file);
-  if (!info.isFile() || info.nlink !== 1 || info.size > 65536) throw new Error('Invalid configuration file');
-  const config = JSON.parse(await readFile(file, 'utf8'));
-  const clients = config.clients ?? [];
-  if (clients.length >= 16 || clients.some(client => client.redirect_uri === value)) throw new Error('Client already registered or limit reached');
-  const temporary = new URL(`config.${token()}.tmp`, directory);
-  config.clients = [...clients, { client_id: token(), client_secret: token(), redirect_uri: value }];
-  await writeFile(temporary, JSON.stringify(config, null, 2), { mode: 0o600, flag: 'wx' });
-  await rename(temporary, file);
+  const { validateConfig, googleRedirect } = await import('./http-app.mjs');
+  const args = process.argv.slice(2);
+  if (args.length && (args.length !== 2 || args[0] !== '--redirect-uri' || !googleRedirect(args[1]))) {
+    throw new Error('Usage: node setup-gemini.mjs [--redirect-uri <exact Google callback URL>]');
+  }
+
+  const dir = fileURLToPath(new URL('./.local/gemini/', import.meta.url));
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const configFile = path.join(dir, 'config.json');
+  if (!existsSync(configFile)) {
+    writeFileSync(configFile, JSON.stringify({ origin: 'https://mcp.bowerbird.cn', port: 48731,
+      adminPassword: randomBytes(32).toString('base64url') }, null, 2), { mode: 0o600, flag: 'wx' });
+  }
+  const config = validateConfig(JSON.parse(readFileSync(configFile, 'utf8')));
+  if (args.length) {
+    config.oauthClient = { clientId: config.oauthClient?.clientId ?? randomBytes(32).toString('base64url'),
+      clientSecret: config.oauthClient?.clientSecret ?? randomBytes(32).toString('base64url'), redirectUri: args[1] };
+    validateConfig(config);
+    writeFileSync(configFile, JSON.stringify(config, null, 2), { mode: 0o600 });
+  }
+  const identity = path.join(dir, 'id_ed25519');
+  if (!existsSync(identity)) execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'bowerbird-mcp-tunnel', '-f', identity], { windowsHide: true });
+  if (!existsSync(identity + '.pub')) throw new Error('Tunnel public key missing');
+  const knownHosts = path.join(dir, 'known_hosts');
+  if (!existsSync(knownHosts)) {
+    const trusted = execFileSync('ssh-keygen', ['-F', '106.55.44.143', '-f', path.join(os.homedir(), '.ssh', 'known_hosts')], { encoding: 'utf8', windowsHide: true });
+    const entries = trusted.split(/\r?\n/).filter(line => line && !line.startsWith('#'));
+    if (!entries.length) throw new Error('No previously trusted VPS host key');
+    writeFileSync(knownHosts, entries.join('\n') + '\n', { mode: 0o600, flag: 'wx' });
+  }
+  if (process.platform === 'win32') {
+    const account = execFileSync('whoami', [], { encoding: 'utf8', windowsHide: true }).trim();
+    for (const file of [configFile, identity, identity + '.pub', knownHosts]) {
+      execFileSync('icacls', [file, '/inheritance:r', '/grant:r', account + ':(F)'], { windowsHide: true, stdio: 'pipe' });
+    }
+  }
+  console.log('Prepared local Gemini configuration, dedicated tunnel key and pinned VPS host key.');
+  console.log('Authorization password remains in ' + configFile);
+  if (config.oauthClient) console.log('Manual OAuth Client ID and secret remain in oauthClient in the same local file. Restart Gemini MCP to load them.');
+  console.log('Deploy only the public key at ' + identity + '.pub');
 }
-console.log(`Saved configuration to ${fileURLToPath(file)}`);

@@ -27,7 +27,14 @@ export async function runWechatMaintenance({ mode = "reconcile", date, env = pro
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify(billDate ? { bill_date: billDate } : {}) });
   } catch { throw new PaymentMaintenanceError("PAYMENT_WORKER_UNAVAILABLE"); }
-  if (!response.ok) throw new PaymentMaintenanceError("PAYMENT_WORKER_HTTP_ERROR");
+  if (!response.ok) {
+    const summary = { task: mode, ...(billDate ? { bill_date: billDate } : {}) };
+    const status = response.status;
+    if (Number.isInteger(status) && status >= 100 && status <= 599 && (status < 200 || status >= 300)) {
+      summary.http_status = status;
+    }
+    throw new PaymentMaintenanceError("PAYMENT_WORKER_HTTP_ERROR", summary);
+  }
   // Never echo a response body or transport exception: either may contain secrets.
   let result;
   try {

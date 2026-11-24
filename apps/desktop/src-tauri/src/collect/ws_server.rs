@@ -245,18 +245,10 @@ fn handle_blob(
         "extension",
     ) {
         Ok(asset) => {
-            if let Some(project_id) = project_id {
-                if let Err(error) = state
-                    .db
-                    .place_collected_image(project_id, &asset)
-                {
-                    tracing::warn!(
-                        "link collected asset {} to project failed: {error}",
-                        asset.id
-                    );
-                    let _ = state.app.emit("library://assets-changed", ());
-                    return serde_json::json!({"ok":false,"saved":true,"error":"图片已入库，但未能加入项目画布"}).to_string();
-                }
+            if let Err(error) = finish_image_capture(&state.db, project_id, &asset) {
+                tracing::warn!("link collected asset {} failed: {error}", asset.id);
+                let _ = state.app.emit("library://assets-changed", ());
+                return serde_json::json!({"ok":false,"saved":true,"error":"图片已保存，但素材归属未能登记，请重试。"}).to_string();
             }
             tracing::info!(
                 "collect ws save_blob ok: {} -> {}",
@@ -418,10 +410,69 @@ async fn save_one(
             return Err(e);
         }
     };
-    if let Some(project_id) = project_id {
-        state.db.place_collected_image(project_id, &asset)?;
-    }
+    finish_image_capture(&state.db, project_id, &asset)?;
     Ok(asset)
+}
+
+fn finish_image_capture(db: &Database, project_id: Option<&str>, asset: &crate::core::library::Asset) -> crate::error::AppResult<()> {
+    if let Some(project_id) = project_id {
+        db.place_collected_image(project_id, asset)
+    } else {
+        // An explicit global capture gives a reused project original an independent library use.
+        db.link_external_to_library(&asset.id).map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use crate::core::file_workspace::FileWorkspace;
+    use std::{fs, path::Path};
+
+    #[test]
+    fn global_capture_retains_project_original_as_an_independent_library_member() {
+        for uploaded in [true, false] {
+            let temporary = tempfile::tempdir().unwrap();
+            let mut paths = LibraryPaths::init(temporary.path().join("cache")).unwrap();
+            paths.files = Some(Arc::new(FileWorkspace::open(
+                temporary.path().join("files.json"), temporary.path().join("BowerbirdLibrary"),
+            ).unwrap()));
+            let db = Database::open_in_memory().unwrap();
+            db.migrate().unwrap();
+            for id in ["origin", "other"] { db.create_project(id,id,"",id,"blank").unwrap(); }
+            let fixture = crate::media::phash::testutil::make_photo_file(temporary.path(),"capture.png",320,7);
+            let bytes = fs::read(&fixture).unwrap();
+            let capture = |paths: &LibraryPaths| {
+                if uploaded { ingest::ingest_from_bytes(paths, &db, &bytes, "https://example.com/image",
+                    Some("capture.png"), Some("image/png"), "extension").unwrap() }
+                else { ingest::ingest_new_file(paths, &db, &fixture).unwrap() }
+            };
+            let project_paths = paths.for_project(&db, Some("origin")).unwrap();
+            let first = capture(&project_paths);
+            finish_image_capture(&db, Some("origin"), &first).unwrap();
+            assert!(Path::new(first.store_path.as_ref().unwrap()).starts_with(project_paths.destination.as_ref().unwrap()));
+            let global_uses = || db.conn.lock().unwrap().query_row(
+                "SELECT COUNT(*) FROM independent_library_assets WHERE asset_id=?1", [&first.id], |row| row.get::<_,i64>(0),
+            ).unwrap();
+            assert_eq!(global_uses(), 0);
+            let another_project = capture(&paths.for_project(&db,Some("other")).unwrap());
+            finish_image_capture(&db,Some("other"),&another_project).unwrap();
+            assert_eq!(another_project.id,first.id);
+            assert_eq!(global_uses(),0);
+            let global = capture(&paths);
+            assert_eq!(global.id, first.id);
+            let before_link = serde_json::to_value(db.get_asset(&global.id).unwrap()).unwrap();
+            finish_image_capture(&db,None,&global).unwrap();
+            finish_image_capture(&db,None,&global).unwrap();
+            assert_eq!(global_uses(),1);
+            assert_eq!(serde_json::to_value(db.get_asset(&global.id).unwrap()).unwrap(), before_link);
+            assert_eq!(fs::read(global.store_path.as_ref().unwrap()).unwrap(),bytes);
+            for project in ["origin","other"] {
+                let canvas = db.project_canvas_snapshot(project).unwrap();
+                assert_eq!(canvas.nodes.iter().filter(|node| node.asset_id.as_deref()==Some(first.id.as_str())).count(),1);
+            }
+        }
+    }
 }
 
 fn asset_result(asset: &crate::core::library::Asset) -> serde_json::Value {

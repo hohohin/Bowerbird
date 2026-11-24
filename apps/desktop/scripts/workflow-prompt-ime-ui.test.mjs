@@ -18,6 +18,7 @@ try {
     await c.load();
     await c.edit(['agent', 'generation', 'planner', 'instruction'].map((kind, index) => ({
       ...newWorkflowNode(kind, 20 + index * 410, 90, 'codex'), id: kind, prompt: '镜头推进',
+      ...(kind === 'instruction' ? {} : { inputs: { image: [{ assetId: 'a', slot: 1 }] } }),
     })));
     const { api } = await import('/src/lib/api.ts');
     const save = api.canvasWorkflowSave;
@@ -57,6 +58,30 @@ try {
   for (const id of ['agent', 'generation', 'planner', 'instruction']) {
     const field = page.locator(`[data-workflow-card="${id}"]`).locator('.ProseMirror, textarea');
     assert.equal(await field.evaluate(el => el.value ?? el.textContent), '镜头中文!?推进。。', id + ' survives reload');
+  }
+  for (const [id, provider] of [['agent', 'codex-local'], ['agent', 'dsh-local'], ['agent', 'dsh-cloud'], ['generation'], ['planner']]) {
+    if (provider) await page.evaluate(async provider => {
+      const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+      const controller = canvasWorkflowController('p');
+      await controller.edit(controller.document.nodes.map(node => node.id === 'agent' ? { ...node, chatProvider: provider } : node));
+    }, provider);
+    const label = provider ?? id;
+    const field = page.locator(`[data-workflow-card="${id}"] .ProseMirror`);
+    await field.fill('参考');
+    await field.press('End');
+    await field.pressSequentially('@');
+    await page.getByRole('option', { name: /图片来源 1/ }).click();
+    const chip = field.locator('.workflow-prompt-reference');
+    await chip.locator('img').waitFor();
+    const caretLine = await chip.evaluate(el => {
+      const chip = el.getBoundingClientRect();
+      const trailingBreak = el.parentElement.querySelector('.ProseMirror-trailingBreak').getBoundingClientRect();
+      return { chipTop: chip.top, chipBottom: chip.bottom, breakTop: trailingBreak.top, breakBottom: trailingBreak.bottom };
+    });
+    assert.ok(caretLine.breakTop < caretLine.chipBottom && caretLine.breakBottom > caretLine.chipTop,
+      `${label}: caret after the image should stay on its line, got ${JSON.stringify(caretLine)}`);
+    await page.keyboard.insertText('继续');
+    assert.equal(await chip.evaluate(el => el.nextSibling?.textContent), '继续', label + ': typing continues after the reference');
   }
   assert.deepEqual(errors, []);
 } finally {

@@ -18,10 +18,10 @@ try {
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { api } = await import('/src/lib/api.ts');
-    const signedOut = { ok: false, reason: 'Bowerbird 的即梦未登录，请在设置中登录' };
+    const signedOut = { ok: false, status: 'login_required', reason: 'Bowerbird 的即梦未登录，请在设置中登录' };
     window.createCount = 0;
     api.codexCreateImage = async () => { window.createCount++; throw Error('隔离测试意外提交'); };
-    api.dreaminaHealth = async () => ({ ok: true, reason: '' }); // successful recheck in Settings
+    api.dreaminaHealth = async () => signedOut;
     const store = window.store;
     store.setState({ defaultProvider: 'jimeng', activeGenProvider: 'jimeng', dreaminaHealth: signedOut,
       cloudAuth: { logged_in: true, cloud_available: true }, codexHealth: { ok: true, reason: '' },
@@ -40,7 +40,7 @@ try {
   await run.waitFor();
   assert.equal(await run.isDisabled(), true);
   assert.match(await card.innerText(), /即梦.*未登录/);
-  const videoRun = page.locator('[data-workflow-card="default-video"]').getByRole('button', { name: '运行此卡片' });
+  const videoRun = page.locator('[data-workflow-card="default-video"]').getByRole('button', { name: '运行', exact: true });
   assert.equal(await videoRun.isDisabled(), true);
   assert.equal(await page.locator('[data-workflow-card="ready-codex"]').getByRole('button', { name: '运行此卡片' }).isEnabled(), true);
   const rejected = await page.evaluate(async () => {
@@ -54,7 +54,7 @@ try {
   await card.getByRole('button', { name: '配置自有订阅' }).click();
   const settings = page.getByRole('dialog', { name: '设置', exact: true });
   const target = settings.locator('[data-modal-autofocus]');
-  assert.match(await target.innerText(), /使用自有即梦订阅/);
+  assert.equal(await target.getAttribute('aria-label'), '即梦 账号授权');
   assert.equal(await settings.getByRole('button', { name: '模型设置' }).getAttribute('aria-current'), 'true');
   // An installed binary can be slow or offline. Only a confirmed missing binary starts a download.
   await page.evaluate(async () => {
@@ -74,14 +74,15 @@ try {
     window.authChecks = [window.readyHealth];
   });
   await login.click();
-  await target.getByText('已就绪，无需授权').waitFor();
+  await target.getByText('已登录，可先退出登录以更换账号。').waitFor();
   assert.deepEqual(await page.evaluate(() => window.authCalls), { installs: 0, logins: 0 });
   await page.evaluate(() => {
+    window.store.getState().setDreaminaHealth({ ok: false, status: 'missing', reason: '尚未安装。' });
     window.authChecks = [{ ok: false, status: 'missing', reason: '尚未安装。' },
       { ok: false, status: 'login_required', reason: '请登录。' }, window.readyHealth];
   });
   await login.click();
-  await page.waitForFunction(() => window.authCalls.logins === 1 && window.authChecks.length === 0);
+  await target.getByText('授权成功', { exact: true }).waitFor();
   assert.deepEqual(await page.evaluate(() => window.authCalls), { installs: 1, logins: 1 });
   await page.evaluate(async () => {
     const {api} = await import('/src/lib/api.ts');
@@ -89,6 +90,7 @@ try {
     window.__TAURI_INTERNALS__.invoke = (cmd, args) => cmd === 'plugin:shell|open'
       ? (window.openedAuthUrl = args.path) : invoke(cmd, args);
     window.authChecks = [{ok: false, status: 'login_required', reason: '请登录。'}];
+    window.store.getState().setDreaminaHealth(window.authChecks[0]);
     api.dreaminaLoginHeadless = async () => ({verification_uri: 'https://example.test/authorize', user_code: 'ABCD-EFGH', device_code: 'fixture-private'});
     api.dreaminaCheckLogin = device => new Promise(resolve => {
       window.finishDeviceCheck = () => resolve(device === 'fixture-private' ? window.readyHealth : null);
@@ -99,7 +101,7 @@ try {
   assert.equal(await page.evaluate(() => window.openedAuthUrl), 'https://example.test/authorize');
   assert.doesNotMatch(await target.innerText(), /fixture-private/);
   await page.evaluate(() => window.finishDeviceCheck());
-  await target.getByText('✓ 授权成功').waitFor();
+  await target.getByText('授权成功', { exact: true }).waitFor();
   assert.equal(await target.getByText('ABCD-EFGH', {exact: true}).count(), 0);
   assert.equal(await page.evaluate(() => window.authCalls.installs), 1);
   await page.evaluate(() => { window.authChecks = [window.readyHealth]; });
@@ -120,6 +122,59 @@ try {
     assert.match(await card.innerText(), reason);
     assert.equal(await run.isDisabled(), true);
   }
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    window.codexCheck = { ok: false, reason: '未检测到可用的 Codex CLI，请在自有订阅设置中安装。' };
+    api.codexHealth = async () => window.codexCheck;
+    api.dreaminaHealth = async () => window.readyHealth;
+    window.store.getState().setCodexHealth(window.codexCheck);
+  });
+  const imageMenu = page.getByRole('dialog', { name: '图像模型', exact: true });
+  const codexOption = imageMenu.locator('[data-model-key="codex"]');
+  await card.locator('.model-select-trigger').click();
+  await codexOption.waitFor();
+  assert.equal(await codexOption.isEnabled(), true, 'an unconfigured GPT Image 2 must be selectable');
+  await codexOption.click();
+  const cardNotice = card.getByRole('status').filter({ hasText: /ChatGPT自有订阅.*尚未安装/ });
+  await cardNotice.waitFor();
+  assert.equal(await run.isDisabled(), true);
+  await cardNotice.getByRole('button', { name: '配置自有订阅' }).click();
+  assert.equal(await target.getAttribute('aria-label'), 'ChatGPT 账号授权');
+  assert.equal(await settings.getByRole('button', { name: '模型设置' }).getAttribute('aria-current'), 'true');
+  await page.keyboard.press('Escape');
+  await settings.waitFor({ state: 'hidden' });
+
+  await page.evaluate(() => {
+    window.codexCheck = { ok: false, reason: 'Codex 自有订阅未登录，请先登录授权。' };
+    window.store.getState().setCodexHealth(window.codexCheck);
+    window.store.setState({ boardOpen: true });
+  });
+  const dock = page.locator('.creation-dock');
+  const editor = dock.locator('.ProseMirror');
+  const send = dock.getByRole('button', { name: '生成图像', exact: true });
+  await editor.fill('保留创作草稿');
+  await dock.locator('.model-select-trigger').click();
+  assert.equal(await imageMenu.getByRole('button', { name: '设为默认：gpt-image-2' }).isDisabled(), true);
+  await imageMenu.getByRole('button', { name: '收藏：gpt-image-2', exact: true }).click();
+  await imageMenu.getByRole('region', { name: '收藏的模型' }).getByRole('button', { name: 'gpt-image-2', exact: true }).press('Enter');
+  const composerNotice = dock.getByRole('status').filter({ hasText: /ChatGPT自有订阅未登录/ });
+  await composerNotice.waitFor();
+  assert.equal(await send.isDisabled(), true);
+  await editor.press('Control+Enter');
+  assert.equal(await page.evaluate(() => window.createCount), 0);
+  await composerNotice.getByRole('button', { name: '配置自有订阅' }).click();
+  assert.equal(await target.getAttribute('aria-label'), 'ChatGPT 账号授权');
+  assert.equal(await settings.getByRole('button', { name: '模型设置' }).getAttribute('aria-current'), 'true');
+  await page.evaluate(() => { window.codexCheck = window.readyHealth; });
+  await target.getByRole('button', { name: '重新检测 Codex 状态' }).click();
+  await page.waitForFunction(() => window.store.getState().codexHealth.ok);
+  await page.keyboard.press('Escape');
+  await settings.waitFor({ state: 'hidden' });
+  assert.equal(await run.isEnabled(), true);
+  assert.equal(await send.isEnabled(), true);
+  assert.equal(await editor.innerText(), '保留创作草稿');
+  assert.equal(await dock.getByRole('button', { name: '配置自有订阅' }).count(), 0);
+  assert.equal(await card.getByRole('button', { name: '配置自有订阅' }).count(), 0);
   const concurrent = await page.evaluate(async () => {
     const {canStartAnotherJob, countLimitedGenerationJobs} = await import('/src/lib/entitlement.ts');
     const {api} = await import('/src/lib/api.ts');
@@ -147,7 +202,7 @@ try {
   });
   assert.deepEqual(concurrent, {received: Array(6).fill('image'), atCapacity: 4, accepted: true, cloud: false, free: false});
   assert.deepEqual(errors, []);
-  console.log('PASS default card and store block before submission, direct subscription settings, recheck and draft preservation');
+  console.log('PASS Jimeng and GPT Image 2 availability, direct subscription settings, recheck and draft preservation');
 } finally {
   await browser.close();
   await server.close();

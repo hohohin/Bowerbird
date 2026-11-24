@@ -169,7 +169,7 @@ function wrapText(source: string, context: CanvasRenderingContext2D, boxWidth: n
   });
 }
 
-/** Both editors create complete text drafts; persisted metadata is not restored as editable shapes. */
+/** The editor and renderer read the same editable value and typography. */
 export function annotationTextLayout(shape: DrawShape, width: number) {
   return {
     source: shape.textSource!,
@@ -198,6 +198,15 @@ export function finishTextShape<T extends AnnotationTool>(shape: DrawShape<T>, w
 }
 
 export type TextEdit<T extends AnnotationTool = AnnotationTool> = { index: number | null; shape: DrawShape<T> };
+
+export function createTextDraft(point: { x: number; y: number }, color: string, fontRatio: number): TextEdit<"text"> {
+  const { x, y } = point;
+  return { index: null, shape: {
+    type: "text", x1: x, y1: y, x2: x, y2: y, color, strokeRatio: 0,
+    text: "", textSource: "", textWidthRatio: Math.min(0.35, Math.max(0.08, 1 - x)),
+    fontRatio, fontFamily: ANNOTATION_FONT, fontWeight: 400,
+  } };
+}
 
 /** Commit to one immutable snapshot so keyboard and pointer exports share the same result. */
 export function applyTextEdit<T extends AnnotationTool>(shapes: DrawShape<T>[], edit: TextEdit<T> | null, width: number, height: number): DrawShape<T>[] {

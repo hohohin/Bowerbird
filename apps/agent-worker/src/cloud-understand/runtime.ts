@@ -4,6 +4,10 @@ import { replicationMessages, validateReplicationResult, validateReplicationVide
 import { validateReplication } from "../../../cloud/supabase/functions/_shared/replication.ts";
 import type { ReplicationSpeechInput } from "../../../cloud/supabase/functions/_shared/replication-speech.ts";
 import { recognizeSpeech } from "./speech.ts";
+import { runFileSpeechJob, type FileSpeechClaim } from "./file-speech-job.ts";
+import { LibraryVisualProviderError, describeLibraryVisual, loadLibraryVisualMedia } from "./library-visual.ts";
+import { parseLibraryVisualVideo, type LibraryVisualVideo } from "../../../cloud/supabase/functions/_shared/library-visual.ts";
+import { FILE_SPEECH_OPERATION, parseFileSpeechAudio, type FileSpeechAudio } from "../../../cloud/supabase/functions/_shared/file-speech.ts";
 import { shortRewrite } from "../../../cloud/supabase/functions/_shared/bcoin-text.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
@@ -30,8 +34,10 @@ export interface UnderstandWorkerConfig {
   arkBaseUrl: string;
   arkVisionModel: string;
   arkReplicationVideoModel?: string;
+  arkLibraryVisualModel?: string;
   arkReplicationTextModel?: string;
   doubaoSpeechApiKey?: string;
+  doubaoFileSpeechApiKey?: string;
   mock: boolean;
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
@@ -45,12 +51,15 @@ interface ClaimedJob {
   job: null | { id: string; inputManifestHash: string; attempt: number };
   lease?: { leaseId: string; leaseSeconds: number };
   inputUrl?: string;
+  fileSpeech?: FileSpeechClaim;
+  libraryVisual?: { videoUrl: string; video: LibraryVisualVideo };
 }
 
 interface UnderstandInput {
   schema_version: number;
-  operation: "caption" | "autoname" | "classify" | "speech-transcription" | ReplicationPayload["operation"];
+  operation: "caption" | "autoname" | "classify" | "speech-transcription" | typeof FILE_SPEECH_OPERATION | ReplicationPayload["operation"];
   audio?: ReplicationSpeechInput;
+  fileSpeechAudio?: FileSpeechAudio;
   video?: ReplicationPayload["video"];
   rewrite?: ReplicationPayload["rewrite"];
   /** null = 纯文本调用（生成图维度数据命名），图片不上云；caption/classify 必带一张图。 */
@@ -109,8 +118,10 @@ export function configFromEnv(env: Record<string, string | undefined>): Understa
     arkBaseUrl: (env.ARK_BASE_URL?.trim() || "https://ark.cn-beijing.volces.com/api/v3").replace(/\/+$/, ""),
     arkVisionModel: required(env, "ARK_VISION_MODEL"),
     arkReplicationVideoModel: env.ARK_REPLICATION_VIDEO_MODEL?.trim(),
+    arkLibraryVisualModel: env.ARK_LIBRARY_VISUAL_MODEL?.trim(),
     arkReplicationTextModel: env.ARK_REPLICATION_TEXT_MODEL?.trim(),
     doubaoSpeechApiKey: env.DOUBAO_SPEECH_API_KEY?.trim(),
+    doubaoFileSpeechApiKey: env.DOUBAO_FILE_SPEECH_API_KEY?.trim() || env.DOUBAO_SPEECH_API_KEY?.trim(),
     mock: (env.BOWERBIRD_CLOUD_MOCK ?? "false") === "true",
     pollIntervalMs: positiveInt(env.UNDERSTAND_POLL_INTERVAL_MS, 2_000, "UNDERSTAND_POLL_INTERVAL_MS"),
     heartbeatIntervalMs: positiveInt(env.UNDERSTAND_HEARTBEAT_INTERVAL_MS, 30_000, "UNDERSTAND_HEARTBEAT_INTERVAL_MS"),
@@ -255,8 +266,14 @@ async function mockUnderstand(input: UnderstandInput): Promise<string> {
 
 function parseInput(value: unknown): UnderstandInput {
   if (!isRecord(value) || value.schema_version !== 1 ||
-      !["caption", "autoname", "classify", "video-analysis", "text-rewrite", "speech-transcription"].includes(String(value.operation))) {
+      !["caption", "autoname", "classify", "video-analysis", "text-rewrite", "speech-transcription", FILE_SPEECH_OPERATION].includes(String(value.operation))) {
     throw new Error("invalid_understand_input");
+  }
+  if (value.operation === FILE_SPEECH_OPERATION) {
+    return {
+      schema_version: 1, operation: FILE_SPEECH_OPERATION, fileSpeechAudio: parseFileSpeechAudio(value.audio),
+      image: null, instruction: null, mock_scenario: null,
+    };
   }
   // image=null 合法（纯文本命名）；带图时校验结构与编码。
   const imageOk = value.image == null ||
@@ -267,8 +284,11 @@ function parseInput(value: unknown): UnderstandInput {
   return value as unknown as UnderstandInput;
 }
 
-async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: string): Promise<UnderstandInput> {
-  const response = await fetchImpl(url, { method: "GET" });
+async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: string, fileSpeech: boolean): Promise<UnderstandInput> {
+  const response = await fetchImpl(url, {
+    method: "GET",
+    ...(fileSpeech ? { redirect: "error", signal: AbortSignal.timeout(45_000) } as const : {}),
+  });
   if (!response.ok) throw new Error(`input_http_${response.status}`);
   const text = await response.text();
   const actualHash = createHash("sha256").update(text).digest("hex");
@@ -276,12 +296,12 @@ async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: str
   return parseInput(parseJson(text));
 }
 
-async function heartbeatLoop(control: ControlClient, jobId: string, leaseId: string, intervalMs: number, state: { stopped: boolean }): Promise<void> {
+async function heartbeatLoop(control: ControlClient, jobId: string, leaseId: string, intervalMs: number, state: { stopped: boolean }, libraryVisual: boolean): Promise<void> {
   while (!state.stopped && control.remainingMs(leaseId) > 1) {
     await sleep(control.nextHeartbeatMs(leaseId, intervalMs));
     if (state.stopped) return;
     try {
-      await control.post({ action: "heartbeat", jobId, leaseId });
+      await control.post({ action: "heartbeat", jobId, leaseId, ...(libraryVisual ? { libraryVisual: true } : {}) });
     } catch (error) {
       console.error(JSON.stringify({ event: "understand_heartbeat_failed", job_id: jobId, error: safeErrorKind(error) }));
     }
@@ -295,14 +315,49 @@ async function executeClaim(
   fetchImpl: WorkerFetch,
   claimed: ClaimedJob,
 ): Promise<void> {
-  if (!claimed.job || !claimed.lease?.leaseId || !claimed.inputUrl) throw new Error("invalid_claim_response");
+  if (!claimed.job || !claimed.lease?.leaseId || (!claimed.inputUrl && !claimed.fileSpeech?.submittedAt && !claimed.libraryVisual)) {
+    throw new Error("invalid_claim_response");
+  }
   const { id: jobId, inputManifestHash } = claimed.job;
   const leaseId = claimed.lease.leaseId;
   const heartbeatState = { stopped: false };
-  void heartbeatLoop(control, jobId, leaseId, config.heartbeatIntervalMs, heartbeatState);
+  const visualControl = claimed.libraryVisual ? { libraryVisual: true } : {};
+  void heartbeatLoop(control, jobId, leaseId, config.heartbeatIntervalMs, heartbeatState, !!claimed.libraryVisual);
   let submitted = false;
   try {
-    const input = await fetchInput(fetchImpl, claimed.inputUrl, inputManifestHash);
+    if (claimed.libraryVisual) {
+      if (!config.arkLibraryVisualModel && !config.mock) {
+        throw new KnownProviderError("not_configured", "豆包素材库画面模型尚未配置");
+      }
+      const video = parseLibraryVisualVideo(claimed.libraryVisual.video);
+      if (createHash("sha256").update(JSON.stringify(video)).digest("hex") !== inputManifestHash) {
+        throw new Error("library_visual_manifest_mismatch");
+      }
+      const media = config.mock ? null : await loadLibraryVisualMedia(fetchImpl, claimed.libraryVisual.videoUrl, jobId, video);
+      await control.post({ action: "submitted", jobId, leaseId, ...visualControl });
+      submitted = true;
+      if (control.remainingMs(leaseId) <= 1) return;
+      const result = media ? await describeLibraryVisual(fetchImpl, {
+        baseUrl: config.arkBaseUrl, apiKey: config.arkApiKey, model: config.arkLibraryVisualModel!,
+      }, media) : { text: "离线示例画面描述", usage: {}, model: null, requestId: null, providerId: null };
+      const { text, ...receipt } = result;
+      await control.post({
+        action: "finish", jobId, leaseId, ...visualControl, resultText: text,
+        providerReceipt: { ...receipt, bytes: video.bytes, durationMs: video.duration_ms, sourceSegmentMs: video.end_ms - video.start_ms },
+      });
+      return;
+    }
+    const speechAuth = { apiKey: config.doubaoFileSpeechApiKey, mock: config.mock };
+    if (claimed.fileSpeech?.submittedAt) {
+      await runFileSpeechJob(null, claimed.fileSpeech, { jobId, leaseId }, speechAuth, body => control.post(body), fetchImpl);
+      return;
+    }
+    const input = await fetchInput(fetchImpl, claimed.inputUrl!, inputManifestHash, !!claimed.fileSpeech);
+    if (input.operation === FILE_SPEECH_OPERATION || claimed.fileSpeech) {
+      if (!input.fileSpeechAudio || !claimed.fileSpeech) throw new Error("file_speech_claim_mismatch");
+      await runFileSpeechJob(input.fileSpeechAudio, claimed.fileSpeech, { jobId, leaseId }, speechAuth, body => control.post(body), fetchImpl);
+      return;
+    }
     if (input.operation === "video-analysis" && !config.mock) await validateReplicationVideo(input.video!);
     // Resolve once before submission; retries use the same prompt even during maintenance.
     if (input.operation === "speech-transcription" && !config.mock && !config.doubaoSpeechApiKey) throw new KnownProviderError("not_configured", "豆包语音服务尚未配置");
@@ -319,14 +374,22 @@ async function executeClaim(
     }));
   } catch (error) {
     if (control.remainingMs(leaseId) <= 1 || error instanceof ControlDeadlineError) return;
-    const known = error instanceof KnownProviderError;
+    if (claimed.fileSpeech) {
+      // Lease recovery consults the durable submit fence. A lost control RPC
+      // response could mean that either the fence or the result was committed.
+      console.error(JSON.stringify({ event: "file_speech_claim_interrupted", job_id: jobId, error: safeErrorKind(error) }));
+      return;
+    }
+    const visualProviderError = error instanceof LibraryVisualProviderError ? error : null;
+    const known = error instanceof KnownProviderError && !visualProviderError?.ambiguous;
     const action = known || !submitted ? "fail" : "outcome_unknown";
-    const safeErrorCode = known ? error.safeCode : safeErrorKind(error);
+    const safeErrorCode = error instanceof KnownProviderError ? error.safeCode : safeErrorKind(error);
     const safeMessage = known
       ? error.safeMessage
       : submitted ? "请求已提交上游服务，但连接中断，结果状态暂时无法确认" : "理解任务启动失败";
     try {
-      await control.post({ action, jobId, leaseId, safeErrorCode, safeMessage });
+      const providerReceipt = visualProviderError?.receipt;
+      await control.post({ action, jobId, leaseId, safeErrorCode, safeMessage, ...visualControl, ...(providerReceipt ? { providerReceipt } : {}) });
     } catch (settlementError) {
       console.error(JSON.stringify({ event: "understand_settlement_failed", job_id: jobId, error: safeErrorKind(settlementError) }));
     }
@@ -345,18 +408,19 @@ export async function runUnderstandWorker(
   const ark = new ArkVisionClient(config, fetchImpl);
   const idleBackoff = new IdlePollBackoff(config.pollIntervalMs);
   let nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
+  const libraryVisualCapable = config.arkLibraryVisualModel ? { libraryVisualCapable: true } : {};
   console.log(JSON.stringify({ event: "understand_worker_started", worker_id: config.workerId }));
   while (!stop.requested) {
     if (Date.now() >= nextCleanupAt) {
       nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
       try {
-        await control.post({ action: "cleanup_expired" });
+        await control.post({ action: "cleanup_expired", libraryVisualCleanup: true });
       } catch (error) {
         console.error(JSON.stringify({ event: "understand_cleanup_failed", error: safeErrorKind(error) }));
       }
     }
     try {
-      const claimed = await control.post({ action: "claim" }) as unknown as ClaimedJob;
+      const claimed = await control.post({ action: "claim", fileSpeechCapable: true, ...libraryVisualCapable }) as unknown as ClaimedJob;
       if (claimed.job) {
         idleBackoff.reset();
         await executeClaim(config, control, ark, fetchImpl, claimed);

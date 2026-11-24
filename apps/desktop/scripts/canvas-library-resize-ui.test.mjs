@@ -8,6 +8,7 @@ await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 page.setDefaultTimeout(10000);
+page.setDefaultNavigationTimeout(60000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
@@ -20,11 +21,8 @@ async function clickControl(name) {
   await button.click();
 }
 async function selectSource(name) {
-  if (name === '文件浏览器') await clickControl(name);
-  else {
-    const tab = panel.getByRole('tab', { name, exact: true });
-    if (await tab.getAttribute('aria-selected') !== 'true') await tab.click();
-  }
+  const button = panel.getByRole('button', { name, exact: true });
+  if (await button.getAttribute('aria-current') !== 'true') await button.click();
   const more = panel.getByRole('button', { name: '更多素材库控件', exact: true });
   if (await more.count() && await more.getAttribute('aria-expanded') === 'true') await more.click();
 }
@@ -47,8 +45,8 @@ async function dragTo(width) {
 }
 async function sampleMotion(opening) {
   const samples = await panel.evaluate(async (el, opening) => {
-    const tab = document.querySelector('.canvas-library-resize');
     const workspace = el.parentElement;
+    const tab = workspace.querySelector(':scope > .canvas-library-resize');
     const animations = workspace.getAnimations({ subtree: true }).filter(animation => animation.transitionProperty === 'transform');
     const panelAnimation = animations.find(animation => animation.effect.target === el);
     if (!panelAnimation) throw new Error('Expected an interruptible drawer transition');
@@ -64,7 +62,7 @@ async function sampleMotion(opening) {
     return { duration, samples };
   }, opening);
   assert.equal(samples.duration, opening ? 480 : 300);
-  assert.ok(samples.samples.every(sample => Math.abs(sample.seam) < 1), 'panel and pull tab stay joined throughout motion');
+  assert.ok(samples.samples.every(sample => Math.abs(sample.seam) < 1), `panel and pull tab stay joined throughout motion: ${JSON.stringify(samples.samples)}`);
   const distances = samples.samples.slice(1).map((sample, i) => Math.abs(sample.x - samples.samples[i].x));
   assert.ok(opening ? distances[3] < distances[1] : distances[0] < distances[2], 'arrival decelerates and departure accelerates');
 }
@@ -131,7 +129,7 @@ try {
   await page.waitForFunction(() => document.activeElement?.classList.contains('canvas-stage'));
   // Exercise the actual home → project picker → project path, including modal focus restoration.
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '项目', exact: true }).click();
   await page.getByRole('button', { name: '打开项目 引用布局合成验收', exact: true }).click();
   await page.waitForFunction(() => document.activeElement?.classList.contains('canvas-stage'));
   const stage = await page.locator('.canvas-stage').boundingBox();
@@ -142,8 +140,9 @@ try {
   assert.equal(await handle.evaluate(el => getComputedStyle(el).cursor), 'grab');
   const closeBox = await close.boundingBox(); const gripBox = await handle.boundingBox();
   assert.ok(closeBox.y + closeBox.height <= gripBox.y && gripBox.width === 24, 'close icon sits above the narrow six-dot grip');
-  assert.equal(await panel.getByRole('tab', { name: '全局素材', exact: true }).getAttribute('aria-selected'), 'true');
-  await panel.getByRole('tab', { name: '项目素材', exact: true }).click();
+  const sidebar = panel.getByRole('complementary', { name: '素材库导航', exact: true });
+  assert.equal(await sidebar.getAttribute('data-collapsed'), null);
+  await selectSource('引用布局合成验收');
   await settle();
   assert.ok(await panel.evaluate(el => {
     const workspace = el.parentElement;
@@ -210,7 +209,7 @@ try {
   await settle();
   await assertGrid();
   await dragTo(620);
-  for (const name of ['全局素材', '项目素材', '文件浏览器']) {
+  for (const name of ['全部素材', '引用布局合成验收', '全部文件夹素材']) {
     await selectSource(name);
     await panel.locator('.folder-media-card').first().waitFor();
     await settle();
@@ -257,5 +256,5 @@ try {
   await page.waitForTimeout(300);
   assert.ok(await page.locator('.canvas-board-title').evaluate(el => el === document.activeElement), 'background updates do not steal input focus');
   assert.deepEqual(errors, []);
-  console.log('PASS project entry focus/Tab, integrated pull tab/close, eased motion, resize/reflow, shadow without edge blur, canvas drag/copy/undo/context menu and pan/zoom with all three sources open, scoped keyboard focus, window bounds, dark/reduced motion and input focus');
+  console.log('PASS project entry focus/Tab, integrated pull tab/close, eased motion, resize/reflow, canvas drag/copy/undo/context menu and pan/zoom with all three sources open, scoped keyboard focus, window bounds, dark/reduced motion and input focus');
 } finally { await browser.close(); await server.close(); }

@@ -32,6 +32,7 @@ export type AgentWorkerFetch = (url: string, request?: HttpRequest) => Promise<H
 export type ClaimedAgentRun = {
   run: null | {
     id: string;
+    continuationKey?: string;
     conversationId: string;
     skillId: string;
     skillVersion: string;

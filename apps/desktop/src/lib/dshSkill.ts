@@ -13,6 +13,7 @@ export function isDshSkill(value: unknown): value is DshSkill {
   if (typeof p.seconds !== "number" || !(p.seconds > 0 && p.seconds <= 120) ||
       typeof p.ratio !== "string" || !["9:16", "16:9", "4:3", "3:4", "1:1", "auto"].includes(p.ratio)) return false;
   if (p.mode === "text") return p.firstFrameCount === 0 && p.lastFrameCount === 0;
-  if (p.mode === "reference") return p.firstFrameCount === 1 && p.lastFrameCount === 0;
-  return p.mode === "frames" && p.firstFrameCount === 1 && (p.lastFrameCount === 0 || p.lastFrameCount === 1);
+  if (p.firstFrameCount !== 0 && p.firstFrameCount !== 1) return false;
+  if (p.mode === "reference") return p.lastFrameCount === 0;
+  return p.mode === "frames" && (p.lastFrameCount === 0 || p.lastFrameCount === 1);
 }

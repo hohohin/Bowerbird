@@ -77,7 +77,8 @@ export function showImportedMedia(assets: Asset[], mode = useLocalFileMode) {
   if (!library.open) return;
   const kinds = new Set(assets.map(asset => isTextAsset(asset) ? "texts" : isAudioAsset(asset) ? "audios" : isVideoPath(asset.store_path) ? "videos" : "images"));
   library.setMedia(kinds.size === 1 ? [...kinds][0] : "all");
-  library.setCatalogView("all");
+  if (library.sidebarMode === "tags" || library.hierarchyTarget.kind === "folders") library.selectHierarchy({ kind: "all" });
+  else library.setSidebarMode("hierarchy");
   library.setQuery("");
   library.setGeneratedFilter(null);
 }

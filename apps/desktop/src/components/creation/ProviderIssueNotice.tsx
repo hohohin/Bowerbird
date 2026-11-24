@@ -3,7 +3,7 @@ import { useStore } from "../../store";
 
 export function openProviderSettings(target: NonNullable<ProviderIssue["settings"]>) {
   if (target === "account") useStore.getState().setAccountOnboardingForceOpen(true);
-  else useStore.setState({ subscriptionSettingsTarget: target });
+  else useStore.setState({ settingsRequest: { section: "models", subscription: target } });
 }
 
 export function ProviderIssueNotice({ issue, className = "" }: { issue: ProviderIssue | null; className?: string }) {

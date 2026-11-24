@@ -95,10 +95,27 @@ fn mp4_display_rotation_swaps_width_and_height() {
 fn fragmented_mp4_uses_sample_timing_not_presentation_offset() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/media");
     for (name, duration) in [("fragmented.mp4", 0.4), ("fragmented-audio.mp4", 1.28)] {
-        let meta = probe_iso_native(&fixtures.join(name), "mp4", 0).unwrap();
+        let path = fixtures.join(name);
+        let meta = probe_connected_video_header(&path, "mp4", std::fs::metadata(&path).unwrap().len()).unwrap();
         assert_eq!((meta.width, meta.height), (320, 240));
         assert!((meta.duration - duration).abs() < 0.025, "{name}: {meta:?}");
     }
+}
+
+#[test]
+fn connection_header_skips_mdat_and_limits_box_walks() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("video.mov");
+    write_fixture_mp4(&file, 128, 96, 400);
+    let size = std::fs::metadata(&file).unwrap().len();
+    let meta = probe_connected_video_header(&file, "mov", size).unwrap();
+    assert_eq!((meta.width, meta.height, meta.duration), (128, 96, 0.4));
+    assert!(probe_connected_video_header(&file, "mkv", size).is_none());
+
+    use std::io::Write;
+    let mut append = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+    for _ in 0..3_000 { append.write_all(b"\0\0\0\x08free").unwrap(); }
+    assert!(probe_connected_video_header(&file, "mov", append.metadata().unwrap().len()).is_none());
 }
 
 #[test]

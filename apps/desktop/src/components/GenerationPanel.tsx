@@ -64,6 +64,7 @@ export function GenerationPanel({
   readOnly = false,
   embedded = false,
   followLatest = false,
+  previewOutput,
   hydratedAssets = [],
   snapshot,
   onAddVideoFrame,
@@ -72,6 +73,7 @@ export function GenerationPanel({
   readOnly?: boolean;
   embedded?: boolean;
   followLatest?: boolean;
+  previewOutput?: { path: string | null; onSelect: (path: string) => void };
   hydratedAssets?: Asset[];
   snapshot?: { job: GenJob; sourceJobId: string | null; selectedTurnKey: string; diagnosticTurnKeys?: ReadonlyMap<string, string>; onReuse: (turn: GenTurn) => void };
   onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
@@ -641,7 +643,11 @@ export function GenerationPanel({
                 refAssets={i === 0 ? firstRefAssets : undefined}
                 actions={readOnly ? undefined : i === 0 ? firstTurnActions : turnActions(turn)}
                 variantNav={!readOnly && !snapshot && i === 0 ? variantNav : undefined}
-                onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
+                previewOutput={previewOutput?.path && turn.images.includes(previewOutput.path) ? previewOutput.path : undefined}
+                onOpenLightbox={(g) => {
+                  if (previewOutput) previewOutput.onSelect(allImages[g]);
+                  else setLightbox({ images: allImages, index: g });
+                }}
                 onOpenRefLightbox={(r) =>
                   setLightbox({ images: refLightboxImages, index: r })
                 }
@@ -762,6 +768,7 @@ function TurnView({
   refAssets,
   actions,
   variantNav,
+  previewOutput,
   onOpenLightbox,
   onOpenRefLightbox,
   onOpenTurnRefs,
@@ -782,6 +789,7 @@ function TurnView({
   refAssets?: Asset[];
   actions?: ReactNode;
   variantNav?: { index: number; total: number; onPrev: () => void; onNext: () => void };
+  previewOutput?: string;
   onOpenLightbox: (globalIdx: number) => void;
   onOpenRefLightbox?: (refIdx: number) => void;
   /** 续轮参考图点开放大（images = 本轮 refs store_path 列表）。 */
@@ -832,7 +840,7 @@ function TurnView({
           .filter((t) => t.src);
 
   return (
-    <div className="flex flex-col gap-2.5" data-generation-turn-key={turn.turnKey}>
+    <div className="flex flex-col gap-2.5" data-generation-turn-key={turn.turnKey} data-preview-turn={previewOutput ? true : undefined}>
       {/* 用户消息：右侧气泡；各轮气泡上方常驻参考图「附件」缩略图（可点开放大）——
           续轮同样展示（用户需要看到上一轮产出图被带上了） */}
       <div className="flex flex-col items-end gap-1.5">
@@ -953,10 +961,11 @@ function TurnView({
           <Sparkles size={13} />
         </span>
         <div className="min-w-0 flex-1 space-y-2">
-          {(viaLabel || durationLabel) && (
+          {(viaLabel || durationLabel || previewOutput) && (
             <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted">
               {viaLabel && <span>via {viaLabel}</span>}
               {durationLabel && <span>{viaLabel ? "· " : ""}用时 {durationLabel}</span>}
+              {previewOutput && <span className="text-accent">当前预览</span>}
             </div>
           )}
           {turn.media === "video" && turn.provider === "jimeng" && <DreaminaTaskCredit submitId={turn.submitId} busy={busy} />}
@@ -970,6 +979,7 @@ function TurnView({
                     type="button"
                     onClick={() => onOpenLightbox(imageOffset + j)}
                     className="mx-auto block w-fit cursor-zoom-in"
+                    aria-current={p === previewOutput ? true : undefined}
                     title="点击放大"
                   >
                     <MediaPreview

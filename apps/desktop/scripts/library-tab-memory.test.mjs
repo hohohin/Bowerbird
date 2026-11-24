@@ -1,101 +1,84 @@
-import assert from 'node:assert/strict';
-import { beforeEach, test } from 'node:test';
-import { createLocalFileMode } from '../src/lib/localFileMode.ts';
+import assert from "node:assert/strict";
+import { beforeEach, test } from "node:test";
+import { createLocalFileMode, libraryShortcutMode } from "../src/lib/localFileMode.ts";
+import { connectedSubtreeRows } from "../src/lib/folderConnections.ts";
 
 let saved;
 beforeEach(() => {
   saved = new Map();
-  globalThis.localStorage = {
-    getItem: key => saved.get(key) ?? null,
-    setItem: (key, value) => saved.set(key, value),
-  };
+  globalThis.localStorage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value) };
 });
 
-test('media restores after restart per project and pane, including existing preferences without media', () => {
-  saved.set('bowerbird.libraryView.main.home', JSON.stringify({ view: 'collections', tagSource: 'global' }));
-  const mode = createLocalFileMode();
-  assert.equal(mode.getState().media, 'images');
-  for (const media of ['videos', 'audios', 'texts', 'images', 'all']) {
-    mode.getState().setMedia(media);
-    const restored = createLocalFileMode().getState();
-    assert.equal(restored.media, media);
-    assert.equal(restored.view, 'collections');
-  }
-  mode.getState().setProjectContext('a');
-  mode.getState().setMedia('texts');
-  const restarted = createLocalFileMode();
-  restarted.getState().setGeneratedFilter('source:generated');
-  restarted.getState().setProjectContext('a');
-  assert.equal(restarted.getState().media, 'texts');
-  assert.equal(restarted.getState().generatedFilter, null);
-  restarted.getState().setProjectContext(null);
-  assert.equal(restarted.getState().media, 'all');
-  assert.equal(createLocalFileMode('other-pane').getState().media, 'images');
-});
+const all = { kind: "all" };
+const project = projectId => ({ kind: "projects", projectId });
+const folder = folderId => ({ kind: "folders", folderId });
+const state = mode => {
+  const { sidebarMode, sidebarCollapsed, hierarchyTarget, media } = mode.getState();
+  return { sidebarMode, sidebarCollapsed, hierarchyTarget, media };
+};
 
-test('reopening restores each primary tab and the tag scope without reopening transient menus', () => {
-  for (const view of ['collections', 'project', 'tags', 'global']) {
-    const mode = createLocalFileMode(view);
-    mode.getState().setView(view);
-    if (view === 'tags') mode.getState().setTagSource('project');
-    mode.getState().selectProject('chosen-project');
-    mode.getState().setOpen(false);
-    const restored = createLocalFileMode(view).getState();
-    assert.equal(restored.view, view);
-    assert.equal(restored.mode, view === 'collections' || view === 'tags' ? view : 'all');
-    assert.equal(restored.source, view === 'project' || view === 'tags' ? 'project' : 'global');
-    assert.equal(restored.browseProjectId, 'chosen-project');
-    assert.equal(restored.open, false);
-    assert.equal(restored.scopeMenuOpen, false);
-    assert.equal(restored.projectPickerOpen, false);
+test("old view and source/lens records migrate to a global tag mode and a remembered hierarchy target", () => {
+  saved.set("bowerbird.libraryProject.p", "browse");
+  for (const [legacy, target, sidebarMode] of [
+    [{ view: "global" }, all, "hierarchy"],
+    [{ view: "project" }, project("browse"), "hierarchy"],
+    [{ view: "collections" }, folder(null), "hierarchy"],
+    [{ view: "tags", tagSource: "project" }, project("browse"), "tags"],
+    [{ source: "global", lens: "tags" }, all, "tags"],
+    [{ source: "folders", lens: "flow" }, folder(null), "hierarchy"],
+  ]) {
+    saved.set("bowerbird.libraryView.main.p", JSON.stringify({ ...legacy, media: "videos" }));
+    const mode = createLocalFileMode();
+    mode.getState().setProjectContext("p");
+    assert.deepEqual(state(mode), { sidebarMode, sidebarCollapsed: false, hierarchyTarget: target, media: "videos" });
+    mode.getState().setSidebarCollapsed(true);
+    assert.deepEqual(JSON.parse(saved.get("bowerbird.libraryView.main.p")), { ...state(mode), sidebarCollapsed: true });
   }
 });
 
-test('home and each canvas restore their own tab and tag scope across navigation and restart', () => {
-  const mode = createLocalFileMode('main');
-  mode.getState().setView('collections');
-  mode.getState().setProjectContext('a');
-  assert.equal(mode.getState().view, 'project');
-  mode.getState().setView('tags');
-  mode.getState().setTagSource('global');
-  mode.getState().setProjectContext('b');
-  assert.equal(mode.getState().view, 'project');
-  mode.getState().setView('global');
-  mode.getState().setProjectContext('a');
-  assert.equal(mode.getState().view, 'tags');
-  assert.equal(mode.getState().source, 'global');
-  mode.getState().setProjectContext(null);
-  assert.equal(mode.getState().view, 'collections');
-  const restarted = createLocalFileMode('main');
-  assert.equal(restarted.getState().view, 'collections');
-  restarted.getState().setProjectContext('a');
-  assert.equal(restarted.getState().view, 'tags');
-  assert.equal(restarted.getState().tagSource, 'global');
+test("project and pane contexts remember independent collapse, target, mode and media", () => {
+  const left = createLocalFileMode("left");
+  left.getState().selectHierarchy(folder("subtree"));
+  left.getState().setSidebarCollapsed(true);
+  left.getState().setProjectContext("p");
+  assert.deepEqual(left.getState().hierarchyTarget, project("p"));
+  assert.equal(left.getState().sidebarCollapsed, false);
+  left.getState().setSidebarMode("tags");
+  left.getState().setMedia("texts");
+  left.getState().setProjectContext(null);
+  assert.deepEqual(state(left), { sidebarMode: "hierarchy", sidebarCollapsed: true, hierarchyTarget: folder("subtree"), media: "images" });
+  assert.deepEqual(state(createLocalFileMode("right")), { sidebarMode: "hierarchy", sidebarCollapsed: false, hierarchyTarget: all, media: "images" });
+  const reopened = createLocalFileMode("left");
+  reopened.getState().setGeneratedFilter("source:generated");
+  reopened.getState().setProjectContext("p");
+  assert.deepEqual(state(reopened), { sidebarMode: "tags", sidebarCollapsed: false, hierarchyTarget: project("p"), media: "texts" });
+  assert.equal(reopened.getState().generatedFilter, null);
 });
 
-test('independent panes do not overwrite each other and explicit source shortcuts remain intentional', () => {
-  const left = createLocalFileMode('left'), right = createLocalFileMode('right');
-  left.getState().setView('collections');
-  right.getState().setView('tags');
-  assert.equal(createLocalFileMode('left').getState().view, 'collections');
-  assert.equal(createLocalFileMode('right').getState().view, 'tags');
-  left.getState().openSource('project');
-  assert.equal(createLocalFileMode('left').getState().view, 'project');
-  assert.equal(createLocalFileMode('right').getState().view, 'tags');
+test("Q and E leave the last hierarchy target intact and do not bind Tab or F", () => {
+  const pane = createLocalFileMode();
+  pane.getState().selectHierarchy(folder("child"));
+  pane.getState().setSidebarMode(libraryShortcutMode("E"));
+  assert.equal(pane.getState().sidebarMode, "tags");
+  pane.getState().setSidebarMode(libraryShortcutMode("q"));
+  assert.deepEqual(pane.getState().hierarchyTarget, folder("child"));
+  assert.equal(pane.getState().sidebarMode, "hierarchy");
+  for (const key of ["Tab", "F", "Escape"]) assert.equal(libraryShortcutMode(key), undefined);
 });
 
-test('unavailable storage keeps in-session context memory and invalid stored choices use defaults', () => {
-  const originalGet = localStorage.getItem;
-  localStorage.getItem = () => '{"view":"unknown","tagSource":"unknown"}';
-  assert.equal(createLocalFileMode('invalid').getState().view, 'global');
-  localStorage.getItem = originalGet;
-  localStorage.setItem = () => { throw new Error('storage unavailable'); };
-  const mode = createLocalFileMode('memory-only');
-  mode.getState().setView('collections');
-  mode.getState().setProjectContext('a');
-  mode.getState().setView('tags');
-  mode.getState().setProjectContext(null);
-  assert.equal(mode.getState().view, 'collections');
-  mode.getState().setProjectContext('a');
-  assert.equal(mode.getState().view, 'tags');
+test("invalid stored targets fall back and blocked storage preserves the session", () => {
+  saved.set("bowerbird.libraryView.main.home", JSON.stringify({ hierarchyTarget: { kind: "folders", folderId: 3 }, media: "unknown" }));
+  const pane = createLocalFileMode();
+  assert.deepEqual(pane.getState().hierarchyTarget, all);
+  localStorage.setItem = () => { throw new Error("unavailable"); };
+  pane.getState().selectHierarchy(folder("child"));
+  pane.getState().setProjectContext("p");
+  pane.getState().setProjectContext(null);
+  assert.deepEqual(pane.getState().hierarchyTarget, folder("child"));
+});
+
+test("subtree sections preserve depth and exclude ancestors, siblings and other roots", () => {
+  const folders = [["root",null], ["child","root"], ["sibling","root"], ["nested","child"], ["second",null]].map(([id, parent_id]) => ({ id, parent_id }));
+  assert.deepEqual(connectedSubtreeRows(folders, "child").map(({ item, depth }) => [item.id, depth]), [["child",0],["nested",1]]);
+  assert.deepEqual(connectedSubtreeRows(folders, "missing"), []);
 });

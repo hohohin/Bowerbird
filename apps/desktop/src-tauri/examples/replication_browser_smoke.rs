@@ -2,6 +2,9 @@
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 #[path = "../src/error.rs"]
 mod error;
+#[path = "../src/core/public_network.rs"]
+pub(crate) mod public_network;
+mod core { pub(crate) use crate::public_network; }
 #[path = "../src/commands/source_browser_jobs.rs"]
 mod source_browser_jobs;
 #[path = "../src/commands/source_browser_network.rs"]

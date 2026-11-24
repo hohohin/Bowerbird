@@ -14,6 +14,8 @@ mod installation;
 mod media;
 mod prompt;
 mod quick_transfer;
+#[cfg(windows)]
+mod windows_shell;
 
 pub use core::canvas_frequent_assets::CanvasFrequentAssetsPreferences;
 pub use media::thumb::video_thumbnail_worker;
@@ -401,6 +403,11 @@ pub fn run() {
             let recovery_paths = paths.clone();
             let orphan_scan_db = db.clone();
 
+            let semantic = Arc::new(core::semantic_search::runtime::SemanticSearch::new(file_config_root));
+            app.manage(settings_state);
+            semantic.clone().watch(app.handle().clone(), db.clone());
+            app.manage(semantic);
+
             app.manage(Arc::new(core::local_classification::LocalClassifier::new(
                 file_config_root.to_path_buf()
                     .join("local-classification")
@@ -421,7 +428,6 @@ pub fn run() {
             app.manage(quick_transfer::QuickTransfer::default());
             app.manage(commands::file_tasks::FileTasks::default());
             app.manage(active_project);
-            app.manage(settings_state);
             let screenshot_paths = paths.clone();
             let screenshot_db = db.clone();
             let screenshot_app = app.handle().clone();
@@ -509,6 +515,7 @@ pub fn run() {
             commands::screenshot::screenshot_session,
             commands::screenshot::screenshot_show,
             commands::screenshot::screenshot_output,
+            commands::screenshot::screenshot_canvas_result,
             commands::screenshot::screenshot_paste,
             commands::screenshot::screenshot_set_shortcuts,
             commands::screenshot::screenshot_shortcut_status,
@@ -588,6 +595,7 @@ pub fn run() {
             commands::cloud_agent::cloud_agent_latest,
             commands::cloud_agent::cloud_agent_list,
             commands::cloud_agent::cloud_agent_get,
+            commands::cloud_agent::cloud_agent_open_h3_chat,
             commands::cloud_agent::cloud_agent_decide_approval,
             commands::cloud_agent::cloud_agent_answer_clarification,
             commands::cloud_agent::cloud_agent_cancel,
@@ -688,6 +696,7 @@ pub fn run() {
             commands::folder_connections::remove_connection_references,
             commands::connection_clipboard::clipboard_file_paths,
             commands::material_catalog::catalog_page,
+            commands::material_catalog::catalog_project_counts,
             commands::material_catalog::catalog_graph_page,
             commands::material_catalog::catalog_ids,
             commands::material_catalog::catalog_prepare_colors,
@@ -699,7 +708,19 @@ pub fn run() {
             commands::video_poster::video_poster,
             commands::canvas_image_preview::canvas_image_preview,
             commands::video_trim::trim_video,
+            commands::audio_trim::trim_audio,
             commands::video_audio::extract_video_audio,
+            commands::video_transcript::video_transcript_get,
+            commands::video_analysis::video_analysis_get,
+            commands::video_analysis::jobs::video_analysis_capabilities,
+            commands::video_analysis::jobs::video_analysis_pause,
+            commands::video_analysis::jobs::video_analysis_progress,
+            commands::video_analysis::jobs::video_analysis_quote,
+            commands::video_analysis::jobs::video_analysis_start,
+            commands::video_transcript::video_transcript_refresh_timing,
+            commands::video_transcript::video_transcript_capabilities,
+            commands::video_transcript::video_transcript_quote,
+            commands::video_transcript::video_transcript_start,
             commands::comfy_video::comfy_video,
             commands::comfy_video::comfy_video_check,
             commands::comfy_setup::comfy_video_environment,
@@ -747,6 +768,15 @@ pub fn run() {
             commands::library::set_asset_tags,
             commands::library::reclassify_all,
             commands::local_classification::local_classification_status,
+            commands::local_classification::video_text_tags_status,
+            commands::local_classification::video_text_tags_start,
+            commands::semantic_search::semantic_status,
+            commands::semantic_search::semantic_model_control,
+            commands::semantic_search::semantic_index_control,
+            commands::semantic_search::semantic_search_start,
+            commands::semantic_search::semantic_search_page,
+            commands::semantic_search::semantic_search_ids,
+            commands::semantic_search::semantic_search_cancel,
             commands::local_classification::local_classification_source,
             commands::local_classification::folder_classification_view,
             commands::local_classification::global_classification_view,
@@ -783,6 +813,8 @@ pub fn run() {
             commands::local_chat::local_chat_revision,
             commands::local_chat::local_chat_get_by_request,
             commands::local_chat::local_chat_quote,
+            commands::local_chat::local_chat_quote_paid,
+            commands::local_chat::local_chat_paid_receipt,
             commands::local_chat::local_chat_models,
             commands::local_chat::local_chat_dsh_status,
             commands::local_chat::local_chat_dsh_account,

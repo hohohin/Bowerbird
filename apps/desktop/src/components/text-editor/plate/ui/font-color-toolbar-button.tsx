@@ -196,7 +196,7 @@ export function FontColorToolbarButton({
         </ToolbarButton>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start">
+      <DropdownMenuContent align="start" className="ignore-click-outside/toolbar text-plate-selection-child">
         <ColorPicker
           clearColor={clearColor}
           color={selectedColor || color}
@@ -487,6 +487,7 @@ function ColorDropdownMenuItem({
         className
       )}
       style={{ backgroundColor: value }}
+      aria-label={name ?? value}
       onSelect={(e) => {
         e.preventDefault();
         updateColor(value);

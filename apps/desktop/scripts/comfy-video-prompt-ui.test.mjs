@@ -1,19 +1,26 @@
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, cacheDir: '.tmp/comfy-video-prompt/vite', server: { host: '127.0.0.1', port: 1682, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } }, cacheDir: '.tmp/comfy-video-prompt/vite',
+  optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1682, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const failures = [];
 const original = '镜头平稳推进，主体自然转动';
 
-async function setup(delay) {
+async function setup(delay, legacySizing = false) {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  if (legacySizing) await page.addInitScript(() => {
+    const supports = CSS.supports.bind(CSS);
+    CSS.supports = (property, ...args) => property !== 'field-sizing' && supports(property, ...args);
+  });
   await page.goto('http://127.0.0.1:1682/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
+  if (legacySizing) await page.addStyleTag({ content: '.workflow-card textarea[data-fit-content] { field-sizing: fixed; }' });
   await page.evaluate(async ({ original, delay }) => {
     window.store.setState({ cloudAuth: { logged_in: true, user_id: 'tester' }, cloudEntitlement: { user_id: 'tester', tier: 'pro', offline_state: 'fresh', is_test_account: false, balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_cloud: true, can_use_byo: true }, generation_services: [] } });
     const invoke = window.__TAURI_INTERNALS__.invoke;
@@ -36,11 +43,13 @@ async function setup(delay) {
       }
       return invoke(command, args);
     };
-    const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+    const { newWorkflowNode, selectWorkflowVideoProvider } = await import('/src/lib/canvasWorkflow.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const controller = canvasWorkflowController('p');
     await controller.load();
     await controller.edit([{ ...newWorkflowNode('comfy-video', 400, 60, 'codex'), id: 'h3-prompt', prompt: original }]);
+    window.replaceH3Prompt = prompt => controller.edit(controller.document.nodes.map(node => node.id === 'h3-prompt' ? { ...node, prompt } : node));
+    window.switchH3ToCloud = () => controller.edit(controller.document.nodes.map(node => node.id === 'h3-prompt' ? selectWorkflowVideoProvider(node, 'cloud') : node));
     window.promptTest.delay = delay;
     window.promptTest.authorizations = 0; window.promptTest.writes = 0;
   }, { original, delay });
@@ -71,6 +80,46 @@ async function persisted(page, prompt, expected, caret, errors) {
 }
 
 try {
+  for (const legacySizing of [false, true]) {
+    const { page, prompt, errors } = await setup(0, legacySizing);
+    try {
+      const dimensions = (field = prompt) => field.evaluate(element => {
+        const style = getComputedStyle(element);
+        return { height: element.offsetHeight, client: element.clientHeight, scroll: element.scrollHeight,
+          max: parseFloat(style.maxHeight), lines: (element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)) / parseFloat(style.lineHeight) };
+      });
+      const compact = await dimensions();
+      assert.equal(compact.height, 64, `a short H3 prompt uses the compact prototype height (legacy sizing: ${legacySizing})`);
+      const mediumText = Array.from({ length: 8 }, (_, index) => `第 ${index + 1} 行提示词`).join('\n');
+      await prompt.fill(mediumText);
+      const expanded = await dimensions();
+      assert.ok(expanded.height > compact.height && expanded.height < expanded.max, 'text input grows within the available height');
+      assert.ok(expanded.scroll <= expanded.client + 1, 'uncapped text does not need scrolling');
+      const longText = `${mediumText}\n`.repeat(12);
+      await page.evaluate(text => window.replaceH3Prompt(text), longText);
+      await page.waitForFunction(text => document.querySelector('.comfy-video-prompt')?.value === text, longText);
+      const capped = await dimensions();
+      assert.equal(capped.height, capped.max, 'externally updated text stops growing at the cap');
+      assert.ok(capped.scroll > capped.client, 'text beyond the cap can scroll');
+      await page.evaluate(text => window.replaceH3Prompt(text), original);
+      await page.waitForFunction(text => document.querySelector('.comfy-video-prompt')?.value === text, original);
+      assert.equal((await dimensions()).height, compact.height, 'replacing text with a short value restores the minimum');
+      if (!legacySizing) {
+        await page.evaluate(() => window.switchH3ToCloud());
+        const cloudEditor = page.locator('[data-workflow-card="h3-prompt"] .workflow-prompt-editor .ProseMirror');
+        await cloudEditor.waitFor();
+        assert.ok(Math.abs((await dimensions(cloudEditor)).lines - 4) < 0.15, 'Cloud video prompt uses the same four-line minimum');
+        await page.evaluate(text => window.replaceH3Prompt(text), longText);
+        await page.waitForFunction(text => document.querySelector('.workflow-prompt-editor .ProseMirror p')?.textContent === text.split('\n')[0] &&
+          document.querySelectorAll('.workflow-prompt-editor .ProseMirror p').length === text.split('\n').length, longText);
+        const cloud = await dimensions(cloudEditor);
+        assert.equal(cloud.height, cloud.max, 'rich input grows to the existing Cloud video cap');
+        assert.ok(cloud.scroll > cloud.client, 'rich input scrolls after the cap');
+      }
+      assert.deepEqual(errors, []);
+    } finally { await page.close(); }
+  }
+
   for (const delay of [0, 120]) {
     for (const kind of ['typing', 'ime']) {
       const { page, prompt, errors } = await setup(delay);

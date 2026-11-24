@@ -16,7 +16,8 @@ export function useChatProviderAccess() {
   const balance = entitlement ? entitlement.balances.daily + entitlement.balances.sub + entitlement.balances.topup : 0;
   const issue = (provider: ChatProvider) => chatProviderAccessIssue(provider,
     { cloudAuth: auth, cloudEntitlement: entitlement, codexHealth: health }, quoteSnapshot, dshSnapshot);
-  const cloudPrice = quote?.dsh_vps_v2_available && quote.available && quote.unit_cost === 0 ? `${quote.unit_cost} Bcoin` : null;
+  const cloudPrice = quote?.paid_available ? "按用量计费"
+    : quote?.dsh_vps_v2_available && quote.available && quote.unit_cost === 0 ? `${quote.unit_cost} Bcoin` : null;
   return { quote, cloudPrice, error, dsh, localAllowed: canUseByo(entitlement), balance: entitlement ? balance : null, loggedIn: !!auth?.logged_in, retry: refreshChatCapabilities,
     issue, reason: (provider: ChatProvider) => issue(provider)?.message ?? null };
 }

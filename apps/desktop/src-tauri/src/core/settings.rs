@@ -30,12 +30,45 @@ fn default_true() -> bool {
     true
 }
 
+fn default_semantic_index_interval_minutes() -> u32 {
+    15
+}
+
+fn semantic_index_interval_minutes(minutes: u32) -> u32 {
+    if minutes == 60 {
+        60
+    } else {
+        default_semantic_index_interval_minutes()
+    }
+}
+
+fn deserialize_semantic_index_interval_minutes<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    u32::deserialize(deserializer).map(semantic_index_interval_minutes)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SemanticIndexPreferences {
+    pub automatic: bool,
+    pub interval_minutes: u32,
+    pub include_generated: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AppTheme {
     #[default]
     Light,
     Dark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UnderstandProviderPreference {
+    Auto,
+    BowerbirdCloud,
+    Codex,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +91,9 @@ pub struct AppSettings {
     #[serde(default = "default_auto_analyze_prompt")]
     pub auto_analyze_prompt: String,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_understand_provider: Option<UnderstandProviderPreference>,
+
     /// 自定义素材库根目录（images/thumbnails/library.db 所在地）；None = 应用数据目录。
     /// 由「迁移素材库位置」写入；仅存指向，文件体量很小，可留在 C 盘。
     #[serde(default)]
@@ -79,6 +115,16 @@ pub struct AppSettings {
     #[serde(default)]
     pub hide_project_assets: bool,
 
+    #[serde(default = "default_true")]
+    pub semantic_index_automatic: bool,
+    #[serde(
+        default = "default_semantic_index_interval_minutes",
+        deserialize_with = "deserialize_semantic_index_interval_minutes"
+    )]
+    pub semantic_index_interval_minutes: u32,
+    #[serde(default = "default_true")]
+    pub semantic_index_include_generated: bool,
+
     /// 在画板图片和视频下方显示素材名称；旧设置默认隐藏。
     #[serde(default)]
     pub canvas_show_asset_names: bool,
@@ -92,6 +138,10 @@ pub struct AppSettings {
     pub generation_completion_popup: bool,
     #[serde(default = "default_true")]
     pub generation_completion_sound: bool,
+
+    /// H3 图片和视频卡手动运行时共用的提示词优化偏好。
+    #[serde(default)]
+    pub h3_auto_optimize_prompt: bool,
 
     /// 首启预置示例图是否已注入完成。true = 不再重灌（配合 count_assets==0 双 gate）。
     #[serde(default)]
@@ -141,16 +191,21 @@ impl Default for AppSettings {
             screenshot_auto_save: true,
             auto_analyze_on_ingest: false,
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
+            default_understand_provider: None,
             library_root: None,
             library_id: None,
             pending_library_move: None,
             cloud_auto_understand: false,
             board_shift_pick: false,
             hide_project_assets: false,
+            semantic_index_automatic: true,
+            semantic_index_interval_minutes: default_semantic_index_interval_minutes(),
+            semantic_index_include_generated: true,
             canvas_show_asset_names: false,
             canvas_frequent_assets: Default::default(),
             generation_completion_popup: true,
             generation_completion_sound: true,
+            h3_auto_optimize_prompt: false,
             samples_seeded: false,
             dreamina_model_version: DEFAULT_DREAMINA_MODEL_VERSION.to_string(),
             jev_image_classification_enabled: false,
@@ -209,11 +264,42 @@ impl SettingsState {
         self.settings.read().unwrap().clone()
     }
 
+    pub(crate) fn semantic_index_preferences(&self) -> SemanticIndexPreferences {
+        self.with_semantic_index_preferences(|preferences| preferences)
+    }
+
+    pub(crate) fn with_semantic_index_preferences<T>(
+        &self,
+        apply: impl FnOnce(SemanticIndexPreferences) -> T,
+    ) -> T {
+        let settings = self.settings.read().unwrap();
+        let result = apply(SemanticIndexPreferences {
+            automatic: settings.semantic_index_automatic,
+            interval_minutes: semantic_index_interval_minutes(settings.semantic_index_interval_minutes),
+            include_generated: settings.semantic_index_include_generated,
+        });
+        drop(settings);
+        result
+    }
+
     /// 覆盖普通设置并持久化；常用素材成员由专用命令维护，不能被旧快照覆盖。
-    pub fn update(&self, mut new_settings: AppSettings) -> AppResult<()> {
+    pub fn update(&self, new_settings: AppSettings) -> AppResult<()> {
+        self.update_preferences(new_settings, false)
+    }
+
+    pub(crate) fn update_preferences(
+        &self,
+        mut new_settings: AppSettings,
+        change_shortcuts: bool,
+    ) -> AppResult<()> {
         self.update_with(|settings| {
             new_settings.canvas_frequent_assets = settings.canvas_frequent_assets.clone();
-            new_settings.screenshot_shortcuts = settings.screenshot_shortcuts.clone();
+            if !change_shortcuts {
+                new_settings.screenshot_shortcuts = settings.screenshot_shortcuts.clone();
+            }
+            if new_settings.default_understand_provider.is_none() {
+                new_settings.default_understand_provider = settings.default_understand_provider;
+            }
             new_settings.library_root = settings.library_root.clone();
             new_settings.library_id = settings.library_id.clone();
             new_settings.pending_library_move = settings.pending_library_move.clone();
@@ -237,6 +323,33 @@ mod tests {
     use super::{AppSettings, AppTheme, SettingsState};
 
     #[test]
+    fn semantic_index_preferences_default_for_old_settings_and_survive_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        std::fs::write(&file, r#"{"hide_project_assets": true}"#).unwrap();
+        let state = SettingsState::init(file.clone()).unwrap();
+        let defaults = state.semantic_index_preferences();
+        assert_eq!(
+            (defaults.automatic, defaults.interval_minutes, defaults.include_generated),
+            (true, 15, true)
+        );
+        let selected = serde_json::from_value(serde_json::json!({
+            "semantic_index_automatic": false,
+            "semantic_index_interval_minutes": 60,
+            "semantic_index_include_generated": false,
+        })).unwrap();
+        state.update(selected).unwrap();
+        let stored = SettingsState::init(file).unwrap().semantic_index_preferences();
+        assert_eq!(
+            (stored.automatic, stored.interval_minutes, stored.include_generated),
+            (false, 60, false)
+        );
+        let invalid: AppSettings =
+            serde_json::from_str(r#"{"semantic_index_interval_minutes":45}"#).unwrap();
+        assert_eq!(invalid.semantic_index_interval_minutes, 15);
+    }
+
+    #[test]
     fn screenshots_default_to_library_and_keep_opt_out() {
         let old: AppSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(serde_json::to_value(old).unwrap()["screenshot_auto_save"], true);
@@ -252,18 +365,22 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bb-shortcut-settings-{}", ulid::Ulid::new()));
         let path = dir.join("settings.json");
         let state = SettingsState::init(path.clone()).unwrap();
-        state
-            .update_with(|settings| {
-                settings.screenshot_shortcuts.capture = "Control+Shift+KeyS".into();
-                settings.screenshot_shortcuts.paste.clear();
-            })
-            .unwrap();
+        let mut selected = state.get();
+        selected.screenshot_shortcuts.capture = "Control+Shift+KeyS".into();
+        selected.screenshot_shortcuts.paste.clear();
+        selected.default_understand_provider = Some(super::UnderstandProviderPreference::BowerbirdCloud);
+        state.update_preferences(selected, true).unwrap();
+        state.update(old).unwrap();
         let restored = SettingsState::init(path.clone()).unwrap().get();
         assert_eq!(
             restored.screenshot_shortcuts,
             state.get().screenshot_shortcuts
         );
         assert!(restored.screenshot_shortcuts.paste.is_empty());
+        assert_eq!(
+            restored.default_understand_provider,
+            Some(super::UnderstandProviderPreference::BowerbirdCloud)
+        );
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         assert!(state
@@ -314,6 +431,21 @@ mod tests {
         let restored = SettingsState::init(path).unwrap().get();
         assert!(!restored.generation_completion_popup);
         assert!(!restored.generation_completion_sound);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn h3_auto_optimize_defaults_off_and_persists() {
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(!old.h3_auto_optimize_prompt);
+        let dir = std::env::temp_dir().join(format!("bb-h3-settings-{}", ulid::Ulid::new()));
+        let path = dir.join("settings.json");
+        let state = SettingsState::init(path.clone()).unwrap();
+        let mut settings = state.get();
+        assert!(!settings.h3_auto_optimize_prompt);
+        settings.h3_auto_optimize_prompt = true;
+        state.update(settings).unwrap();
+        assert!(SettingsState::init(path).unwrap().get().h3_auto_optimize_prompt);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

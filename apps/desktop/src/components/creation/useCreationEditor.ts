@@ -500,6 +500,10 @@ export function useCreationEditor(opts?: {
     loadPrompt,
     getDraft,
     finalPrompt: serialized.finalPrompt,
+    promptWithAssetToken: (assetToken: (assetId: string) => string | undefined) => {
+      const doc = viewRef.current?.state.doc;
+      return doc ? serializeDoc(doc, assetByIdRef.current, { assetToken }).finalPrompt : "";
+    },
     rawPrompt,
     references: serialized.references,
     referenceNodeIds: serialized.referenceNodeIds,

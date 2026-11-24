@@ -3,14 +3,12 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "engines": {
-    "node": ">=24.10.0"
-  },
+  "engines": { "node": ">=24.10.0" },
   "scripts": {
     "snapshot": "node export.mjs",
     "start": "node run.mjs",
     "test": "node --test test/*.test.mjs",
     "start:gemini": "node run-gemini.mjs",
-    "test:browser": "node test/consent.browser.mjs"
+    "test:browser": "node --test test/consent.browser.mjs"
   }
 }

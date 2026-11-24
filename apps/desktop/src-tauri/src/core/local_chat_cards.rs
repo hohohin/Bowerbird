@@ -169,6 +169,8 @@ enum CardSpec {
         first_frame_alias: Option<String>,
         #[serde(rename = "lastFrameAlias")]
         last_frame_alias: Option<String>,
+        #[serde(default, rename = "referenceAliases")]
+        reference_aliases: Vec<String>,
     },
     Content {
         id: String,
@@ -377,16 +379,30 @@ fn place_section_groups(
 fn base_node(id: &str, kind: &str, x: f64, y: f64, provider: &str) -> Value {
     json!({"id":id,"kind":kind,"x":x,"y":y,"action":"describe","skill":"image-edit","prompt":"","ratio":null,"provider":provider,"inputs":{},"outputs":{},"outputPorts":[],"trigger":false})
 }
-fn image_alias_index(alias: &str, images: &[String]) -> AppResult<usize> {
+struct CardReference {
+    id: String,
+    extension: String,
+}
+
+fn image_alias_index(alias: &str, references: &[CardReference]) -> AppResult<usize> {
     let index = alias
         .strip_prefix("image")
         .and_then(|s| s.parse::<usize>().ok())
-        .filter(|i| *i > 0 && *i <= images.len() && *i <= 8)
+        .filter(|i| *i > 0 && *i <= references.len() && *i <= 8)
         .ok_or_else(invalid)?;
     if alias != format!("image{index}") {
         return Err(invalid());
     }
     Ok(index - 1)
+}
+
+fn r2v_reference_port(extension: &str) -> AppResult<&'static str> {
+    if matches!(extension, "png" | "jpeg" | "jpg" | "webp" | "bmp") {
+        return Ok("reference-image");
+    }
+    if crate::media::probe::is_video(extension) { return Ok("reference-video"); }
+    if crate::media::audio::is_audio(extension) { return Ok("r2v-audio"); }
+    Err(error("H3 R2V 仅支持静态图片、视频和音频参考素材"))
 }
 fn add_input(node: &mut Value, port: &str, mut binding: Value, label: &str) {
     let referenced = node["kind"] == "generation" && matches!(port, "text" | "image");
@@ -489,6 +505,7 @@ fn normalize_card_fields(args: &mut Value) {
                 "resolution",
                 "firstFrameAlias",
                 "lastFrameAlias",
+                "referenceAliases",
             ],
             "content" => &["id", "kind", "title", "text", "rows"],
             "trigger" => &["id", "kind", "title", "count", "triggerMode", "dailyAt", "runAt"],
@@ -529,7 +546,7 @@ fn trigger_schedule(
 fn compile(
     args: &Value,
     defaults: &ChatCardDefaults,
-    images: &[String],
+    references: &[CardReference],
     anchor: (f64, f64),
     prefix: &str,
 ) -> AppResult<Compilation> {
@@ -671,14 +688,18 @@ fn compile(
                 }
                 let mut seen = HashSet::new();
                 for alias in reference_aliases {
-                    let index = image_alias_index(alias, images)?;
+                    let index = image_alias_index(alias, references)?;
                     if !seen.insert(index) {
                         return Err(invalid());
+                    }
+                    let reference = &references[index];
+                    if crate::media::audio::is_audio(&reference.extension) {
+                        return Err(error("音频别名仅可连接到 H3 R2V 生成卡片"));
                     }
                     add_input(
                         &mut node,
                         "image",
-                        json!({"assetId":images[index]}),
+                        json!({"assetId":reference.id}),
                         &format!("参考图片 {}", index + 1),
                     );
                 }
@@ -691,21 +712,24 @@ fn compile(
                 resolution,
                 first_frame_alias,
                 last_frame_alias,
+                reference_aliases,
                 ..
             } => {
                 let mode = mode.as_deref().unwrap_or("frames");
-                let seconds = seconds.unwrap_or(8);
-                let ratio = ratio.as_deref().unwrap_or("9:16");
-                let resolution = resolution.unwrap_or(0.8);
+                let r2v = mode == "r2v";
+                let seconds = seconds.unwrap_or(if r2v { 5 } else { 8 });
+                let ratio = ratio.as_deref().unwrap_or(if mode == "text" { "9:16" } else { "auto" });
+                let resolution = resolution.unwrap_or(if r2v { 0.98 } else { 0.8 });
                 if prompt.trim().is_empty()
                     || prompt.chars().count() > 8000
                     || prompt.contains("@[")
                     || !(1..=15).contains(&seconds)
                     || !matches!(ratio, "auto" | "9:16" | "16:9" | "4:3" | "3:4" | "1:1")
-                    || !matches!(mode, "text" | "reference" | "frames")
-                    || !(if mode == "frames" { &[0.6, 0.8, 1.0][..] } else { &[0.6, 0.8, 0.98, 1.0][..] }).contains(&resolution)
-                    || (mode == "text" && (first_frame_alias.is_some() || last_frame_alias.is_some()))
+                    || !matches!(mode, "text" | "reference" | "frames" | "r2v")
+                    || ![0.6, 0.8, 0.98, 1.0].contains(&resolution)
+                    || ((mode == "text" || r2v) && (first_frame_alias.is_some() || last_frame_alias.is_some()))
                     || (mode == "reference" && last_frame_alias.is_some())
+                    || (!r2v && !reference_aliases.is_empty())
                 {
                     return Err(invalid());
                 }
@@ -717,9 +741,17 @@ fn compile(
                     ("last-frame", last_frame_alias),
                 ] {
                     if let Some(alias) = alias {
-                        let index = image_alias_index(alias, images)?;
-                        add_input(&mut node, port, json!({"assetId":images[index]}), "");
+                        let index = image_alias_index(alias, references)?;
+                        add_input(&mut node, port, json!({"assetId":references[index].id}), "");
                     }
+                }
+                let mut seen = HashSet::new();
+                for alias in reference_aliases {
+                    let index = image_alias_index(alias, references)?;
+                    if !seen.insert(index) { return Err(invalid()); }
+                    let reference = &references[index];
+                    let port = r2v_reference_port(&reference.extension)?;
+                    add_input(&mut node, port, json!({"assetId":reference.id}), "");
                 }
             }
             CardSpec::Trigger { count, trigger_mode, daily_at, run_at, .. } => {
@@ -868,12 +900,17 @@ fn compile(
             }
             _ => return Err(invalid()),
         };
+        let target_mode = nodes.iter().find(|node| node["id"] == *to)
+            .and_then(|node| node["comfyVideo"]["mode"].as_str());
+        let source_is_video = kind == "comfy-video"
+            || nodes.iter().any(|n| n["id"] == *from && n["generation"]["media"] == "video");
         let valid = match (to_kind.as_str(), connection.input.as_str()) {
             ("generation", "text" | "image" | "signal") => connection.input == output_type,
             ("comfy-video", "text" | "signal") => connection.input == output_type,
-            ("comfy-video", "first-frame" | "last-frame") => output_type == "image" && nodes.iter().any(|node|
-                node["id"] == *to && node["comfyVideo"]["mode"] != "text"
-                    && (connection.input == "first-frame" || node["comfyVideo"]["mode"] != "reference")),
+            ("comfy-video", "first-frame") => output_type == "image" && matches!(target_mode, Some("frames" | "reference")),
+            ("comfy-video", "last-frame") => output_type == "image" && target_mode == Some("frames"),
+            ("comfy-video", "reference-image" | "reference-video") => target_mode == Some("r2v")
+                && output_type == "image" && source_is_video == (connection.input == "reference-video"),
             ("trigger", "completion") => matches!(kind.as_str(), "generation" | "comfy-video"),
             ("loop", "signal") => output_type == "signal",
             _ => false,
@@ -881,10 +918,6 @@ fn compile(
         if !valid {
             return Err(invalid());
         }
-        let source_is_video = kind == "comfy-video"
-            || nodes
-                .iter()
-                .any(|n| n["id"] == *from && n["generation"]["media"] == "video");
         if source_is_video
             && (matches!(connection.input.as_str(), "first-frame" | "last-frame")
                 || connection.input == "image"
@@ -918,6 +951,13 @@ fn compile(
             &cards.iter().find(|c| c.id == *from).unwrap().title,
         );
     }
+    for node in nodes.iter().filter(|node| node["comfyVideo"]["mode"] == "r2v") {
+        for (port, limit) in [("reference-image", 9), ("reference-video", 3), ("r2v-audio", 3)] {
+            if node["inputs"][port].as_array().is_some_and(|inputs| inputs.len() > limit) {
+                return Err(error("H3 R2V 最多连接 9 张图片、3 段视频和 3 段音频"));
+            }
+        }
+    }
     for trigger in nodes.iter().filter(|node| node["kind"] == "trigger") {
         if trigger["inputs"]["completion"].is_array() && !trigger["triggerMode"].is_null()
             && trigger["triggerMode"] != "completion" {
@@ -930,6 +970,11 @@ fn compile(
         if target["kind"] == "trigger" && (target["inputs"]["completion"].is_array()
             || !target["triggerMode"].is_null() && target["triggerMode"] != "manual") {
             return Err(error("立即触发下游请选择手动触发卡"));
+        }
+        if target["comfyVideo"]["mode"] == "r2v"
+            && ["reference-image", "reference-video", "r2v-audio"].iter().all(|port| target["inputs"][*port].as_array().is_none_or(Vec::is_empty))
+        {
+            return Err(error("运行 H3 R2V 前请连接至少一个参考素材"));
         }
     }
     if !batch.sections.is_empty() {
@@ -1237,15 +1282,17 @@ impl Database {
             serde_json::from_str(&raw_defaults)?
         };
         defaults.validate()?;
-        let images:Vec<String>=serde_json::from_str(&tx.query_row("SELECT reference_asset_ids FROM local_chat_messages WHERE conversation_id=?1 AND turn_id=?2 AND role='user'",params![conversation,turn],|r|r.get::<_,String>(0))?)?;
-        for id in &images {
-            if !tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)",
-                [id],
-                |r| r.get::<_, bool>(0),
-            )? {
-                return Err(error("本轮参考图片已删除，本次未创建卡片"));
-            }
+        let reference_ids:Vec<String>=serde_json::from_str(&tx.query_row("SELECT reference_asset_ids FROM local_chat_messages WHERE conversation_id=?1 AND turn_id=?2 AND role='user'",params![conversation,turn],|r|r.get::<_,String>(0))?)?;
+        let mut references = Vec::with_capacity(reference_ids.len());
+        for id in reference_ids {
+            let (ext, path): (Option<String>, Option<String>) = tx.query_row(
+                "SELECT ext,store_path FROM assets WHERE id=?1", [&id], |r| Ok((r.get(0)?, r.get(1)?)),
+            ).optional()?.ok_or_else(|| error("本轮参考素材已删除，本次未创建卡片"))?;
+            let extension = ext.or_else(|| path.as_deref()
+                .and_then(|p| std::path::Path::new(p).extension())
+                .map(|suffix| suffix.to_string_lossy().into_owned()))
+                .unwrap_or_default().trim_start_matches('.').to_ascii_lowercase();
+            references.push(CardReference { id, extension });
         }
         let batch_count: i64 = tx.query_row(
             "SELECT COUNT(*) FROM local_chat_card_actions WHERE conversation_id=?1 AND turn_id=?2",
@@ -1259,7 +1306,7 @@ impl Database {
         // Batch aliases can only reference newly compiled cards. Append to the latest
         // document in this transaction, preserving every unrelated run and reservation.
         let id = ulid::Ulid::new().to_string();
-        let mut compiled = compile(args, &defaults, &images, (0.0, 0.0), &id)?;
+        let mut compiled = compile(args, &defaults, &references, (0.0, 0.0), &id)?;
         let existing = doc["nodes"].as_array().into_iter().flatten();
         let source = existing.clone().find(|n| n["id"] == source_id && n["kind"] == "agent")
             .map(workflow_rect).unwrap_or(native_rect);
@@ -1292,21 +1339,10 @@ impl Database {
             for port in image_ports {
                 for input in node["inputs"][*port].as_array().into_iter().flatten() {
                     if let Some(asset) = input["assetId"].as_str() {
-                        let (ext, path): (Option<String>, Option<String>) = tx.query_row(
-                            "SELECT ext,store_path FROM assets WHERE id=?1",
-                            [asset],
-                            |r| Ok((r.get(0)?, r.get(1)?)),
-                        )?;
-                        let extension = ext
-                            .or_else(|| {
-                                path.as_deref()
-                                    .and_then(|p| std::path::Path::new(p).extension())
-                                    .map(|s| s.to_string_lossy().into_owned())
-                            })
-                            .unwrap_or_default()
-                            .to_ascii_lowercase();
+                        let extension = references.iter().find(|reference| reference.id == asset)
+                            .map_or("", |reference| reference.extension.as_str());
                         if !matches!(
-                            extension.trim_start_matches('.'),
+                            extension,
                             "png" | "jpg" | "jpeg" | "webp" | "bmp"
                         ) {
                             return Err(error(
@@ -1356,8 +1392,8 @@ impl Database {
             note_records.push(note_snapshot(&tx, note["id"].as_str().unwrap())?.unwrap());
         }
         save_workflow(&tx, &project, revision, &doc)?;
-        for asset in &images {
-            tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,?3)",params![project,asset,now/1000])?;
+        for reference in &references {
+            tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,?3)",params![project,reference.id,now/1000])?;
         }
         let mut footprint = json!({"nodes":compiled.nodes,"notes":note_records,"names":compiled.names});
         let run_status = args["runCard"].as_str().map(|alias| {

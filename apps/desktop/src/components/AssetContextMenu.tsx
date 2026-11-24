@@ -1,112 +1,97 @@
-import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
-import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
-import { GenerationGroupMenuItem, MergeGenerationGroupMenuItem } from "./GenerationGroupMenuItem";
-import { CANVAS_ARTBOARD_FROM_IMAGE } from "../lib/canvasArtboard";
-import { ContextMenu, ContextSubmenu, DeleteSubmenu } from "./ContextMenu";
-import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
-import { isVideoPath } from "../lib/videoGeneration";
-import { isAudioAsset } from "../lib/audioMedia";
-import { isTextAsset } from "../lib/textMedia";
-import { ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Scan, Trash2, Ungroup } from "lucide-react";
-import { AssetTransferMenuItems, useAssetTransferDialogs } from "./AssetTransferMenuItems";
-import { understandEngineUsable, useStore } from "../store";
+import { ClipboardCopy, FileText, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, Pin, ScanSearch, Scan, Trash2, Ungroup } from "lucide-react";
+import { useStore } from "../store";
+import { understandEngineUsable } from "../lib/entitlement";
 import { api } from "../lib/api";
-import { loadDescribePrompt } from "../lib/describePrompt";
-import { CollectionAssignDialog } from "./CollectionDialogs";
-import { CanvasAssetDeleteDialog } from "./CanvasAssetDeleteDialog";
-import { ModalShell } from "./ModalShell";
-import { RenameDialog } from "./RenameDialog";
-import { canUseByo } from "../lib/entitlement";
-import { notifyError, notifySuccess } from "../lib/notify";
-import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
-import type { Asset } from "../lib/types";
-import { externalFiles, OPEN_LOCAL_FILES } from "../lib/externalFiles";
+import { buildAssetContextMenu, type AssetMenuAction, type AssetMenuSnapshot } from "../lib/assetContextMenu";
 import {
-  CANVAS_ARRANGE_NODES_EVENT,
-  type CanvasArrangeNodesEventDetail,
-} from "../lib/creativeCanvas";
-
-/** 可标注图片：浏览器 <img>/canvas 能解码的位图格式（tiff 浏览器不解码，排除）。 */
-const ANNOTATABLE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
-const CANVAS_IMAGE_EXTS = [...ANNOTATABLE_EXTS, "avif", "svg", "ico", "tif", "tiff"];
+  copyAssetFilePath, copyImageToClipboard, enqueueDescribeWithEngine, openAssetWithSystem,
+  removeAssetsFromProject, reuseGenerationPrompt, revealAssetFolder, setAssetLibraryVisibility,
+} from "../lib/assetMenuCommands";
+import { canUseByo } from "../lib/entitlement";
+import { externalFiles } from "../lib/externalFiles";
+import { notifyError } from "../lib/notify";
+import { canSearchPinterest } from "../lib/pinterestSearch";
+import type { Asset } from "../lib/types";
+import { videoSourceKey } from "../lib/videoSourceKey";
+import { isAudioAsset } from "../lib/audioMedia";
+import { AssetTransferMenuItems, useAssetTransferDialogs } from "./AssetTransferMenuItems";
+import { BatchAddToProjectsDialog } from "./BatchAddToProjectsDialog";
+import { CanvasAssetDeleteDialog } from "./CanvasAssetDeleteDialog";
+import { CanvasSelectionMenuItems } from "./CanvasSelectionMenuItems";
+import { CollectionAssignDialog } from "./CollectionDialogs";
+import { ContextMenu } from "./ContextMenu";
+import { ContextMenuItems } from "./ContextMenuItems";
+import { GenerationGroupMenuItem, MergeGenerationGroupMenuItem } from "./GenerationGroupMenuItem";
+import { ImageEditIcon } from "./ImageEditIcon";
+import { LibraryVideoPreview } from "./LibraryVideoPreview";
+import { RenameDialog } from "./RenameDialog";
+import { useAssetMenuHost, type AssetMenuContext, type AssetMenuHostSelection } from "./useAssetMenuHost";
 
 type SelectionOperation = { ids: string[]; onComplete?: () => void };
 
-/** 右键「反推」二级菜单的引擎选项；reason 为空表示该引擎当前可用。 */
-interface DescribeEngineOption {
-  key: "bowerbird-cloud" | "codex";
-  label: string;
-  reason: string | null;
-}
+const ICONS = {
+  edit: <ImageEditIcon />,
+  "folder-plus": <FolderPlus size={13} />,
+  "folder-tree": <FolderTree size={13} />,
+  trash: <Trash2 size={13} />,
+  ungroup: <Ungroup size={13} />,
+  layers: <Layers size={13} />,
+  "status-unavailable": <span className="app-status-dot" aria-hidden="true" />,
+  "status-ready": <span className="app-status-dot is-ready" aria-hidden="true" />,
+  "scan-search": <ScanSearch size={13} />,
+  scan: <Scan size={13} />,
+  board: <LayoutDashboard size={13} />,
+  pin: <Pin size={13} />,
+  clipboard: <ClipboardCopy size={13} />,
+  message: <MessageSquare size={13} />,
+  "file-text": <FileText size={13} />,
+};
 
-/**
- * 素材菜单：单项按常用 / 再创作与文件分列，多选只显示选区操作。
- * 默认由 store.contextMenu 驱动；嵌入式工作区可持有独立菜单与详情选择。
- */
-export function AssetContextMenu({ selection }: { selection?: {
-  menu: ReturnType<typeof useStore.getState>["contextMenu"];
-  onClose(): void;
-  onOpen(id: string): void;
-  detailAssetId: string | null;
-  onNavigate?(): void;
-  onReusePrompt?(prompt: string): void;
-} } = {}) {
-  const globalMenu = useStore((s) => s.contextMenu);
-  const menu = selection ? selection.menu : globalMenu;
-  const currentMenu = useRef(menu);
-  currentMenu.current = menu;
-  useEffect(() => () => { currentMenu.current = null; }, []);
-  const isCurrentMenu = () => (selection ? currentMenu.current : useStore.getState().contextMenu) === menu;
-  const closeContextMenu = () => {
-    if (!isCurrentMenu()) return;
-    if (selection) selection.onClose(); else useStore.getState().closeContextMenu();
-  };
-  const openGlobalDetail = useStore((s) => s.openDetail);
-  const globalDetailAssetId = useStore((s) => s.detailAssetId);
-  const openDetail = selection?.onOpen ?? openGlobalDetail;
-  const detailAssetId = selection ? selection.detailAssetId : globalDetailAssetId;
-  const addAssetToBoardFromDetail = useStore((s) => s.addAssetToBoardFromDetail);
-  const activeProjectId = useStore((s) => s.activeProjectId);
-  const reloadProjects = useStore((s) => s.reloadProjects);
-  const assets = useStore((s) => s.assets);
-  const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
-  const codexHealth = useStore((s) => s.codexHealth);
-  const openAnnotator = useStore((s) => s.openAnnotator);
-  const viewGenerationHistory = useStore((s) => s.viewGenerationHistory);
-  const mode = useStore((s) => s.mode);
-  const enterManage = useStore((s) => s.enterManage);
-  const toggleSelect = useStore((s) => s.toggleSelect);
-  const selectedIds = useStore((s) => s.selectedIds);
-  const projects = useStore((s) => s.projects);
-  const exitManage = useStore((s) => s.exitManage);
-  const cloudAuth = useStore((s) => s.cloudAuth);
-  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-  const cloudAvailable = cloudAuth?.cloud_available ?? false;
-  const reuseIntentRef = useRef(0);
+/** 单选双列，多选单列；全局素材库、画布和嵌入式工作区共用。 */
+export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelection } = {}) {
+  const host = useAssetMenuHost(selection);
+  const { menu, embedded, isCurrent, close } = host;
+  const activeProjectId = useStore(state => state.activeProjectId);
+  const assets = useStore(state => state.assets);
+  const mode = useStore(state => state.mode);
+  const selectedIds = useStore(state => state.selectedIds);
+  const hasProjects = useStore(state => state.projects.length > 0);
+  const cloudAuth = useStore(state => state.cloudAuth);
+  const cloudEntitlement = useStore(state => state.cloudEntitlement);
+  const codexHealth = useStore(state => state.codexHealth);
+  const describingId = useStore(state => state.describingId);
+  const describeQueue = useStore(state => state.describeQueue);
 
+  const reuseIntent = useRef(0);
   const [busy, setMenuBusy] = useState(false);
-  function setBusy(value: boolean) { if (isCurrentMenu()) setMenuBusy(value); }
-  const [canvasLibraryCheck, setCanvasLibraryCheck] = useState<{ menu: typeof menu; available: boolean } | null>(null);
-  const [groupIds, setGroupIds] = useState<string[] | null>(null);
+  const [canvasLibraryCheck, setCanvasLibraryCheck] = useState<{ menu: AssetMenuContext; status: AssetMenuSnapshot["canvasLibraryStatus"] } | null>(null);
+  const [groupCheck, setGroupCheck] = useState<{ menu: AssetMenuContext; projectId: string | null; ids: string[] | null } | null>(null);
+  const [selectionAssets, setSelectionAssets] = useState<{ menu: AssetMenuContext; assets: Asset[] } | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; external: boolean; localPath?: string } | null>(null);
+  const [mediaPreview, setMediaPreview] = useState<{ asset: Asset; path: string; projectId: string | null; openTranscript: boolean } | null>(null);
   const [assignCollectionIds, setAssignCollectionIds] = useState<SelectionOperation | null>(null);
-  const transfer = useAssetTransferDialogs();
   const [projectPickIds, setProjectPickIds] = useState<SelectionOperation | null>(null);
   const [pendingCanvasDelete, setPendingCanvasDelete] = useState<{ assetIds: string[]; projectId: string | null; localPaths?: Record<string, string>; onComplete?: () => void } | null>(null);
-  const [selectionAssets, setSelectionAssets] = useState<{ menu: typeof menu; assets: Asset[] } | null>(null);
-  const describingId = useStore(s => s.describingId);
-  const describeQueue = useStore(s => s.describeQueue);
+  const transfer = useAssetTransferDialogs();
+
   useEffect(() => {
-    if (!selection && menu && menu.workspaceProjectId !== undefined && menu.workspaceProjectId !== activeProjectId) closeContextMenu();
+    if (!embedded && menu && menu.workspaceProjectId !== undefined && menu.workspaceProjectId !== activeProjectId) close();
   }, [menu, activeProjectId, selection]);
+  useEffect(() => { setMediaPreview(null); }, [activeProjectId]);
+
   useEffect(() => {
     setMenuBusy(false);
     if (!menu?.canvasSelection) return;
+    const supplied = new Set(menu.canvasSelection.assets?.map(asset => asset.id));
+    const cached = useStore.getState().assets;
+    const missing = (menu.canvasSelection.assetIds ?? [menu.assetId]).filter(id =>
+      id !== menu.asset?.id && !supplied.has(id) && !cached.some(asset => asset.id === id));
+    if (!missing.length) return;
     let alive = true;
-    api.getAssetsByIds(menu.canvasSelection.assetIds ?? [menu.assetId]).then(assets => {
+    api.getAssetsByIds(missing).then(assets => {
       if (alive) setSelectionAssets({ menu, assets });
-    }).catch(() => {});
+    }).catch(() => { if (alive) setSelectionAssets({ menu, assets: [] }); });
     return () => { alive = false; };
   }, [menu]);
 
@@ -114,32 +99,28 @@ export function AssetContextMenu({ selection }: { selection?: {
     if (!menu?.libraryProjectId) return;
     let alive = true;
     api.projectCanvasGet(menu.libraryProjectId).then(snapshot => {
-      if (alive) setCanvasLibraryCheck({ menu, available: snapshot.nodes.some(node =>
-        node.kind === "asset" && node.assetId === menu.assetId && node.hiddenAt == null) });
-    }).catch(() => { if (alive) setCanvasLibraryCheck({ menu, available: false }); });
+      if (!alive) return;
+      const available = snapshot.nodes.some(node => node.kind === "asset" && node.assetId === menu.assetId && node.hiddenAt == null);
+      setCanvasLibraryCheck({ menu, status: available ? "available" : "unavailable" });
+    }).catch(() => { if (alive) setCanvasLibraryCheck({ menu, status: "failed" }); });
     return () => { alive = false; };
   }, [menu]);
 
-  // 菜单打开且为生成图时取同组图（与瀑布流轮播同一查询、同 project scope）；
-  // 非生成图 / 查询失败按无组处理，不显示整组删除。
+  // 与素材库轮播共用组图查询。结果只更新当前菜单中已有的删除行。
   useEffect(() => {
-    setGroupIds(null);
     if (!menu || menu.canvasSelection) return;
-    const target = menu.asset ?? useStore.getState().assets.find((a) => a.id === menu.assetId);
+    const target = menu.asset ?? useStore.getState().assets.find(asset => asset.id === menu.assetId);
     if (!target?.generation_session_id) return;
     let alive = true;
-    api
-      .listGenerationGroup(menu.assetId, activeProjectId)
-      .then((g) => {
-        if (alive) setGroupIds(g.map((a) => a.id));
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
+    api.listGenerationGroup(menu.assetId, activeProjectId).then(group => {
+      if (alive) setGroupCheck({ menu, projectId: activeProjectId, ids: group.map(asset => asset.id) });
+    }).catch(() => { if (alive) setGroupCheck({ menu, projectId: activeProjectId, ids: null }); });
+    return () => { alive = false; };
   }, [menu, activeProjectId]);
 
   if (!menu) return <>
+    {mediaPreview && <LibraryVideoPreview {...mediaPreview} sourceKey={videoSourceKey(mediaPreview.asset)}
+      onClose={() => setMediaPreview(null)} />}
     {assignCollectionIds && <CollectionAssignDialog assetIds={assignCollectionIds.ids} onSaved={assignCollectionIds.onComplete} onClose={() => setAssignCollectionIds(null)} />}
     {transfer.dialogs}
     {pendingCanvasDelete && <CanvasAssetDeleteDialog target={pendingCanvasDelete} onComplete={pendingCanvasDelete.onComplete} onClose={() => setPendingCanvasDelete(null)} />}
@@ -147,414 +128,187 @@ export function AssetContextMenu({ selection }: { selection?: {
     {projectPickIds && <BatchAddToProjectsDialog ids={projectPickIds.ids} onComplete={projectPickIds.onComplete} onClose={() => setProjectPickIds(null)} />}
   </>;
 
-  if (menu.moveIncompleteSelection) return <ContextMenu x={menu.x} y={menu.y} label="所选素材的操作" onClose={closeContextMenu}>
-    <div className="app-context-label">部分所选条目已不存在</div>
-    <button role="menuitem" className="app-context-item" onClick={() => { menu.moveIncompleteSelection?.(); closeContextMenu(); }}>移动到文件夹</button>
-  </ContextMenu>;
-
-  // 守卫后捕获，闭包里直接用（TS 不会把守卫的收窄带进嵌套函数）。
-  const assetId = menu.assetId;
-  const asset = menu.asset ?? (selectionAssets?.menu === menu ? selectionAssets.assets : assets).find((a) => a.id === assetId);
-  const canvasMulti = !!menu.canvasSelection && menu.canvasSelection.nodeIds.length > 1;
-  const multiIds = canvasMulti ? [...new Set(menu.canvasSelection!.assetIds ?? [])]
-    : menu.fileSelection ? (menu.fileSelection.entries?.count ?? menu.fileSelection.assets.length) > 1 ? menu.fileSelection.assets.map(asset => asset.id) : null
-    : !selection && !menu.singleAsset && !menu.canvasSelection && mode === "manage" && selectedIds.size > 1 && selectedIds.has(assetId) ? [...selectedIds] : null;
+  const { assetId, canvasSelection: canvas, fileSelection: file } = menu;
+  const canvasMulti = !!canvas && canvas.nodeIds.length > 1;
+  const entries = file?.entries;
+  const entryCount = entries?.count ?? file?.assets.length;
+  let multiIds: string[] | null = null;
+  if (canvasMulti) multiIds = [...new Set(canvas?.assetIds ?? [])];
+  else if (file && (entryCount ?? 0) > 1) multiIds = file.assets.map(asset => asset.id);
+  else if (!file && !embedded && !menu.singleAsset && !canvas && mode === "manage" && selectedIds.size > 1 && selectedIds.has(assetId)) {
+    multiIds = [...selectedIds];
+  }
   const targetIds = multiIds ?? [assetId];
-  const selectedCount = canvasMulti ? menu.canvasSelection!.nodeIds.length : menu.fileSelection?.entries?.count ?? multiIds?.length ?? 1;
-  const connectionEntries = menu.fileSelection?.entries;
-  const knownAssets = menu.fileSelection?.assets ?? (selectionAssets?.menu === menu ? selectionAssets.assets : assets);
-  const targets = targetIds.map(id => id === assetId ? asset ?? knownAssets.find(a => a.id === id) : knownAssets.find(a => a.id === id));
-  const targetsReady = targets.every((item): item is Asset => !!item);
-  const allImages = targetIds.length > 0 && targetsReady && targets.every(item => !!item.store_path && !isVideoPath(item.store_path) && !isAudioAsset(item) && !isTextAsset(item));
-  const audio = !!asset && isAudioAsset(asset);
-  const text = !!asset && isTextAsset(asset);
-  const projectId = menu.canvasSelection?.projectId ?? (menu.workspaceProjectId !== undefined ? menu.workspaceProjectId : activeProjectId);
+  const resolvedSelection = selectionAssets?.menu === menu ? selectionAssets.assets : undefined;
+  const resolveAsset = (id: string) => resolvedSelection?.find(item => item.id === id)
+    ?? canvas?.assets?.find(item => item.id === id) ?? assets.find(item => item.id === id);
+  const resolveTarget = (id: string) => file ? file.assets.find(item => item.id === id) : resolveAsset(id);
+  const asset = menu.asset ?? resolveTarget(assetId);
+  const targets = targetIds.map(id => id === assetId ? asset ?? resolveTarget(id) : resolveTarget(id));
+  const canvasImagesPending = canvasMulti && canvas.imageOnly && targets.some(target => !target)
+    ? resolvedSelection ? "部分所选素材不可用" : "正在检查所选素材…" : undefined;
+  const projectId = canvas?.projectId ?? (menu.workspaceProjectId !== undefined ? menu.workspaceProjectId : activeProjectId);
   const membershipProjectId = menu.libraryProjectId ?? projectId;
-  const onComplete = menu.fileSelection?.onComplete ?? (!selection && !menu.canvasSelection && multiIds ? exitManage : undefined);
-  const transfers = !menu.fileSelection?.localPaths && <AssetTransferMenuItems assetIds={targetIds} sourceProjectId={menu.canvasSelection?.projectId ?? menu.libraryProjectId ?? null}
-    dialogs={transfer} onClose={closeContextMenu} onMoveFolder={connectionEntries?.move} onComplete={onComplete} disabled={busy} />;
-  const storePath = asset?.store_path ?? null;
-  const canvasLibraryAvailable = canvasLibraryCheck?.menu === menu && canvasLibraryCheck.available;
-  const canChangeLibraryVisibility = !!asset?.store_path && CANVAS_IMAGE_EXTS.includes((asset.ext ?? "").toLowerCase());
-  // 仅生成图显示「复用生成提示词」：generation_session_id 非 null 即任意 provider 的生成图。
-  const isGenerated = !audio && !text && !!asset?.generation_session_id;
-  // 「图片标注」可用：本地有文件且为浏览器可解码位图（视频 / SVG / TIFF 不可标注）。
-  const annotatable =
-    !!storePath && ANNOTATABLE_EXTS.includes((asset?.ext ?? "").toLowerCase());
-  // 反推项置灰：该图正在反推或已排队（runDescribe 内部已去重，置灰仅为给用户明确反馈）。
-  const describing =
-    describingId === assetId ||
-    describeQueue.some((q) => q.assetId === assetId);
-  // 反推引擎选项（右键二级菜单）：门控与 DescribeProviderPicker 一致，但不按账号档位自动路由——
-  // Pro 未就绪 codex 仍可显式选 Cloud；reason 为空即该引擎当前可用。
-  const describeEngines: DescribeEngineOption[] = [
-    {
-      key: "bowerbird-cloud",
-      label: "Bowerbird Cloud",
-      reason: understandEngineUsable({ cloudAuth, cloudEntitlement, codexHealth }, "bowerbird-cloud")
-        ? null
-        : !cloudAvailable
-          ? "当前版本未配置 Bowerbird Cloud"
-          : !cloudAuth?.logged_in
-            ? "请先登录 Bowerbird 账号"
-            : "积分不足",
-    },
-    {
-      key: "codex",
-      label: "本机 codex",
-      reason: understandEngineUsable({ cloudAuth, cloudEntitlement, codexHealth }, "codex")
-        ? null
-        : !canUseByo(cloudEntitlement)
-          ? "升级 Pro 解锁本机 codex"
-          : codexHealth?.reason || "codex 不可用",
-    },
-  ];
+  const onComplete = file?.onComplete ?? (!canvas && multiIds ? host.selectionComplete : undefined);
+  const deletionTargets = canvas?.deletionTargets;
+  const removeFromCanvas = canvasMulti ? canvas?.removeSelectionFromCanvas : deletionTargets?.item.removeFromCanvas;
+  const menuMode = menu.moveIncompleteSelection ? "incomplete" : multiIds ? "multi" : "single";
+  const describeAccess = { cloudAuth, cloudEntitlement, codexHealth };
+  const group = groupCheck?.menu === menu && groupCheck.projectId === activeProjectId ? groupCheck : undefined;
+  const groupIds = group?.ids;
+  const generationCheck = !canvas && !!asset?.generation_session_id
+    ? !group ? "checking" : groupIds == null ? "failed" : groupIds.length <= 1 ? "unavailable" : undefined
+    : undefined;
+  const model = buildAssetContextMenu({
+    mode: menuMode, asset, targets,
+    selectedCount: canvasMulti ? canvas.nodeIds.length : entries?.count ?? multiIds?.length ?? 1,
+    busy, manage: mode === "manage", embedded, hasDetail: host.detailAssetId !== null,
+    canSearchPinterest: canSearchPinterest(asset), hasProject: !!projectId, hasMembershipProject: !!membershipProjectId,
+    canAddToProject: hasProjects, libraryProject: !!menu.libraryProjectId,
+    canvasLibraryStatus: canvasLibraryCheck?.menu === menu ? canvasLibraryCheck.status : "checking",
+    generationCount: groupIds?.length ?? 0, generationCheck, hasGenerationGroup: !!menu.generationGroup, canvasImagesPending,
+    canvas: canvas && { nodeCount: canvas.nodeIds.length, canRemove: !!removeFromCanvas, itemTarget: !!deletionTargets?.item,
+      groupCount: deletionTargets?.group?.count, canUngroup: !!menu.ungroupCanvasFolder,
+      generationActions: canvas.generationActions && { pin: !!canvas.generationActions.pin, revise: !!canvas.generationActions.revise,
+        create: !!canvas.generationActions.create } },
+    file: file && { local: !!file.localPaths, entries: entries && { available: entries.available, canRemoveReferences: !!entries.removeReferences } },
+    describe: { queued: describingId === assetId || describeQueue.some(item => item.assetId === assetId),
+      cloudUsable: understandEngineUsable(describeAccess, "bowerbird-cloud"), cloudAvailable: cloudAuth?.cloud_available ?? false,
+      loggedIn: !!cloudAuth?.logged_in, codexUsable: understandEngineUsable(describeAccess, "codex"),
+      canUseByo: canUseByo(cloudEntitlement), codexReason: codexHealth?.reason },
+  });
 
-  async function reveal() {
-    setBusy(true);
-    try {
-      await api.revealAssetFolder(assetId);
-      notifySuccess("已打开素材所在文件夹");
-      closeContextMenu();
-    } catch (e) {
-      notifyError(e, "无法打开所在文件夹");
-      setBusy(false);
+  const feedback = { onClose: close, onComplete, isCurrent, setBusy: (value: boolean) => { if (isCurrent()) setMenuBusy(value); } };
+  const storePath = asset?.store_path;
+  const external = asset?.source === "external";
+  const rename = () => {
+    if (entries) {
+      close();
+      entries.rename();
+      return;
     }
-  }
-
-  /** 图片位图复制到系统剪贴板（可粘贴到聊天 / 编辑等应用）。data URL 同源不污染画布，
-   *  canvas 统一转 PNG——ClipboardItem 仅稳定支持 image/png（动图取首帧）。 */
-  async function copyImage() {
-    if (!storePath) return;
-    setBusy(true);
+    const localPath = file?.localPaths?.[assetId];
+    const name = localPath ? localPath.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "") : asset?.name ?? "";
+    setRenameTarget({ id: assetId, name, external: !localPath && external, localPath });
+    close();
+  };
+  const confirmDelete = (ids: string[]) => {
+    setPendingCanvasDelete({ assetIds: [...new Set(ids)], projectId, localPaths: file?.localPaths, onComplete });
+    close();
+  };
+  const removeFromProject = (ids: string[], removeCellImages?: () => void) => {
+    void removeAssetsFromProject(membershipProjectId, ids, feedback, canvas && { ...canvas, removeCellImages });
+  };
+  const describe = (engine: "bowerbird-cloud" | "codex") => {
+    enqueueDescribeWithEngine(targetIds, engine, () => {
+      if (multiIds && !file && !canvas) useStore.getState().exitManage();
+      file?.onComplete?.();
+      close();
+    });
+  };
+  const openMedia = async (openTranscript: boolean) => {
+    if (!asset || !storePath || busy || entries?.available === false || !isCurrent()) return;
+    const routeRevision = useStore.getState().projectRouteRevision;
+    const isCurrentPreview = () => isCurrent() && useStore.getState().projectRouteRevision === routeRevision;
+    setMenuBusy(true);
     try {
-      const url = await api.readImageDataUrl(storePath);
-      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const el = new Image();
-        el.onload = () => resolve(el);
-        el.onerror = () => reject(new Error("图片解码失败"));
-        el.src = url;
-      });
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      canvas.getContext("2d")?.drawImage(img, 0, 0);
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-      if (!blob) throw new Error("图片转换 PNG 失败");
-      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-      notifySuccess("图片已复制到剪贴板");
-      closeContextMenu();
-    } catch (e) {
-      notifyError(e, "复制图片失败");
-      setBusy(false);
-    }
-  }
-
-  async function reuseGeneration() {
-    const intentId = ++reuseIntentRef.current;
-    const route = useStore.getState();
-    const expectedProjectId = route.activeProjectId;
-    const expectedRouteRevision = route.projectRouteRevision;
-    const isCurrentIntent = () => {
-      const current = useStore.getState();
-      return intentId === reuseIntentRef.current
-        && isCurrentMenu()
-        && isWorkspaceOperationCurrent(
-          expectedProjectId,
-          current.activeProjectId,
-          current.projectRoutePending,
-          expectedRouteRevision,
-          current.projectRouteRevision,
-        );
-    };
-    if (!isCurrentIntent()) return;
-    setBusy(true);
-    try {
-      // 生成来源属于中心素材，而不是素材当前出现的项目。画板节点可以引用尚未写入
-      // project_assets 的恢复/迁移结果；按当前项目过滤会把真实 generation_meta 筛空。
-      const hist = await api.generationHistory(assetId, null);
-      if (!isCurrentIntent()) {
-        if (isCurrentMenu()) setBusy(false);
-        return;
-      }
-      // 优先未铺开的原始编辑框文本（维度 chip，不展开 body）；旧 meta 无 prompt_raw → 回退铺开 prompt。
-      const prompt = hist.turns[0]?.prompt_raw ?? hist.turns[0]?.prompt ?? "";
-      if (!prompt) {
-        notifyError(null, "该生成图没有可复用的提示词记录");
-        setBusy(false);
-        return;
-      }
-      // 复用首轮 prompt + 首版参考图 + 借用维度源图（车牌 sidecar，与 GenerationPanel 一致）
-      // → 打开创作板载入。
-      if (selection?.onReusePrompt) { selection.onReusePrompt(prompt); closeContextMenu(); return; }
-      selection?.onNavigate?.();
-      reusePromptToBoard(prompt, hist.references, hist.dimension_assets, undefined, { media: hist.media, videoOptions: hist.video_options, ratio: hist.ratio, videoChannel: hist.provider?.startsWith("bowerbird-cloud") ? "cloud" : "jimeng" }, expectedProjectId && hist.turns[0]?.project_id === expectedProjectId ? hist.references.map(asset => hist.turns[0]?.reference_node_ids?.[hist.turns[0]?.references?.indexOf(asset.store_path ?? "") ?? -1] ?? null) : undefined);
-      notifySuccess("生成提示词已载入创作板");
-      closeContextMenu();
-    } catch (e) {
-      if (!isCurrentIntent()) {
-        if (isCurrentMenu()) setBusy(false);
-        return;
-      }
-      notifyError(e, "读取生成提示词失败");
-      setBusy(false);
-    }
-  }
-
-  async function setLibraryVisibility(visible: boolean) {
-    const projectId = visible ? menu?.canvasSelection?.projectId : menu?.libraryProjectId;
-    if (!projectId) return;
-    setBusy(true);
-    try {
-      if (visible && asset?.source === "external") await externalFiles.copy(assetId);
-      else await api.setCanvasAssetLibraryVisibility(projectId, assetId, visible);
-      if (isCurrentMenu()) onComplete?.();
-      notifySuccess(visible ? "已加入素材库" : "已从素材库移除，画布图片已保留");
-      if (isCurrentMenu()) closeContextMenu();
-      void reloadProjects();
+      const path = isAudioAsset(asset) ? storePath : await externalFiles.media(storePath);
+      if (!isCurrentPreview()) return;
+      setMediaPreview({ asset, path, projectId: membershipProjectId, openTranscript });
+      close();
     } catch (error) {
-      notifyError(error, "调整素材库归属失败");
-      if (isCurrentMenu()) setBusy(false);
+      if (isCurrentPreview()) notifyError(error, isAudioAsset(asset) ? "无法打开音频预览" : "无法打开视频预览");
+    } finally {
+      if (isCurrent()) setMenuBusy(false);
     }
-  }
+  };
 
-  /** 反推二级菜单选定引擎后直接入队（单图 / 多选批量同链路，批量与选择浮层一致退出管理态）。 */
-  function runDescribeWith(engine: DescribeEngineOption["key"]) {
-    if (!allImages) return;
-    const instruction = loadDescribePrompt();
-    const st = useStore.getState();
-    if (multiIds) {
-      for (const id of multiIds) st.runDescribe(id, instruction, engine);
-      if (!menu?.fileSelection && !menu?.canvasSelection) st.exitManage();
-    } else {
-      st.runDescribe(assetId, instruction, engine);
+  const onSelect = (action: AssetMenuAction) => {
+    const store = useStore.getState();
+    const item = deletionTargets?.item;
+    const group = deletionTargets?.group;
+    switch (action) {
+      case "move-incomplete": menu.moveIncompleteSelection?.(); close(); break;
+      case "add-to-chat": host.navigate(); store.addAssetToBoardFromDetail(assetId); close(); break;
+      case "open-detail": if (asset && isAudioAsset(asset)) void openMedia(false); else host.openDetail(menu); break;
+      case "open-transcript": void openMedia(true); break;
+      case "edit": host.navigate(); store.openAnnotator(assetId); close(); break;
+      case "pinterest": host.searchPinterest(assetId); break;
+      case "select": host.select(menu); break;
+      case "rename": rename(); break;
+      case "describe-cloud": describe("bowerbird-cloud"); break;
+      case "describe-codex": describe("codex"); break;
+      case "dimensions": host.peek(menu); break;
+      case "artboard": host.createArtboard(menu); break;
+      case "reuse": {
+        const request = ++reuseIntent.current;
+        void reuseGenerationPrompt(assetId, { ...feedback, isLatest: () => reuseIntent.current === request,
+          navigate: host.navigate, reuseEmbeddedPrompt: host.reusePrompt });
+        break;
+      }
+      case "edit-draft":
+        host.navigate();
+        store.openDraftEditor({ assetId, projectId, canvasNodeId: canvas?.primaryNodeId ?? (canvas?.nodeIds.length === 1 ? canvas.nodeIds[0] : undefined) });
+        close();
+        break;
+      case "layers": host.navigate(); store.openLayerEditor(assetId); break;
+      case "history": close(); host.navigate(); void store.viewGenerationHistory(assetId); break;
+      case "assign": setAssignCollectionIds({ ids: targetIds, onComplete }); close(); break;
+      case "project-picker": setProjectPickIds({ ids: targetIds, onComplete }); close(); break;
+      case "reveal": void revealAssetFolder(assetId, feedback); break;
+      case "open-system": if (storePath) void openAssetWithSystem(storePath, feedback); break;
+      case "copy-image": if (storePath) void copyImageToClipboard(storePath, feedback); break;
+      case "copy-path": if (storePath) void copyAssetFilePath(storePath, feedback); break;
+      case "references": host.openReferences(menu); break;
+      case "show-in-library": void setAssetLibraryVisibility(canvas?.projectId, assetId, true, external, feedback); break;
+      case "hide-in-library": void setAssetLibraryVisibility(menu.libraryProjectId, assetId, false, external, feedback); break;
+      case "remove-references": close(); entries?.removeReferences?.(); break;
+      case "remove-from-canvas": removeFromCanvas?.(); close(); break;
+      case "ungroup": close(); menu.ungroupCanvasFolder?.(); break;
+      case "pin-generation-card": close(); canvas?.generationActions?.pin?.(); break;
+      case "continue-image-generation": close(); canvas?.generationActions?.revise?.(); break;
+      case "create-image-generation-card": close(); canvas?.generationActions?.create?.(); break;
+      case "remove-from-project": removeFromProject(targetIds); break;
+      case "delete-originals": confirmDelete(targetIds); break;
+      case "delete-generation": if (groupIds) confirmDelete(groupIds); break;
+      case "remove-canvas-item-from-project": if (item) removeFromProject(item.assetIds, item.removeFromCanvas); break;
+      case "delete-canvas-item": if (item) confirmDelete(item.assetIds); break;
+      case "remove-canvas-group": group?.removeFromCanvas(); close(); break;
+      case "remove-canvas-group-from-project": if (group) removeFromProject(group.assetIds, group.removeFromCanvas); break;
+      case "delete-canvas-group": if (group) confirmDelete(group.assetIds); break;
     }
-    menu?.fileSelection?.onComplete?.();
-    closeContextMenu();
-  }
+  };
 
-  async function removeFromProject(ids: string[], removeCellImages?: () => void) {
-    if (!membershipProjectId) return;
-    setBusy(true);
-    try {
-      const canvas = menu?.canvasSelection;
-      await canvas?.prepareProjectRemoval?.(ids);
-      await api.removeAssetsFromProject(membershipProjectId, ids, !!canvas);
-      if (canvas && !canvas.nodeIds.length && useStore.getState().activeProjectId === canvas.projectId) removeCellImages?.();
-      await reloadProjects();
-      notifySuccess("素材已移出当前项目");
-      if (isCurrentMenu()) onComplete?.();
-      closeContextMenu();
-    } catch (e) {
-      notifyError(e, "移出项目失败");
-      setBusy(false);
-    }
-  }
+  const slots = {
+    "canvas-selection": canvas && <CanvasSelectionMenuItems {...canvas} images={menu.addCanvasImagesToBoard} disabled={busy}
+      className="app-context-item px-2 py-1.5" onClose={close} />,
+    "generation-group": <GenerationGroupMenuItem target={menu.generationGroup} disabled={busy} onComplete={close} />,
+    "merge-generation-group": <MergeGenerationGroupMenuItem assetIds={targetIds} nodeIds={canvas?.nodeIds} projectId={projectId}
+      disabled={busy || !!canvasImagesPending} title={canvasImagesPending}
+      onComplete={() => { close(); onComplete?.(); }} />,
+    transfers: <AssetTransferMenuItems assetIds={targetIds} sourceProjectId={canvas?.projectId ?? menu.libraryProjectId ?? null}
+      dialogs={transfer} onClose={close} onMoveFolder={entries?.move} onComplete={onComplete} disabled={busy} />,
+  };
 
-  const itemClass = "app-context-item px-2 py-1.5";
-  function confirmDelete(ids: string[]) {
-    setPendingCanvasDelete({ assetIds: [...new Set(ids)], projectId, localPaths: menu!.fileSelection?.localPaths, onComplete });
-    closeContextMenu();
-  }
-  const describeMenu = <ContextSubmenu label={multiIds ? "批量反推" : "反推提示词"} menuLabel="选择反推引擎" icon={<ScanSearch size={13} />}
-    disabled={busy || (!multiIds && describing)} title={describing && !multiIds ? "这张图片正在反推或已排队" : undefined}>
-    {describeEngines.map(engine => <button key={engine.key} type="button" role="menuitem" className={itemClass}
-      disabled={busy || engine.reason !== null} title={engine.reason ? userErrorMessage(engine.reason, "此方式暂不可用，请在设置中重新登录。") : `用 ${engine.label} 反推`} onClick={() => runDescribeWith(engine.key)}>
-      <span className={`app-status-dot ${engine.reason === null ? "is-ready" : ""}`} aria-hidden="true" />
-      <span>{engine.label}{engine.reason && <small className="context-menu-reason">{userErrorMessage(engine.reason, "此方式暂不可用，请在设置中重新登录。")}</small>}</span>
-    </button>)}
-  </ContextSubmenu>;
-  const canvasActions = menu.canvasSelection && !targets.some(item => item && (isAudioAsset(item) || isTextAsset(item))) && <>
-    {menu.canvasSelection.nodeIds.length > 0 && <CanvasLayerMenuItem {...menu.canvasSelection} disabled={busy} className={itemClass} />}
-    {menu.canvasSelection.nodeIds.length > 1 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
-      window.dispatchEvent(new CustomEvent<CanvasArrangeNodesEventDetail>(CANVAS_ARRANGE_NODES_EVENT, { detail: menu.canvasSelection })); closeContextMenu();
-    }}><LayoutDashboard size={13} />整理</button>}
-    {menu.addCanvasImagesToBoard && menu.addCanvasImagesToBoard.count > 0 && <button role="menuitem" className={itemClass} disabled={busy}
-      onClick={() => { closeContextMenu(); menu.addCanvasImagesToBoard!.run(); }}>
-      {menu.addCanvasImagesToBoard.count > 1 ? `添加所选 ${menu.addCanvasImagesToBoard.count} 张图片到对话框` : "添加到对话框"}
-    </button>}
-  </>;
-  const deletionTargets = menu.canvasSelection?.deletionTargets;
-  function canvasDeleteSubmenu(group: boolean) {
-    const target = group ? deletionTargets?.group : deletionTargets?.item;
-    return <ContextSubmenu label={group ? "删除当前组" : "删除当前项"}
-      icon={group ? <Layers size={13} /> : <Trash2 size={13} />} disabled={busy || !target}>
-      {target && <>
-        <button role="menuitem" className={itemClass} title="素材仍能在项目素材库找到"
-          onClick={() => { target.removeFromCanvas(); closeContextMenu(); }}>移出画布</button>
-        <button role="menuitem" className={itemClass} title="移除后，进入全局素材" disabled={!membershipProjectId}
-          onClick={() => void removeFromProject(target.assetIds, target.removeFromCanvas)}>移出项目</button>
-        <button role="menuitem" className={itemClass + " is-danger"} title="将文件放入回收箱，应用内不可见"
-          onClick={() => confirmDelete(target.assetIds)}>删除原文件…</button>
-      </>}
-    </ContextSubmenu>;
-  }
-  const deleteMenu = menu.canvasSelection ? <>
-    {menu.ungroupCanvasFolder && !canvasMulti && <button role="menuitem" className={itemClass} onClick={() => { closeContextMenu(); menu.ungroupCanvasFolder!(); }}><Ungroup size={13} />解散素材组</button>}
-    {canvasDeleteSubmenu(false)}
-    {canvasDeleteSubmenu(true)}
-  </> : <DeleteSubmenu disabled={busy}>
-    {connectionEntries?.removeReferences && <button role="menuitem" className={itemClass} onClick={() => { closeContextMenu(); connectionEntries.removeReferences!(); }}>{selectedCount > 1 ? "删除所选分身" : "删除此分身"}</button>}
-    {!multiIds && menu.libraryProjectId && canChangeLibraryVisibility && !asset?.library_hidden && <button role="menuitem" className={itemClass}
-      disabled={!canvasLibraryAvailable} title={canvasLibraryAvailable ? "从中央和各项目素材库列表移除，保留所有画布中的图片及原文件" : "请先将图片拖到当前画布"}
-      onClick={() => void setLibraryVisibility(false)}>从库中删除 · 在画布保留</button>}
-    {membershipProjectId && targetIds.length > 0 && <button role="menuitem" className={itemClass} title="仅移出当前项目 · 原文件保留" onClick={() => void removeFromProject(targetIds)}>移出当前项目</button>}
-    {targetIds.length > 0 && <button role="menuitem" className={itemClass + " is-danger"} onClick={() => confirmDelete(targetIds)}>
-      删除原文件…
-    </button>}
-    {!multiIds && groupIds && groupIds.length > 1 && <button role="menuitem" className={itemClass + " is-danger"}
-      title="将这组生成图的原文件放入回收站" onClick={() => confirmDelete(groupIds)}>删除整组原文件 · {groupIds.length} 张</button>}
-  </DeleteSubmenu>;
-  function assign() { setAssignCollectionIds({ ids: targetIds, onComplete }); closeContextMenu(); }
-  if (multiIds) return <ContextMenu key={`${assetId}:${menu.x}:${menu.y}:multi`} x={menu.x} y={menu.y} label={`已选 ${selectedCount} 项素材的操作`}
-    onClose={closeContextMenu} className="asset-context-menu is-multi">
-    <div className="asset-context-column">
-      <div className="app-context-label">已选 {selectedCount} 项</div>
-      {canvasActions}
-      {allImages && <MergeGenerationGroupMenuItem assetIds={targetIds} nodeIds={menu.canvasSelection?.nodeIds} projectId={projectId} disabled={busy} onComplete={() => { closeContextMenu(); onComplete?.(); }} />}
-      {canSearchPinterest(asset) && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); selection?.onNavigate?.(); requestPinterestSearch(assetId); }}>Pinterest 以图搜图</button>}
-      {targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到文件夹</button>}
-      {transfers}
-      {!projectId && projects.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { setProjectPickIds({ ids: targetIds, onComplete }); closeContextMenu(); }}><FolderTree size={13} />加入项目</button>}
-      {allImages && <><div className="app-context-divider" />{describeMenu}</>}
-      <div className="app-context-divider" />{deleteMenu}
-    </div>
-  </ContextMenu>;
-
-  return <ContextMenu key={`${assetId}:${menu.x}:${menu.y}`} x={menu.x} y={menu.y} label="素材操作" onClose={closeContextMenu} className="asset-context-menu" contentClassName="asset-context-columns">
-    <div className="asset-context-column">
-      <div className="app-context-label">常用</div>
-      {canvasActions}
-      <GenerationGroupMenuItem target={menu.generationGroup} onComplete={closeContextMenu} disabled={busy} />
-      {!audio && !text && mode === "browse" && detailAssetId !== null && <button role="menuitem" className={itemClass} disabled={busy}
-        onClick={() => { selection?.onNavigate?.(); addAssetToBoardFromDetail(assetId); closeContextMenu(); }}>添加到对话框</button>}
-      <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection && !selection) useStore.setState({ mode: "browse" }); openDetail(assetId); }}>{text ? "打开文本编辑器" : audio ? "打开音频详情" : isVideoPath(storePath) ? "打开视频详情" : "打开图片详情"}</button>
-      {canSearchPinterest(asset) && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); selection?.onNavigate?.(); requestPinterestSearch(assetId); }}>Pinterest 以图搜图</button>}
-      {!menu.canvasSelection && (!selection || menu.fileSelection) && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
-        if (menu.fileSelection) menu.fileSelection.select(); else { if (mode !== "manage") enterManage(); toggleSelect(assetId); } closeContextMenu();
-      }}>{menu.fileSelection ? "选择" : mode === "manage" ? "选择/取消选择" : "选择"}</button>}
-      {storePath && <button role="menuitem" className={itemClass} disabled={busy || connectionEntries?.available === false} title={connectionEntries ? "重命名当前文件或分身" : menu.fileSelection?.localPaths ? "重命名本机文件" : asset?.source === "external" ? "修改引用名称，原文件名保留" : "重命名（同步改磁盘文件名）"}
-        onClick={() => { if (connectionEntries) { closeContextMenu(); connectionEntries.rename(); return; } const localPath = menu.fileSelection?.localPaths?.[assetId]; setRenameTarget({ id: assetId, name: localPath ? localPath.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "") : asset?.name ?? "", external: !localPath && asset?.source === "external", localPath }); closeContextMenu(); }}>重命名</button>}
-      {(allImages || isGenerated) && <><div className="app-context-divider" /><div className="app-context-label">再创作</div></>}
-      {allImages && describeMenu}
-      {allImages && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
-        const nodeId = menu.canvasSelection?.nodeIds[0];
-        const anchor = nodeId ? document.querySelector<HTMLElement>(`[data-canvas-node-id="${CSS.escape(nodeId)}"]`) : null;
-        closeContextMenu();
-        window.dispatchEvent(new CustomEvent("bowerbird://board-asset-peek", { detail: { assetId, anchor, point: { x: menu.x, y: menu.y } } }));
-      }}><Scan size={13} />维度</button>}
-      {menu.canvasSelection && menu.canvasSelection.nodeIds.length > 0 && canChangeLibraryVisibility && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
-        window.dispatchEvent(new CustomEvent(CANVAS_ARTBOARD_FROM_IMAGE, { detail: { ...menu.canvasSelection, assetId } })); closeContextMenu();
-      }}><LayoutDashboard size={13} />以此图新建画板</button>}
-      {isGenerated && <button role="menuitem" data-tour="ctx-reuse-gen" className={itemClass} disabled={busy} onClick={reuseGeneration}><ClipboardCopy size={13} />复用生成提示词</button>}
-      {annotatable && <>
-        <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { selection?.onNavigate?.(); useStore.getState().openDraftEditor({ assetId, projectId, canvasNodeId: menu.canvasSelection?.primaryNodeId ?? (menu.canvasSelection?.nodeIds.length === 1 ? menu.canvasSelection.nodeIds[0] : undefined) }); }}><PenTool size={13} />编辑草稿</button>
-        <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { selection?.onNavigate?.(); openAnnotator(assetId); closeContextMenu(); }}><PenTool size={13} />图片标注</button>
-        <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { selection?.onNavigate?.(); useStore.getState().openLayerEditor(assetId); }}><Layers size={13} />分层编辑</button>
-      </>}
-      {isGenerated && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); selection?.onNavigate?.(); void viewGenerationHistory(assetId); }}><MessageSquare size={13} />回看所属创作</button>}
-    </div>
-    <div className="asset-context-column">
-      <div className="app-context-label">文件</div>
-      <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到文件夹</button>
-      {transfers}
-      {storePath && <>
-        <button role="menuitem" className={itemClass} disabled={busy} onClick={reveal}>打开所在文件夹</button>
-        <button role="menuitem" className={itemClass} disabled={busy} onClick={async () => { setBusy(true); try { await api.openWithSystem(storePath); notifySuccess("已用系统程序打开素材"); closeContextMenu(); } catch (e) { notifyError(e, "无法用系统程序打开素材"); setBusy(false); } }}>用系统程序打开</button>
-        {annotatable && <button role="menuitem" className={itemClass} disabled={busy} onClick={copyImage}>复制图片</button>}
-        <button role="menuitem" className={itemClass} disabled={busy} onClick={async () => { setBusy(true); try { await navigator.clipboard.writeText(storePath); notifySuccess("文件路径已复制"); closeContextMenu(); } catch (e) { notifyError(e, "复制文件路径失败"); setBusy(false); } }}>复制文件路径</button>
-      </>}
-      {asset?.source === "external" && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection) menu.fileSelection.openReferences(); else { selection?.onNavigate?.(); window.dispatchEvent(new Event(OPEN_LOCAL_FILES)); } }}>管理外部引用 · 原文件保留</button>}
-      {menu.canvasSelection && asset?.library_hidden && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => void setLibraryVisibility(true)}>加入素材库</button>}
-      <div className="app-context-divider" />{deleteMenu}
-    </div>
+  const single = menuMode === "single";
+  const incomplete = menuMode === "incomplete";
+  const sections = (column: typeof model.columns[number]) => column.map(({ heading, items }, index) =>
+    <AssetMenuSection key={index} heading={heading} divide={index > 0 && !!heading}>
+      <ContextMenuItems items={items} icons={ICONS} slots={slots} onSelect={onSelect} />
+    </AssetMenuSection>);
+  return <ContextMenu key={incomplete ? undefined : `${assetId}:${menu.x}:${menu.y}${single ? "" : ":multi"}`}
+    x={menu.x} y={menu.y} label={model.label} onClose={close}
+    className={incomplete ? undefined : single ? "asset-context-menu" : "asset-context-menu is-multi"}
+    contentClassName={single ? "asset-context-columns" : undefined}>
+    {incomplete ? sections(model.columns[0]) : model.columns.map((column, index) =>
+      <div className="asset-context-column" key={index}>{sections(column)}</div>)}
   </ContextMenu>;
 }
 
-/** 多选右键「加入项目」小面板：勾选（可多选）目标项目后批量加入；
- *  全部失败留在面板反馈，至少一个成功才退出管理。 */
-function BatchAddToProjectsDialog({ ids, onClose, onComplete }: SelectionOperation & { onClose: () => void }) {
-  const projects = useStore((s) => s.projects);
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
-
-  function toggle(id: string) {
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  async function submit() {
-    if (checked.size === 0 || busy) return;
-    setBusy(true);
-    let failed = 0;
-    for (const projectId of checked) {
-      try {
-        await api.addAssetsToProject(projectId, ids);
-      } catch (e) {
-        failed += 1;
-        console.error("add to project failed", e);
-      }
-    }
-    await useStore.getState().reloadProjects();
-    if (failed === checked.size) {
-      notifyError(null, "加入项目失败");
-      setBusy(false);
-      return;
-    }
-    if (failed === 0) onComplete?.();
-    if (failed > 0) notifyError(null, `${failed} 个项目加入失败`);
-    notifySuccess(`素材已加入 ${checked.size - failed} 个项目`);
-    useStore.getState().exitManage();
-    onClose();
-  }
-
-  return (
-    <ModalShell
-      title="加入项目"
-      eyebrow="Add to projects"
-      description={`勾选要放入所选 ${ids.length} 项素材的项目（可多选）。`}
-      onClose={onClose}
-      preventClose={busy}
-      footer={
-        <>
-          <button onClick={onClose} disabled={busy} className="app-modal-button">
-            取消
-          </button>
-          <button
-            onClick={() => void submit()}
-            disabled={checked.size === 0 || busy}
-            className="app-modal-button is-primary"
-          >
-            {busy && <span className="app-spinner" aria-hidden />}
-            {busy ? "加入中…" : checked.size > 0 ? `加入所选 ${checked.size} 个项目` : "加入项目"}
-          </button>
-        </>
-      }
-    >
-      <div className="max-h-64 space-y-1 overflow-y-auto">
-        {projects.map((p) => (
-          <label
-            key={p.id}
-            className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm ${busy ? "" : "cursor-pointer hover:bg-edge"}`}
-          >
-            <input
-              type="checkbox"
-              checked={checked.has(p.id)}
-              disabled={busy}
-              onChange={() => toggle(p.id)}
-              className="size-4"
-            />
-            <span className="min-w-0 flex-1 truncate" title={p.name}>{p.name}</span>
-          </label>
-        ))}
-        {projects.length === 0 && (
-          <p className="px-2.5 py-4 text-center text-xs text-muted">还没有项目</p>
-        )}
-      </div>
-    </ModalShell>
-  );
+function AssetMenuSection({ heading, divide, children }: { heading: string; divide: boolean; children: React.ReactNode }) {
+  return <>
+    {divide && <div className="app-context-divider" />}
+    {heading && <div className="app-context-label">{heading}</div>}
+    {children}
+  </>;
 }

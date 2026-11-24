@@ -39,11 +39,22 @@ fn image_card_gallery_survives_prompt_optimizer() {
       INSERT INTO canvas_nodes(id,project_id,thread_id,kind,asset_id,role,payload_json,x,y,width,height,created_at,updated_at)
       SELECT 'gen-output:b',project_id,thread_id,kind,'b',role,'{"execution":{"job_id":"third","turn_key":"three"}}',x,y,width,height,3,3
       FROM canvas_nodes WHERE id='gen-output:a';
+      INSERT INTO cloud_agent_runs(run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,created_at,updated_at) VALUES
+       ('manual-optimize','manual','h3-image-prompt','succeeded','','[]','p','{}',1,1),
+       ('auto-optimize','auto','h3-image-prompt','succeeded','','[]','p','{}',2,2);
+      INSERT INTO canvas_nodes(id,project_id,thread_id,kind,asset_id,role,payload_json,x,y,width,height,created_at,updated_at) VALUES
+       ('agent-artifact:manual','p','t','asset','plain','final','{"execution":{"run_id":"manual-optimize"}}',0,0,100,100,4,4),
+       ('agent-artifact:auto','p','t','asset','plain2','final','{"execution":{"run_id":"auto-optimize"}}',0,0,100,100,5,5),
+       ('workflow-comfy:video','p','t','asset','video','output','{"workflow_source":"animate"}',0,0,100,100,6,6);
     "#).unwrap();
     let history=serde_json::json!({"schema_version":1,"runs":[
         {"steps":{"draw":{"jobId":"first"}}},
-        {"steps":{"draw":{"agentRunId":"optimize","comfyOptimization":{"original":"draft"}}}},
-        {"steps":{"draw":{"jobId":"second"},"another":{"jobId":"third"}}}
+        {"steps":{"draw":{"agentRunId":"manual-optimize","comfyOptimization":{"original":"draft"}}}},
+        {"steps":{
+            "draw":{"jobId":"second","agentRunId":"auto-optimize","comfyOptimization":{"result":"refined"},"comfyAutoGeneration":{"imageInput":{"assetIds":[],"referenceNodeIds":[]}}},
+            "another":{"jobId":"third"},
+            "animate":{"jobId":"video","comfyOptimization":{"result":"refined"},"comfyAutoGeneration":{"input":{"prompt":"draft"}}}
+        }}
     ]});
     conn.execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p',1,?1)",[history.to_string()]).unwrap();
     drop(conn);
@@ -55,6 +66,11 @@ fn image_card_gallery_survives_prompt_optimizer() {
     assert_eq!(group("gen-output:a"),group("gen-output:c"));
     assert_eq!(group("gen-output:a"),group("gen-prompt:second"));
     assert_ne!(group("gen-output:a"),group("gen-output:b"));
+    assert_eq!(group("agent-artifact:manual"),"generation:manual");
+    assert_eq!(group("agent-artifact:auto"),"generation:auto");
+    assert_eq!(group("workflow-comfy:video"),r#"workflow:["p","animate"]"#);
+    let members=db.list_generation_group("c",None).unwrap();
+    assert_eq!(members.iter().map(|a|a.id.as_str()).collect::<Vec<_>>(),vec!["a","c"]);
 }
 
 #[test]

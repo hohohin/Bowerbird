@@ -198,6 +198,20 @@ try {
       check((transport === 'reuse' ? reuseCalls : agentCalls) - before === 3, `${transport}: completed continuation never repeats`);
     }
 
+    const loopController = new CanvasWorkflowController('trigger-loop'); await loopController.load();
+    const loop = { ...newWorkflowNode('loop', 0, 0, ''), id: 'loop', loopMode: 'images', inputs: { image: [{ assetId: 'a' }, { assetId: 'b' }] } };
+    const reuse = id => ({ ...newWorkflowNode('instruction', 400, 0, ''), id, action: 'reuse' });
+    const body = { ...reuse('body'), inputs: { image: [{ nodeId: loop.id, portId: 'image' }] } };
+    const afterLoop = { ...reuse('after-loop'), inputs: { image: [{ assetId: 'c' }] } };
+    const order = [];
+    api.generationHistory = async id => { order.push(id); return { turns: [{ prompt: '复用提示词' }], references: [] }; };
+    await loopController.edit([loop, body, afterLoop]);
+    const { createdNodeIds: [loopTriggerId] } = await loopController.connectCompletionTrigger(loop.id, afterLoop.id, { x: 200, y: 0 });
+    await loopController.start(loop.id);
+    check(loopController.document.run.status === 'done', `loop completion finishes: ${JSON.stringify(loopController.issue)}`);
+    check(order.join() === 'a,b,c' && loopController.document.nodes.find(node => node.id === loopTriggerId)?.triggerCount === 0,
+      `loop completion fires once after all items: ${order}`);
+
     // Reopen through the UI controller for port and count interaction checks.
     const ui = canvasWorkflowController('p'); ui.document = c.document; ui.revision = c.revision;
     await ui.edit(make(3));

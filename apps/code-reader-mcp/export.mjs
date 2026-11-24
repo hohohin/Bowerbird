@@ -1,12 +1,34 @@
 import { execFileSync } from 'node:child_process';
-import { localReferences, isCoreSource, relatedTests } from './dependencies.mjs';
 import { constants } from 'node:fs';
 import { lstat, realpath, open, mkdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { allowedFile, redact, digest, MAX_FILE_BYTES, MAX_SNAPSHOT_BYTES } from './core.mjs';
+import { allowedFile, safePath, redact, digest, MAX_FILE_BYTES, MAX_SNAPSHOT_BYTES } from './core.mjs';
+import { references, candidates, coreSource, testFile, relatedTest } from './dependencies.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+// Reviewed exceptions may be shared before their implementation is committed.
+export const EXPLICIT_FILES = [
+  'dev-doc/Bowerbird开发计划.md',
+  'macOS/RELEASE-READINESS.md',
+  'apps/agent-worker/src/control-plane/control-transport.ts',
+  'apps/agent-worker/src/control-plane/control-transport.test.ts',
+  'apps/desktop/src/lib/settingsQueue.ts',
+  'apps/desktop/scripts/settings-queue.test.mjs',
+  'apps/cloud/supabase/migrations/0091_agent_model_usage_settlement.sql',
+  'apps/cloud/scripts/agent-model-usage-settlement-db.test.mjs',
+  'apps/cloud/scripts/check-vps-release-health.mjs',
+  'apps/cloud/scripts/ga-local-mixed-capacity.mjs',
+  'apps/cloud/supabase/migrations/0092_file_speech.sql',
+  'apps/cloud/supabase/migrations/0093_file_speech_storage_mime.sql',
+  'apps/cloud/supabase/migrations/0094_chat_daily_limits.sql',
+  'apps/cloud/supabase/migrations/0095_chat_model_usage.sql',
+  'apps/cloud/supabase/migrations/0096_chat_paid_billing.sql',
+  'apps/cloud/supabase/migrations/0098_file_speech_pilot.sql',
+  'apps/cloud/supabase/migrations/0099_file_speech_repeat_test_account.sql',
+  'apps/cloud/scripts/chat-paid-db.fixture.mjs',
+  'apps/cloud/supabase/functions/chat-worker/index_test.ts',
+];
 export async function readSource(root, relative) {
   if (!allowedFile(relative)) throw new Error('Excluded path');
   const canonicalRoot = await realpath(root);
@@ -36,77 +58,104 @@ export async function readSource(root, relative) {
 
 export async function exportSnapshot(root, output) {
   const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, windowsHide: true });
-  const names = [...new Set([...git('ls-files', '-z', '--cached').split('\0').filter(Boolean), 'dev-doc/Bowerbird开发计划.md'])].sort();
-  const untracked = git('ls-files', '-z', '--others', '--exclude-standard').split('\0').filter(Boolean);
-  const allowedUntracked = new Set(untracked.filter(allowedFile));
-  const seeds = new Set(names);
-  const files = new Map();
+  const tracked = git('ls-files', '-z', '--cached').split('\0').filter(Boolean);
+  const testPaths = ['apps', 'website', 'dev-doc', 'Windows', 'macOS'].flatMap(directory => [
+    ...['test', 'tests', 'scripts'].map(folder => `:(glob)${directory}/**/${folder}/**`),
+    ...['*.test.*', '*.spec.*', '*_test.*', '*_tests.*', 'test_*'].map(name => `:(glob)${directory}/**/${name}`),
+  ]);
+  const excludedTrees = ['node_modules', 'target', 'dist', 'build', 'resources', 'binaries', 'fixtures', 'vendor', '.*']
+    .map(directory => `:(glob,exclude)**/${directory}/**`);
+  const untracked = git('ls-files', '-z', '--others', '--exclude-standard', '--', ...testPaths, ...excludedTrees).split('\0').filter(Boolean);
+  const names = [...new Set([...tracked, ...EXPLICIT_FILES])].sort();
+  const queued = new Set(names);
+  const files = [];
+  const included = new Set();
+  const contents = new Map();
   const skipped = [];
+  const coverage = { status: 'checked', analysis: 'Static literal JS/TS imports, Rust module/include paths and related-test heuristics; dynamic paths are not evaluated.',
+    dependencyFiles: [], relatedTestFiles: [], unresolvedCoreDependencies: [], excludedDependencies: [], unresolvedReferences: [] };
   let redactedLines = 0;
   let bytes = 0;
-  const visited = new Set();
-  const pending = [];
-  const coverageCheck = { dependencyFiles: 0, relatedTests: 0, unresolvedReferences: 0 };
-  const issues = [];
-  const candidatesSeen = new Map();
-  const checkCandidate = async name => {
-    if (!candidatesSeen.has(name)) {
-      const exists = await lstat(path.join(root, name)).then(stat => !stat.isDirectory(), error => {
-        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
-        throw error;
-      });
-      candidatesSeen.set(name, exists);
+  async function content(name) {
+    if (!contents.has(name)) contents.set(name, await readSource(root, name));
+    return contents.get(name);
+  }
+  async function dependency(from, reference) {
+    if (reference.kind === 'dynamic') {
+      coverage.unresolvedReferences.push({ from, target: 'dynamic-expression', reason: 'Computed path is not evaluated' });
+      return;
     }
-    return candidatesSeen.get(name);
-  };
-  const enqueue = (name, kind) => {
-    if (visited.has(name)) return;
-    visited.add(name);
-    pending.push({ name, kind });
-  };
-  const scan = async () => {
-    for (let cursor = 0; cursor < pending.length; cursor++) {
-      const { name, kind } = pending[cursor];
+    const choices = candidates(from, reference);
+    let target;
+    for (const choice of choices) {
+      if (!safePath(choice)) continue;
+      try {
+        const entry = await lstat(path.join(root, choice));
+        if (entry.isFile() || entry.isSymbolicLink()) { target = choice; break; }
+      } catch { /* Missing extension alternatives are normal. */ }
+    }
+    if (!target) {
+      coverage.unresolvedReferences.push({ from, target: choices.find(choice => safePath(choice)) ?? 'outside-project', reason: 'No literal local file resolved' });
+      return;
+    }
+    if (included.has(target)) return;
+    let reason;
+    if (!allowedFile(target)) reason = 'policy';
+    else {
+      try { await content(target); }
+      catch { reason = 'unavailable, linked, binary or oversized'; }
+    }
+    if (reason) {
+      const gap = { from, target, reason };
+      // Fixtures, dependencies and generated trees remain intentional exclusions.
+      const intentional = /\/(?:fixtures|node_modules|target|dist|build|resources|binaries)\//.test('/' + target) ||
+        /\/(?:before-preview|frozen-preview)\/assets\//.test(target);
+      if (coreSource(target) && !intentional) coverage.unresolvedCoreDependencies.push(gap);
+      else coverage.excludedDependencies.push(gap);
+      return;
+    }
+    if (!queued.has(target)) {
+      queued.add(target);
+      names.push(target);
+      coverage.dependencyFiles.push(target);
+    }
+  }
+  const possibleTests = [...new Set([...tracked, ...untracked])].filter(file => allowedFile(file) && testFile(file));
+  let cursor = 0;
+  while (true) {
+    while (cursor < names.length) {
+      const name = names[cursor++];
       if (!allowedFile(name)) { skipped.push({ path: name, reason: 'policy' }); continue; }
       let source;
-      try { source = await readSource(root, name); }
-      catch {
-        skipped.push({ path: name, reason: 'unavailable, linked, binary or oversized' });
-        continue;
-      }
+      try { source = await content(name); }
+      catch { skipped.push({ path: name, reason: 'unavailable, linked, binary or oversized' }); continue; }
       const filtered = redact(source);
       bytes += Buffer.byteLength(filtered.content);
       redactedLines += filtered.redactedLines;
-      files.set(name, { path: name, content: filtered.content, sha256: digest(filtered.content) });
-      if (kind) coverageCheck[kind]++;
-      if (bytes > MAX_SNAPSHOT_BYTES || files.size > 10000) throw new Error('Snapshot exceeds limit');
-      for (const alternatives of localReferences(name, source)) {
-        const eligible = alternatives.filter(allowedFile);
-        if (!eligible.length) continue;
-        let selected;
-        for (const candidate of eligible) {
-          if (await checkCandidate(candidate)) { selected = candidate; break; }
-        }
-        if (!selected) { coverageCheck.unresolvedReferences++; continue; }
-        if (isCoreSource(name)) issues.push({ source: name, dependency: selected });
-        if (seeds.has(selected) || allowedUntracked.has(selected)) enqueue(selected, 'dependencyFiles');
-        else if (!isCoreSource(name)) coverageCheck.unresolvedReferences++;
-      }
+      files.push({ path: name, content: filtered.content, sha256: digest(filtered.content) });
+      included.add(name);
+      for (const reference of references(name, source)) await dependency(name, reference);
+      if (bytes > MAX_SNAPSHOT_BYTES || files.length > 10000) throw new Error('Snapshot exceeds limit');
     }
-    pending.length = 0;
-  };
-  for (const name of names) enqueue(name);
-  await scan();
-  for (const name of relatedTests(files.keys(), [...allowedUntracked])) enqueue(name, 'relatedTests');
-  await scan();
-  const uncovered = issues.filter(item => !files.has(item.dependency));
-  if (uncovered.length) {
-    const examples = uncovered.slice(0, 5).map(item => `${item.source} → ${item.dependency}`).join(', ');
-    throw new Error(`Snapshot coverage check failed (${uncovered.length} references): ${examples}`);
+    for (const candidate of possibleTests) {
+      if (queued.has(candidate)) continue;
+      try {
+        if (!relatedTest(candidate, await content(candidate), included)) continue;
+        queued.add(candidate);
+        names.push(candidate);
+        coverage.relatedTestFiles.push(candidate);
+      } catch { /* Unreadable tests are not automatically selected. */ }
+    }
+    if (cursor === names.length) break;
   }
-  if (!files.size) throw new Error('No eligible files');
-  const snapshot = { version: 1, createdAt: new Date().toISOString(), revision: git('rev-parse', 'HEAD').trim(),
-    files: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)), coverageCheck };
+  if (!files.length) throw new Error('No eligible files');
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  const snapshot = { version: 1, createdAt: new Date().toISOString(), revision: git('rev-parse', 'HEAD').trim(), coverage, files };
+  const report = { createdAt: snapshot.createdAt, revision: snapshot.revision, exportedFiles: files.length, redactedLines, skipped, coverage };
+  if (coverage.unresolvedCoreDependencies.length) {
+    coverage.status = 'incomplete';
+    throw Object.assign(new Error('Core source dependencies were not exported: ' + JSON.stringify(coverage.unresolvedCoreDependencies)), { report });
+  }
   const serialized = JSON.stringify(snapshot);
   if (Buffer.byteLength(serialized) > MAX_SNAPSHOT_BYTES) throw new Error('Snapshot exceeds serialized limit');
   await mkdir(path.dirname(output), { recursive: true });
@@ -114,13 +163,22 @@ export async function exportSnapshot(root, output) {
   const temporary = `${output}.${process.pid}.tmp`;
   await writeFile(temporary, serialized, { flag: 'wx', mode: 0o600 });
   await rename(temporary, output);
-  const report = { createdAt: snapshot.createdAt, revision: snapshot.revision, exportedFiles: files.size, redactedLines, skipped, coverageCheck };
   return report;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const output = path.join(here, '.local', 'snapshot.json');
-  const report = await exportSnapshot(path.resolve(here, '../..'), output);
-  await writeFile(path.join(here, '.local', 'report.json'), JSON.stringify(report, null, 2), { mode: 0o600 });
-  console.log(JSON.stringify({ exportedFiles: report.exportedFiles, redactedLines: report.redactedLines, skippedFiles: report.skipped.length, snapshot: output }));
+  try {
+    const report = await exportSnapshot(path.resolve(here, '../..'), output);
+    await writeFile(path.join(here, '.local', 'report.json'), JSON.stringify(report, null, 2), { mode: 0o600 });
+    console.log(JSON.stringify({ exportedFiles: report.exportedFiles, redactedLines: report.redactedLines, skippedFiles: report.skipped.length,
+      dependencyFiles: report.coverage.dependencyFiles.length, relatedTests: report.coverage.relatedTestFiles.length, snapshot: output }));
+  } catch (error) {
+    if (error.report) {
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(path.join(here, '.local', 'report.json'), JSON.stringify(error.report, null, 2), { mode: 0o600 });
+    }
+    console.error(error.message);
+    process.exitCode = 1;
+  }
 }

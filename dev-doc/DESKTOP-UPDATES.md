@@ -2,6 +2,137 @@
 
 本页集中维护自动更新的技术约定、发布操作和部署证据；[PROJECT.md](../PROJECT.md) 只保留项目级摘要及入口。更新代码、构建签名包、发布清单、排查双端差异前先读本页。
 
+本地开发与打包见 [Windows](../Windows/README.md) 和 [macOS](../macOS/README.md)。早期 README 中的发版与跨端交接原文保存在 [平台历史记录](../project_logs/2026-11-22-desktop-platform-history.md)。
+
+## Windows 全量放行的手工验收
+
+用备用 Windows 设备或隔离虚拟机。准备专用 Bowerbird 账号、至少 1,000 张图片的脱敏旧库副本、一份已连接文件夹和一个可拔插的测试外盘。旧库至少有一个保存过且含图片与连线的项目画板、一条历史任务，若已有在途任务也记下状态。先备份测试数据并记录旧版号、库和外盘路径、样本素材数、项目及任务标识。验证公开版本可用 26.11.1901 → 26.11.2003，实际全量候选另按其冻结版本复验。
+
+本机发布目录中的 26.11.1901 安装包已核对 SHA-256 与历史发布记录一致。[旧版安装包](../Windows/dist/Bowerbird_26.11.1901_x64-setup.exe)
+
+| 步骤 | 操作 | 通过条件 |
+|---|---|---|
+| 1. 记录旧版基线 | 安装并运行旧版，登录专用账号，打开库、外盘连接和画板，保留历史或已在途的任务标识。 | 样本能预览，画板含已保存内容，账号与任务可查。 |
+| 2. 从应用内更新 | 历史版本沿用设置内的安装入口。验收带直接安装图标的候选版时，等下载圆环切换为蓝色安装图标。在运行本地生成卡片时点击，先取消并确认卡片继续运行，再选择「安装并重启」。另用空闲项目验证直接安装。记录下载开始、安装提示和重启后首屏时间。 | 两个入口均在有本地生成时要求确认，空闲时直接安装。重启后更新卡显示目标版本。 |
+| 3. 验证登录和 SQLite | 首次重启后打开账号面板、历史任务和旧项目，退出应用再正常打开一次。关闭应用后，用 SQLite 打开测试索引目录里的 `library.db` 副本并执行 `PRAGMA user_version;`。装有命令行工具时可运行 `sqlite3 -readonly "测试副本路径\library.db" "PRAGMA user_version;"`。 | 登录和已有会话保持，未提示重新登录。26.11.2003 应返回 60，库与项目可读，无迁移错误。 |
+| 4. 核对库、连接和画板写入 | 核对样本素材数量和路径，预览图片与视频，在测试文件夹导入一张新图；修改一个测试画板、保存并重开。安全弹出测试外盘，再接回并恢复连接。 | 旧素材的记录和路径匹配，新素材可打开，画板改动保留。外盘断开时有明确状态，接回后可浏览原内容，无重复入库或丢项。 |
+| 5. 核对任务和启动表现 | 用原历史任务标识重新查询结果；若有在途任务，观察原任务能否按同一标识恢复，不重复提交。用专用库副本另测文件工作区迁移重启，记录窗口可交互时间及白屏或无响应时长。 | 任务留在原项目，未重复下单。正常重启可交互。迁移若出现持续无响应、白屏、强制退出或数据不一致，保留日志并将该项记为失败。 |
+
+回传每步的通过、失败或未测、旧版号和新版号、Windows 版本、库规模、迁移起止时间及错误截图或日志。测试中的账号、素材和任务标识可脱敏。已有隔离 SQLite 0060、7 项迁移、NSIS 两种语言钩子和清单验签通过，实际应用内更新及大库结果记录于本节。
+
+全量候选包另验 WebView2 的探索和 CSP。打开出现过问题的网站，滚动后分别点击链接、按钮和输入框，再打开及关闭应用弹层，确认遮挡时网页不响应、弹层关闭后恢复。候选包还需验证本机图片、音频、视频、截图窗口、Plate 文档编辑与导出、画板和 Cloud 入口。若点击失效或资源加载失败，记录站点、WebView2 版本、应用版本、发生前的操作和截图。
+
+2026-11-20 已生成桌面 26.11.2003 的 CSP 与转录本地 QA 包，以 `de0e3539` 为基础冻结指定源码。包内可执行文件为 x64，NSIS 安装包 SHA-256 为 `451f296a52f752cc77c1a7a1b6fcb3bb5c55f1182d126f695aab10cff364f309`。此包仅供隔离机手动检验，未签名，版本号与公开包相同。26.11.1901 的应用内更新仍指向公开 26.11.2003，两次验收分别留证。[本地 QA 安装包](../.tmp/ga-windows-qa/Bowerbird_26.11.2003_x64-QA-UNSIGNED-setup.exe)
+
+第二份本地 QA 包增加了共享只读来源的画板连线修复，SHA-256 为 `87ee52bf27eee4b1c30206f2cca0bee387f701567ef73ff1700a993868fe7f6a`。冻结源码的 TypeScript、生产构建和三组工作流界面回归通过。安装包静态核对 x64、SQLite 0060、英语及简中、更新钩子和 81 个资源路径。包仍为未签名的 26.11.2003，供隔离机手动验收。两份 QA 包、历史签名包和各自回执均保留，复用的 Cargo 构建缓存已被重编产物更新。[第二份 QA 安装包](../.tmp/ga-windows-qa-workflow/Bowerbird_26.11.2003_x64-QA-WORKFLOW-UNSIGNED-setup.exe) · [静态验收回执](../.tmp/ga-windows-qa-workflow/candidate-report.json)
+
+2026-11-21 在独立源码和 Cargo 目录生成 Windows 26.11.2100 x64 本地 QA 包。与第二份 QA 逐文件核对，产品源码仅调整 Tauri 版本，另纳入四组回归脚本及共用登录夹具的修改。该冻结源码的 TypeScript、Vite 生产构建、Rust 发布构建和九组 Chromium 模拟 IPC 回归通过。安装器和包内主程序均为 26.11.2100，静态核对 81 个资源路径、简中与英语、`/UPDATE` 钩子、CSP、扩展 0.5.2 及 SQLite 0060。安装包为 108,608,731 字节，SHA-256 为 `ae99c4ff94be4da3933dcf1db8987e23c99f19ded96e0abbe66ff005e2ab0bc5`。[26.11.2100 本地 QA 安装包](../.tmp/ga-win-qa-26.11.2100/Bowerbird_26.11.2100_x64-GA-QA-UNSIGNED-setup.exe) · [静态验收回执](../.tmp/ga-win-qa-26.11.2100/candidate-report.json)
+
+26.11.2100 保留客户端的更新验证公钥，安装器及主程序的 Authenticode 状态均为 `NotSigned`，供隔离机手工安装。旧版应用内更新按上表走仍有签名的公开 26.11.1901 → 26.11.2003。手工安装 26.11.2100 后，执行以下增量验收并单独记录该包的 SHA-256 和结果。
+
+| 操作 | 通过条件 |
+|---|---|
+| 按前述步骤打开探索、媒体预览、截图与 Plate 文档导出。 | WebView2 中正常点击和拖图，遮挡弹层生效，图片／音视频与截图可见，文档可编辑并导出。 |
+| 在当前转录服务关闭的账号下，打开一个新视频，再切换到包含新视频的文件夹或项目。若库已有文稿或原任务，沿用原视频进入文稿页。 | 新视频和相应范围无新增转录入口。已有文稿可查看和按句跳转，既有任务可按原记录取回。 |
+| 在测试画板上把同一图片或结果卡连给第一个下游，再从同一张卡连接第二个空闲下游，保存并重开项目。只需建卡和连线。 | 两条连线同时存在，来源素材引用相同，重开后两条连线和各自下游仍可见。 |
+
+macOS 的双架构回执单独维护。[macOS 全量发布验收](../macOS/RELEASE-READINESS.md)
+
+### Windows 全量候选的自动化回执
+
+在同一冻结候选上保留桌面 TypeScript、Rust、安装包验签与更新网关回执。界面回归取 `apps/desktop/scripts/` 下的 `account-billing-ui`、`explorer-ui`、`canvas-batch-delete-ui`、`canvas-notes-ui`、`canvas-workflow-ui`、`video-preview-panels-ui`、`video-transcript-batch-ui` 现行脚本，使用合成素材和模拟 IPC。对话、充值、Cloud 生图和视频的真实服务结果另按对应专项验收。
+
+2026-11-20 工作树回归中，以上七组及共享来源的统一加号连接和完成触发均通过。额外四组历史脚本也已修复并分别在第二份冻结 QA 源和当前工作树重跑通过。账号夹具补齐 `quick_transfer_status`，验证报错脱敏与浏览器重试。画板草稿等待缩放矩阵提交，核对落点、归属和失败重试。生成进度缩小 Vite 依赖扫描范围并处理冷启动和关停。连线建视频按组图当前显示的素材验证引用身份、撤销和重开。Windows 26.11.2003 原生测试二进制重跑工作流 42 项通过。正式候选及旧版真机升级仍需另行留证。
+
+### Windows 发布者签名与更新验签
+
+11 月 21 日重新核对 26.11.2100 隔离候选。安装器和包内 x64 主程序的版本、架构、SHA-256 与冻结报告一致。SignTool 对两者均报告无签名。在本机当前用户及本地计算机的个人证书库未发现可用的代码签名证书。正式签名需现有发布者签名入口或经确认的其他发布者签名方案。
+
+同日核对免费签名路径。Microsoft Store 会为通过审核的商店 MSIX 免费重签，注册公司开发者可用微软的新免费入口并完成企业验证。商店签名只覆盖商店包。用户确认本轮 Windows 继续用官网 NSIS EXE、自有 updater 和 `/UPDATE` 登录保留，走可信发布者签名。正式签名入口仍待接入。微软列出的公开分发选项包括企业验证 OV 代码签名，私钥由硬件令牌或 HSM 管理，成品同时验 Authenticode 信任链和原 Tauri 更新签名。[微软签名选项](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options) · [中国区 OV 示例](https://www.globalsign.cn/shop/code-signing)
+
+用现行 Tauri CLI 2.11.4、真实 Bowerbird NSIS 模板、Windows SDK SignTool 及两套隔离测试密钥验证顺序。Tauri 写入 NSIS 标记后先签包内主程序，使用本次签名设置处理 NSIS 组件和临时卸载程序，再签最终安装器，最后为最终字节生成 Tauri 更新 `.sig`。解包主程序与签名回执哈希相同。分别篡改安装器和主程序时，Tauri 验签拒绝安装器，Windows Authenticode 将主程序判为 `HashMismatch`。测试使用自签证书且未加公用时间戳。正式构建可用既有 `--config` 注入 `bundle.windows.signCommand`，签名命令须兼容 NSIS 在临时目录生成的卸载程序。既有更新私钥通过受控 `TAURI_SIGNING_PRIVATE_KEY` 提供，可指向签名机的密钥文件，验证通过前不允许上传成品。正式验收须对最终 EXE 及其包内主程序做 `signtool verify /pa /tw` 并核对所选组织发布者及时间戳，再用现有更新公钥核对最终发放字节，最后执行 Windows 手工验收。[Tauri 配置](https://v2.tauri.app/reference/config/#signcommand) · [SignTool 验证](https://learn.microsoft.com/windows/win32/seccrypto/signtool)
+
+发布方确认暂无现成签名资源，用户暂缓 OV 采购。官网 EXE 继续按企业发布者签名准备。2026-11-21 核查到 Certum 标准云签名公开价 €209 起，需确认实际公司主体、核验方式及含税报价。腾讯云现行基础代码签名指南公开价 ¥6,800／年，线下确认。采购、主体核验及实际签名入口尚未办理。[Certum 产品与报价](https://shop.certum.eu/standard-code-signing-in-the-cloud.html) · [腾讯云购买指南](https://cloud.tencent.com/document/product/1369/51170)
+
+公开 26.11.2003 安装包的 Tauri updater 签名已通过原公钥验签。同一字节的安装包在本机复核为 Authenticode `NotSigned`，没有发布者证书或时间戳。仓库当前 Windows 构建配置未指定 `certificateThumbprint` 或 `signCommand`，本机构建环境也未发现可用的代码签名证书。正式候选须由发布团队提供获授权的发布者签名入口、预期发布者身份和时间戳策略。[Windows 签名配置](https://v2.tauri.app/distribute/sign/windows/) · [现有构建入口](../Windows/build.ps1)
+
+在同一冻结源码上，待 Tauri 完成包内主程序的 NSIS 标记等字节调整，再签署主程序并将其装入安装包。主程序与安装器均须有有效时间戳。对完成 Authenticode 的最终安装器字节生成 Tauri updater `.sig`、计算 SHA-256，再生成更新清单。改动安装器字节后重做对应签名、验签和哈希回执。版本仍按本页发布流程同步并使用 [安装包预检](../Windows/verify-installer.ps1) 核对安装器及包内主程序版本和 x64 架构。[Tauri 更新签名](https://v2.tauri.app/plugin/updater/)
+
+- **Windows Authenticode。** 对最终安装器和从该包提取的 `bowerbird-desktop.exe` 分别运行 `Get-AuthenticodeSignature -LiteralPath $File` 和 Windows SDK 的 `signtool verify /pa /all /v /tw $File`。要求 PowerShell 状态为 `Valid`、SignTool 退出码为 0，签名者与批准的发布者匹配且时间戳有效。留存文件名、SHA-256、发布者证书主题及指纹、证书链、时间戳和验签原始输出。[Microsoft SignTool](https://learn.microsoft.com/windows/win32/seccrypto/signtool)
+- **Tauri updater。** 在对应冻结版本工作区保留最终安装包及相邻的 `.sig`，运行 `node Windows/update-manifest.mjs --inspect $Installer`，用客户端内置更新公钥验签。留存版本、`windows-x86_64`、安装包 SHA-256、验签结果和清单对应签名字段。公网读回按批准的分发流程复验最终字节，核对下载包 SHA-256 和清单签名。[本机验签入口](../Windows/update-manifest.mjs)
+
+自 2026-11-21 起，Windows 官网发布按用户授权在缺少 Authenticode 时继续，保留 Tauri 更新签名和公网安装包完整回读验签。下文可信发布者签名验收用于接入该能力时。
+
+## Windows 26.11.2402 已公开发布（2026-11-24）
+
+北京时间 10:25:53 公网核验通过，源码 `7ce371ee0`，SQLite 0062。H3 提示词优化及写作 Agent 的参数错误提供中文处理提示。客户端支持实际参考槽数量，空槽优化依赖配套 Cloud 校验上线。TypeScript、Vite 生产构建、两组 H3 界面回归、8 项错误提示测试、1439 项 Windows 原生测试通过，62 项按配置跳过。
+
+官网和 Windows 自动更新清单均指向 26.11.2402。CDN 安装包完整回读并通过 Tauri 更新签名校验，SHA-256 为 `a2bbb141fd71700e405fb121c450674069ec762f31b5f1314b99894108429426`。按既有授权跳过 Authenticode。回滚目标为 26.11.2401。旧版应用内安装及重启尚待实机验证。回执见 `.tmp/release-windows-26.11.2402/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2402_x64-setup.exe)
+
+## Windows 26.11.2401 已公开发布（2026-11-24）
+
+写作编辑器更新写作 Agent、选区工具栏、富文本草稿和分页 PDF 导出。画板更新 H3 提示词、视频参考和生成结果恢复。候选回归发现，手动优化完成后仍按视频生成等待产物，造成卡片无法编辑。已区分仅优化的步骤和自动优化后继续生成的步骤，优化完成后立即释放卡片。H3 完整界面回归和生成结果投影用例通过。Cloud DSH 增量预览沿 11 月 23 日独立发布记录。[云端回执](../apps/cloud/DEPLOY.md#2026-11-23-文本编辑器-cloud-dsh-增量预览已部署)
+
+冻结产品源码 `ac64360df` 通过 TypeScript、Vite 生产构建、7 组界面回归与 1439 项 Windows 原生测试，62 项按配置跳过。CDN 安装包已完整回读并通过 Tauri 更新签名校验，SHA-256 为 `c82f63878ca490fbddc0a363a8f5653cf946d6295a9be8956cd57e81b41813ae`。按既有授权跳过 Authenticode。北京时间 01:39:04，官网和 Windows 自动更新清单的公网核验通过，回滚目标为 26.11.2304。旧版应用内安装及重启尚待实机验证。回执见 `.tmp/release-windows-26.11.2401/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2401_x64-setup.exe)
+
+## Windows 26.11.2304 已公开发布（2026-11-23）
+
+北京时间 20:51:07 公网核验通过，源码 `49409682a`，SQLite 0062。更新包括音频逐字文稿、选区试听和裁剪，文件夹总览与增量扫描，目录预览缓存，画板生成结果缩放，以及视频信息入口。视频画面分析的生产服务仍待关闭态部署与单独启价确认。[Cloud 部署范围](../apps/cloud/DEPLOY.md#素材库画面分析关闭态候选)
+
+音频与视频分支合并后，部分视频调用沿用旧签名，原生编译报六处参数缺失。补齐视频用途，并在画面分析写回时复用事务内原件版本校验。冻结源码通过 TypeScript、Vite 生产构建和 1438 项 Windows 原生测试，62 项按配置跳过。桌面界面回归 8 组、目录缓存测试 10 项通过。
+
+官网和 Windows 自动更新清单均指向 26.11.2304。CDN 安装包完整回读并通过 Tauri 更新签名校验，SHA-256 为 `df873fb5f712dd5effb5d00272ddbd37315fde19b3c6c254f4808b1e09d37c86`。按用户授权跳过 Authenticode。回滚目标为 26.11.2303，旧版应用内安装及重启尚待实机验证。回执见 `.tmp/release-windows-26.11.2304/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2304_x64-setup.exe)
+
+## Windows 26.11.2303 已公开发布（2026-11-23）
+
+北京时间 17:26:59 公网核验通过，源码 `fcc6f0654`，SQLite 0062。素材库侧栏支持独立折叠「项目」和「拼音 A–Z」，新增「全部项目素材」，「管理标签」移至侧栏底部。TypeScript、Vite 生产构建、三组桌面界面回归和 1418 项 Windows 原生测试通过，56 项按配置跳过。
+
+官网和 Windows 自动更新清单均指向 26.11.2303。CDN 安装包完整回读并通过 Tauri 更新签名校验，SHA-256 为 `2f9cf1ce8f7938f46175c76c7995fee72b0ca137dfb97c07234c1243d14714b7`。按用户授权跳过 Authenticode。官网和 Windows 更新清单可回滚至 26.11.2302。旧版应用内安装和重启尚待实机验证。回执见 `.tmp/release-windows-26.11.2303/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2303_x64-setup.exe)
+
+## Windows 26.11.2302 已公开发布（2026-11-23）
+
+北京时间 16:14 公网核验通过，源码 `cc767d6f8`，SQLite 0062。顶栏验签后可直接安装并重启，折叠生成卡预览随图片或视频结果移动，模型菜单可引导配置自有订阅 GPT Image 2。冻结源码通过 TypeScript、Vite 生产构建和 1418 项 Windows 原生测试，56 项按配置跳过。五组 Chromium 回归在同产品源码的存档提交通过。[回归记录](../project_logs/2026-11-23-source-archive.md)
+
+官网和 Windows 自动更新清单均指向 26.11.2302。CDN 安装包完整回读并通过 Tauri 更新签名校验，SHA-256 为 `3fc62d238994adcafa8e87efd004156cf82408a7b3d10a9ec20503a5bfd4436e`。按用户授权跳过 Authenticode。官网和 Windows 更新清单可回滚至 26.11.2301。旧版应用内安装、重启和真实在途任务恢复尚待实机验证。回执见 `.tmp/release-windows-26.11.2302/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2302_x64-setup.exe)
+
+## Windows 26.11.2301 已公开发布（2026-11-23）
+
+北京时间 14:32 公网核验通过，源码 `3a7077bf`，SQLite 0062。素材库改用常驻侧栏，图片标注保存后可继续编辑，截图可直接发送到画板。TypeScript、六组桌面界面回归和 1418 项原生测试通过，56 项按配置跳过。随源码存档的只读 MCP 术语表索引通过 28 项测试。
+
+官网和 Windows 自动更新清单均指向 26.11.2301。CDN 安装包完整回读并通过 Tauri 更新签名校验，SHA-256 为 `b25edd66882c7f2fdc8cd1bc171bd580de7484551f6cb9ec2c53722afc2238a6`。按用户授权跳过 Authenticode。官网和 Windows 更新清单可回滚至 26.11.2201。旧版应用内安装和重启尚待实机验证。回执见 `.tmp/release-windows-26.11.2301/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2301_x64-setup.exe)
+
+## Windows 26.11.2201 已公开发布（2026-11-23）
+
+北京时间 08:56 公网核验通过，源码 `4f682488`，SQLite 0062。H3 卡片支持对照查看原始提示词与优化稿，改进素材库导航和连接目录，顶栏可查看更新进度并进入安装。类型检查、四组界面回归和 1413 项原生测试通过，56 项跳过。
+
+官网及 Windows 自动更新清单均指向 26.11.2201。CDN 安装包完整回读并通过 Tauri 更新验签，SHA-256 为 `c344e373ba259a03f5ede60cdd78856537fa1799e41e56aed61c086369e7ff0d`。按用户授权跳过 Authenticode。官网和 Windows 清单的回滚版本为 26.11.2103。旧版应用内安装与重启尚待实机验证。发布回执见 `.tmp/release-windows-26.11.2201/` 中的 `public-report.json`、`prepared.json` 和 `cdn-verified.json`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2201_x64-setup.exe)
+
+## Windows 26.11.2103 已公开发布（2026-11-21）
+
+北京时间 23:37:56 公网核验通过，源码 e2868795，SQLite 0062。大型项目打开、数据库锁等待、连接扫描及视频索引、采集落点反馈和设置入口更新。类型检查、三组界面回归和 1413 项原生测试通过，56 项跳过。按约定跳过 Authenticode，CDN 安装包完整回读并通过 Tauri 验签，SHA-256 为 34dc576d19b3cb20fc8cf29b65d6744cd18e065d2a2f2a4d2fa19aed907e5ae2 。官网可回退至 2102。未实测旧版升级重启。证据见 .tmp/release-windows-26.11.2103/。
+
+## Windows 26.11.2102 已公开发布（2026-11-21）
+
+北京时间 17:58 公网复核通过，源码 9205eba1，SQLite 0061。项目首屏优先、逐字转录阅读器、H3 多素材参考和结构化提示词、语义索引调度已发布。按现行约定跳过 Authenticode；CDN 安装包完整回读并通过 Tauri 验签，SHA-256 为 d53b93e3a76a12b3eceaf46713dcb0cc6a8b648477c286b5eb13e28182849c7f 。五组界面回归和 1402 项原生测试通过，55 项跳过。官网回滚版本 2101。未实测旧版升级重启。证据见 .tmp/release-windows-26.11.2102/。
+
+## Windows 26.11.2101 已公开发布（2026-11-21）
+
+北京时间 03:37:49 公网核验通过，源码 80dc5245。用户授权本版跳过 Authenticode，保留 Tauri updater 签名。CDN 完整回读并验签，SHA-256 为 87b809b80c7efc7104b3c80a84b85be1345eed16be71e16177352c942f3478ea 。官网与应用内更新已切换，回滚目标 20261121-cloud-capacity-8-4。原生测试 1382 通过、55 跳过。未做旧版实机升级重启。证据见 .tmp/release-windows-26.11.2101/。
+
+## Windows 26.11.2003 已公开发布（2026-11-20）
+
+北京时间 21:06:13 公网核验通过，源码 68e55d92。H3 参考录音、语义搜索调整和整段转录桌面入口已发布；本轮未启价。桌面类型检查、四组界面回归和 1378 项原生测试通过，55 项跳过。CDN 完整回读并验签，SHA-256 为 4fe7f3247f803156cc06f5dfb4000b94ac7a3b9f3ce10ebf41312d26b2671de8 。官网回滚目标为 20261120-file-speech-gateway，保留上一版网关。未做旧版实机升级重启。证据见 .tmp/release-windows-26.11.2003/。
+
+## Windows 26.11.2002 已公开发布（2026-11-20）
+
+北京时间 16:13:19 独立公网复核通过，源码 498829b8。画板保存兼容已有 H3 参考音频，恢复新建生图卡和其他画板编辑，保留原连线及运行历史。带录音的 H3 卡片仍须使用支持该功能的版本执行。42 项原生工作流专项、隔离浏览器建卡保存／重开／视频模型切换、TypeScript 和生产构建通过。旧拖线建视频脚本的组图参考预览断言在 2001 基线和 2002 候选均超时。
+
+Windows x64 安装包 82,692,680 字节，SHA-256 为 `96ead0e4baa4fb40fc6cb6ccf7af0a35fb2aed699d7e6500c3bd2c6b79415a56`。CDN 完整回读与原更新公钥验签通过。官网只更新 Windows 下载相关的 5 个文件，其余 90 个文件逐字节核对一致。官网清单、双首页及 Mac 清单复核通过。现役 `/opt/bowerbird/website-releases/20261120-windows-26.11.2002`，可用 `rollback.sh` 回到 2001 官网。证据位于 `.tmp/release-windows-26.11.2002/`。旧版真实安装升级与应用重启仍待实机验收。
+
+## Windows 26.11.2001 已公开发布（2026-11-20）
+
+北京时间 12:02:12 公网复核通过，源码 33cbff6d。素材语义搜索、画布和素材菜单、采集原件定位与外拖、H3 视频卡参数和可选提示词优化已发布。类型检查、五组专项回归及 1366 项原生测试通过，53 项跳过。CDN 安装包完整回读并验签，SHA-256 为 2d91e149c58ce9d39a0f8edce42c15453bfed9240701a001adee2f392295ebb7 。官网回滚版本 1901；SQLite 迁移 0060。未实测旧版升级重启。发布证据见 .tmp/release-windows-26.11.2001/。
+
 ## Windows 26.11.1901 已公开发布（2026-11-19）
 
 北京时间 12:41:23 公网核验通过，源码 9b649026。画板本机 Agent 提问与回答、视频整段及首尾帧引用、视频详情及生成会话面板已上线。类型检查及 1325 项原生测试通过，50 项跳过。CDN 完整回读及签名核验通过，SHA-256 为 99ac018fe58f5ca7c94ab5ae54c39343a06c2f542d1d8bdf92a903b34b9866b2 。官网回滚版本 1806。未做旧版实机升级重启。发布证据见 .tmp/release-windows-26.11.1901/。
@@ -618,25 +749,26 @@ Mac `darwin-aarch64` 26.9.1901 更新包（mac 同步 dev `3f089bf` + 本地分�
 
 ## 客户端行为与代码入口
 
-**顶栏入口（2026-11-02，源码待发布）：** `SidebarAccount` 顶栏模式在 Bcoin 左侧预留 36px 图标位，有 `useAppUpdater.update` 时显示更新图标，未检测到新版则留空。按钮直达设置「关于我们」，沿用 `AppUpdateCard` 的下载／验签／安装保护；跳过启动提醒、下载失败或下载完成后仍保留入口。没有新增检测请求或轮询。验证见 [记录](../project_logs/2026-11-02-topbar-update.md)。
+**后台下载（2026-11-22，源码待发布）。** 应用初始化后自动检查一次，间隔五分钟检查，窗口聚焦和网络恢复沿用同一时间限制。「设置 → 系统设置」显示当前版本，也可手动检查。发现新版即开始下载，启动、下载和验签完成均无自动弹窗。下载或验签失败后保留原图标入口，同版本可在面板里选择「重新下载」。检查失败保留最近结果，手动检查失败显示原因。
 
-**启动检测（Windows 26.9.1803 已发布；Mac 26.9.1901 发布说明包含此功能，原生验收待补）：** 应用初始化完成后，每次启动在后台检查一次。只有发现更高版本才弹出“发现新版本”，提供“立即更新”和“暂不更新”；前者开始下载，下载与验签完成后由用户确认“安装并重启”。跳过、关闭或 Esc 只影响本次运行，下次启动重新检查；已是最新版或自动检查失败时不弹窗，手动检查失败仍显示原因。不定时轮询、不自动下载或强制安装。
+**顶栏与更新面板。** 检测到新版时，Bcoin 左侧显示更新图标。下载时，圆环按已下载字节和包大小绘制。包大小未知时显示活动圆弧，并遵循减少动态效果设置。点击圆环可打开「设置 → 系统设置」。11 月 23 日源码中，下载和验签通过后，蓝色图标直接执行「安装并重启」，与系统设置内的安装按钮共用同一入口。
 
-检查与提醒状态只保存在本次会话，避免 React StrictMode、组件重挂载触发重复请求。若设置、素材库迁移、引导等对话框已打开，先静默检查并等待它们关闭后提醒。提醒内复用 `AppUpdateCard` 的进度、验签、任务与保存保护；关闭提醒后可在设置继续处理。
+检查和下载状态保存在当前进程。关闭设置后继续下载，重新启动应用时重新检查。检查超时 30 秒、下载超时 300 秒。Tauri updater 使用客户端内置公钥验签，网络传输结束后仍须等待验签结果。
 
-**Mac 交接及上线边界：** 此功能属于 Windows/Mac 共享前端；两端同步 `App.tsx`、`StartupUpdateDialog.tsx`、`AppUpdateCard.tsx`、`appUpdater.ts` 后，分别提高实际版本、重新构建签名包并发布清单。已上线的旧 26.9.1802 仍只能手动检查，需先通过设置或官网升级一次到含此功能的新包。仅部署官网或更新清单不会改变旧客户端启动行为，不能覆盖已发布的 26.9.1802 包。针对性合成 IPC UI 回归与 TypeScript/Vite 构建通过；已覆盖启动有更新/无更新/离线、初始化/其他弹窗等待、StrictMode 去重、跳过/关闭后本次不再提醒及下次重查、主动下载、验签失败重试和安装前任务/保存保护；尚未执行双端新包实机验收。
+**交付边界。** 此功能位于 Windows 和 Mac 的共享前端。两个平台各自在包含此变更的签名包发布后启用，并分别验收原生安装和重启。
 
-设置 → 关于我们 → 当前版本：检查更新 → 下载更新 → 安装并重启。使用 Tauri 官方 updater，内置公钥校验更新包。只有下载及验签都成功才允许安装；重复操作互斥，关闭设置保留进度。失败可重试，不把检查失败显示为“最新版本”。检查超时 30 秒、下载超时 300 秒。
+2026-11-22 隔离 Chromium 使用模拟 IPC 验证启动／轮询／手动检查触发下载、验签前禁止安装、失败重试、任务和画板保存保护、手动安装与重启，以及深浅色和窄窗口的顶栏状态。桌面 TypeScript 与 Vite 生产构建通过。原生安装和重启待签名包验收。
 
-安装前等待已知生成、Agent 和素材整理任务结束，并等待画板保存。Windows 使用 passive NSIS，安装器启动后应用退出，由安装器重新启动；其他桌面平台安装返回后调用 relaunch，失败时提示手动重启。
+安装前检查所有已打开项目的工作流、本机生成会话及原生任务队列。有进行中的本地生成时弹窗说明可能无法取回，默认聚焦「取消」。取消后任务继续运行，选择「安装并重启」才继续。仅有 Cloud 任务时直接安装。安装前须完成素材整理并保存画板，保存期间新启动的本地生成也会触发确认。Windows 使用 passive NSIS，安装器启动后应用退出，由安装器重新启动；其他桌面平台安装返回后调用 relaunch，失败时提示手动重启。
 
 Windows 26.10.904 已发布并区分更新与重装：应用内 `/UPDATE` 保留登录，普通手动安装/重装才重置 Bowerbird 账号、权益缓存及独立 CLI 登录；旧版更新到 26.10.904 时按新包的保留规则执行，见本页顶部发布说明。素材、项目、settings 和独立 CLI 历史保留，不操作系统 CLI 登录。Mac 清单的发布说明称保留登录，但本轮未实测，不将此文案视作凭据保留验收。
 
 | 入口 | 用途 |
 |---|---|
 | [appUpdater.ts](../apps/desktop/src/lib/appUpdater.ts) | 更新状态、超时、下载/安装/重启 |
-| [AppUpdateCard.tsx](../apps/desktop/src/components/AppUpdateCard.tsx) | 设置 UI、任务与保存保护 |
-| [StartupUpdateDialog.tsx](../apps/desktop/src/components/StartupUpdateDialog.tsx)、[App.tsx](../apps/desktop/src/App.tsx) | 启动静默检查、新版提醒、等待其他对话框关闭与本次跳过 |
+| [AppUpdateCard.tsx](../apps/desktop/src/components/AppUpdateCard.tsx) | 系统设置中的版本、下载与安装入口 |
+| [AppUpdateMonitor.tsx](../apps/desktop/src/components/AppUpdateMonitor.tsx)、[App.tsx](../apps/desktop/src/App.tsx) | 初始化后检查、定时后台检查及本地生成安装确认框 |
+| [SidebarAccount.tsx](../apps/desktop/src/components/SidebarAccount.tsx) | 顶栏进度圆环、安装图标和更新面板入口 |
 | [tauri.conf.json](../apps/desktop/src-tauri/tauri.conf.json) | 共享版本、入口模板、Windows 更新公钥、签名产物开关 |
 | `apps/desktop/src-tauri/tauri.macos.conf.json`（Mac 分支） | Mac 独立更新公钥覆盖；26.9.1802 核验来源 `origin/mac:13c7280`，公钥与已发布旧版一致 |
 | [server.mjs](../website/server.mjs) | 三平台 GET/HEAD 跳转、清单 no-store |

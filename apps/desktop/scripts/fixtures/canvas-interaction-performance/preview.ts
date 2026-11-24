@@ -2,7 +2,8 @@ import { flushSync } from "react-dom";
 
 const w = window as any;
 const picture = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="190" height="150"><rect width="190" height="150" fill="#387ca4"/></svg>')}`;
-const assets = Array.from({ length: location.search.includes("large") ? 334 : 100 }, (_, index) => ({ id: `interaction-asset-${index}`, name: `素材 ${index}`, width: 190, height: 150, store_path: picture, source: "imported" }));
+const count = location.search.includes("large") ? 334 : new URLSearchParams(location.search).has("small") ? 8 : 100;
+const assets = Array.from({ length: count }, (_, index) => ({ id: `interaction-asset-${index}`, name: `素材 ${index}`, width: 190, height: 150, store_path: picture, source: "imported" }));
 const base = { projectId: "p", threadId: "t", hiddenAt: null, positionLocked: false, createdAt: 1, updatedAt: 1, zIndex: 1, role: "reference", kind: "asset", width: 190, height: 182 };
 const nodes = assets.flatMap((asset, index) => {
   const overview = location.search.includes("overview");

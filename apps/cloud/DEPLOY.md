@@ -1,5 +1,73 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 素材库画面分析关闭态候选
+
+本候选包含 `0100_library_visual_catalog.sql`、`0101_library_visual_jobs.sql`、`understand-proxy`、`understand-worker` 和 VPS 理解 Worker。按顺序先应用迁移，再部署两个 Edge 入口，最后切换 Worker。生产配置保持 `LIBRARY_VISUAL_ENABLED` 未设置，`library_video_analysis` 目录条目保持 inactive 且 `pricing_ready=false`。只有另行获准启价时才设置经过账单核验的每小时 Bcoin 和报价版本，并配置 `ARK_LIBRARY_VISUAL_MODEL`。现有私有暂存桶必须允许 MP4、对象上限至少为 32,000,000 字节。校验匿名拒绝、已登录用户不可报价，以及原转录、复刻和图片理解兼容。
+
+画面分析使用现有理解控制面和私有暂存签名传输。独立父任务整片预留一次，子段表独立租约和记账，从而兼容现有理解队列每条任务绑定唯一钱包预留的约束。上传提交核对对象路径、文件大小、MIME 和 SHA-256。Worker 在提交上游前再次校验对象摘要、静音 H.264 视频流、分辨率和时长。段回执保存可用的安全请求 ID、计量和媒体参数。最后一段成功后结算父任务。明确失败退还预留。提交后结果不明的段停止分派，原预留跨内容 TTL 保留供人工核对。查回供应商账单和回执，确认无法交付结果时使用受限 RPC `refund_unknown_library_visual(父任务 UUID, 审计原因)` 退款。该 RPC 不允许重投或扣费。过期清理移除画面代理、请求清单和描述正文，保留指纹和计量回执供对账。
+
+需要回退时先关闭新任务准入，由现役 Worker 跑完已受理任务或对账后再回退服务。已冻结报价的父任务可以在关闭新准入后继续提交下一段。只读回滚保留迁移、历史预留与回执。此处记录候选步骤，尚未部署。
+
+## 2026-11-23 文本编辑器 Cloud DSH 增量预览已部署
+
+经用户确认，北京时间 21:32:50 切换现役 VPS Worker。文本编辑任务在上游模型生成期间通过现有私有 Run 事件发布正文预览，最终结果仍沿原持久化、计量和恢复链路提交。确认的新镜像仅叠加五个运行模块，现有 test-only 准入继续生效。部署前后五类队列均为空，五个文件在宿主与镜像中的校验均一致。[验证和回退记录](../../project_logs/2026-11-23-text-editor-cloud-stream.md)
+
+## 2026-11-21 H3 视频 Skill 切换为官方结构版已部署
+
+获用户批准后，17:38:52（北京时间）以同目录 UTF-8 临时文件原子替换只读挂载的 `/opt/bowerbird/agent-worker/src/skills/text/h3-video-prompt/SKILL.md`。原方法备份为 `/opt/bowerbird/deploy-backups/h3-official-structure-20261121/SKILL.md`，替换前后哈希分别为 `45e895c7a6e5c163cf9bf1ee3346878b4f1219aebaffe5644fad4db04c00f5a7` 和 `5fc3920853580ceea0d8abb3adee69923b4ee717f6fee7cf7ef2265321e23523`，新文件 13,769 字节。
+
+宿主文件与 `agent-worker-generation-worker-1` 内 `/app/text-skills/` 挂载读回一致。容器内用现役 loader 加载 `text`、`reference`、`frames`（仅首帧与首尾帧）和 `r2v` 五种组合，均命中新哈希、`high` 思考并包含官方三字段／六字段结构。该文件在每次新任务开始时读取，无需重建镜像或重启 Worker；已开始的任务继续使用 checkpoint 冻结的方法。本轮无数据库迁移、无镜像切换、无付费模型请求。
+
+回退：把备份文件按同一原子方式写回原路径，运行中任务不受影响。方法改动不等于改写质量验收，官方结构对新任务的实际遵循度仍需真实优化任务核对。
+
+## 2026-11-21 指定账号可重复转录与字级时间已部署
+
+经用户确认，16:21:37（北京时间）切换 VPS 理解 Worker，仅覆盖豆包录音文件识别适配器。现役镜像 `4fecd3f8645a51795939f8c23b644161265caaabddba9be750a0f5e7f1d3d671`，宿主与容器源码和候选一致，切换前后五组活动队列均为空，消费者正常。16:26:32 独立读回确认原试跑任务已在四个句段补齐 350 个原生字词时间，保留原结果有效期与唯一一笔 1 Bcoin 结算。
+
+16:27:47 独立读回确认 0099 定向应用，只移除限制账号累计一次的索引和受理检查，保留原 94 条迁移记录、权限及私有试价。16:28:38 完成 `understand-proxy` v55 到 v56 的部署读回，14 个文件与封存候选一致。独立检查确认线上匿名路由鉴权仍返回 401。仍仅向指定账号报价，每条 1 Bcoin、最长 7,200 秒，保留余额、请求频率和成本预算。新任务实际提交由测试账号进行。
+
+若需暂停新试跑，先关闭指定账号准入，既有任务可按原账号和任务键恢复。开始重复受理后不能还原 0098 的账号唯一索引。Worker 回退标签为 `rollback-file-speech-words-20261121`，先评估是否会丢失新任务词级输出。部署回执位于 `.tmp/video-transcript-words-release-candidate-20261121/`、`.tmp/file-speech-repeat-0099-20261121/` 和 `.tmp/video-transcript-repeat-pilot-edge-20261121/`。
+
+## 2026-11-21 整段视频转录指定账号试跑
+
+经用户确认，12:00:36 定向应用 0098，生产回滚预演通过，原有 93 条迁移记录指纹一致。12:02:16 将 `understand-proxy` v53 切换至 v54，仅替换 `index.ts`，14 个文件逐一读回并校验。JWT 校验开启，闭态官网和直连匿名能力请求均返回 HTTP 401。
+
+12:03:36 回读了单账号准入配置及私有试价，配置只允许指定已登录账号新建一条、最长 7,200 秒的任务。试价 1 Bcoin，上游预算 ¥2，公开转录开关保持缺省。12:04:11 独立复核确认匿名与已登录账号的公共目录均隐藏试价，私有桶允许 MP3，转录任务、预授权及暂存音轨均为零。部署未提交真实任务，用户可从 Windows 已发布的素材视频预览试跑。若需停止试跑，先关闭单账号准入，再确认在途原单能够查询和完成，最后停用试价。回退 Edge 时使用冻结的 v53 包，0098 可保留。部署与独立核验记录位于 `.tmp/file-speech-pilot-edge-20261121/` 和 `.tmp/file-speech-pilot-readonly-20261121/`。
+
+## 2026-11-21 H3 R2V 建卡和提示词优化已部署
+
+获用户批准后，03:51:02（北京时间）切换 Worker 至 `sha256:acb7b81d98e1524a8fa328b6f4d3001467614bd2bb674e0d31bc3f5cb2ca1c66`。从现役镜像定向覆盖 8 个工具能力和 Skill 参数文件，更新只读挂载的 H3 视频 Skill。现役 9 个文件与候选逐项核对，Skill SHA-256 为 `45e895c7a6e5c163cf9bf1ee3346878b4f1219aebaffe5644fad4db04c00f5a7`。环境、资源限制和会话挂载核对一致，重启和 OOM 为 0。切换前后五组活动队列均为空。
+
+03:51:47 核验 Chat Proxy v18 ACTIVE、JWT 鉴权开启，7 个文件读回与候选一致，匿名报价请求返回 401。冻结的 v17 候选隔离验证新旧能力协商、请求存储和非法选项拒绝。断网 Worker 验证旧工具定义完整保留，只有声明 `h3_r2v` 的新客户端获得 R2V 选项，挂载的实际 Skill 接收图片、视频和独立音频数量，继续使用高思考。此次无数据库迁移，桌面入口随新版发布。生产未发起收费模型请求。
+
+候选、哈希、队列与发布回执见 `.tmp/h3-r2v-cloud-candidate/`。回退先用 `edge-live-before` 的 v17 文件包恢复 Chat Proxy，再执行 VPS `/opt/bowerbird/deploy-backups/h3-r2v-20261121/release.sh restore` 恢复 Worker 和 Skill。
+
+## 2026-11-21 H3 提示词优化结算修复已部署
+
+新版 Worker 已保存改写正文和续聊标记，现役 0091 只允许 `schemaVersion` 与 `text`，导致 5 条改写任务在完成结算时返回 HTTP 409。获用户确认后，03:17:52（北京时间）定向应用 `0097_h3_text_continuation_settlement`，仅更新 `settle_agent_run` 的文字结果校验。旧结果继续通过，DSH 结果可多带一个布尔值为 `true` 的 `dshContinuation`，其他字段仍被拒绝。
+
+隔离 PostgreSQL 使用原结算函数和积分流水复现 0091 拒绝，确认 0097 允许同一结果结算一次，旧格式和既有账本、租约及并发回归通过。03:18:27 完成生产只读核验，登记迁移与候选 SHA-256 `057fbf5625bf50261d270ee949a03bf4d1a05f19accaa67f33c1183efecad069` 一致，现役正文、所有者、权限与候选预期一致，原 5 条失败任务及冻结记录的指纹一致。本轮未发起收费模型请求。
+
+部署事务、旧函数和线上读回保存在 `.tmp/h3-settlement-0097-20261121/`。回退前确认现役函数身份，用 `settle-before.sql` 恢复此前函数定义。回退会重新触发新版 Worker 的结算冲突。原任务状态和账本保持原有记录。
+
+## 2026-11-21 H3 优化高思考、录音规则和原会话续聊已部署
+
+获用户确认后，02:13:03（北京时间）切换 VPS Worker 至 `sha256:591bb0d4be92a1ce8b21f33e4fe70067cf3481fb3918c14f549218e0fab74254`，H3 视频 Skill 哈希为 `789eae6ee1fe5d75726f4f0f222c7aeae39ea356ef85603bde60f68d0603f016`。13 份目标文件读回一致，既有 DSH 会话卷、运行配置和资源限制通过校验，Worker 正常轮询，重启和 OOM 均为 0。
+
+另一轮生产更新完成后，基于最新现役 Edge 重新叠加 H3 改动。02:14:28 发布 `agent-worker` v70（原 v69），02:14:32 发布 `chat-proxy` v17（原 v16）。两函数均 ACTIVE，原 JWT 设置保留，16 个文件读回匹配。02:15:27 复核运行队列均为 0，DSH 对话现行价格仍为 0 Bcoin，官网匿名 Agent 和 Chat 入口均返回 401。本轮无数据库迁移及真实付费模型调用。
+
+断网候选使用现役固定 DSH 和回环模拟上游验证三种录音参数、首轮高思考，以及两次追问沿用首轮原生会话。桌面浏览器和原生回归验证续聊工具条、对话详情、原身份发送和重开。桌面入口仍随版本发布。
+
+本机的 Worker 候选证据、双 Edge 下载备份及现役读回、部署前后只读回执分别位于 `.tmp/h3-continuation-worker-20261121/`、`.tmp/h3-continuation-edge-refresh-20261121/`、`.tmp/h3-production-readback-20261121/`。Worker 回退镜像为 `bowerbird/generation-worker:rollback-h3-continuation-20261121`，回退入口在 VPS `/opt/bowerbird/deploy-backups/h3-continuation-20261121/release.sh restore`。两个 Edge 分别使用本次备份的 v69 和 v16 回退，并保持原 JWT 设置。
+
+## 2026-11-20 整段视频转录关闭态已部署
+
+0092、官网新签名路由、`understand-proxy` v50、`understand-worker` v30 和 VPS 理解 Worker 已核验。公网新能力返回关闭，受理被拒绝，既有能力及原键查询保持可用。部署前后整段转录任务、价格、暂存对象和预授权均为零。真实豆包联调单独确认。[部署、线上检查与回退](../../project_logs/2026-11-20-file-speech-deployment.md)
+
+获单独批准后，19:05:02 确认 0093 只为私有 `generation-temp` 追加 `audio/mpeg`。其后官网上传、豆包签名取件和原 UUID 查询在三条合成音轨通过，含实测 7200 秒片尾。测试对象均已清理，生产入口和定价没有开放。[隔离联调回执](../../project_logs/2026-11-20-file-speech-live-verification.md)
+
+获用户确认后，20:28:31 切换仅更新 `file-speech.ts` 的 Worker 镜像 `f8ac9a4bb014…`。20:29 核对了现役文件、重启与轮询状态和生产数据库。入口仍关闭，价格为零条，旧镜像 `3e326352117b…` 已保留回滚标签。[切换及只读复核](../../project_logs/2026-11-20-file-speech-live-verification.md#按静音分句生产切换)
+
 ## 2026-11-15 受控 DeepSeek 结算与 HTTP 状态已部署
 
 10:30:12 完成修正版 0091、`agent-worker` 65、`agent-run` 60 及 VPS 镜像 `ba9d2224f878…` 的生产核验。两个 Edge 的 18 个文件与 Worker 的四个运行文件均已读回。缺失用量的旧账未作追补，已标记新调用按冻结额及原调用凭据恢复。[数据库、运行回执与回退](../../project_logs/2026-11-15-agent-model-settlement-deployment.md)
@@ -466,6 +534,158 @@ sudo docker compose --env-file .env.generation -f compose.generation.yml logs --
 Worker 容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities，并限制 1536 MiB 内存、1.75 CPU、256 PID、256 MiB workspace tmpfs 与 10 MiB × 3 JSON 日志。容器入口为 `src/main.ts` 组合入口：按 `GENERATION_CONTROL_URL` / `UNDERSTAND_CONTROL_URL` / `AGENT_CONTROL_URL` / `VISUAL_PROFILE_CONTROL_URL` 是否配置分别启动生图、理解、Agent 与视觉规范四个消费循环，互不阻塞。方舟同步请求（生图与理解）不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。Agent 循环每 10 分钟运行 TTL/orphan 清理并输出不含用户内容的控制面与磁盘健康指标；可在运维端运行 `node apps/cloud/scripts/check-agent-runtime-health.mjs` 做阈值探测。
 
 视频 Worker 镜像安装 `ca-certificates` 与 `ffmpeg`（包含 `ffprobe`），并从 `cloud-shared` 构建上下文复制 `video-contract.ts`、`task-authorization.ts`、`layer-contract.ts`、`image-metadata.ts`、`replication.ts`、`bcoin-text.ts` 到 `/cloud/supabase/functions/_shared/`，保持源码跨包导入路径。VPS 上将仓库 `apps/cloud/supabase/functions/_shared/` 中这六个文件同步到 `/opt/bowerbird/cloud-shared/`；不得把包含 `.env` 的整个 Cloud 目录当作构建上下文。直接调用 `docker build` 时也要传 `--build-context cloud-shared=<上述目录>`。生产 `/tmp` 为有界 640 MiB，覆盖单个 500 MiB 视频探测文件；其他 CPU/内存/PID 限制不变。候选镜像需在无网络、只读根目录和可写 `/tmp` 下运行 `node /app/scripts/video-readonly-probe.mjs`，核验生产入口导入及真实合成 MP4 探测；加 `--max-size` 用合法 MP4 free box 检查 500 MiB 上限（采用 640 MiB /tmp 和原 1536 MiB 内存限制），不调用模型或替代真实下载/并发验收。视频上线同时需要 `0058` 迁移和 `generate-proxy` / `generation-worker`；迁移默认不启价，价格须另行确认。
+
+#### VPS 全量发布健康巡检
+
+[巡检脚本](scripts/check-vps-release-health.mjs)从同目录读取 `check-agent-runtime-health.mjs`，并复用 `wechatpay-maintenance.mjs` 的 `previousChinaDay`。使用既有授权的 Agent 巡检配置，仅需 `AGENT_CONTROL_URL`（或 `SUPABASE_URL`）和 `AGENT_WORKER_TOKEN`。Docker 采集定位本机 `/var/run/docker.sock` 与现役 `agent-worker-generation-worker-1`。
+
+- `root_disk`、`bowerbird_disk`、`docker_disk` 记录目标卷的总量、剩余字节和使用率。任一卷使用率达到 85% 或可用空间低于 5 GiB 时告警。三个路径共用卷时按一个卷核算。
+- `worker` 读取状态、累计重启数、OOM 标志和 `unless-stopped` 策略。`worker_tmpfs` 分别采集 `/tmp`、`/workspaces`、`/dsh-runtime` 的实际挂载和占用，挂载缺失或使用率达到 90% 时告警。
+- `agent_queue` 沿用 `agent-worker` 的只读指标和原阈值，报告队列深度、最老等待、活动 Run、过期租约、TTL 积压及触发的阈值名称。其他消费者的积压和有效并发需在单独容量回执里分别核对。
+- `payment_reconcile`、`payment_bill` 读取现有 timer、service result 和对应日志。分钟补偿需在最近 5 分钟有成功回执。日账在北京时间 10:45 起需有昨日账单 `matched` 且零差异的回执。最新 `ok:false`、服务异常或回执过期时告警。输出保留固定状态、异常计数和回执时间。
+
+每次只输出一条 `vps_release_health` JSON。退出码 `0` 表示已采集且无告警，`1` 表示有告警，`2` 表示有采集项无法核验。现有监控可消费退出码和 `alerts` 字段。本机隔离回归可运行 `node --test apps/cloud/scripts/check-vps-release-health.test.mjs`。
+
+[systemd 服务](ops/bowerbird-vps-release-health.service)使用 `/usr/bin/node` 直接执行 oneshot，上限 180 秒。配套 [timer](ops/bowerbird-vps-release-health.timer) 每 5 分钟触发一次，允许 10 秒调度误差，恢复后补跑一次错过的触发。服务将报告写入标识为 `bowerbird-vps-release-health` 的 journal，状态码 1 和 2 均保留为系统服务失败，`ExecMainStatus` 可以区分二者。Agent 环境文件缺失时仍保留其他采集结果，Agent 项记为无法核验。服务启动失败或超时也由监控按单元失败处理，此时可能没有 JSON。
+
+现役预检发现主机没有静态 `bowerbird` 账号，尚无已验证且能直接读取 Docker 和 journal 的低权限身份。候选使用 `root` oneshot，清空额外的 Linux capabilities，禁止进程提权，操作限于固定巡检脚本。Docker socket 按特权接口管理，文件系统只读设置只约束服务本身的挂载空间。部署确认须包含运行身份。现役 `/usr/bin/node` 为 Node 18，配置由 systemd `EnvironmentFile` 注入。
+
+已确认部署使用独立的 `/opt/bowerbird/vps-release-health/`，目录用 `root:root`、`0755`，文件用 `root:root`、`0644`。放入本轮核验的 `check-vps-release-health.mjs`、`check-agent-runtime-health.mjs`，从现役 `/opt/bowerbird/wechatpay/wechatpay-maintenance.mjs` 复制同名文件到该目录。副本与现役原件字节相同且导出 `previousChinaDay`。运维从既有授权配置准备 `/etc/bowerbird/agent-health.env`，文件为 `root:root`、`0600`。
+
+以 `root:root`、`0644` 安装两个单元到 `/etc/systemd/system/`。状态码 1 或 2 会让手动启动命令返回失败，继续读取单元状态和 journal 分类，核验采集项与现役状态相符后再启用 timer。
+
+```sh
+sudo systemd-analyze verify /etc/systemd/system/bowerbird-vps-release-health.{service,timer}
+sudo systemctl daemon-reload
+sudo systemctl start bowerbird-vps-release-health.service
+systemctl show bowerbird-vps-release-health.service -p Result -p ExecMainCode -p ExecMainStatus
+sudo journalctl -u bowerbird-vps-release-health.service -n 10 --no-pager -o cat
+sudo systemctl enable --now bowerbird-vps-release-health.timer
+systemctl list-timers --all bowerbird-vps-release-health.timer
+```
+
+首次执行应核对所有预期检查已有结果，另逐项核对 Worker 的三处 tmpfs。采集项缺失时先保留 timer 为禁用，分析只读回执。采集结果完整且告警与现役状态相符后启用 timer，再核对一次实际的五分钟定时回执。
+
+现役预检已确认 `/usr/bin/node` 的 `fetch`、`AbortSignal.timeout` 和 `Object.hasOwn` 可用，现役微信维护模块导出 `previousChinaDay`。Agent 巡检环境可在目标机从当前 Worker 配置中只选取 `AGENT_CONTROL_URL`、`AGENT_WORKER_TOKEN` 两个字段，核对固定 HTTPS 项目和 `agent-worker` 路径后写入独立的 root `0600` 环境文件。核验回执只记录字段是否匹配。部署文件、环境文件及单元的目标路径在预检时尚未占用。
+
+回退先通过 `sudo systemctl disable --now bowerbird-vps-release-health.timer` 停止排程，并确认该 oneshot 已退出。对照本次文件哈希及路径，只将本次新增的两个单元、专用脚本目录和专用环境文件移出加载路径，保存在仅 root 可读的本机停用目录。随后 `systemctl daemon-reload`，核对 timer 已停止及原 Worker、微信维护单元状态。部署前已有的文件需单独核对归属，有不同版本或用途时保留现场。
+
+现役巡检交付到本机 journal。若目标机已有获批接收端，沿现有 journal 规则订阅该标识，或用 `OnFailure` drop-in 接到已批准的转发单元。转发仅取健康事件、检查时间、状态、告警名称和进程状态码。用合成告警分别验证 `attention` 和 `incomplete` 确实送达，健康事件不触发通知，并记录接收端、发送与接收时间和回执。现役只确认本机 rsyslog 已启用，外部接收端和真实告警送达待验证。
+
+**2026-11-21 现役部署与定时验收。** 用户确认后原子安装独立脚本目录、Agent 环境和 systemd 单元。目标 `/usr/bin/node` 为 v18.19.1。脚本目录为 `root:root 0755`，下列五个文件为 `root:root 0644`，Agent 环境为 `root:root 0600`。现场 Node 语法及 `systemd-analyze verify` 通过。
+
+| 文件 | 现役 SHA-256 |
+|---|---|
+| `check-vps-release-health.mjs` | `841d8af98f7460f87ec6abf899c78576772d4fbc6999a51cbfe8a400f9fdf2be` |
+| `check-agent-runtime-health.mjs` | `d3447cf90a3c86023e3b2f4f019d341556e8eab198b77eb1a62466de46b6c296` |
+| `wechatpay-maintenance.mjs` 巡检副本 | `0fbb6236a41d5b51d4b42e68e76d7f0aae328b48157cf89b5b1300ed8a96c6d2` |
+| `bowerbird-vps-release-health.service` | `dc56b3bbcc7b6722517c9ab755e081e20aadca4af5d7c0d09a291abb46f5ec6a` |
+| `bowerbird-vps-release-health.timer` | `ba03132c45c4671d992e7f8343a201042356b9e2f56fc41393d28c77cf25b13e` |
+
+- 北京时间 00:16:01.780 手工采集，八项检查和三处 tmpfs 齐全，`status=ok`、退出码 0、无告警。00:18:08 启用 timer，首次未来日历点为 00:20:00。
+- 首次定时启动 00:20:00，00:20:03 退出，journal 回执时间 00:20:03.424，调用与手工采集不同。八项检查和三处 tmpfs 齐全，`status=ok`、退出码 0、无告警。根卷使用率 74%，可用 13,498,073,088 字节。Agent 队列深度、最老等待、活动 Run、过期租约及两项 TTL 均为 0，微信分钟补偿和日账均为当前有效回执。计时器核验为 `active/enabled`，下次 00:25:00。
+- 现役 manager 读回 `Type=oneshot`、`User=root`、180 秒启动超时、`NoNewPrivileges=yes`、空 `CapabilityBoundingSet`、`PrivateTmp=yes`、`ProtectHome=yes`、`ProtectSystem=strict`。此次线上验收覆盖定时执行和采集。混合任务负载、恢复目标和外部告警送达待验证。
+
+第五轮复审后，在 WSL 的临时 systemd 用户单元用合成状态验证 `OnFailure`。`attention`（退出 1）和 `incomplete`（退出 2）各触发一次本地处理器，处理器读到对应退出码及原调用 ID。`ok`（退出 0）未触发处理器。三条事件在本机 journal 读回，临时单元已清理。生产接收端待确认。
+
+2026-11-20 在本机 Ubuntu 隔离目录以 `0644` 校验两个单元，`systemd-analyze verify` 通过，连续三个日历触发点相隔 5 分钟。Ubuntu Node 22 的巡检和微信维护 12 项隔离回归通过，覆盖健康、异常、采集缺失和日志脱敏。
+
+磁盘空间不足时，运维人员可以单独盘点体积与可能回收的暂存项：
+
+```sh
+du -x -h --max-depth=1 /opt/bowerbird/website-releases
+du -x -s -h /opt/bowerbird/deploy-backups /opt/bowerbird/agent-worker/dsh-sessions
+find /tmp -xdev -mindepth 1 -maxdepth 1 -type d -name 'bowerbird-release-windows-*' -mtime +7 -print
+docker --host=unix:///var/run/docker.sock system df
+```
+
+依照[既有磁盘清理回执](#2026-10-24-vps-磁盘清理已完成)，只将已核对 SHA-256 的重复暂存文件、已确认可重新生成的构建缓存列入待审批清单。官网现役与批准的回滚目录、独有资产、Worker 回滚镜像、部署备份及持久 DSH 会话列为保留项。空间回执记录同一挂载点前后 `df` 的可用字节，Docker 的共享层估算单列。
+
+发布门禁另需目标机实际回执。先采集巡检状态，然后在经授权的隔离环境验证批准负载下的队列最老等待、内存及 tmpfs 峰值、OOM 和重启计数。容灾回执应记录备份范围与时间，在独立环境按既有回退路径恢复官网、Worker 和持久会话，核验原任务可恢复及实际耗时。运维接收渠道、现役指标、并发容量和恢复结果待对应环境验证。
+
+2026-11-20 22:13（北京时间）现役 SSH 只读抽查。根、Bowerbird 与 Docker 共用卷，使用率 74%，可用约 12.52 GiB。Worker running、重启 0、OOM 标志为 false，三处 tmpfs 声明 640／256／32 MiB，renderer healthy。两个微信维护 timer 均 active，分钟补偿服务成功；日账服务最近于 22:11:45 以状态码 1 退出，处于自动重试。尚无实际 tmpfs 峰值、有效并发容量、告警送达及容灾回执。巡检候选与维护回归 10 项通过。
+
+2026-11-20 23:28 至 23:30（北京时间）补做现役只读采样。Worker 实际挂载的 `/tmp`、`/workspaces`、`/dsh-runtime` 容量依次为 640、256、32 MiB，三个挂载在采样时的已用空间均为 0 KiB，renderer 为 healthy。Agent 控制面的队列深度、最老等待秒数、活动任务、过期租约、TTL 任务及工件均为 0。此次为空载单点采样，后续定时执行证据见上文，混合负载峰值和告警送达仍待验收。
+
+##### Worker 与官网隔离演练
+
+1. 使用已授权的隔离 staging。冻结 Worker 和 renderer 镜像 digest、官网版本与 `cloud-routes.json`，对齐 Compose 的 CPU、内存、PID 与 tmpfs 限制。先启动 renderer，再启动 `compose.generation.yml`，使用 staging 的 Supabase、存储、账号和 Worker 凭据。将既有 `*_CONTROL_URL` 指到 staging 控制面，模型请求使用隔离样本和测试上游。先各跑一条图片、理解、Agent、视觉规范及 DSH 对话，再按批准的放量目标逐级增加混合并发，包含短文本、长文本、小图、多参考图和当期最长视频或音轨。每级记录实际提交速率、完结量、队列最老等待、租约、错误分类与资源峰值，记录达到预定停测阈值的第一级。
+2. 在 staging 官网已受理合成任务后，停止 staging 官网的 `bowerbird-website.service`，保持 Worker 与 staging Edge/Storage 连接。用运维探针通过既有 Worker 控制面和测试账号按原任务身份查状态，确认已经排队的任务能领取并交付。检查官网恢复后客户端可沿原网关按原身份取回。再反向停止 staging Worker，核对官网静态及账号路由仍响应、已受理任务保持原身份且可等待 Worker 恢复。此处旁路只用于 staging 运维探针。正式客户端继续使用[既有网关及原单恢复契约](../../dev-doc/CLOUD-TRANSPORT.md)。
+3. 演练 DSH 原生续聊转移时先使用合成账号完成一轮并记录其最后成功的 job ID。停止新增并排空活动轮次后，先停止来源 staging Worker，再归档 `compose.generation.yml` 映射到 `/dsh-sessions` 的宿主持久目录。以私有传输路径复制归档，校验 SHA-256、恢复至空的目标 staging 目录，并核对 `1000:1000` 和 `0700`。沿用原 staging 控制面与会话键，同一会话卷只允许一个 Worker 写入。目标先挂载并校验，再启动 Worker。按原 job ID 或幂等键取回旧轮次，再在同一会话发起新轮次验证续聊。归档和会话正文留在 staging 私有环境，回执只留快照时间、归档哈希与验证结果。[持久卷契约](../agent-worker/README.md#dsh-云端原生会话2026-11-13vps-worker-已切换)
+4. 在演练回执记录故障注入、可再次受理、原任务可取回和原会话续聊成功的时间。RTO 从故障注入算到相应链路恢复，RPO 根据故障时最后成功回合与恢复后最后可续回合之间的时间差和缺失轮数记录。核验官网旧版本在恢复 `current` 前仍支持本批客户端所需网关路由，Worker 回滚镜像与 staging 控制面协议兼容。回到来源前冻结新增、排空活动轮次，再停止目标 Worker。如果目标已写入成功回合，用同样的冻结与校验流程把当前卷交还来源后再启动，确保只有一个写入者。回退后复查官网健康、原任务可取回、原 DSH 会话可续、重放保持单次结算。上述步骤和目标值须在 staging 留证，作为后续发布的验收回执。
+
+##### 2026-11-20 本机隔离演练
+
+本机演练使用真实 Cloud 网关代码、独立 Worker 子进程和模拟控制面。Worker 未启动时网关可受理，网关停机后 Worker 可处理已受理的合成任务，网关恢复后按原键查询与重放，始终保留同一任务。Linux 临时目录使用真实 DSH 会话目录代码，三个独立进程依次验证源卷、按 SHA-256 校验后的目标卷和带最新回合的回退卷，三轮合成状态均可读取，目录权限为 0700。演练使用本机合成数据及模型桩。[本机演练脚本](../../.tmp/ga-local-rehearsal.mjs)
+
+Ubuntu WSL 通过临时 systemd scope 复跑同一演练，设置 1.75 CPU、1536 MiB 内存、256 PID。资源限制与现役 Worker 的对应配置对齐，回放和两次会话卷传输均通过。
+
+追加离线回归覆盖 39 项网关、巡检和恢复证据检查。隔离 PostgreSQL 复核了图片、理解、视觉和对话分桶。合成音轨通过真实 Edge／Worker 入口的跨进程恢复和单次结算验证。仓库钉版 DSH／ACP 与本机模型桩的 9 项会话联调通过，覆盖原调用、租约中断、工具回执和截止时间。单次 500 MiB 合成视频通过 FFmpeg 探测。当前暂无独立 staging，目标机的混合任务容量、队列等待、资源峰值、RTO／RPO 和告警送达仍待实测。
+
+##### 2026-11-21 本机混合容量与恢复采样
+
+北京时间 00:57，在 Ubuntu WSL、Node 22.22.1 上复跑。每档单独使用 systemd 临时单元，以 UID 1000 执行，环境只保留 PATH、HOME、TMPDIR，网络命名空间只有 loopback。回读 `cpu.max=175000 100000`、`memory.max=1610612736`、`pids.max=256` 和 `/tmp` tmpfs 671088640 字节。官网使用实际 Cloud 代理，独立子进程分别执行真实对话 Worker 的 `processChatJob` 及 renderer 的 PNG 解码、裁切、重编码和临时落盘。鉴权固定等待 12 ms，Edge、任务队列、控制面、存储下载和模型均在本机注入合成实现。
+
+每档预热一次后共提交 60 条，不重试。4 KiB 短文本、512 KiB 长文本和 1800×1200 PNG 各 20 条，裁图输出 1280×840。并发数指同时在途的官网请求。完结速率从第一条提交计至最后一条已受理任务完结，尾延迟只统计成功受理并执行的任务。
+
+| 并发 | 提交／受理／完结 | 网关 429 | 完结 / 秒 | 等待队列峰值 | 网关 P95 ms | 排队 P95 ms | 端到端 P95 ms | CPU 秒／节流周期 | 内存峰值 MiB | tmpfs 峰值 MiB |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 60／60／60 | 0 | 11.15 | 17 | 17.5 | 3537.4 | 3810.3 | 5.828／0 | 265.2 | 1.31 |
+| 4 | 60／60／60 | 0 | 11.40 | 20 | 28.3 | 3973.3 | 4252.0 | 5.635／3 | 261.8 | 0.81 |
+| 8 | 60／60／60 | 0 | 11.29 | 29 | 56.1 | 4123.2 | 4430.7 | 5.684／3 | 252.4 | 0.81 |
+| 12 | 60／37／37 | 23 | 10.93 | 24 | 49.7 | 2767.3 | 3048.4 | 3.650／1 | 255.9 | 0.81 |
+
+四档均无其他 HTTP 错误、执行失败或 OOM，cgroup PID／线程峰值观测均为 25。12 并发的 23 次 429 来自单个 Cloud 代理实例共享的 8 个在途请求上限。每档连预热最多 63 次请求，未达到 300 次／分钟的来源 IP 上限，共享上限在文本的按用户并发门禁之前检查。在 8 并发档，短／长文本端到端 P95 为 82.9／88.0 ms，PNG 排队 P95 为 4619.1 ms、执行 P95 为 313.5 ms。PNG 单子进程队列是这组样本的长尾来源。12 并发档仅 13 个 PNG 获受理，尾延迟缩短对应受理量下降。[Cloud 代理](../../website/cloud-proxy.mjs)
+
+用同一隔离参数重新执行本机恢复演练。关闭官网代理至恢复后按原幂等键取回原任务耗时 419 ms，后续重放只返回同一任务。真实 DSH 会话目录实现经本机归档、SHA-256 比对、恢复和子进程续聊，正向交接 391 ms，将带新增回合的卷回交并续聊 391 ms。源、目标、回退依次验证 1、2、3 个合成回合，观测到零缺失回合和零真实模型调用。测量范围是本机内存控制面和本机临时卷，生产备份、部署与网络均未参与。[容量脚本](./scripts/ga-local-mixed-capacity.mjs) · [本机容量原始回执](../../.tmp/ga-local-mixed-capacity-results.json) · [本机恢复原始回执](../../.tmp/ga-local-rehearsal-results.json)
+
+在具备 systemd 的本机 WSL 管理 shell 切到仓库目录后，逐档复跑：
+
+```bash
+run_local() {
+  systemd-run --wait --collect --pipe --quiet \
+    -p PrivateNetwork=yes -p NoNewPrivileges=yes -p User=1000 \
+    -p CPUQuota=175% -p MemoryMax=1536M -p TasksMax=256 -p RuntimeMaxSec=120 \
+    -p TemporaryFileSystem=/tmp:rw,size=640M,mode=1777 \
+    /usr/bin/env -i PATH=/usr/bin:/bin HOME=/tmp TMPDIR=/tmp \
+    /usr/bin/node --disable-warning=ExperimentalWarning "$@"
+}
+for concurrency in 1 4 8 12; do
+  run_local "$PWD/apps/cloud/scripts/ga-local-mixed-capacity.mjs" "$concurrency"
+done
+run_local "$PWD/.tmp/ga-local-rehearsal.mjs"
+```
+
+该 WSL 的官网和两个子进程共享一个 cgroup。现役由独立官网、Worker 与 renderer 服务承载，磁盘、额外 Worker tmpfs、Chromium、FFmpeg、真实 DSH、Supabase 往返和多账号持续流量仍需隔离 staging 验证。暂无可确认与现役对等的 staging。上述本机观测不作为全量流量阈值、生产 RTO／RPO 或告警送达回执。
+
+2026-11-21 复跑本机数据库冷备恢复。PostgreSQL 18.7 的两个临时集群只用回环网络和合成数据。按现役顺序应用 91 个基线迁移、0095、0094。源库干净停机后，复制并校验 1,243 个数据目录文件耗时 1.447 秒。从目标恢复开始到原任务可查询为 1.821 秒。原任务、0095 用量和唯一 0 Bcoin 终态账本凭证均可读。源库在快照后 1.954 秒新受理的合成任务没有出现在目标库。本机冷备未回放 WAL，生产恢复时限和数据丢失上限仍需用目标部署方案单独验证。
+
+##### 2026-11-21 官网 Cloud 网关并发隔离候选
+
+官网进程启动时从服务环境读取配额。两项均未设置时，继续由每个代理实例的 8 个在途槽位统一承载全部 Cloud 路由。启用隔离须同时设置 `BOWERBIRD_CLOUD_MAX_IN_FLIGHT`（2–16）和 `BOWERBIRD_CLOUD_MAX_STORAGE_IN_FLIGHT`（1 至总量减一）。无效配置会在开始监听前拒绝启动。已登记的签名上传和下载同时占用共享槽位及 Storage 子槽位，Storage 达上限时仍为控制、查询及文本代理保留至少总量减 Storage 上限个槽位。既有 300 次／分钟来源 IP、10,000 个 IP 桶、已鉴权账号跨 Agent／聊天 8 个在途文本请求、180 秒超时和 429 `Retry-After: 60` 沿用。完成、异常、超时及客户端断开均归还已占用槽位。账号、支付及更新网关使用各自的入口与配额。[官网 Cloud 代理](../../website/cloud-proxy.mjs)
+
+北京时间 01:22 完成同一隔离环境的 A/B。原 WSL cgroup 和 tmpfs 限制继续生效，另将文件描述符软硬限额都设为 1024。每档按前述比例提交 60 个相同合成控制样本，4 个模拟核验账号分配给提交端。四路各 16 MiB 的合成视频先经实际签名下载路由送首块，持续占槽至全部控制提交收到结果，再完成流式下载。每组的四路下载与 64 MiB 数据均通过长度及 SHA-256 检查。
+
+| 在途控制数 | 基线完结／429 | 候选完结／429 | 候选完结 / 秒 | 候选等待队列峰值 | 候选网关 P95 ms | 候选端到端 P95 ms | 候选内存峰值 MiB | 候选 FD 峰值 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 60／0 | 60／0 | 10.46 | 17 | 18.2 | 4117.3 | 266.7 | 36 |
+| 4 | 60／0 | 60／0 | 9.61 | 20 | 35.8 | 4990.1 | 278.4 | 46 |
+| 8 | 29／31 | 60／0 | 11.09 | 28 | 45.6 | 4476.1 | 301.4 | 58 |
+| 12 | 25／35 | 60／0 | 10.54 | 43 | 45.1 | 4694.8 | 317.7 | 70 |
+
+候选取总量 16、Storage 4，仅用于本机 12 个在途控制加 4 个持续传输的目标。八组均无其他 HTTP 错误、执行失败或 OOM；候选 12 档内存峰值 317.7／1536 MiB，网关及同进程合成客户端合计 FD 观测峰值 70／1024，临时写盘峰值 0.81／640 MiB。受理增加后，12 档的 PNG 排队 P95 为 4970.6 ms。另有 52 项隔离回归通过，包含越界配置、签名上传和下载共享子限额、查询保留槽位、超时和断开释槽、轮换令牌仍按账号限流、同来源第 301 次请求拒绝，以及账号、支付、更新与桌面路由契约。[容量脚本](./scripts/ga-local-mixed-capacity.mjs) · [本机 A/B 原始回执](../../.tmp/ga-local-gateway-concurrency-results.json) · [网关回归](../../website/scripts/cloud-proxy.test.mjs)
+
+复跑沿用上节命令。在 `systemd-run` 增加 `-p LimitNOFILE=1024:1024`，脚本并发参数后追加 `4 4`（模拟账号数、同时签名下载数）。基线使用空白服务环境，候选在 `/usr/bin/env -i` 后、Node 命令前加入 `BOWERBIRD_CLOUD_MAX_IN_FLIGHT=16 BOWERBIRD_CLOUD_MAX_STORAGE_IN_FLIGHT=4`。该样本经内存 Edge 桩，未覆盖最大 JSON、生产网络往返或持续多租户负载。生产设定应根据目标隔离 staging 的实测容量、排队和上游限额确认。
+
+同日另外验证保持 8 个总槽、签名 Storage 子上限为 4 的候选。基线和候选都提交 8 路各 16 MiB 的持续签名下载及 4 个在途、共 60 条控制请求。基线 8 路下载全通过且 60 条控制全部 429。8／4 候选受理 4 路下载并逐流校验 64 MiB，超额 4 路收到 429 和 `Retry-After: 60`，60 条控制全部完成且零其他错误或 OOM。内存峰值 286.7／1536 MiB，进程 FD 峰值 46／1024。复跑参数基线 `4 4 8 0`，候选 `4 4 8 4`，最后一位为预期 Storage 429 数。该组合验证在现有总槽位内保护控制面的行为，目标容量仍待过门槛。
+
+候选阶段的最小发布范围是从现役官网版本复制后仅更换 `cloud-proxy.mjs`，在独立官网服务配置中成对设置已验证值。回退时撤销本批两个配置项即可恢复共享 8 槽行为。需要回退代码时，按既有官网程序原子切回本批前的现役目录，复核健康、固定 Cloud 路由和旧客户端取回原单。
+
+##### 2026-11-21 官网 Cloud 网关 8／4 已上线
+
+经用户批准，部署范围为现役官网复制版中的 `cloud-proxy.mjs` 以及官网服务独立 `80-cloud-capacity.conf`。北京时间 02:36:54 二次读回，官网运行于 `20261121-cloud-capacity-8-4`，进程总在途 8、签名 Storage 在途 4。已复核候选 SHA-256 `ac2ca1d0c79dc4120ca35c858ddf9f20bc86f09c702cc30a35db1857744ffadb`、其余 94 个文件身份或内容、主 systemd 单元和 Nginx 配置。新官网进程无额外重启，读回 25／1024 FD。回环和公网 `/healthz` 204。三个更新通道总计 6 项跳转和清单核对、5 项固定匿名拒绝均与切换前一致。Windows 26.11.2003、Apple Silicon 26.10.801、Intel 26.10.1501。只在隔离环境做过混合压力。此次上线后检查为低流量回执，目标规格容量、实际容灾和外部告警仍待现场验收。
+
+现役回退入口为 `/opt/bowerbird/deploy-backups/cloud-capacity-8-4-20261121/release.py rollback`。回退先核验原部署文件、链接和独立配置身份，然后恢复 `20261120-windows-26.11.2003` 并移除本批 drop-in，只重启官网。拒绝覆盖后续版本。原子切换、故障回退及重复回退已在本机练习。[本机执行回执](../../.tmp/cloud-capacity-8-4-20261121/approved-verify.json)
 
 ### 5. 微信扫码登录（H5，备案域名 bowerbird.cn）
 

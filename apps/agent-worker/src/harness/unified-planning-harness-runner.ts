@@ -17,6 +17,7 @@ export type PlanningHarnessAdapterFactory = (
   childEnvironment: Readonly<Record<string, string>>,
   providerEnvironment?: Readonly<Record<string, string>>,
   activity?: ToolActivity,
+  options?: { reasoningEffort?: "high"; nativeSession?: { dir: string; sessionId: string } },
 ) => HarnessAdapter;
 
 /**
@@ -35,7 +36,7 @@ export class UnifiedPlanningHarnessRunner {
     this.createAdapter = createAdapter;
   }
 
-  async run(seed: HarnessCheckpointSeed, prompt: HarnessPromptBlock[]): Promise<HarnessTurnResult> {
+  async run(seed: HarnessCheckpointSeed, prompt: HarnessPromptBlock[], onContent?: (content: HarnessPromptBlock) => void): Promise<HarnessTurnResult> {
     if (seed.runId !== this.bridge.runId || !["compose_plan", "execute_approved_plan"].includes(seed.phase) ||
         (seed.phase === "execute_approved_plan" && !/^[0-9a-f]{64}$/.test(seed.approvedPlanHash ?? "")) || !prompt.length ||
         prompt.some((block) => block.type !== "text" || !block.text.trim())) {
@@ -49,7 +50,7 @@ export class UnifiedPlanningHarnessRunner {
       server = await startLoopbackToolBridge({ dispatch: (call) => activity.run(() => this.bridge.dispatch(call)) });
       const adapter = this.createAdapter(server.childEnvironment(), undefined, activity);
       session = await adapter.open(seed);
-      return await session.turn(prompt);
+      return await session.turn(prompt, onContent);
     } finally {
       await session?.close();
       await server?.close();

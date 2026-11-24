@@ -1,0 +1,80 @@
+.site-header .nav-account {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--blue-soft);
+  cursor: pointer;
+  text-align: left;
+}
+.site-header .nav-account:hover { color: var(--ink); }
+.site-header .nav-account[hidden] { display: none; }
+.signup-offer-wrap, .download-offer-wrap { position: relative; display: flex; align-items: center; }
+.signup-offer-wrap:has(.nav-account[hidden]), .offer-bubble[hidden] { display: none; }
+.offer-bubble {
+  position: absolute;
+  z-index: 1;
+  padding: 5px 10px;
+  border: 1px solid #b5c1ff;
+  border-radius: 8px;
+  background: #dfe5ff;
+  color: #1a2342;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.offer-bubble::before {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: solid #b5c1ff;
+  border-width: 1px 0 0 1px;
+  background: inherit;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .offer-bubble:not([data-introduced]) {
+    animation: offer-appear 280ms ease-out 240ms backwards;
+  }
+  @keyframes offer-appear {
+    from { opacity: 0; scale: .94; }
+    70% { opacity: 1; scale: 1.025; }
+    to { opacity: 1; scale: 1; }
+  }
+}
+.signup-offer-wrap .offer-bubble { top: 100%; left: 50%; transform: translateX(-50%); }
+.signup-offer-wrap .offer-bubble::before { top: -5px; left: calc(50% - 4px); transform: rotate(45deg); }
+.download-offer-wrap .button {
+  outline: 2px solid #829aff;
+  outline-offset: 2px;
+}
+.download-offer-wrap .button:focus-visible { outline: 3px solid var(--lime); }
+.download-offer-wrap .offer-bubble { right: 0; bottom: calc(100% + 11px); }
+.download-offer-wrap .offer-bubble::before { bottom: -5px; right: 28px; transform: rotate(225deg); }
+.site-header :focus-visible { outline: 2px solid var(--lime); outline-offset: 4px; }
+:where(#features, #projects, #board-demo, #download) { scroll-margin-top: 72px; }
+@media (max-width: 900px) {
+  .signup-offer-wrap { align-self: start; gap: 12px; }
+  .signup-offer-wrap .offer-bubble { position: relative; top: auto; left: auto; transform: none; }
+  .signup-offer-wrap .offer-bubble::before { top: calc(50% - 4px); left: -5px; transform: rotate(-45deg); }
+  .download-offer-wrap .offer-bubble { left: 0; right: auto; }
+  .download-offer-wrap .offer-bubble::before { left: 28px; right: auto; }
+  .menu-toggle { width: 44px; height: 44px; }
+  .site-nav { gap: 0; max-height: calc(100dvh - 72px); overflow-y: auto; }
+  .site-nav a { display: flex; align-items: center; min-height: 44px; }
+  html:not(.js) .site-header { position: static; height: auto; }
+  html:not(.js) .header-inner { flex-wrap: wrap; height: auto; padding-block: 12px; gap: 6px; }
+  html:not(.js) .menu-toggle { display: none; }
+  html:not(.js) .site-nav {
+    position: static;
+    display: flex;
+    flex-flow: row wrap;
+    width: 100%;
+    max-height: none;
+    padding: 0;
+    border: 0;
+    column-gap: 16px;
+  }
+}

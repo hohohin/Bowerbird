@@ -255,9 +255,6 @@ importers:
       path-browserify:
         specifier: 1.0.1
         version: 1.0.1
-      pdf-lib:
-        specifier: 1.17.1
-        version: 1.17.1
       platejs:
         specifier: 53.5.2
         version: 53.5.2(@types/lodash@4.17.27)(@types/react@18.3.31)(immer@10.2.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(scheduler@0.23.2)(use-sync-external-store@1.6.0(react@18.3.1))
@@ -382,6 +379,9 @@ importers:
       jsqr:
         specifier: 1.4.0
         version: 1.4.0
+      pdf-lib:
+        specifier: 1.17.1
+        version: 1.17.1
       postcss:
         specifier: ^8.4.47
         version: 8.5.16

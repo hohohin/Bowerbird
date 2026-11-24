@@ -30,7 +30,7 @@ try {
   // The canvas owns its loaded assets even when the filtered library list is empty.
   await page.waitForFunction(() => window.calls.filter(call => call.command === "get_assets_by_ids").length >= 2);
   await page.locator('[data-canvas-node-id="old"]').click({ button: "right" });
-  await page.getByRole("menuitem", { name: "图片标注", exact: true }).click();
+  await page.getByRole("menuitem", { name: "编辑", exact: true }).click();
   await dialog.getByAltText("合成参考 existing", { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.store.getState().assets.length), 0);
   assert.equal(await dialog.getByText("素材不存在或已删除", { exact: true }).count(), 0);

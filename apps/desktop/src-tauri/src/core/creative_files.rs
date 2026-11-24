@@ -36,9 +36,10 @@ fn snapshot(db: &Database, id: &str, token: &str) -> AppResult<Option<Value>> {
 pub(super) fn record_snapshot(conn: &Connection, id: &str) -> AppResult<Option<Value>> {
     let asset = rows(&conn, "SELECT id,name,ext,size,width,height,duration,rating,source,source_url,created_at,file_mtime,generation_session_id FROM assets WHERE id=?1", id)?;
     let Some(asset) = asset.into_iter().next() else { return Ok(Some(json!({ "version": 1, "asset_id": id, "deleted": true }))); };
+    // Video transcripts and their task state belong to the local library.
     Ok(Some(json!({
         "version": 2, "asset": asset,
-        "analyses": rows(&conn, "SELECT id,kind,payload,provider,created_at FROM analyses WHERE asset_id=?1 ORDER BY id", id)?,
+        "analyses": rows(&conn, "SELECT id,kind,payload,provider,created_at FROM analyses WHERE asset_id=?1 AND kind<>'video_transcript' ORDER BY id", id)?,
         "tags": rows(&conn, "SELECT t.id,t.name,t.color,at.origin FROM tags t JOIN asset_tags at ON at.tag_id=t.id WHERE at.asset_id=?1 ORDER BY t.id", id)?,
         "prompts": rows(&conn, "SELECT p.*,ap.role FROM prompts p JOIN asset_prompts ap ON ap.prompt_id=p.id WHERE ap.asset_id=?1 ORDER BY p.id", id)?,
     })))

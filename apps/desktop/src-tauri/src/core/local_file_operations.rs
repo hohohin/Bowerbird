@@ -126,6 +126,7 @@ mod tests {
 
 impl Database {
     pub fn rename_local_file(&self, id: &str, expected_path: &str, new_name: &str) -> AppResult<()> {
+        self.complete_connected_fingerprint(id)?;
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let path = selected_file(&tx, id, expected_path)?;
@@ -153,7 +154,7 @@ impl Database {
             for alias in [old.as_ref(), new.as_ref()] {
                 tx.execute("INSERT OR IGNORE INTO external_asset_paths(asset_id,path) VALUES(?1,?2)", params![id,alias])?;
             }
-            tx.execute("UPDATE assets SET name=?2,name_manual=1,store_path=?3,origin_path=CASE WHEN origin_path=?4 THEN ?3 ELSE origin_path END,thumb_path=CASE WHEN thumb_path=?4 THEN ?3 ELSE thumb_path END WHERE id=?1", params![id,stem,new,old])?;
+            tx.execute("UPDATE assets SET name=?2,name_manual=1,store_path=?3,connected_scan_key=NULL,origin_path=CASE WHEN origin_path=?4 THEN ?3 ELSE origin_path END,thumb_path=CASE WHEN thumb_path=?4 THEN ?3 ELSE thumb_path END WHERE id=?1", params![id,stem,new,old])?;
             fs::remove_file(&path)?;
             tx.commit()?;
             Ok(())
@@ -167,6 +168,7 @@ impl Database {
     }
 
     pub fn delete_local_file(&self, id: &str, expected_path: &str) -> AppResult<()> {
+        self.complete_connected_fingerprint(id)?;
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let path = selected_file(&tx, id, expected_path)?;

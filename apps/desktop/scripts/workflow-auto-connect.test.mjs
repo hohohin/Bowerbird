@@ -205,12 +205,22 @@ test('switching a video card to H3 explains incompatible sources and accepts inp
       assert.match(plan(source('photo')).error, /文生视频.*单图.*首尾帧/);
     } else {
       assert.match(plan(videoOutput).error, /从视频中截取/);
-      assert.match(plan(source('music', 'audio')).error, /音频/);
     }
     const audioWithText = plan(source('music', 'audio'), documentOutputs[0]);
     assert.equal(audioWithText.error, null);
-    assert.deepEqual(audioWithText.bindings.map(item => item.inputId), ['text']);
+    assert.deepEqual(audioWithText.bindings.map(item => item.inputId), ['reference-audio', 'text']);
+    assert.deepEqual(audioWithText.bindings[0].binding.mediaFilter, ['audio']);
+    assert.match(plan(source('one', 'audio'), source('two', 'audio')).error, /已连接一段录音/);
   }
+});
+
+test('switching away from H3 parks a local audio connection', () => {
+  const audio = source('music', 'audio');
+  const local = connect(node('h3', 'comfy-video'), [audio]);
+  const remote = selectWorkflowVideoProvider(local, 'cloud');
+  assert.equal(remote.inputs.image.length, 0);
+  assert.equal(remote.inputs['reference-audio'], undefined);
+  assert.deepEqual(selectWorkflowVideoProvider(remote, 'h3').inputs['reference-audio'], local.inputs['reference-audio']);
 });
 
 test('cycles and self-connections reject the entire planned relation', () => {

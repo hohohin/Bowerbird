@@ -155,6 +155,7 @@ html[data-theme] :is(.app-modal, .classification-panel) :is(button, input, texta
   outline-offset: 2px;
   box-shadow: none;
 }
+html[data-theme] .dsh-setup-dialog .app-form-input { border-bottom-color: var(--bb-line-hover); }
 html[data-theme] .app-form-input:focus { outline: 1px solid rgb(var(--industrial-accent-rgb)); }
 html[data-theme] .app-form-input[aria-invalid="true"] { outline-color: var(--bb-danger); }
 html[data-theme] :is(.app-modal, .classification-panel) .app-form-input[aria-invalid="true"]:focus-visible { outline-color: var(--bb-danger); }
@@ -166,7 +167,7 @@ html[data-theme] body :is(
   .app-button-light, .app-icon-button, .app-modal-button, .app-modal-close,
   .library-tactical button, .canvas-tactical button, .composer-glass button,
   .settings-dialog button, .classification-panel button
-):not(:disabled):not([aria-disabled="true"]):not(.is-danger):not([class*="danger"]):not([class*="text-red"]):is(:hover, :focus-visible) {
+):not(:disabled):not([aria-disabled="true"]):not(.is-danger):not([class*="danger"]):not([class*="text-red"]):not(.asset-detail-primary, .workflow-reference-remove, .comfy-frame-action):is(:hover, :focus-visible) {
   color: rgb(var(--industrial-accent-rgb));
 }
 html[data-theme] body .app-modal-button.is-danger:not(:disabled):is(:hover, :focus-visible) {
@@ -260,7 +261,7 @@ html[data-theme] .app-topbar-view-controls::after {
 }
 html[data-theme] .app-topbar .library-icon-segments button { width: 32px; }
 html[data-theme] .topbar-update-slot { width: 36px; height: 32px; }
-html[data-theme] .app-topbar .topbar-update-button { color: var(--bb-blue); }
+html[data-theme] .app-topbar .topbar-update-button[data-install-icon] { color: var(--bb-blue); }
 html[data-theme] .app-topbar .topbar-account-trigger { gap: 12px; padding: 0 4px; }
 html[data-theme] .app-topbar .topbar-account-trigger > :is(span.bg-accent, img) {
   width: 22px; height: 22px; background: none !important; color: inherit;

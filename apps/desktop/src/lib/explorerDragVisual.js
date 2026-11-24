@@ -13,22 +13,27 @@
   }
   window.createBowerbirdDragVisual = (parent = document.body) => {
     let host, root, card, picture, chips, caption, id, landing = false, timer, landedAt = 0;
-    let pointer, hasPreview = false;
+    let pointer, hasPreview = false, candidateLabelsHidden = false;
     const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
     const clear = () => {
       clearTimeout(timer);
-      host?.remove(); host = null; id = null; landing = false; pointer = null; hasPreview = false;
+      host?.remove(); host = null; id = null; landing = false; pointer = null; hasPreview = false; candidateLabelsHidden = false;
     };
-    const move = (x, y) => {
+    const move = (x, y, hideCandidateLabels = candidateLabelsHidden) => {
       if (!host || landing) return;
       pointer = { x, y };
+      if (candidateLabelsHidden !== hideCandidateLabels) {
+        candidateLabelsHidden = hideCandidateLabels;
+        root.toggleAttribute("data-hide-candidates", candidateLabelsHidden);
+      }
+      const showCandidates = hasPreview && !candidateLabelsHidden;
       const bounds = parent === document.body ? { left: 0, top: 0, right: innerWidth, bottom: innerHeight } : parent.getBoundingClientRect();
       // Leave room for the carried card and its surrounding chips at panel edges.
       const previewWidth = card.offsetWidth, previewHeight = card.offsetHeight;
       const width = Math.max(40, Math.min(164, (bounds.right - bounds.left - previewWidth - 56) / 2));
       chips.style.setProperty("--fan-width", `${width}px`);
-      x = Math.max(bounds.left + (hasPreview ? width + 8 : 6), Math.min(bounds.right - previewWidth - 20 - (hasPreview ? width + 12 : 0), x));
-      y = Math.max(bounds.top + previewHeight + (hasPreview ? 48 : 18), Math.min(bounds.bottom - (hasPreview ? 68 : 18), y));
+      x = Math.max(bounds.left + (showCandidates ? width + 8 : 6), Math.min(bounds.right - previewWidth - 20 - (showCandidates ? width + 12 : 0), x));
+      y = Math.max(bounds.top + previewHeight + (showCandidates ? 48 : 18), Math.min(bounds.bottom - (showCandidates ? 68 : 18), y));
       host.style.visibility = "visible";
       host.style.transform = `translate3d(${x}px,${y}px,0)`;
     };
@@ -78,6 +83,7 @@
           width:max-content;max-width:calc(var(--preview-width) + 2 * var(--fan-width));overflow:hidden;text-overflow:ellipsis;
           white-space:nowrap;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:2px;padding:3px 7px; }
         .caption:empty { display:none; }
+        .root[data-phase=carry][data-hide-candidates] :is(.chips,.caption) { display:none; }
         .root[data-phase=landing] .card { left:calc(-1 * var(--preview-width) / 2);top:calc(-1 * var(--preview-height) / 2); }
         .root[data-phase=landing] .chips { display:none; }
         .root[data-phase=landing] .caption { left:0;top:calc(var(--preview-height) / 2 + 12px); }
@@ -110,7 +116,11 @@
     };
     return {
       pick, move, clear,
-      hide() { if (host && !landing) host.style.visibility = "hidden"; },
+      hide() {
+        if (!host || landing) return;
+        host.style.visibility = "hidden";
+        pointer = null;
+      },
       update(value) {
         if (!host || value.id !== id || landing) return;
         if (value.thumbnail) picture.src = value.thumbnail;

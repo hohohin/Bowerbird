@@ -1,8 +1,12 @@
 //! Native filesystem notices are hints; reconciliation remains the existing conservative scan.
-use super::{queue_refresh, request_originals_check};
-use crate::core::folder_connections::connection_root_readable;
+use super::{emit_catalog_scopes, queue_refresh, request_originals_check, RefreshTargets};
+use crate::core::folder_connections::{connection_root_readable, registered_path_spelling};
 use crate::{core::paths::LibraryPaths, db::Database, error::AppResult};
-use notify::{Event, EventKind, RecursiveMode, Watcher};
+use notify::{
+    event::{ModifyKind, RenameMode},
+    Event, EventKind, RecursiveMode, Watcher,
+};
+use rusqlite::{params, OptionalExtension};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -20,7 +24,7 @@ struct Root {
     path: PathBuf,
     indexed_available: bool,
     // A reference may point outside all connected roots. Watch its original's parent too.
-    originals: Vec<PathBuf>,
+    originals: Vec<(PathBuf, String)>,
 }
 fn roots(db: &Database) -> AppResult<Vec<Root>> {
     let conn = db.conn.lock().unwrap();
@@ -35,16 +39,17 @@ fn roots(db: &Database) -> AppResult<Vec<Root>> {
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut stmt = conn.prepare("SELECT DISTINCT f.root_id,a.store_path FROM connected_entries e JOIN connected_folders f ON f.id=e.folder_id JOIN assets a ON a.id=e.asset_id WHERE e.is_reference=1 AND a.store_path IS NOT NULL")?;
+    let mut stmt = conn.prepare("SELECT DISTINCT f.root_id,a.store_path,e.folder_id FROM connected_entries e JOIN connected_folders f ON f.id=e.folder_id JOIN assets a ON a.id=e.asset_id WHERE e.is_reference=1 AND a.store_path IS NOT NULL")?;
     for value in stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             PathBuf::from(row.get::<_, String>(1)?),
+            row.get::<_, String>(2)?,
         ))
     })? {
-        let (id, path) = value?;
+        let (id, path, folder) = value?;
         if let Some(root) = roots.iter_mut().find(|root| root.id == id) {
-            root.originals.push(path);
+            root.originals.push((registered_path_spelling(&path), folder));
         }
     }
     Ok(roots)
@@ -56,29 +61,80 @@ fn ignored(path: &Path) -> bool {
             || value.to_ascii_lowercase().starts_with(".bowerbird-")
     })
 }
-fn affected(event: &Event, roots: &[Root]) -> HashSet<String> {
-    if matches!(event.kind, EventKind::Access(_)) {
-        return HashSet::new();
+
+fn collect_original_changes(event: &Event, generated: &[PathBuf], changed: &mut HashSet<PathBuf>) {
+    let ambiguous_rename = matches!(
+        event.kind,
+        EventKind::Modify(ModifyKind::Name(RenameMode::Any))
+    );
+    let paths = match (event.kind, event.paths.as_slice()) {
+        (EventKind::Modify(ModifyKind::Name(RenameMode::Both)), [_, destination]) => {
+            std::slice::from_ref(destination)
+        }
+        (
+            EventKind::Create(_)
+            | EventKind::Any
+            | EventKind::Modify(
+                ModifyKind::Any
+                | ModifyKind::Data(_)
+                | ModifyKind::Name(RenameMode::To | RenameMode::Any),
+            ),
+            paths,
+        ) => paths,
+        _ => return,
+    };
+    changed.extend(
+        paths.iter().filter(|path| {
+            !ignored(path)
+                && !generated.iter().any(|dir| path.starts_with(dir))
+                // FSEvents leaves rename direction unspecified. Re-verify an
+                // original at the reported name without assuming a missing source was edited.
+                && (!ambiguous_rename || path.is_file())
+        }).cloned(),
+    );
+}
+
+fn collect_scan_paths(event: &Event, paths: &mut HashMap<PathBuf, bool>) {
+    if matches!(event.kind, EventKind::Access(_)) { return; }
+    let replacement = matches!(event.kind, EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_)));
+    for path in event.paths.iter().filter(|path| !ignored(path)) {
+        *paths.entry(path.clone()).or_default() |= replacement;
     }
-    roots
-        .iter()
-        .filter(|root| {
-            event.need_rescan()
-                || event
-                    .paths
-                    .iter()
-                    .filter(|path| !ignored(path))
-                    .any(|path| {
-                        path.starts_with(&root.path)
-                            || root.path.starts_with(path)
-                            || root
-                                .originals
-                                .iter()
-                                .any(|original| original == path || original.starts_with(path))
-                    })
-        })
-        .map(|root| root.id.clone())
-        .collect()
+}
+
+fn affected(db: &Database, roots: &[Root], paths: &HashMap<PathBuf, bool>) -> AppResult<RefreshTargets> {
+    let mut targets = RefreshTargets::default();
+    if paths.is_empty() { return Ok(targets); }
+    let conn = db.conn.lock().unwrap();
+    let mut lookup = conn.prepare_cached("SELECT id FROM connected_folders WHERE path=?1 AND root_id=?2")?;
+    for (path, replacement) in paths {
+        for root in roots {
+            if *replacement && root.path.starts_with(path) {
+                targets.roots.insert(root.id.clone());
+                continue;
+            }
+            if path.starts_with(&root.path) {
+                // A directory notice may name the directory rather than the
+                // changed child. Include its parent to handle a rename or removal.
+                let mut found = false;
+                for ancestor in path.ancestors().take_while(|path| path.starts_with(&root.path)) {
+                    if let Some(folder) = lookup.query_row(params![ancestor.to_string_lossy(), root.id], |row| row.get::<_, String>(0)).optional()? {
+                        targets.folders.insert(folder, root.id.clone());
+                        found = true;
+                        if ancestor != path { break; }
+                    }
+                }
+                if !found { targets.folders.insert(root.id.clone(), root.id.clone()); }
+            }
+            for (original, folder) in &root.originals {
+                if original.starts_with(path) {
+                    targets.folders.insert(folder.clone(), root.id.clone());
+                }
+            }
+        }
+    }
+    targets.folders.retain(|_, root| !targets.roots.contains(root));
+    Ok(targets)
 }
 fn invalidated_watches(event: &Event, watched: &HashMap<PathBuf, RecursiveMode>) -> Vec<PathBuf> {
     let replaced = matches!(
@@ -106,7 +162,7 @@ fn desired_watches(
             watches.insert(root.path.clone(), RecursiveMode::Recursive);
         }
         // Watching the parent detects replacement/deletion of a watched directory itself.
-        for path in std::iter::once(&root.path).chain(root.originals.iter()) {
+        for path in std::iter::once(&root.path).chain(root.originals.iter().map(|(path, _)| path)) {
             if let Some(parent) = path.parent() {
                 parents.insert(parent.to_path_buf());
             }
@@ -181,20 +237,23 @@ fn reconcile_availability(
 }
 #[derive(Default)]
 struct Pending {
-    roots: HashSet<String>,
+    targets: RefreshTargets,
     first: Option<Instant>,
     last: Option<Instant>,
 }
 impl Pending {
     fn add(&mut self, roots: HashSet<String>, now: Instant) {
-        if roots.is_empty() {
+        self.add_targets(RefreshTargets::roots(roots), now);
+    }
+    fn add_targets(&mut self, targets: RefreshTargets, now: Instant) {
+        if targets.is_empty() {
             return;
         }
-        self.roots.extend(roots);
+        self.targets.merge(targets);
         self.first.get_or_insert(now);
         self.last = Some(now);
     }
-    fn take_ready(&mut self, now: Instant) -> Option<HashSet<String>> {
+    fn take_ready(&mut self, now: Instant) -> Option<RefreshTargets> {
         if self
             .last
             .is_some_and(|last| now.duration_since(last) >= Duration::from_millis(750))
@@ -204,11 +263,30 @@ impl Pending {
         {
             self.first = None;
             self.last = None;
-            return Some(std::mem::take(&mut self.roots));
+            return Some(std::mem::take(&mut self.targets));
         }
         None
     }
 }
+
+fn queue_lost_notifications(
+    db: &Database,
+    roots: HashSet<String>,
+    pending: &mut Pending,
+    now: Instant,
+) {
+    // The normal scan can skip files whose stamps match. When the OS or our
+    // bounded channel reports dropped events, verify originals in those roots.
+    for root in &roots {
+        if let Err(error) =
+            crate::core::semantic_search::index::request_connection_verification(db, Some(root))
+        {
+            tracing::warn!(%error, "semantic index lost-notification verification");
+        }
+    }
+    pending.add(roots, now);
+}
+
 pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
     if let Some(main) = app.get_webview_window("main") {
         let (app, db, paths) = (app.clone(), db.clone(), paths.clone());
@@ -263,8 +341,9 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                         &known_roots,
                         &mut available,
                         |value| {
+                            let root = value.root_id.clone();
                             let _ = app.emit("library://connection-availability", value);
-                            super::changed(&app);
+                            emit_catalog_scopes(&app, vec![root], Vec::new());
                         },
                         |root| pending.add(HashSet::from([root]), now),
                     );
@@ -291,7 +370,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                                                 .filter(|root| {
                                                     root.path.starts_with(&path)
                                                         || path.starts_with(&root.path)
-                                                        || root.originals.iter().any(|original| {
+                                                        || root.originals.iter().any(|(original, _)| {
                                                             original.starts_with(&path)
                                                         })
                                                 })
@@ -310,15 +389,26 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                     }
                     sync_at = now;
                 }
+                let mut changed_originals = HashSet::new();
+                let mut lost_roots = HashSet::new();
+                let mut noticed_paths = HashMap::new();
                 while let Ok(event) = receive.try_recv() {
                     match event {
                         Ok(mut event) => {
+                            for path in &mut event.paths { *path = registered_path_spelling(path); }
+                            // Classify a paired rename before removing generated
+                            // paths, so a generated origin cannot shift its destination.
+                            collect_original_changes(&event, &generated, &mut changed_originals);
                             event.paths.retain(|path| {
                                 !generated
                                     .iter()
                                     .any(|generated| path.starts_with(generated))
                             });
-                            pending.add(affected(&event, &known_roots), now);
+                            if event.need_rescan() {
+                                lost_roots.extend(known_roots.iter().map(|root| root.id.clone()));
+                            } else {
+                                collect_scan_paths(&event, &mut noticed_paths);
+                            }
                             // A root can be removed and recreated between availability polls.
                             // Reattach its OS handle even when the same path already exists again.
                             for path in invalidated_watches(&event, &watched) {
@@ -330,10 +420,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                         }
                         Err(error) => {
                             tracing::warn!("connection watcher: {error}");
-                            pending.add(
-                                known_roots.iter().map(|root| root.id.clone()).collect(),
-                                now,
-                            );
+                            lost_roots.extend(known_roots.iter().map(|root| root.id.clone()));
                             // An OS watch can become invalid after a mount/root is replaced.
                             if let Some(native) = native.as_mut() {
                                 for path in watched.keys() {
@@ -344,11 +431,29 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                         }
                     }
                 }
+                let targets = match affected(&db, &known_roots, &noticed_paths) {
+                    Ok(targets) => targets,
+                    Err(error) => {
+                        tracing::warn!(%error, "connection watcher scope lookup");
+                        lost_roots.extend(known_roots.iter().map(|root| root.id.clone()));
+                        RefreshTargets::default()
+                    }
+                };
+                if !changed_originals.is_empty() {
+                    let paths: Vec<_> = changed_originals.into_iter().collect();
+                    match crate::core::semantic_search::index::note_original_changes(&db, &paths) {
+                        Ok(true) if targets.is_empty() => super::changed(&app),
+                        Ok(true) => { emit_catalog_scopes(&app, targets.roots.iter().cloned().collect(), targets.folders.keys().cloned().collect()); }
+                        Ok(false) => (),
+                        Err(error) => tracing::warn!(%error, "semantic index change notice"),
+                    }
+                }
+                pending.add_targets(targets, now);
                 if overflow.swap(false, Ordering::AcqRel) {
-                    pending.add(
-                        known_roots.iter().map(|root| root.id.clone()).collect(),
-                        now,
-                    );
+                    lost_roots.extend(known_roots.iter().map(|root| root.id.clone()));
+                }
+                if !lost_roots.is_empty() {
+                    queue_lost_notifications(&db, lost_roots, &mut pending, now);
                 }
                 // Native notifications can be absent on NAS mounts. A bounded fallback plus
                 // focus/manual checks also recover missed events without a hot full-tree poll.
@@ -364,12 +469,12 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                     );
                     fallback_at = now;
                 }
-                if let Some(roots) = pending.take_ready(now) {
+                if let Some(targets) = pending.take_ready(now) {
                     queue_refresh(
                         app.clone(),
                         db.clone(),
                         paths.clone(),
-                        Some(roots),
+                        Some(targets),
                         None,
                         true,
                     );
@@ -384,7 +489,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{AccessKind, ModifyKind};
+    use notify::event::AccessKind;
     #[test]
     fn removable_root_round_trip() {
         use std::fs;
@@ -588,42 +693,46 @@ mod tests {
     }
     #[test]
     fn filters_sidecar_and_reads_but_tracks_reference_files_and_external_originals() {
-        let root = Root {
-            id: "a".into(),
-            indexed_available: true,
-            path: PathBuf::from("/media"),
-            originals: vec![PathBuf::from("/outside/source.png")],
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        let source = base.join("media");
+        std::fs::create_dir_all(source.join("first")).unwrap();
+        std::fs::create_dir_all(source.join("second")).unwrap();
+        let paths = LibraryPaths::init(base.join("library")).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id = db.connect_directory(&source, None).unwrap();
+        db.scan_connection(&paths, &id).unwrap();
+        let folders = db.connection_folders(None, None).unwrap();
+        let folder = |name: &str| folders.iter().find(|folder| folder.name == name).unwrap().id.clone();
+        let first = folder("first");
+        let second = folder("second");
+        let external = base.join("outside/source.png");
+        let mut known = roots(&db).unwrap();
+        known[0].originals.push((external.clone(), first.clone()));
+        let scoped = |event| {
+            let mut notices = HashMap::new();
+            collect_scan_paths(&event, &mut notices);
+            affected(&db, &known, &notices).unwrap()
         };
-        for path in [
-            "/media/.bowerbird/id.json",
-            "/media/.bowerbird-cache/file",
-            "/other/file",
-        ] {
-            assert!(affected(
-                &Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path.into()),
-                &[root.clone()]
-            )
-            .is_empty());
+        let modified = |path: PathBuf| Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path);
+        for path in [source.join(".bowerbird/id.json"), source.join(".bowerbird-cache/file"), base.join("other/file")] {
+            assert!(scoped(modified(path)).is_empty());
         }
-        for path in [
-            "/media/photo.png.bowerbird",
-            "/media/photo.png",
-            "/outside/source.png",
-            "/media",
-        ] {
-            assert_eq!(
-                affected(
-                    &Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path.into()),
-                    &[root.clone()]
-                ),
-                HashSet::from(["a".into()])
-            );
+        for path in [source.join("first/photo.png.bowerbird"), source.join("first/unknown/photo.png"), external] {
+            let target = scoped(modified(path));
+            assert!(target.roots.is_empty());
+            assert_eq!(target.folders, HashMap::from([(first.clone(), id.clone())]));
         }
-        assert!(affected(
-            &Event::new(EventKind::Access(AccessKind::Read)).add_path("/media/photo.png".into()),
-            &[root]
-        )
-        .is_empty());
+        let paired = scoped(Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(source.join("first/photo.png")).add_path(source.join("second/photo.png")));
+        assert_eq!(paired.folders, HashMap::from([(first, id.clone()), (second, id.clone())]));
+        let modified_root = scoped(modified(source.clone()));
+        assert_eq!(modified_root.folders, HashMap::from([(id.clone(), id.clone())]));
+        let replaced = scoped(Event::new(EventKind::Remove(notify::event::RemoveKind::Folder)).add_path(source.clone()));
+        assert_eq!(replaced.roots, HashSet::from([id]));
+        assert!(replaced.folders.is_empty());
+        assert!(scoped(Event::new(EventKind::Access(AccessKind::Read)).add_path(source.join("first/photo.png"))).is_empty());
     }
     #[test]
     fn debounces_bursts_without_starving_continuous_writes() {
@@ -639,6 +748,7 @@ mod tests {
             pending
                 .take_ready(start + Duration::from_millis(1250))
                 .unwrap()
+                .roots
                 .len(),
             2
         );
@@ -652,13 +762,14 @@ mod tests {
             pending
                 .take_ready(start + Duration::from_secs(2))
                 .unwrap()
+                .roots
                 .len(),
             1
         );
     }
     #[test]
     fn root_replacement_invalidates_only_affected_watch_handles() {
-        use notify::event::{RemoveKind, RenameMode};
+        use notify::event::RemoveKind;
         let watched = HashMap::from([
             (PathBuf::from("/media"), RecursiveMode::Recursive),
             (PathBuf::from("/other"), RecursiveMode::Recursive),
@@ -679,6 +790,155 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn replacement_events_mark_only_the_destination_and_coalesce_duplicates() {
+        let from = PathBuf::from("/media/.bowerbird-temporary/preview.png");
+        let to = PathBuf::from("/media/reference.png");
+        let generated = PathBuf::from("/generated");
+        let event = |mode| Event::new(EventKind::Modify(ModifyKind::Name(mode)));
+        let mut changed = HashSet::new();
+        collect_original_changes(
+            &event(RenameMode::From).add_path(to.clone()),
+            &[],
+            &mut changed,
+        );
+        assert!(changed.is_empty());
+        collect_original_changes(
+            &event(RenameMode::Both).add_path(from.clone()).add_path(generated.join("skip.png")),
+            std::slice::from_ref(&generated),
+            &mut changed,
+        );
+        assert!(changed.is_empty());
+        collect_original_changes(
+            &event(RenameMode::Both).add_path(from).add_path(to.clone()),
+            &[],
+            &mut changed,
+        );
+        collect_original_changes(
+            &event(RenameMode::To).add_path(to.clone()),
+            &[],
+            &mut changed,
+        );
+        assert_eq!(changed, HashSet::from([to]));
+    }
+
+    #[test]
+    fn native_watcher_detects_same_size_and_mtime_atomic_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let original = root.join("original.png");
+        let replacement = root.join("incoming.tmp");
+        std::fs::write(&original, b"before").unwrap();
+        std::fs::write(&replacement, b"after!").unwrap();
+        let before = std::fs::metadata(&original).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_modified(before.modified().unwrap())
+            .unwrap();
+
+        let (send, receive) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(send).unwrap();
+        watcher.watch(&root, RecursiveMode::Recursive).unwrap();
+        std::fs::rename(&replacement, &original).unwrap();
+        let after = std::fs::metadata(&original).unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            let event = receive
+                .recv_timeout(until.saturating_duration_since(Instant::now()))
+                .unwrap()
+                .unwrap();
+            if matches!(event.kind, EventKind::Modify(ModifyKind::Name(_))) {
+                let mut changed = HashSet::new();
+                collect_original_changes(&event, &[], &mut changed);
+                if changed.contains(&original) {
+                    assert!(!changed.contains(&replacement));
+                    break;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lost_notification_scan_recovers_same_stamp_unsupported_original() {
+        use crate::core::semantic_search::index;
+        use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+        use sha2::{Digest, Sha256};
+        use std::{fs, io::Cursor};
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("originals");
+        fs::create_dir(&source).unwrap();
+        let original = source.join("asset.png");
+        let encode = |format, side| {
+            let image =
+                DynamicImage::ImageRgb8(RgbImage::from_pixel(side, side, Rgb([12, 91, 180])));
+            let mut out = Cursor::new(Vec::new());
+            image.write_to(&mut out, format).unwrap();
+            out.into_inner()
+        };
+        let mut unsupported = encode(ImageFormat::Bmp, 1);
+        let supported = encode(ImageFormat::Png, 4);
+        assert!(supported.len() > unsupported.len());
+        unsupported.resize(supported.len(), 0);
+        fs::write(&original, &unsupported).unwrap();
+        let stamp = fs::metadata(&original).unwrap().modified().unwrap();
+
+        let paths = LibraryPaths::init(temp.path().join("internal")).unwrap();
+        let db = Database::open(&paths.db).unwrap();
+        db.migrate().unwrap();
+        let root = db
+            .connect_directory(&fs::canonicalize(&source).unwrap(), None)
+            .unwrap();
+        db.scan_connection(&paths, &root).unwrap();
+        let identity = || {
+            let conn = db.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT asset_id,fingerprint FROM external_assets",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            ).unwrap()
+        };
+        let prior = identity();
+        index::control(&db, "start").unwrap();
+        index::run_one(&db, |_| panic!("unsupported source must not reach image encoder"))
+            .unwrap();
+        assert_eq!(index::status(&db).unwrap().unsupported, 1);
+
+        fs::write(&original, &supported).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&original)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        let after = fs::metadata(&original).unwrap();
+        assert_eq!(after.len(), unsupported.len() as u64);
+        assert_eq!(after.modified().unwrap(), stamp);
+        db.scan_connection(&paths, &root).unwrap();
+        assert_eq!(identity(), prior, "ordinary scan skips the same stamp");
+
+        let mut pending = Pending::default();
+        let now = Instant::now();
+        queue_lost_notifications(&db, HashSet::from([root]), &mut pending, now);
+        for id in pending.take_ready(now + Duration::from_secs(1)).unwrap().roots {
+            db.scan_connection(&paths, &id).unwrap();
+        }
+        assert_eq!(identity(), (prior.0, format!("{:x}", Sha256::digest(&supported))));
+        index::run_one(&db, |_| {
+            let mut vector = vec![0.0; 768];
+            vector[0] = 1.0;
+            Ok(vector)
+        }).unwrap();
+        let status = index::status(&db).unwrap();
+        assert_eq!((status.indexed, status.unsupported), (1, 0));
+    }
+
     #[test]
     fn native_watcher_detects_real_temporary_file_changes() {
         let temp = tempfile::tempdir().unwrap();

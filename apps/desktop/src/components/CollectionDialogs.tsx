@@ -14,17 +14,17 @@ import { useStore } from "../store";
 import { stopAudioPreview, stopAudioPreviewInFolder } from "../lib/audioPreview";
 
 function FolderDestination({ name, fixedParent, location, onPick, disabled, onError }: {
-  name: string; fixedParent?: string; location: string | null;
-  onPick: (path: string) => void; disabled: boolean; onError: (message: string) => void;
+  name: string; fixedParent?: string; location?: string | null;
+  onPick?: (path: string) => void; disabled: boolean; onError: (message: string) => void;
 }) {
   const [defaultRoot, setDefaultRoot] = useState("");
   useEffect(() => {
     if (fixedParent) return;
     let active = true;
     fileWorkspace.status().then(status => { if (active) setDefaultRoot(status.proposed_root); })
-      .catch(reason => { if (active) onError(userErrorMessage(reason, "资料目录暂时无法读取，可更改父目录。")); });
+      .catch(reason => { if (active) onError(userErrorMessage(reason, onPick ? "资料目录暂时无法读取，可更改父目录。" : "暂时无法读取 BowerbirdLibrary 的保存位置。")); });
     return () => { active = false; };
-  }, [fixedParent, onError]);
+  }, [fixedParent, onError, onPick]);
   const base = fixedParent || location || defaultRoot;
   const display = base.replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/, "");
   const destination = name.trim() && display
@@ -32,12 +32,12 @@ function FolderDestination({ name, fixedParent, location, onPick, disabled, onEr
   async function pick() {
     try {
       const path = await api.pickFolder(base || undefined, "选择新文件夹的父目录");
-      if (path) { onPick(path); onError(""); }
+      if (path) { onPick?.(path); onError(""); }
     } catch (reason) { onError(userErrorMessage(reason, "无法打开文件夹选择器，请重试。")); }
   }
   return <div>
     <p className="break-all text-xs text-muted">保存位置 {destination || "BowerbirdLibrary"}</p>
-    {!fixedParent && <button type="button" className="app-modal-button" disabled={disabled} onClick={() => void pick()}>更改父目录</button>}
+    {!fixedParent && onPick && <button type="button" className="app-modal-button" disabled={disabled} onClick={() => void pick()}>更改父目录</button>}
   </div>;
 }
 
@@ -48,7 +48,6 @@ export function CollectionEditorDialog({ collections, item, parentId, projectId 
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
-  const [location, setLocation] = useState<string | null>(null);
   const parent = item ? item.parent_id ?? null : parentId;
   const parentFolder = collections.find(collection => collection.id === parent);
   const parentPath = parentFolder && "path" in parentFolder && typeof parentFolder.path === "string"
@@ -63,7 +62,7 @@ export function CollectionEditorDialog({ collections, item, parentId, projectId 
         await folderConnections.renameFolder(id, name);
       }
       else {
-        id = await folderConnections.create(parent, name, parent ? null : location, projectId);
+        id = await folderConnections.create(parent, name, null, projectId);
       }
       onSaved(id); onClose();
     }
@@ -74,7 +73,7 @@ export function CollectionEditorDialog({ collections, item, parentId, projectId 
     <form className="catalog-form" onSubmit={event => { event.preventDefault(); void save(); }}>
       <label>文件夹名称<input data-modal-autofocus value={name} maxLength={100} onChange={e => setName(e.target.value)} disabled={busy} /></label>
       {!item && <FolderDestination name={name} fixedParent={parent ? parentPath || "选中的文件夹" : undefined}
-        location={location} onPick={setLocation} disabled={busy} onError={setError}/>}
+        disabled={busy} onError={setError}/>}
       {error && <p role="alert">{userErrorMessage(error, "文件夹未保存，请稍后重试。")}</p>}
       <button className="app-button-accent" type="submit" disabled={busy || !name.trim()}>{busy ? "保存中…" : "保存"}</button>
     </form>

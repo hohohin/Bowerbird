@@ -38,18 +38,15 @@ try {
       const target = grouped ? node("folder").locator('[data-frequent-asset-id="existing"]') : node("old");
       await target.click({ button: "right", position: { x: 15, y: 15 } });
       const menu = page.getByRole("menu", { name: "素材操作" });
-      const scope = mode === "group" ? "删除当前组" : "删除当前项";
-      const trigger = menu.getByRole("menuitem", { name: scope, exact: true });
-      assert.ok(await trigger.locator("svg").count() > 0);
-      await trigger.click();
-      const labels = ["移出画布", "移出项目", "删除原文件…"];
-      const tips = ["素材仍能在项目素材库找到", "移除后，进入全局素材", "将文件放入回收箱，应用内不可见"];
-      const submenu = page.getByRole("menu").filter({ has: page.getByRole("menuitem", { name: "移出画布", exact: true }) }).last();
-      assert.deepEqual(await submenu.getByRole("menuitem").allTextContents(), labels);
-      for (const [index, label] of labels.entries()) {
-        assert.equal(await submenu.getByRole("menuitem", { name: label, exact: true }).getAttribute("title"), tips[index]);
+      if (mode === "group") {
+        await menu.getByRole("menuitem", { name: "整组操作 · 2 项", exact: true }).click();
+        await page.getByRole("menuitem", { name: "将整组移出画布", exact: true }).click();
+      } else if (mode === "keep") {
+        await menu.getByRole("menuitem", { name: "项目与原文件", exact: true }).click();
+        await page.getByRole("menuitem", { name: "移出项目", exact: true }).click();
+      } else {
+        await menu.getByRole("menuitem", { name: "移出画布", exact: true }).click();
       }
-      await submenu.getByRole("menuitem", { name: mode === "keep" ? "移出项目" : "移出画布", exact: true }).click();
     }
     if (mode.startsWith("group")) {
       await remove();
@@ -110,14 +107,13 @@ try {
     const card = node(session ? "session" : "workflow-video:a");
     const target = session ? card.locator('[data-conversation-image="b"]') : card;
     await target.click({ button: "right", position: { x: 30, y: 30 } });
-    await page.getByRole("menuitem", { name: "删除当前组" }).click();
+    await page.getByRole("menuitem", { name: "整组操作 · 2 项", exact: true }).click();
     await page.getByRole("menuitem", { name: "删除原文件…", exact: true }).click();
     await page.waitForFunction(() => window.calls.some(c => c.command === "preview_asset_originals"));
     assert.deepEqual(await page.evaluate(() => window.calls.findLast(c => c.command === "preview_asset_originals").args.assetIds.slice().sort()), ["a", "b"]);
     await page.getByRole("dialog").getByRole("button", { name: "取消" }).click();
     assert.equal(await page.evaluate(() => window.calls.some(c => c.command === "trash_asset_original")), false);
     await target.click({ button: "right", position: { x: 30, y: 30 } });
-    await page.getByRole("menuitem", { name: "删除当前项" }).click();
     await page.getByRole("menuitem", { name: "移出画布" }).click();
     await page.waitForFunction(() => window.snapshot().nodes.find(n => n.id === "workflow-video:b")?.hiddenAt != null);
     assert.equal(await card.isVisible(), true);

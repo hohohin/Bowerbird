@@ -70,7 +70,8 @@ async function dragCard(id) {
 try {
   await page.goto("http://127.0.0.1:1569/scripts/fixtures/draft-library/preview.html");
   await page.evaluate(() => {
-    window.libraryState.setState({ query: "原库搜索", generatedFilter: "source:generated", media: "videos", source: "project", open: false });
+    window.libraryState.setState({ query: "原库搜索", generatedFilter: "source:generated", media: "videos", hierarchyTarget: { kind: "projects", projectId: "isolated-project" }, open: false });
+    window.store.setState({ projects: [{ id: "isolated-project", name: "测试项目" }] });
     window.store.getState().openDraftEditor({ assetId: null, projectId: "isolated-project" });
   });
   await dialog.locator("[data-draft-canvas]").waitFor();
@@ -81,12 +82,13 @@ try {
   assert.ok(thumb && thumb.width > 20 && thumb.height > 20, "catalog thumbnails must retain visible dimensions within editor button styles");
   assert.equal(await library.getByRole("button", { name: "视频", exact: true }).count(), 0);
   assert.equal(await library.getByRole("button", { name: "添加到画板", exact: true }).count(), 0);
-  await library.getByRole("tab", { name: "项目", exact: true }).click();
+  await library.getByRole("button", { name: "测试项目", exact: true }).click();
   await library.locator('[data-asset-id="library-red"]').waitFor();
   assert.equal(await library.locator('[data-asset-id="library-blue"]').count(), 0);
-  await library.getByRole("tab", { name: "全局", exact: true }).click();
+  await library.getByRole("button", { name: "全部素材", exact: true }).click();
   await library.locator('[data-asset-id="library-blue"]').waitFor();
-  await library.getByRole("textbox", { name: "搜索草稿素材" }).fill("红色");
+  await library.getByRole("button", { name: "搜索素材", exact: true }).click();
+  await library.getByRole("searchbox", { name: "搜索素材" }).fill("红色");
   await library.locator('[data-asset-id="library-blue"]').waitFor({ state: "detached" });
   await page.keyboard.press("Tab");
   assert.equal(await library.getAttribute("aria-hidden"), "false", "Tab from a text input must remain focus traversal");
@@ -97,13 +99,14 @@ try {
   assert.equal((await saveCalls()).length, 0);
   await page.keyboard.press("Escape"); await hiddenLibrary();
   assert.equal(await dialog.isVisible(), true, "Escape closes the library before the editor");
-  assert.deepEqual(await page.evaluate(() => { const { query, generatedFilter, media, source, open } = window.libraryState.getState(); return { query, generatedFilter, media, source, open }; }),
-    { query: "原库搜索", generatedFilter: "source:generated", media: "videos", source: "project", open: false });
+  assert.deepEqual(await page.evaluate(() => { const { query, generatedFilter, media, hierarchyTarget, open } = window.libraryState.getState(); return { query, generatedFilter, media, hierarchyTarget, open }; }),
+    { query: "原库搜索", generatedFilter: "source:generated", media: "videos", hierarchyTarget: { kind: "projects", projectId: "isolated-project" }, open: false });
 
   await page.keyboard.press("Tab");
   await page.waitForFunction(() => document.querySelector("[data-draft-library]")?.getAttribute("aria-hidden") === "false");
   await library.focus(); await page.keyboard.press("Space");
-  await library.getByRole("textbox", { name: "搜索草稿素材" }).focus();
+  await library.getByRole("button", { name: "搜索素材", exact: true }).click();
+  await library.getByRole("searchbox", { name: "搜索素材" }).focus();
   await page.keyboard.press("Escape"); await hiddenLibrary();
   assert.equal(await dialog.locator(".draft-preview").evaluate(element => element === document.activeElement), true);
   assert.equal(await dialog.locator(".draft-preview").evaluate(element => element.classList.contains("is-pan-ready") || element.classList.contains("is-panning")), false);
@@ -141,7 +144,7 @@ try {
 
   // Connected collections must retain the Mac draft's explicit image picker contract.
   await openLibrary();
-  await library.getByRole("tab", { name: "集合", exact: true }).click();
+  await library.getByRole("button", { name: "全部文件夹素材", exact: true }).click();
   await library.locator('[data-connection-entry="entry-library-red"]').waitFor();
   assert.equal(await library.getByRole("button", { name: "视频", exact: true }).count(), 0);
   await library.locator('[data-asset-id="library-red"]').dblclick();
@@ -158,7 +161,7 @@ try {
   await dialog.getByRole("button", { name: "撤销", exact: true }).click();
   assert.equal(await layers(), 3);
   await openLibrary();
-  await library.getByRole("tab", { name: "全部", exact: true }).click();
+  await library.getByRole("button", { name: "全部素材", exact: true }).click();
   await page.keyboard.press("Escape"); await hiddenLibrary();
 
   // A failed read is atomic: preserve the current tool, pixel selection and active layer.

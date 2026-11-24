@@ -24,6 +24,8 @@
 
 ## 验证与发布
 
+- 2026-11-21 官网网关 8／4 已上线。现役官网网关同时处理最多 8 个 Cloud 请求，签名 Storage 上传与下载共用其中最多 4 个。槽位随 HTTP 请求结束释放，后台模型任务、官网安装包和更新走各自通道。来源 IP 和已鉴权文本账号继续按原范围限流。8 个持续下载的隔离对照中，原配置控制请求 0/60，8／4 完成 60/60，超额文件请求返回可重试 429。生产核对配置、健康和固定通道，目标规格容量及容灾待验。[生产回执与回退](../apps/cloud/DEPLOY.md#2026-11-21-官网-cloud-网关-84-已上线)
+
 - 2026-11-09 已部署：Agent `request.json` 的共享路由 `maxBytes: null` 表示不附加应用字节配额；Agent 控制 JSON 和事件结果同样移除固定大小拦截，Nginx 前置 200 MiB body 上限同步取消，由固定路由继续执行媒体配额。签名、非空／精确长度、账号、路由与断线恢复保持，媒体和其他 Function 的配额不变。Cloud Storage 仍受平台全局上传容量约束，0081／0083、Edge／Worker 与现役网关已配套更新；公网约 25.2 MiB 合成清单上传及完整读回通过，桌面安装包未重发。见 [工作流文本容量](CANVAS-WORKFLOW.md#2026-11-09agent-文本容量与-dsh-配置cloud-已部署桌面源码待发布)。
 
 - `node apps/desktop/scripts/cloud-routing-contract.test.mjs` 扫描实际 Rust 调用，拒绝未登记 Function、业务代码直接读取 Supabase URL／REST 地址以及 Agent 绕开公共上传映射；已纳入桌面 `build`。

@@ -31,7 +31,7 @@ export interface HarnessSession {
   readonly sessionId: string;
   readonly runId: string;
   /** 只返回 committed answer；隐藏思维链不进入 Bowerbird 事件。 */
-  turn(prompt: HarnessPromptBlock[]): Promise<HarnessTurnResult>;
+  turn(prompt: HarnessPromptBlock[], onContent?: (content: HarnessPromptBlock) => void): Promise<HarnessTurnResult>;
   cancel(): Promise<void>;
   /** 当前 DSH rc 使用连接级关闭；不得假装调用不存在的 ACP session/close。 */
   close(): Promise<void>;

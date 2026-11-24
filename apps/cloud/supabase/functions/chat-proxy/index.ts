@@ -6,6 +6,8 @@ import {
   DSH_CHAT_ENGINE_V2,
   chatFailure,
   ChatInputError,
+  isDshChatModel,
+  h3OptimizationRunId,
   parseChatToolReceipt,
   validChatCallId,
   validateChatInput,
@@ -38,6 +40,9 @@ const BUCKET = "generation-temp";
 const enabled = () => Deno.env.get("CHAT_ENABLED") === "true";
 const dshEnabled = () => Deno.env.get("CHAT_DSH_VPS_ENABLED") === "true";
 const dshV2Enabled = () => dshEnabled() && Deno.env.get("CHAT_DSH_VPS_V2_ENABLED") === "true";
+const paidEnabled = () => Deno.env.get("CHAT_DSH_TOKEN_BILLING_ENABLED") === "true";
+const dshV2TrialAvailable = (user: { app_metadata?: unknown }) =>
+  Deno.env.get("CHAT_DSH_VPS_V2_TEST_ONLY")?.trim().toLowerCase() !== "true" || accountTestMarker(user.app_metadata);
 async function skillsAvailable(admin: SupabaseClient, user: { id: string; app_metadata?: unknown }) {
   if (!dshEnabled() || !accountTestMarker(user.app_metadata) ||
       Deno.env.get("AGENT_DSH_RUNTIME_SELECTION_ENABLED")?.trim().toLowerCase() !== "true" ||
@@ -57,6 +62,32 @@ const hash = async (text: string) =>
     (byte) => byte.toString(16).padStart(2, "0"),
   ).join("");
 const scalar = <T>(value: T | T[]) => Array.isArray(value) ? value[0] : value;
+
+async function verifyOptimizationConversation(admin: SupabaseClient, userId: string, conversation: string, key: string) {
+  const runId = h3OptimizationRunId(conversation);
+  if (!runId) throw new ApiError("invalid_request", "提示词优化对话编号无效");
+  const account = await admin.from("billing_accounts").select("id").eq("auth_user_id", userId).maybeSingle();
+  if (account.error) throw new ApiError("internal_error", "提示词优化对话暂时无法读取", true);
+  if (!account.data) throw new ApiError("invalid_request", "原提示词优化对话无法续聊", false, 404);
+  const source = await admin.from("agent_runs").select("id")
+    .eq("id", runId).eq("user_id", account.data.id).eq("status", "succeeded").eq("agent_runtime", "dsh").maybeSingle();
+  if (source.error) throw new ApiError("internal_error", "提示词优化对话暂时无法读取", true);
+  if (!source.data) throw new ApiError("invalid_request", "原提示词优化对话无法续聊", false, 404);
+  const sessionKey = await hash(`bowerbird:dsh-v2:${userId}:${conversation}`);
+  const ownJobs = () => admin.from("chat_completion_jobs").select("id")
+    .eq("user_id", userId).eq("dsh_session_key", sessionKey);
+  const [previous, replay] = await Promise.all([
+    ownJobs().eq("status", "succeeded").limit(1).maybeSingle(),
+    ownJobs().eq("idempotency_key", key).maybeSingle(),
+  ]);
+  if (previous.error || replay.error) throw new ApiError("internal_error", "提示词优化对话暂时无法读取", true);
+  if (previous.data || replay.data) return;
+  const event = await admin.from("agent_events").select("seq")
+    .eq("run_id", runId).eq("type", "text.result").contains("display_payload", { dshContinuation: true })
+    .gt("content_expires_at", new Date().toISOString()).maybeSingle();
+  if (event.error) throw new ApiError("internal_error", "提示词优化对话暂时无法读取", true);
+  if (!event.data) throw new ApiError("invalid_request", "原提示词优化对话无法续聊", false, 404);
+}
 
 function response(job: Job, cors: HeadersInit, includeTool = false): Response {
   const expired = Date.parse(job.content_expires_at) <= Date.now();
@@ -96,10 +127,11 @@ async function create(
   cors: HeadersInit,
 ): Promise<Response> {
   const userId = user.id;
+  const paid = raw.action === "create_paid";
+  const allowedKeys = ["action", "idempotency_key", "messages", "tools_enabled", "engine", "conversation_id", "skill", "image_card_provider", "video_card_options", "h3_r2v", "dsh_options"];
+  if (paid) allowedKeys.push("pricing_version", "max_credits", "max_output_tokens");
   if (
-    Object.keys(raw).some((key) =>
-      !["action", "idempotency_key", "messages", "tools_enabled", "engine", "conversation_id", "skill", "image_card_provider", "video_card_options", "dsh_options"].includes(key)
-    ) ||
+    Object.keys(raw).some((key) => !allowedKeys.includes(key)) ||
     typeof raw.idempotency_key !== "string" || !raw.idempotency_key.trim() ||
     raw.idempotency_key.length > 200
   ) throw new ApiError("invalid_request", "对话请求格式无效");
@@ -111,33 +143,45 @@ async function create(
     dsh_options: raw.dsh_options,
     image_card_provider: raw.image_card_provider,
     video_card_options: raw.video_card_options,
+    h3_r2v: raw.h3_r2v,
     ...(raw.tools_enabled === undefined
       ? {}
       : { tools_enabled: raw.tools_enabled }),
   });
+  if (paid && (input.engine !== DSH_CHAT_ENGINE_V2 || !input.dsh_options || !positiveInteger(raw.pricing_version) ||
+    !positiveInteger(raw.max_credits) || !positiveInteger(raw.max_output_tokens) || raw.max_output_tokens > 393216)) {
+    throw new ApiError("invalid_request", "请先查看并确认本轮云端对话的费用上限");
+  }
+  if (paid && !paidEnabled()) throw new ApiError("not_configured", "云端 DSH 付费对话尚未开放");
   const body = JSON.stringify(input), digest = await hash(body);
-  if (input.engine !== DSH_CHAT_ENGINE_V2) {
+  if (!paid && (input.engine !== DSH_CHAT_ENGINE_V2 || paidEnabled())) {
     // Old clients can finish an interrupted upload or retrieve their exact original order.
     const existing = await admin.from("chat_completion_jobs").select(
       "id,status,input_hash,request_object_key,actual_credits,estimated_credits,pricing_version,hold_id,error_code,content_expires_at,lease_expires_at,result_json,dsh_tools_enabled",
     ).eq("user_id", userId).eq("idempotency_key", raw.idempotency_key).maybeSingle();
     if (existing.error) throw new ApiError("internal_error", "云端对话暂时无法读取", true);
-    if (!existing.data) throw new ApiError("invalid_request", "云端对话已统一为 DSH · Cloud，请更新 Bowerbird 桌面端后再发送。", false, 426);
+    if (!existing.data || (input.engine === DSH_CHAT_ENGINE_V2 && existing.data.estimated_credits !== 0)) {
+      throw new ApiError("invalid_request", "请更新 Bowerbird 桌面端，查看云端对话报价后再发送。", false, 426);
+    }
     if (existing.data.input_hash !== digest) {
       throw new ApiError("invalid_request", "此请求已用于其他对话内容", false, 409);
     }
     return enqueueIfUploading(admin, existing.data as Job, body, digest, cors);
   }
   if (!dshV2Enabled()) throw new ApiError("not_configured", "云端 DSH 尚未开放");
+  if (!dshV2TrialAvailable(user)) throw new ApiError("invalid_request", "云端 DSH 目前仅向获准的测试账号开放。", false, 403);
+  if (input.conversation_id?.startsWith("o-")) {
+    await verifyOptimizationConversation(admin, userId, input.conversation_id, raw.idempotency_key);
+  }
   if (input.skill && !await skillsAvailable(admin, user)) throw new ApiError("upgrade_required", "当前账号暂不可使用该 Agent 技能");
   await ensureDailyCredits(admin, userId);
-  const daily = Number(Deno.env.get("DAILY_COST_LIMIT_CNY") ?? 500) * 1_000_000;
+  const daily = Math.round(Number(Deno.env.get("CHAT_DAILY_COST_LIMIT_CNY") ?? 500) * 1_000_000);
   const rate = Number(Deno.env.get("RATE_LIMIT_PER_USER_PER_MIN") ?? 10);
   if (
     !Number.isSafeInteger(daily) || daily <= 0 || !Number.isSafeInteger(rate) ||
     rate <= 0
   ) throw new ApiError("not_configured", "云端对话额度配置无效");
-  const begun = await admin.rpc("begin_chat_session_turn", {
+  const begun = await admin.rpc(paid ? "begin_chat_paid_turn" : "begin_chat_session_turn", {
     p_conversation: input.conversation_id,
     p_dsh_tools: input.tools_enabled,
     p_user_id: userId,
@@ -148,8 +192,22 @@ async function create(
     )}/request.json`,
     p_daily_cost_limit: daily,
     p_per_minute: rate,
+    ...(paid ? { p_model: input.dsh_options?.model, p_pricing_version: raw.pricing_version,
+      p_max_credits: raw.max_credits, p_max_output_tokens: raw.max_output_tokens,
+    } : {}),
   });
   if (begun.error) {
+    if (paid) {
+      if (begun.error.details === "chat_paid_unavailable") {
+        throw new ApiError("not_configured", "云端 DSH 付费对话暂不可用");
+      }
+      if (begun.error.details === "chat_paid_price_mismatch") {
+        throw new ApiError("quote_changed", "本轮报价已变化或与原请求不一致，请先核对原请求及当前报价");
+      }
+      if (begun.error.details === "insufficient_credits") {
+        throw new ApiError("insufficient_credits", "当前 Bcoin 余额低于本轮授权上限");
+      }
+    }
     if (begun.error.details === "chat_session_busy") {
       throw new ApiError("invalid_request", "这段云端对话仍在处理上一轮，请稍后继续", false, 409);
     }
@@ -170,12 +228,19 @@ async function create(
     if (begun.error.details === "rate_limit_per_minute") {
       throw new ApiError("rate_limited", "请求过于频繁，请稍后再试", true);
     }
+    if (begun.error.details === "chat_daily_turn_limit") {
+      throw new ApiError("rate_limited", "今日免费云端对话轮数已用完，请明日再试。");
+    }
     if (begun.error.details === "daily_cost_limit") {
-      throw new ApiError("cost_limit_reached", "云端今日成本额度已用完", true);
+      throw new ApiError("cost_limit_reached", "云端对话今日服务额度已用完，请明日再试。");
     }
     throw new ApiError("internal_error", "云端对话暂时无法创建", true);
   }
   return enqueueIfUploading(admin, scalar(begun.data) as Job, body, digest, cors);
+}
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 2_147_483_647;
 }
 
 async function enqueueIfUploading(admin: SupabaseClient, job: Job, body: string, digest: string, cors: HeadersInit) {
@@ -215,6 +280,34 @@ Deno.serve(async (request: Request) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
       throw new ApiError("invalid_request", "请求格式无效");
     }
+    if (raw.action === "quote_paid") {
+      if (!isDshChatModel(raw.model)) throw new ApiError("invalid_request", "请选择云端 DSH 模型");
+      if (!enabled() || !dshV2Enabled() || !paidEnabled() || !dshV2TrialAvailable(user)) {
+        return jsonResponse({ available: false, model: raw.model }, 200, cors);
+      }
+      const quote = await admin.rpc("quote_chat_paid_turn", { p_model: raw.model });
+      if (quote.error) throw new ApiError("internal_error", "对话报价暂时不可用", true);
+      const available = quote.data?.available === true;
+      return jsonResponse({ available, model: raw.model, ...(available ? {
+        pricing_version: quote.data.pricing_version,
+        max_credits: quote.data.max_credits,
+        max_output_tokens: quote.data.max_output_tokens,
+        rates_nano: quote.data.rates_nano,
+        image_card_provider: true,
+        video_card_options: true,
+        h3_r2v: true,
+        dsh_vps_skills_available: await skillsAvailable(admin, user),
+      } : {}),
+      }, 200, cors);
+    }
+    if (raw.action === "get_paid_receipt") {
+      if (typeof raw.job_id !== "string" || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(raw.job_id)) {
+        throw new ApiError("invalid_request", "云端对话请求身份无效");
+      }
+      const receipt = await admin.rpc("get_chat_paid_receipt", { p_user_id: user.id, p_id: raw.job_id });
+      if (receipt.error) throw new ApiError("internal_error", "对话费用暂时无法读取", true);
+      return jsonResponse({ receipt: receipt.data }, 200, cors);
+    }
     if (raw.action === "quote") {
       const price = await admin.from("service_costs").select(
         "unit_cost,pricing_version,active",
@@ -222,7 +315,8 @@ Deno.serve(async (request: Request) => {
       if (price.error) {
         throw new ApiError("internal_error", "对话报价暂时不可用", true);
       }
-      const available = enabled() && dshV2Enabled() && price.data?.active === true && price.data?.unit_cost === 0;
+      const eligible = enabled() && dshV2Enabled() && dshV2TrialAvailable(user);
+      const available = eligible && !paidEnabled() && price.data?.active === true && price.data?.unit_cost === 0;
       return jsonResponse(
         {
           provider: "dsh-cloud",
@@ -231,10 +325,12 @@ Deno.serve(async (request: Request) => {
           unit_cost: price.data?.unit_cost ?? null,
           pricing_version: price.data?.pricing_version ?? null,
           available,
+          ...(eligible && paidEnabled() ? { paid_available: true } : {}),
           dsh_vps_available: false,
           dsh_vps_v2_available: available,
           image_card_provider: available,
           video_card_options: available,
+          h3_r2v: available,
           dsh_vps_skills_available: available && await skillsAvailable(admin, user),
         },
         200,
@@ -276,7 +372,7 @@ Deno.serve(async (request: Request) => {
       }
       return response(result.data as Job, cors, true);
     }
-    if (raw.action !== "create") {
+    if (raw.action !== "create" && raw.action !== "create_paid") {
       throw new ApiError("invalid_request", "未知对话操作");
     }
     if (!enabled()) throw new ApiError("not_configured", "云端对话尚未开放");

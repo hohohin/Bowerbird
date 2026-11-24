@@ -9,6 +9,7 @@ import {
   readFileSync,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { loadChatCardTool } from "../cloud-chat/card-tool.ts";
 
 const PROFILE_NAME = "bowerbird-u1";
 export const DSH_PROFILE_TEMPLATE_FILES = [
@@ -52,9 +53,12 @@ export function createDshRuntimeHome(options: {
   runtimeRoot: string;
   chat?: boolean;
   chatOptions?: import("../../../cloud/supabase/functions/_shared/chat.ts").DshChatOptionsSelection;
+  planningReasoningEffort?: "high";
   imageCardProvider?: boolean;
   videoCardOptions?: boolean;
+  h3R2v?: boolean;
   nativeSession?: {dir: string; sessionId:string};
+  nativeTextOnly?: boolean;
 }): DshRuntimeHome {
   const templateDir = resolve(options.templateDir);
   const runtimeRoot = resolve(options.runtimeRoot);
@@ -84,6 +88,16 @@ export function createDshRuntimeHome(options: {
     mkdirSync(pluginDir, { recursive: true });
     for (const file of DSH_PROFILE_TEMPLATE_FILES) copyFileSync(join(templateDir, file), join(profileDir, file));
     for (const file of DSH_PROFILE_PLUGIN_FILES) copyFileSync(join(templateDir, "plugins", file), join(pluginDir, file));
+    if (options.planningReasoningEffort === "high") {
+      const file = join(profileDir, "cordis.bridge.patch.yml");
+      const baseline = readFileSync(file, "utf8");
+      const patch = baseline.replace(/^( +thinking: )disabled(?=\r?$)/m, "$1enabled")
+        .replace(/^( +reasoningEffort: )off(?=\r?$)/m, "$1high");
+      if (!/^ +thinking: enabled$/m.test(patch) || !/^ +reasoningEffort: high$/m.test(patch)) {
+        throw new Error("dsh_planning_reasoning_profile_invalid");
+      }
+      writeFileSync(file, patch, "utf8");
+    }
     if (options.chat) {
       let chatPatch = readFileSync(join(import.meta.dirname, "../cloud-chat/cordis.chat.patch.yml"), "utf8");
       if (options.chatOptions) {
@@ -95,26 +109,13 @@ export function createDshRuntimeHome(options: {
       }
       writeFileSync(join(profileDir, "cordis.chat.patch.yml"), chatPatch, "utf8");
       copyFileSync(join(import.meta.dirname, "../cloud-chat/chat-cards.mjs"), join(pluginDir, "chat-cards.mjs"));
-      const cardTool = JSON.parse(readFileSync(join(import.meta.dirname, "../../../cloud/supabase/functions/_shared/chat-card-tool.json"), "utf8"));
-      if (!options.imageCardProvider) delete cardTool.inputSchema.properties.cards.items.properties.provider;
-      if (options.videoCardOptions !== true) {
-        const fields = cardTool.inputSchema.properties.cards.items.properties;
-        delete fields.videoChannel;
-        delete fields.videoOptions;
-        fields.mode.enum = ["count", "rows"];
-        fields.mode.description = "loop only: count repeats the body; rows feeds source table rows to the body.";
-        fields.resolution.enum = [0.6, 0.8, 1];
-        cardTool.description = cardTool.description
-          .replace("H3 video mode is text, reference (one image), or frames (default, first and optional last frame). ", "")
-          .replace("Frames may be omitted to create a draft; frames mode requires a first frame to run, reference mode requires one image, text mode needs none.", "Frames may be omitted to create a draft; running H3 requires a first frame.");
-      }
-
-      writeFileSync(join(pluginDir, "chat-card-tool.json"), JSON.stringify(cardTool), "utf8");
+      writeFileSync(join(pluginDir, "chat-card-tool.json"), JSON.stringify(loadChatCardTool(options)), "utf8");
       if (options.nativeSession) {
         copyFileSync(join(import.meta.dirname, "../cloud-chat/native-chat-acp.mjs"), join(pluginDir, "native-chat-acp.mjs"));
         const file = join(profileDir, "cordis.chat.patch.yml");
         const patch = readFileSync(file, "utf8");
         writeFileSync(file, patch + "\n- id: acp\n  disabled: true\n- insert:\n    - id: native-chat-acp\n      name: './plugins/native-chat-acp.mjs'\n" +
+          (options.nativeTextOnly ? "- id: bowerbird-chat-cards\n  disabled: true\n" : "") +
           "- id: compaction-basic\n  config:\n    auto: true\n- id: session-persistence-jsonl\n  config:\n    root: " + JSON.stringify(options.nativeSession.dir) + "\n", "utf8");
       }
     }

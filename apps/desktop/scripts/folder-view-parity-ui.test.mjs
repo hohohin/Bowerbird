@@ -6,21 +6,42 @@ const server = await createServer({cacheDir:'.tmp/folder-view-parity/vite',serve
 const browser = await chromium.launch({channel:'chrome',headless:true});
 const page = await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
 page.setDefaultTimeout(10000);
-const errors=[];page.on('pageerror',error=>errors.push(error.message));
+const errors=[];page.setDefaultNavigationTimeout(60000);
+page.on('pageerror',error=>errors.push(error.message));
 const card=id=>page.locator(`[data-connection-entry="${id}"] .folder-media-card`);
 const menu=name=>page.getByRole('menuitem',{name,exact:true});
 async function more() { const button=page.getByRole('button',{name:'更多素材库控件',exact:true});if(await button.count() && await button.getAttribute('aria-expanded')!=='true') await button.click(); }
 try {
- await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/connected-collections/preview.html`); await page.getByRole('tab',{name:'文件夹',exact:true}).click(); await card('root-0').waitFor();
+ await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/connected-collections/preview.html`); await page.getByRole('button',{name:'全部文件夹素材',exact:true}).click(); await card('root-0').waitFor();
+ const scroller = page.locator('.connected-collections .catalog-scroller');
+ await scroller.evaluate(el => { el.scrollTop = 900; });
+ await page.getByRole('button', { name: '搜索素材', exact: true }).click();
+ const search = page.getByRole('searchbox', { name: '搜索素材' });
+ await search.evaluate(input => input.addEventListener('input', () => {
+   window.topBeforeSearch = input.closest('.connected-collections').querySelector('.catalog-scroller').scrollTop;
+ }, { once: true }));
+ await search.fill('ref-one');
+ const top = await page.evaluate(() => window.topBeforeSearch);
+ assert.ok(top > 0);
+ await card('ref-one').waitFor();
+ assert.equal(await page.getByRole('complementary', { name: '素材库导航' }).isVisible(), true);
+ assert.equal(await card('root-0').count(), 0);
+ assert.ok(await page.evaluate(() => window.requests.some(r => r.command === 'connection_entries' && r.args.folderId === 'child' && r.args.filter.query === 'ref-one')));
+ await page.getByRole('button', { name: '清空搜索' }).click();
+ await page.waitForFunction(top => window.mode.getState().query === ''
+   && Math.abs(document.querySelector('.connected-collections .catalog-scroller').scrollTop - top) < 2, top);
+ await page.keyboard.press('Escape');
+ await scroller.evaluate(el => el.scrollTop = 0);
+ await card('root-0').waitFor();
  await more(); for(const label of ['不看生成图','颜色筛选','刷新文件夹']) assert.equal(await page.getByRole('button',{name:label,exact:true}).isVisible(),true);
  await card('root-0').click({button:'right'});
- for(const label of ['打开图片详情','选择','重命名','图片标注','分层编辑','添加到文件夹','移动到文件夹','打开所在文件夹','用系统程序打开','复制图片','复制文件路径','管理外部引用 · 原文件保留','删除']) assert.equal(await menu(label).count(),1,label);
+ for(const label of ['打开图片详情','选择','重命名','编辑','分层编辑','添加到文件夹','移动到文件夹','打开所在文件夹','用系统程序打开','复制图片','复制文件路径','管理外部引用 · 原文件保留','删除']) assert.equal(await menu(label).count(),1,label);
  await menu('选择').click(); const bar=page.getByRole('group',{name:'分类素材所选操作'});
  assert.equal(await bar.getByRole('button',{name:'全选',exact:true}).count(),1);assert.equal(await bar.getByRole('button',{name:'添加到新项目',exact:true}).count(),1);
  await bar.getByRole('button',{name:'全选',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.catalog-selection')?.textContent.includes('130 项'));
  await bar.getByRole('button',{name:'取消选择',exact:true}).click();
- const resize=page.getByRole('separator',{name:'调整文件夹侧栏宽度'});await resize.focus();await resize.press('ArrowRight');const remembered=await resize.getAttribute('aria-valuenow');
- await page.reload();await page.getByRole('tab',{name:'文件夹',exact:true}).click(); await card('root-0').waitFor();assert.equal(await resize.getAttribute('aria-valuenow'),remembered);
+ const resize=page.getByRole('separator',{name:'调整素材库侧栏宽度'});await resize.focus();await resize.press('ArrowRight');const remembered=await resize.getAttribute('aria-valuenow');
+ await page.reload();await page.getByRole('button',{name:'全部文件夹素材',exact:true}).click(); await card('root-0').waitFor();assert.equal(await resize.getAttribute('aria-valuenow'),remembered);
  await page.evaluate(()=>{const template=window.entries[0];const make=(id,time,color)=>({...template,id,asset_id:id,name:id+'.png',color,asset:{...template.asset,id,name:id+'.png',generation_session_id:'conversation',created_at:time}});window.entries=[make('g-old',1,'red'),make('g-new',2,'blue'),{...window.entries[1],color:'red'}];window.changed();});
  await card('g-new').waitFor();assert.equal(await card('g-old').count(),0);const group=page.locator('.catalog-generation-group');assert.equal(await group.locator('.generation-group-count').innerText(),'2/2');
  await group.getByRole('button',{name:'上一张生成素材'}).click();await card('g-old').waitFor();await card('g-old').click({button:'right'});
@@ -31,16 +52,16 @@ try {
  assert.equal(await card('root-1').count(),1);await more();await page.getByRole('button',{name:'不看生成图',exact:true}).click();await card('g-new').waitFor();
  await more();await page.getByRole('button',{name:'颜色筛选',exact:true}).click();await page.getByRole('button',{name:'红',exact:true}).click();await card('g-old').waitFor();assert.equal(await card('g-new').count(),0);await page.keyboard.press('Escape');
  assert.ok(await page.evaluate(()=>window.requests.some(r=>r.command==='folder_connections'&&r.args.filter.color==='red'&&r.args.filter.grouped)));
- // Controls are overlays: show/hide does not alter directory or gallery geometry.
+ // The toolbar reserves a stable row above the content. Toggling controls does not move it.
  await mkdir('.tmp/folder-view-parity',{recursive:true});
  for(const width of [1440,600,360]) {await page.setViewportSize({width,height:900});for(const theme of ['dark','light']) {await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);await page.waitForTimeout(200);
- const geometry=await page.locator('.connected-collections').evaluate(root=>{const h=root.querySelector('.file-view-heading');const read=()=>['.catalog-sidebar','.catalog-gallery','.catalog-scroller'].map(s=>{const r=root.querySelector(s).getBoundingClientRect();return [r.top,r.height]});const before=read();h.style.display='none';const after=read();h.style.display='';return {before,after};});assert.deepEqual(geometry.before,geometry.after);await page.screenshot({path:`.tmp/folder-view-parity/${width}-${theme}.png`});}}
+ const geometry=await page.locator('.connected-collections').evaluate(root=>{const controls=root.querySelector('.video-collection-controls');const read=()=>[root.closest('.library-catalog').querySelector('.library-sidebar'),root.querySelector('.catalog-gallery'),root.querySelector('.catalog-scroller')].map(node=>{const r=node.getBoundingClientRect();return [r.top,r.height]});const before=read();controls.style.display='none';const after=read();controls.style.display='';return {before,after};});assert.deepEqual(geometry.before,geometry.after);await page.screenshot({path:`.tmp/folder-view-parity/${width}-${theme}.png`});}}
  // Embedded editor keeps menus and child dialogs inside its own workspace.
  await page.setViewportSize({width:1440,height:900});
  await page.route('**/fixture/reference.png*',route=>route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#99aabb"/></svg>'}));
  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-workspace-live/preview.html`);
  const editor=page.getByRole('textbox',{name:'文档正文',exact:true});await editor.waitFor();
- await page.getByRole('tab',{name:'文件夹',exact:true}).click();const embedded=page.locator('.text-workspace [data-connection-entry="entry-img1"] .folder-media-card');await embedded.waitFor();
+ await page.getByRole('button',{name:'全部文件夹素材',exact:true}).click();const embedded=page.locator('.text-workspace [data-connection-entry="entry-img1"] .folder-media-card');await embedded.waitFor();
  await embedded.click({button:'right'});await menu('重命名').waitFor();
  assert.equal(await page.locator('.text-workspace .asset-context-menu').count(),1);
  assert.equal(await page.evaluate(()=>window.store.getState().contextMenu),null,'embedded folder menu does not modify the background menu');

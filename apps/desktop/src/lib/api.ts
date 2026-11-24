@@ -10,6 +10,7 @@ import type {
   AgentPromptInput,
   AgentPromptResult,
   AppSettings,
+  SettingsSaveReceipt,
   AuthSnapshot,
   Asset,
   AssetDeleteMode,
@@ -88,6 +89,7 @@ export const api = {
   videoPoster: (sourcePath: string) => invoke<string | null>("video_poster", { sourcePath }),
   canvasImagePreview: (path: string, maxSize: number) => invoke<string>("canvas_image_preview", { path, maxSize }),
   trimVideo: (request: import("./videoTrim").VideoTrimRequest, projectId?: string) => invoke<Asset>("trim_video", { ...request, projectId: projectId ?? null }),
+  trimAudio: (request: import("./videoTrim").VideoTrimRequest, projectId?: string) => invoke<Asset>("trim_audio", { ...request, projectId: projectId ?? null }),
   extractVideoAudio: (sourcePath: string, operationId: string, projectId?: string) => invoke<Asset>("extract_video_audio", { sourcePath, operationId, projectId: projectId ?? null }),
   canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
   workflowTemplatesList: () => invoke<WorkflowTemplate[]>("workflow_templates_list"),
@@ -175,7 +177,7 @@ export const api = {
       autoDelivered: boolean;
       notice?: string | null;
     }>("agent_ds_chat", { text, images, imageNames, visualProfileId }),
-  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text" | "agent-video", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string, transport?: "local-ds" | "codex-cli", isolatedSession?: boolean, sessionGeneration?: boolean, visualProfile?: { profileId: string; version: number }) =>
+  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text" | "agent-video" | "text-editor", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string, transport?: "local-ds" | "codex-cli", isolatedSession?: boolean, sessionGeneration?: boolean, visualProfile?: { profileId: string; version: number }) =>
     invoke<{ path: string; sessionId?: string | null; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source, purpose, images, sessionScope, imageProvider, transport, isolatedSession, sessionGeneration, visualProfile }),
   agentDsWorkflowCancel: (requestId: string) => invoke<void>("agent_ds_workflow_cancel", { requestId }),
   agentVideoStudioOpen: (requestId: string, editorSessionId: string, bounds: { x: number; y: number; width: number; height: number }) => invoke<void>("agent_video_studio_open", { requestId, editorSessionId, bounds }),
@@ -247,8 +249,6 @@ export const api = {
     invoke<boolean>("project_canvas_title_from_first_prompt", { projectId, title }),
   projectCanvasUpdateDraft: (projectId: string, draftJson: string) =>
     invoke<boolean>("project_canvas_update_draft", { projectId, draftJson }),
-  projectCanvasTouch: (projectId: string) =>
-    invoke<boolean>("project_canvas_touch", { projectId }),
   projectThreadCreate: (value: NewCreativeThread) =>
     invoke<CreativeThread>("project_thread_create", { value }),
   projectThreadArchive: (threadId: string) =>
@@ -312,7 +312,7 @@ export const api = {
     fileName: string;
     projectId?: string | null;
     annotationJson: string;
-    overwrite?: { assetId: string; sourceHash: string };
+    overwrite?: { assetId: string; sourceHash: string; annotationId?: string };
   }) =>
     invoke<Asset>("save_annotated_image", {
       dataUrl: req.dataUrl,
@@ -338,6 +338,7 @@ export const api = {
   draftWorkspaceAssetIds: () => invoke<string[]>("draft_workspace_asset_ids"),
   draftWorkspaceCanvasUpsert: (request: { projectId: string; documentId: string; assetId: string; sourceNodeId: string | null; newNode: NewCanvasNode }) =>
     invoke<CanvasNode>("draft_workspace_canvas_upsert", request),
+  readAnnotationImageWithHash: (path: string) => invoke<{ url: string; sha256: string }>("read_image_data_url", { path, withHash: true }),
   layerWorkspaceAssetIds: () => invoke<string[]>("layer_workspace_asset_ids"),
   layerExportPsd: (path: string, base64: string) => invoke<void>("layer_export_psd", { path, base64 }),
   layerExportFontNames: (fonts: string[]) => invoke<Record<string, string>>("layer_export_font_names", { fonts }),
@@ -654,8 +655,8 @@ export const api = {
   extensionFolderPath: () => invoke<string>("extension_folder_path"),
   // 设置
   getSettings: () => invoke<AppSettings>("get_settings"),
-  updateSettings: (settings: AppSettings) =>
-    invoke<void>("update_settings", { settings }),
+  updateSettings: (settings: AppSettings, applyScreenshotShortcuts = false) =>
+    invoke<SettingsSaveReceipt | null | void>("update_settings", { settings, applyScreenshotShortcuts }),
   libraryRoot: () => invoke<string>("library_root"),
   migrateLibraryRoot: (newRoot: string) =>
     invoke<void>("migrate_library_root", { newRoot }),

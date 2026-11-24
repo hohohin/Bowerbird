@@ -4,8 +4,10 @@ import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { ToastViewport } from "../../../src/components/ToastViewport";
+import type { Asset } from "../../../src/lib/types";
 import { useStore } from "../../../src/store";
 const w = window as any;
+const capturedAssets = new Map<string, Asset>();
 w.calls = []; w.callbacks = {}; w.pending = {}; w.deliveries = []; w.failDelivery = false;
 w.store = useStore;
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
@@ -23,7 +25,10 @@ w.__TAURI_INTERNALS__ = {
       if (w.refuseCancel) return false;
       w.pending[args.captureId]?.reject("采集已取消"); return true;
     }
-    if (command === "get_assets_by_ids") return [{ id: args.assetIds[0], name: "已采集素材", ext: "png" }];
+    if (command === "get_assets_by_ids") return args.assetIds.map((id: string) => capturedAssets.get(id)).filter(Boolean);
+    if (command === "external_files_media" && args.path === "/captured-video.mp4") return "/src-tauri/tests/fixtures/media/fragmented.mp4";
+    if (["list_analyses_by_asset", "list_asset_collections", "list_asset_tags"].includes(command)) return [];
+    if (command === "video_transcript_capabilities") return { available: false };
     return null;
   },
 };
@@ -33,8 +38,18 @@ w.emitProgress = (payload: any) => {
 };
 w.complete = (id: string) => {
   const item = w.pending[id];
-  item.resolve({ id: `asset-${id}`, name: w.remoteAssetMetadata ? "https://cdn.fixture/private.mp4?signature=SAVE_SECRET" : item.args.mediaKind === "video" ? "海边短片.mp4" : "建筑参考.png", ext: item.args.mediaKind === "video" ? "mp4" : "png",
-    width: 320, height: 180, thumb_path: w.remoteAssetMetadata ? "https://cdn.fixture/private.png?signature=THUMB_SECRET" : "/scripts/fixtures/explorer-capture-history/thumb.svg" });
+  const video = item.args.mediaKind === "video";
+  const localName = video ? "海边短片.mp4" : "建筑参考.png";
+  const asset = {
+    id: `asset-${id}`,
+    name: w.remoteAssetMetadata ? "https://cdn.fixture/private.mp4?signature=SAVE_SECRET" : localName,
+    ext: video ? "mp4" : "png",
+    width: 320, height: 180,
+    store_path: video ? "/captured-video.mp4" : "/scripts/fixtures/explorer-capture-history/thumb.svg",
+    thumb_path: w.remoteAssetMetadata ? "https://cdn.fixture/private.png?signature=THUMB_SECRET" : "/scripts/fixtures/explorer-capture-history/thumb.svg",
+  };
+  capturedAssets.set(asset.id, asset);
+  item.resolve(asset);
 };
 useStore.setState({ assets: [], total: 0, projects: [{ id: "p", name: "测试画板", kind: "blank", provisional: false } as any], activeProjectId: "p", projectRoutePending: false,
   projectRouteRevision: 0, settings: {}, mode: "browse", projectCanvasFlush: async () => {} });

@@ -1,10 +1,9 @@
-use std::{fs, path::{Path, PathBuf}, process::Stdio, sync::Arc, time::{Duration, Instant}};
+use std::{fs, path::{Path, PathBuf}, sync::Arc};
 use rusqlite::{params, OptionalExtension};
 use tauri::{AppHandle, Emitter, State};
 use crate::{core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}, media::{self, tools::{self, Tool}}};
 
-// A second edit must not encode against a source another edit is replacing.
-static TRIM_QUEUE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+use super::media_trim::{self, TRIM_QUEUE};
 
 #[tauri::command]
 pub async fn trim_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>,
@@ -24,11 +23,7 @@ struct Scratch(PathBuf);
 impl Drop for Scratch { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
 
 fn validate_range(start: f64, end: f64, duration: f64) -> AppResult<()> {
-    if !start.is_finite() || !end.is_finite() || !duration.is_finite() || start < 0.0
-        || end <= start || end > duration + 0.001 || duration <= 0.0 {
-        return Err(AppError::Media("入点和出点无效：需要 0 ≤ 入点 < 出点 ≤ 视频时长".into()));
-    }
-    Ok(())
+    media_trim::validate_range(start, end, Some(duration), "视频")
 }
 
 fn encode(source: &Path, output: &Path, log: &Path, start: f64, end: f64) -> AppResult<()> {
@@ -46,22 +41,7 @@ fn encode(source: &Path, output: &Path, log: &Path, start: f64, end: f64) -> App
     if matches!(output.extension().and_then(|v| v.to_str()), Some("mp4" | "mov" | "m4v")) {
         command.args(["-movflags", "+faststart"]);
     }
-    let mut child = command.arg(output).stdout(Stdio::null()).stderr(fs::File::create(log)?).spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(300);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(_)) => {
-                let message = fs::read_to_string(log).unwrap_or_default();
-                return Err(AppError::Media(format!("视频裁剪失败：{}", message.chars().take(4000).collect::<String>())));
-            }
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(40)),
-            result => {
-                let _ = child.kill(); let _ = child.wait();
-                return Err(AppError::Media(format!("视频裁剪超时或进程异常：{result:?}")));
-            }
-        }
-    }
+    media_trim::run_encoder(command.arg(output), log, "视频")
 }
 
 fn trim(db: &Database, paths: &LibraryPaths, source: &str, start: f64, end: f64,
@@ -130,12 +110,21 @@ fn trim(db: &Database, paths: &LibraryPaths, source: &str, start: f64, end: f64,
 }
 
 fn replace(db: &Database, original: &Asset, output: &Path, thumbnail: &Path, meta: &media::probe::ProbeMeta) -> AppResult<()> {
+    let fingerprint = crate::core::external_files::fingerprint(output)?;
+    let modified = fs::metadata(output)?.modified()?.duration_since(std::time::UNIX_EPOCH).ok()
+        .map(|time| time.as_secs() as i64);
     let mut conn = db.conn.lock().unwrap();
     let tx = conn.transaction()?;
-    let changed = tx.execute("UPDATE assets SET size=?1,width=?2,height=?3,duration=?4,thumb_path=?5,file_mtime=?6,phash=NULL,colors=NULL WHERE id=?7 AND store_path=?8",
-        params![meta.size as i64, meta.width, meta.height, meta.duration, thumbnail.to_string_lossy(), chrono::Utc::now().timestamp(), original.id, original.store_path])?;
+    let changed = tx.execute("UPDATE assets SET size=?1,width=?2,height=?3,duration=?4,thumb_path=?5,file_mtime=?6,phash=NULL,colors=NULL,connected_scan_key=NULL WHERE id=?7 AND store_path=?8",
+        params![meta.size as i64, meta.width, meta.height, meta.duration, thumbnail.to_string_lossy(), modified, original.id, original.store_path])?;
     if changed != 1 { return Err(AppError::Other("原视频已被删除或移动，未覆盖".into())); }
     tx.execute("DELETE FROM asset_colors WHERE asset_id=?1", [&original.id])?;
+    tx.execute("INSERT INTO creative_file_fingerprints(asset_id,sha256,asset_size,asset_mtime) VALUES(?1,?2,?3,?4)
+        ON CONFLICT(asset_id) DO UPDATE SET sha256=excluded.sha256,asset_size=excluded.asset_size,asset_mtime=excluded.asset_mtime",
+        params![original.id,fingerprint,meta.size as i64,modified])?;
+    tx.execute("UPDATE analyses SET payload=json_set(payload,'$.current',json('false')) WHERE asset_id=?1
+        AND kind IN ('video_transcript','video_analysis') AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.current')=1 END",
+        [&original.id])?;
     // Same volume rename replaces atomically; encoding never writes into the source file.
     fs::rename(output, original.store_path.as_deref().unwrap())?;
     tx.commit()?;

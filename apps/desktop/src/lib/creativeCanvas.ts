@@ -1,6 +1,7 @@
 import type { CanvasGroupNode, CanvasPoint } from "./canvasLogic";
 import { isVideoPath } from "./videoGeneration.ts";
-import { isAudioPath } from "./audioMedia";
+import { isAudioPath } from "./audioMedia.ts";
+import { canvasNodePayload } from "./canvasNodePayload.ts";
 import type {
   Asset,
   CanvasGroup,
@@ -70,9 +71,7 @@ export function canvasOriginalDeletionProjection(materials: ProjectCanvasUiNode[
     }
   }
   for (const node of graph) {
-    if (node.kind === "prompt" && affected.has(node.id) && !surviving.has(node.id)) {
-      try { if (JSON.parse(node.payloadJson)?.job_id) hidden.add(node.id); } catch { /* A legacy prompt can lack execution data. */ }
-    }
+    if (node.kind === "prompt" && affected.has(node.id) && !surviving.has(node.id) && canvasNodePayload(node).job_id) hidden.add(node.id);
   }
   return { materials: shown, graph: graph.filter(node => !hidden.has(node.id)), hidden };
 }
@@ -97,15 +96,30 @@ export function canvasAssetNodeSize(asset: Pick<CanvasAssetSnapshot, "width" | "
 
 /** Parent images are stored as continued/retry/branch edges, not duplicate input edges. */
 export function canvasPromptReferences(promptId: string, nodes: readonly CanvasNode[], edges: readonly CanvasEdge[], assets: Map<string, Asset>): Array<Asset & { referenceNames: string[] }> {
-  const byId = new Map(nodes.map(node => [node.id, node]));
+  return canvasPromptReferenceLookup(nodes, edges)(promptId, assets);
+}
+
+export function canvasPromptReferenceLookup(nodes: readonly CanvasNode[], edges: readonly CanvasEdge[]) {
+  const nodesById = new Map(nodes.map(node => [node.id, node]));
+  const edgesByTarget = new Map<string, CanvasEdge[]>();
+  for (const edge of edges) {
+    if (!["input", "continued", "retry", "branch"].includes(edge.kind)) continue;
+    const group = edgesByTarget.get(edge.toNodeId);
+    if (group) group.push(edge);
+    else edgesByTarget.set(edge.toNodeId, [edge]);
+  }
+  for (const group of edgesByTarget.values()) group.sort((a, b) => a.ordinal - b.ordinal || a.id.localeCompare(b.id));
+  return (promptId: string, assets: Map<string, Asset>) =>
+    promptReferencesForNode(nodesById.get(promptId), edgesByTarget.get(promptId) ?? [], nodesById, assets);
+}
+
+function promptReferencesForNode(prompt: CanvasNode | undefined, edges: readonly CanvasEdge[], nodesById: ReadonlyMap<string, CanvasNode>, assets: Map<string, Asset>): Array<Asset & { referenceNames: string[] }> {
   const seen = new Set<string>();
-  const snapshots = promptReferenceAssets(byId.get(promptId)?.payloadJson);
-  const linked = edges.filter(edge => ["input", "continued", "retry", "branch"].includes(edge.kind) && edge.toNodeId === promptId)
-    .sort((a, b) => a.ordinal - b.ordinal || a.id.localeCompare(b.id))
-    .flatMap(edge => {
-      const node = byId.get(edge.fromNodeId);
+  const snapshots = promptReferenceAssets(prompt);
+  const linked = edges.flatMap(edge => {
+      const node = nodesById.get(edge.fromNodeId);
       if (node?.kind !== "asset") return [];
-      return [{ asset_id: node.assetId ?? node.id, snapshot: parseAssetPayload(node.payloadJson)?.snapshot }];
+      return [{ asset_id: node.assetId ?? node.id, snapshot: validatedAssetPayload(canvasNodePayload(node))?.snapshot }];
     });
   return [...snapshots, ...linked].flatMap(reference => {
     const id = reference.asset_id;
@@ -122,13 +136,10 @@ export function canvasPromptReferences(promptId: string, nodes: readonly CanvasN
   });
 }
 
-function promptReferenceAssets(payloadJson?: string): Array<{ asset_id: string; snapshot?: { name: string } }> {
-  if (!payloadJson) return [];
-  try {
-    const references = JSON.parse(payloadJson).reference_assets;
-    return Array.isArray(references) ? references.filter(reference => reference && typeof reference.asset_id === "string"
-      && typeof reference.snapshot?.name === "string") : [];
-  } catch { return []; }
+function promptReferenceAssets(node?: CanvasNode): Array<{ asset_id: string; snapshot?: { name: string } }> {
+  const references = node && canvasNodePayload(node).reference_assets;
+  return Array.isArray(references) ? references.filter(reference => reference && typeof reference.asset_id === "string"
+    && typeof reference.snapshot?.name === "string") : [];
 }
 
 /** Keep Agent launch prompts as history, with their group as the canvas card. */
@@ -165,16 +176,13 @@ interface AssetPayload {
   draft_document_id?: string;
 }
 
+function validatedAssetPayload(value: Partial<AssetPayload> | null): AssetPayload | null {
+  return value?.schema_version === 1 && typeof value.snapshot?.name === "string" ? value as AssetPayload : null;
+}
+
 function parseAssetPayload(payloadJson: string): AssetPayload | null {
-  try {
-    const value = JSON.parse(payloadJson) as Partial<AssetPayload>;
-    if (value.schema_version !== 1 || !value.snapshot || typeof value.snapshot.name !== "string") {
-      return null;
-    }
-    return value as AssetPayload;
-  } catch {
-    return null;
-  }
+  try { return validatedAssetPayload(JSON.parse(payloadJson)); }
+  catch { return null; }
 }
 
 export function createCanvasAssetSnapshot(asset: Asset, nodeId: string): CanvasAssetSnapshot {
@@ -399,22 +407,18 @@ export function persistedProjectActiveNodeId(
 /** Exact asset identities needed to render a normalized project snapshot.
  * Browsing projections are intentionally not used because they paginate and
  * collapse generation sessions. */
-export function projectCanvasAssetIds(
-  nodes: readonly (Pick<CanvasNode, "kind" | "assetId"> & Partial<Pick<CanvasNode, "payloadJson">>)[],
-): string[] {
+export function projectCanvasAssetIds(nodes: readonly CanvasNode[]): string[] {
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const node of nodes) {
     if (node.kind === "prompt") {
-      for (const reference of promptReferenceAssets(node.payloadJson)) {
+      for (const reference of promptReferenceAssets(node)) {
         if (!seen.has(reference.asset_id)) { seen.add(reference.asset_id); ids.push(reference.asset_id); }
       }
     }
     if (node.kind === "note" && node.payloadJson) {
-      try {
-        const base = JSON.parse(node.payloadJson).artboard?.base_asset_id;
-        if (typeof base === "string" && !seen.has(base)) { seen.add(base); ids.push(base); }
-      } catch { /* Malformed legacy notes have no base reference. */ }
+      const base = canvasNodePayload(node).artboard?.base_asset_id;
+      if (typeof base === "string" && !seen.has(base)) { seen.add(base); ids.push(base); }
     }
     if (node.kind !== "asset" || !node.assetId || seen.has(node.assetId)) continue;
     seen.add(node.assetId);
@@ -437,7 +441,7 @@ export function isCanvasAssetHydrationCurrent(
 function snapshotForNode(node: CanvasNode, assetById: Map<string, Asset>): CanvasAssetSnapshot | null {
   // Legacy deletions leave an unhidden tombstone; retain it in history, not on the canvas.
   if (node.kind !== "asset" || node.hiddenAt != null || node.assetId == null) return null;
-  const payload = parseAssetPayload(node.payloadJson);
+  const payload = validatedAssetPayload(canvasNodePayload(node));
   if (!payload) return null;
   const asset = node.assetId ? assetById.get(node.assetId) : null;
   return {

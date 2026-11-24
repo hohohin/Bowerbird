@@ -96,6 +96,12 @@ fn source(db: &Database, id: &str) -> AppResult<Source> {
     if !external_files::audio_path(&path) {
         return Err(AppError::Other("请选择支持的音频文件".into()));
     }
+    if version.as_deref() == Some("") {
+        db.complete_connected_fingerprint(id)?;
+        let current = record(db, id)?;
+        if current.0 != stored { return Err(changed()); }
+        version = current.1;
+    }
     // Newly saved originals may precede their sidecar fingerprint. Establish it once,
     // without holding the database lock while reading source bytes.
     if version.is_none() {

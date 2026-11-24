@@ -6,28 +6,43 @@ import * as React from 'react';
 import type { PlateEditor, PlateElementProps } from 'platejs/react';
 
 import { AIChatPlugin } from '@platejs/ai/react';
+import { LineHeightPlugin, TextAlignPlugin } from '@platejs/basic-styles/react';
+import { EmojiPlugin } from '@platejs/emoji/react';
+import { indent, outdent } from '@platejs/indent';
+import { SlashPlugin } from '@platejs/slash-command/react';
 import {
+  AlignCenterIcon,
+  AlignJustifyIcon,
+  AlignLeftIcon,
+  AlignRightIcon,
   CalendarIcon,
   ChevronRightIcon,
   Code2,
   Columns3Icon,
+  FilmIcon,
   Heading1Icon,
   Heading2Icon,
   Heading3Icon,
+  ImageIcon,
+  IndentIcon,
   LightbulbIcon,
   ListIcon,
   ListOrdered,
+  MinusIcon,
+  OutdentIcon,
   PenToolIcon,
   PilcrowIcon,
   Quote,
   RadicalIcon,
+  SmileIcon,
   SparklesIcon,
   Square,
   SuperscriptIcon,
   Table,
   TableOfContentsIcon,
+  WrapTextIcon,
 } from 'lucide-react';
-import { type TComboboxInputElement, KEYS } from 'platejs';
+import { type TComboboxInputElement, KEYS, RangeApi } from 'platejs';
 import { PlateElement } from 'platejs/react';
 
 import {
@@ -141,6 +156,12 @@ const groups: Group[] = [
         value: KEYS.blockquote,
       },
       {
+        icon: <MinusIcon />,
+        keywords: ['divider', 'hr', '---'],
+        label: '分割线',
+        value: KEYS.hr,
+      },
+      {
         description: '插入提示块',
         icon: <LightbulbIcon />,
         keywords: ['note'],
@@ -181,6 +202,7 @@ const groups: Group[] = [
         value: KEYS.excalidraw,
       },
       {
+        focusEditor: false,
         icon: <Code2 />,
         keywords: [
           'code-drawing',
@@ -193,6 +215,12 @@ const groups: Group[] = [
         label: '代码绘图',
         value: KEYS.codeDrawing,
       },
+      {
+        icon: <FilmIcon />,
+        keywords: ['embed', '嵌入'],
+        label: '嵌入媒体',
+        value: KEYS.mediaEmbed,
+      },
     ].map((item) => ({
       ...item,
       onSelect: (editor, value) => {
@@ -201,36 +229,99 @@ const groups: Group[] = [
     })),
   },
   {
+    group: '素材',
+    items: [{
+      icon: <ImageIcon />,
+      label: '图片',
+      value: KEYS.img,
+      keywords: ['image'],
+      onSelect: (editor, value) => insertBlock(editor, value, { upsert: true }),
+    }],
+  },
+  {
     group: '行内元素',
     items: [
+      ...[
+        {
+          focusEditor: true,
+          icon: <CalendarIcon />,
+          keywords: ['time'],
+          label: '日期',
+          value: KEYS.date,
+        },
+        {
+          focusEditor: true,
+          icon: <SuperscriptIcon />,
+          keywords: ['citation', 'fn', 'footnote', '[^]'],
+          label: '脚注',
+          value: 'action_footnote',
+        },
+        {
+          focusEditor: false,
+          icon: <RadicalIcon />,
+          label: '行内公式',
+          value: KEYS.inlineEquation,
+        },
+      ].map((item) => ({
+        ...item,
+        onSelect: insertInlineElement,
+      })),
       {
-        focusEditor: true,
-        icon: <CalendarIcon />,
-        keywords: ['time'],
-        label: '日期',
-        value: KEYS.date,
-      },
-      {
-        focusEditor: true,
-        icon: <SuperscriptIcon />,
-        keywords: ['citation', 'fn', 'footnote', '[^]'],
-        label: '脚注',
-        value: 'action_footnote',
-      },
-      {
+        icon: <SmileIcon />,
         focusEditor: false,
-        icon: <RadicalIcon />,
-        label: '行内公式',
-        value: KEYS.inlineEquation,
+        keywords: ['emoji', ':'],
+        label: '表情',
+        value: KEYS.emoji,
+        onSelect: (editor) => {
+          const input = editor.getOption(EmojiPlugin, 'createComboboxInput')?.(':');
+          if (input) editor.tf.insertNodes({ ...input, fromSlashMenu: true }, { select: true });
+        },
       },
-    ].map((item) => ({
-      ...item,
-      onSelect: (editor, value) => {
-        insertInlineElement(editor, value);
-      },
-    })),
+    ],
   },
 ];
+
+const alignments = [
+  ['left', '左对齐', AlignLeftIcon],
+  ['center', '居中', AlignCenterIcon],
+  ['right', '右对齐', AlignRightIcon],
+  ['justify', '两端对齐', AlignJustifyIcon],
+] as const;
+
+function paragraphFormats(editor: PlateEditor): Group {
+  const { validNodeValues = [] } = editor.getInjectProps(LineHeightPlugin);
+  return {
+    group: '段落格式',
+    items: [
+      ...alignments.map(([value, label, Icon]) => ({
+        icon: <Icon />,
+        keywords: ['对齐', 'align'],
+        label,
+        value: `align-${value}`,
+        onSelect: (editor: PlateEditor) => editor.getTransforms(TextAlignPlugin).textAlign.setNodes(value),
+      })),
+      { icon: <IndentIcon />, keywords: ['缩进', 'indent'], label: '增加缩进', value: 'indent', onSelect: editor => indent(editor) },
+      { icon: <OutdentIcon />, keywords: ['缩进', 'outdent'], label: '减少缩进', value: 'outdent', onSelect: editor => outdent(editor) },
+      ...validNodeValues.map((value) => ({
+        icon: <WrapTextIcon />,
+        keywords: ['行距', 'line height'],
+        label: `行高 ${value}`,
+        value: `line-height-${value}`,
+        onSelect: (editor: PlateEditor) => editor.getTransforms(LineHeightPlugin).lineHeight.setNodes(Number(value)),
+      })),
+    ],
+  };
+}
+
+export function openTextSlashMenu(editor: PlateEditor) {
+  if (editor.dom.readOnly) return;
+  const { createComboboxInput, triggerQuery } = editor.getOptions(SlashPlugin);
+  const at = editor.selection ? RangeApi.end(editor.selection) : editor.api.end([]);
+  if (!at || !createComboboxInput) return;
+  editor.tf.select(at);
+  if (triggerQuery && !triggerQuery(editor)) return;
+  editor.tf.insertNodes({ ...createComboboxInput('/'), fromToolbar: true }, { select: true });
+}
 
 export function SlashInputElement(
   props: PlateElementProps<TComboboxInputElement>
@@ -239,13 +330,13 @@ export function SlashInputElement(
 
   return (
     <PlateElement {...props} as="span">
-      <InlineCombobox element={element} trigger="/">
-        <InlineComboboxInput />
+      <InlineCombobox element={element} trigger="/" preserveOnCancel={!element.fromToolbar}>
+        <InlineComboboxInput aria-label="搜索块" />
 
         <InlineComboboxContent>
           <InlineComboboxEmpty>没有匹配项</InlineComboboxEmpty>
 
-          {groups.map(({ group, items }) => (
+          {[...groups, paragraphFormats(editor)].map(({ group, items }) => (
             <InlineComboboxGroup key={group}>
               <InlineComboboxGroupLabel>{group}</InlineComboboxGroupLabel>
 

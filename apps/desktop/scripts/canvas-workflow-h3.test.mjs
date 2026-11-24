@@ -45,14 +45,15 @@ try {
   await card.getByTitle('选择视频模型', { exact: true }).click();
   const menu = page.getByRole('dialog', { name: '视频模型', exact: true });
   const local = menu.locator('[data-model-key="local:h3"]');
-  assert.match(await local.innerText(), /本地部署\s*H3\s*0/);
+  assert.match(await local.innerText(), /本地部署\s*H3/);
   await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.store.getState().cloudEntitlement, tier: 'free' } }));
   await page.waitForFunction(() => document.querySelector('[data-model-key="local:h3"]')?.disabled);
   await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.store.getState().cloudEntitlement, tier: 'pro' } }));
   await local.click();
-  await card.getByLabel('H3 时长').fill('6');
+  await card.getByLabel('H3 时长').click();
+  await page.getByRole('option', { name: '6 秒', exact: true }).click();
   await card.getByLabel('H3 分辨率', { exact: true }).click();
-  await page.getByRole('option', { name: '0.6', exact: true }).click();
+  await page.getByRole('option', { name: '低', exact: true }).click();
   await card.getByLabel('H3 比例', { exact: true }).click();
   await page.getByRole('option', { name: '1:1', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].comfyVideo?.ratio === '1:1');
@@ -67,27 +68,28 @@ try {
   assert.equal(await card.getByLabel('首帧输入', { exact: true }).count(), 1);
   assert.equal(await card.getByLabel('尾帧输入', { exact: true }).count(), 1);
   assert.equal(await card.getByRole('button', { name: '添加上游', exact: true }).count(), 1);
-  assert.equal(await card.evaluate(el => parseFloat(el.style.width)), 320);
+  assert.equal(await card.evaluate(el => parseFloat(el.style.width)), 390);
   // Actual slot drop must replace the first frame, not create a generic image reference.
   await page.evaluate(async () => (await import('/src/lib/dragPayload.ts')).setDragAssets(['c']));
   await card.getByLabel('首帧输入', { exact: true }).dispatchEvent('drop');
   await page.evaluate(async () => (await import('/src/lib/dragPayload.ts')).setDragAssets(null));
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].inputs['first-frame'][0].assetId === 'c');
   await page.reload(); await card.waitFor(); await mock();
-  assert.equal(await card.getByLabel('H3 时长').inputValue(), '6');
+  assert.equal(await card.getByLabel('H3 时长').innerText(), '6 秒');
   // Switch the persisted H3 card back to a remote supplier, then return to H3 on the same card.
   const selectModel = async key => {
     await card.getByTitle('选择视频模型', { exact: true }).click();
     await menu.locator(`[data-model-key="${key}"]`).click();
   };
   await selectModel('cloud:seedance2.5');
-  await card.getByLabel('视频时长（秒）').fill('8');
+  await card.getByLabel('视频时长（秒）').click();
+  await page.getByRole('option', { name: '8 秒', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].generation?.videoOptions?.duration === 8);
   assert.equal(await card.getByLabel('H3 时长').count(), 0);
   assert.equal((await saved()).prompt, '镜头推进');
   await selectModel('local:h3');
-  assert.equal(await card.getByLabel('H3 时长').inputValue(), '6');
-  assert.match(await card.getByLabel('H3 分辨率', { exact: true }).innerText(), /0\.6/);
+  assert.equal(await card.getByLabel('H3 时长').innerText(), '6 秒');
+  assert.match(await card.getByLabel('H3 分辨率', { exact: true }).innerText(), /低/);
   assert.match(await card.getByLabel('H3 比例', { exact: true }).innerText(), /1:1/);
   const returned = await saved();
   assert.equal(returned.inputs['first-frame'][0].assetId, 'c');
@@ -98,7 +100,7 @@ try {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await page.screenshot({ path: `.tmp/workflow-h3/card-${theme}.png` });
   }
-  await card.getByRole('button', { name: '运行此卡片', exact: true }).click();
+  await card.getByRole('button', { name: '运行', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status === 'done');
   const submission = await page.evaluate(() => window.h3Calls[0].input);
   assert.equal(submission.firstFrame, 'c'); assert.equal(submission.lastFrame, 'b');

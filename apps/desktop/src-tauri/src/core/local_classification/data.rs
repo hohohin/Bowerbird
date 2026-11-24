@@ -33,7 +33,7 @@ fn image_version(conn: &rusqlite::Connection, id: &str) -> AppResult<Option<Imag
 
 /// Called in the same transaction as the new source fingerprint. Human and
 /// historical records survive; only obsolete automatic classification is reset.
-pub(crate) fn requeue_changed_connected_asset(tx: &rusqlite::Transaction<'_>, id: &str) -> AppResult<()> {
+pub(crate) fn requeue_changed_connected_asset(tx: &rusqlite::Connection, id: &str) -> AppResult<()> {
     let manual: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM asset_tags WHERE asset_id=?1 AND origin='manual')", [id], |r| r.get(0))?;
     if manual { return Ok(()); }
     tx.execute(
@@ -617,11 +617,29 @@ impl Database {
         definitions: &[super::cloud::NewLabel],
         expected: Option<&ImageVersion>,
     ) -> AppResult<bool> {
+        self.apply_classification_with_guard(
+            asset, revision, prediction, record_observation, evaluated, model, definitions,
+            |tx| match expected {
+                Some(expected) => Ok(image_version(tx, asset)?.as_ref() == Some(expected)),
+                None => Ok(true),
+            },
+        )
+    }
+
+    pub(super) fn apply_classification_with_guard(
+        &self,
+        asset: &str,
+        revision: i64,
+        prediction: &Prediction,
+        record_observation: bool,
+        evaluated: &[String],
+        model: &str,
+        definitions: &[super::cloud::NewLabel],
+        current_source: impl FnOnce(&rusqlite::Transaction<'_>) -> AppResult<bool>,
+    ) -> AppResult<bool> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        if let Some(expected) = expected {
-            if image_version(&tx, asset)?.as_ref() != Some(expected) { return Ok(false); }
-        }
+        if !current_source(&tx)? { return Ok(false); }
         let current: i64 = tx.query_row(
             "SELECT revision FROM local_classification_state WHERE id=1",
             [],

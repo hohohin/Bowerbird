@@ -21,6 +21,37 @@
 .annotation-stage[data-pan-mode="true"] svg,
 .annotation-stage[data-pan-mode="true"] svg * { cursor: inherit !important; }
 
+.annotation-crop-toolbar {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 16px);
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid #ffffff26;
+  border-radius: 2px;
+  background: #202528;
+  box-shadow: 0 4px 16px #0005;
+}
+
+.annotation-crop-toolbar[data-hidden] { visibility: hidden; pointer-events: none; }
+.annotation-crop-toolbar button { white-space: nowrap; }
+.annotation-crop-toolbar button:focus-visible { outline: 1px solid #8faab8; outline-offset: -1px; }
+html[data-theme] .image-annotator .annotation-crop-toolbar .tactical-select-trigger {
+  padding: 6px 8px;
+  color: #e4e6eb;
+  font-size: 12px;
+}
+html[data-theme] .image-annotator .annotation-crop-toolbar .tactical-select-trigger:not(:disabled):is(:hover, [aria-expanded="true"]) {
+  color: #ffffff;
+  background: #ffffff18;
+}
+
 .annotation-toolbar-actions {
   display: flex;
   align-items: center;

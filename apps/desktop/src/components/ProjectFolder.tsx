@@ -1,5 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ArrowUpRight, Image, ImagePlus, Maximize2, MoreHorizontal, PanelsTopLeft } from "lucide-react";
+import { useState } from "react";
 import { notifyError } from "../lib/notify";
 import { useStore } from "../store";
 import type { LibraryProjectGroup } from "../lib/libraryView";
@@ -19,11 +20,16 @@ export function ProjectFolder({ group, onExpand, onOpen, detailed = false, seria
   const projectDrop = useProjectAssetDrop();
   const projectRoutePending = useStore((s) => s.projectRoutePending);
   const activeProjectId = useStore((s) => s.activeProjectId);
+  const [opening, setOpening] = useState(false);
   const selected = detailed && (selection ? selection.id : activeProjectId) === group.project.id;
   const updatedAt = group.project.updated_at ?? group.project.created_at;
-  const openProject = () => void useStore.getState().enterProject(group.project.id)
-    .then(() => onOpen?.())
-    .catch((error) => notifyError(error, "无法打开项目画板"));
+  const openProject = () => {
+    setOpening(true);
+    void useStore.getState().enterProject(group.project.id)
+      .then(() => onOpen?.())
+      .catch((error) => notifyError(error, "无法打开项目画板"))
+      .finally(() => setOpening(false));
+  };
   const menuButton = <button type="button" className={detailed ? "project-manager-menu" : "library-project-expand"} title="项目操作"
     aria-label={`项目操作 ${group.project.name}`} aria-haspopup="menu" onClick={event => {
       const bounds = event.currentTarget.getBoundingClientRect();
@@ -59,6 +65,7 @@ export function ProjectFolder({ group, onExpand, onOpen, detailed = false, seria
       {!detailed && content}
     </button>
     {detailed && <><div className="library-project-enter">{content}</div><span className="project-manager-open" aria-hidden="true"><ArrowUpRight size={17}/></span></>}
+    {opening && <span className="project-folder-opening" role="status">正在打开项目</span>}
     {!detailed && (onExpand ? <button type="button" className="library-project-expand" title="展开项目"
       aria-label={`展开项目 ${group.project.name}`} aria-expanded={false} onClick={onExpand}>
       <Maximize2 size={15} aria-hidden="true" />

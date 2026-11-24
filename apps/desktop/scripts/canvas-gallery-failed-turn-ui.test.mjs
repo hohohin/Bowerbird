@@ -64,7 +64,7 @@ try {
   await card.hover();
   await card.getByRole('button', { name: '上一张生成图片' }).click();
   await card.locator('[data-conversation-image="a"]').click();
-  const preview = page.getByRole('dialog', { name: /^(媒体预览|图片与会话预览)/ });
+  const preview = page.getByRole('dialog', { name: /^(媒体预览|图片与生成记录预览)/ });
   await preview.waitFor();
   assert.equal(await inspector.count(), 0, 'the successful image opens its own preview');
   await page.keyboard.press('Escape');

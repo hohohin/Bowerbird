@@ -6,11 +6,14 @@
 import { cleanupTextJobs } from "../_shared/text-job-upload.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
-import { corsHeaders } from "../_shared/limits.ts";
+import { corsHeaders, readJsonBody } from "../_shared/limits.ts";
+import { FILE_SPEECH_MAX_RESULT_BYTES, FILE_SPEECH_OPERATION, fileSpeechAudioKey } from "../_shared/file-speech.ts";
+import { libraryVisualVideoKey, parseLibraryVisualVideo } from "../_shared/library-visual.ts";
 
 const BUCKET = "generation-temp";
 const LEASE_SECONDS = 90;
 const SIGNED_URL_SECONDS = 300;
+const SPEECH_AUDIO_URL_SECONDS = 4 * 60 * 60;
 const MAX_RESULT_CHARS = 65_536;
 
 function requiredEnv(name: string): string {
@@ -60,6 +63,8 @@ interface JobRow {
   input_manifest_hash: string;
   attempt_count: number;
   upstream_submitted_at: string | null;
+  operation: string;
+  file_speech_source_duration_ms: number | null;
 }
 
 function scalar<T>(value: T | T[] | null): T | null {
@@ -77,25 +82,40 @@ async function assertLease(admin: SupabaseClient, jobId: string, leaseId: string
 }
 
 async function actionCleanupExpired(admin: SupabaseClient): Promise<Response> {
+  const reconciled = await admin.rpc("reconcile_stale_understand_jobs", { p_limit: 100 });
+  if (reconciled.error) throw new ApiError("internal_error", "失联理解任务对账失败", true);
   const classification = await admin.rpc("cleanup_classification");
   if (classification.error) throw new ApiError("internal_error", "过期分类请求清理失败", true);
   return jsonResponse(await cleanupTextJobs(admin, "understand_jobs"));
 }
 
-async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Response> {
+async function actionClaim(admin: SupabaseClient, workerId: string, fileSpeechCapable: boolean): Promise<Response> {
   const reconciled = await admin.rpc("reconcile_stale_understand_jobs", { p_limit: 100 });
   if (reconciled.error) throw new ApiError("internal_error", "失联理解任务对账失败", true);
   const result = await admin.rpc("claim_understand_job", {
     p_worker_id: workerId,
     p_lease_seconds: LEASE_SECONDS,
+    ...(fileSpeechCapable ? { p_file_speech_capable: true } : {}),
   });
   if (result.error) throw new ApiError("internal_error", "理解任务认领失败", true);
   const job = scalar(result.data) as JobRow | null;
   // PostgREST serializes a NULL composite return as an all-null object, not JSON null.
   if (!job?.id) return jsonResponse({ job: null });
-  const signed = await admin.storage.from(BUCKET).createSignedUrl(job.request_object_key, SIGNED_URL_SECONDS);
-  if (signed.error || !signed.data?.signedUrl) {
-    throw new ApiError("internal_error", "理解输入下载地址签发失败", true);
+  const bucket = admin.storage.from(BUCKET);
+  let fileSpeech: { submittedAt: string | null; audioUrl: string | null; sourceDurationMs: number | null } | undefined;
+  if (job.operation === FILE_SPEECH_OPERATION) {
+    fileSpeech = { submittedAt: job.upstream_submitted_at, audioUrl: null, sourceDurationMs: job.file_speech_source_duration_ms };
+    if (!job.upstream_submitted_at) {
+      const audio = await bucket.createSignedUrl(fileSpeechAudioKey(job.id), SPEECH_AUDIO_URL_SECONDS);
+      if (audio.error || !audio.data?.signedUrl) throw new ApiError("internal_error", "音轨读取地址签发失败", true);
+      fileSpeech.audioUrl = audio.data.signedUrl;
+    }
+  }
+  let inputUrl: string | undefined;
+  if (!fileSpeech?.submittedAt) {
+    const signed = await bucket.createSignedUrl(job.request_object_key, SIGNED_URL_SECONDS);
+    if (signed.error || !signed.data?.signedUrl) throw new ApiError("internal_error", "理解输入下载地址签发失败", true);
+    inputUrl = signed.data.signedUrl;
   }
   return jsonResponse({
     job: {
@@ -104,8 +124,64 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
       attempt: job.attempt_count,
     },
     lease: { leaseId: job.lease_id, leaseSeconds: LEASE_SECONDS },
-    inputUrl: signed.data.signedUrl,
+    inputUrl,
+    fileSpeech,
   });
+}
+
+async function claimLibraryVisual(admin: SupabaseClient): Promise<Response | null> {
+  const claim = await admin.rpc("control_library_visual_segment", { p_action: "claim" });
+  if (claim.error) throw new ApiError("internal_error", "画面分析任务认领失败", true);
+  const job = claim.data;
+  if (!job?.id) return null;
+  const video = parseLibraryVisualVideo(job.video);
+  const signed = await admin.storage.from(BUCKET).createSignedUrl(libraryVisualVideoKey(job.id), SIGNED_URL_SECONDS);
+  if (signed.error || !signed.data?.signedUrl) throw new ApiError("internal_error", "画面代理读取地址签发失败", true);
+  return jsonResponse({
+    job: { id: job.id, inputManifestHash: job.input_manifest_hash, attempt: 1 },
+    lease: { leaseId: job.lease_id, leaseSeconds: LEASE_SECONDS },
+    libraryVisual: { videoUrl: signed.data.signedUrl, video },
+  });
+}
+
+async function controlLibraryVisual(admin: SupabaseClient, action: string, body: Record<string, unknown>): Promise<Response> {
+  if (!["heartbeat", "submitted", "finish", "fail", "outcome_unknown"].includes(action) ||
+      typeof body.jobId !== "string" || typeof body.leaseId !== "string") {
+    throw new ApiError("invalid_request", "画面分析操作或租约无效");
+  }
+  const { data, error } = await admin.rpc("control_library_visual_segment", {
+    p_action: action === "outcome_unknown" ? "unknown" : action, p_segment_id: body.jobId, p_lease_id: body.leaseId,
+    p_result_text: typeof body.resultText === "string" && action === "finish" ? body.resultText : null,
+    p_receipt: body.providerReceipt ?? null,
+    p_error_code: typeof body.safeErrorCode === "string" ? body.safeErrorCode : null,
+    p_safe_message: typeof body.safeMessage === "string" ? body.safeMessage : null,
+  });
+  if (error || !data) {
+    if (["55000", "P0002"].includes(error?.code ?? "")) throw new ApiError("invalid_request", "画面分析租约已失效", false, 409);
+    throw new ApiError("internal_error", "画面分析任务结算失败", true);
+  }
+  return jsonResponse({ jobId: body.jobId, status: data.segment.status, leaseExpiresAt: data.segment.lease_expires_at });
+}
+
+async function cleanupLibraryVisual(admin: SupabaseClient) {
+  const now = new Date().toISOString();
+  const expired = await admin.from("library_visual_segments").select("id,parent:library_visual_jobs!inner(expires_at)")
+    .lt("parent.expires_at", now).is("cleaned_at", null).order("start_ms", { ascending: false }).limit(50);
+  const stalled = await admin.from("library_visual_segments").select("id")
+    .eq("status", "running").lt("lease_expires_at", now).limit(50);
+  if (expired.error || stalled.error) throw new ApiError("internal_error", "读取待清理画面分析任务失败", true);
+  for (const job of stalled.data ?? []) {
+    const result = await admin.rpc("control_library_visual_segment", { p_action: "expire", p_segment_id: job.id });
+    if (result.error) throw new ApiError("internal_error", "回收画面分析租约失败", true);
+  }
+  for (const job of expired.data ?? []) {
+    const result = await admin.rpc("control_library_visual_segment", { p_action: "expire", p_segment_id: job.id });
+    if (result.error) throw new ApiError("internal_error", "结清过期画面分析任务失败", true);
+    const removed = await admin.storage.from(BUCKET).remove([libraryVisualVideoKey(job.id)]);
+    if (removed.error) throw new ApiError("internal_error", "清除过期画面代理失败", true);
+    const cleaned = await admin.from("library_visual_segments").update({ cleaned_at: now, video: null, result_text: null }).eq("id", job.id);
+    if (cleaned.error) throw new ApiError("internal_error", "画面分析清理登记失败", true);
+  }
 }
 
 async function actionHeartbeat(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
@@ -142,18 +218,34 @@ async function actionSubmitted(admin: SupabaseClient, body: Record<string, unkno
   return jsonResponse({ jobId, status: job.status, submittedAt: job.upstream_submitted_at });
 }
 
+async function actionDeferFileSpeech(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
+  const jobId = typeof body.jobId === "string" ? body.jobId : "";
+  const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
+  if (!jobId || !leaseId) throw new ApiError("invalid_request", "缺少 jobId/leaseId");
+  const deferred = await admin.rpc("defer_file_speech_job", { p_job_id: jobId, p_lease_id: leaseId });
+  if (deferred.error) throw new ApiError("invalid_request", "转录租约或状态已变化", false, 409);
+  return jsonResponse({ jobId, status: "queued" });
+}
+
 async function actionComplete(
   admin: SupabaseClient,
   body: Record<string, unknown>,
   status: "succeeded" | "failed" | "outcome_unknown",
+  fileSpeechCapable = false,
 ): Promise<Response> {
   const jobId = typeof body.jobId === "string" ? body.jobId : "";
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
   if (!jobId || !leaseId) throw new ApiError("invalid_request", "缺少 jobId/leaseId");
-  await assertLease(admin, jobId, leaseId);
+  const jobWithLease = await assertLease(admin, jobId, leaseId);
+  if ((jobWithLease.operation === FILE_SPEECH_OPERATION) !== fileSpeechCapable) {
+    throw new ApiError("invalid_request", "任务类型不支持此结算动作", false, 409);
+  }
   const resultText = typeof body.resultText === "string" ? body.resultText : null;
   if (status === "succeeded") {
-    if (!resultText?.trim() || resultText.length > MAX_RESULT_CHARS) {
+    const tooLarge = resultText !== null && (jobWithLease.operation === FILE_SPEECH_OPERATION
+      ? new TextEncoder().encode(resultText).length > FILE_SPEECH_MAX_RESULT_BYTES
+      : resultText.length > MAX_RESULT_CHARS);
+    if (!resultText?.trim() || tooLarge) {
       throw new ApiError("invalid_request", "理解结果文本无效");
     }
   }
@@ -164,6 +256,7 @@ async function actionComplete(
     p_result_text: resultText,
     p_error_code: typeof body.safeErrorCode === "string" ? body.safeErrorCode.slice(0, 80) : null,
     p_safe_message: typeof body.safeMessage === "string" ? body.safeMessage.slice(0, 500) : null,
+    ...(fileSpeechCapable ? { p_file_speech_capable: true } : {}),
   });
   if (result.error) throw new ApiError("internal_error", "理解任务结算失败", true);
   const job = scalar(result.data) as { status: string; actual_credits?: number | null };
@@ -179,13 +272,30 @@ Deno.serve(async (request) => {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     if (request.method !== "POST") throw new ApiError("invalid_request", "仅支持 POST", false, 405);
     const { workerId, admin } = requireWorker(request);
-    const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+    const body = await readJsonBody(request, 2 * FILE_SPEECH_MAX_RESULT_BYTES + 4096);
     const action = typeof body.action === "string" ? body.action : "";
     let response: Response;
-    if (action === "cleanup_expired") response = await actionCleanupExpired(admin);
-    else if (action === "claim") response = await actionClaim(admin, workerId);
+    if (action === "cleanup_expired") {
+      response = await actionCleanupExpired(admin);
+      if (body.libraryVisualCleanup === true) {
+        try { await cleanupLibraryVisual(admin); }
+        catch (error) {
+          safeLog({ requestId: id, service: "understand-worker:library-visual-cleanup", status: error instanceof ApiError ? error.code : "error" });
+        }
+      }
+    }
+    else if (action === "claim") {
+      response = await actionClaim(admin, workerId, body.fileSpeechCapable === true);
+      if (body.libraryVisualCapable === true && !(await response.clone().json()).job) {
+        response = await claimLibraryVisual(admin) ?? response;
+      }
+    }
+    else if (body.libraryVisual === true) response = await controlLibraryVisual(admin, action, body);
     else if (action === "heartbeat") response = await actionHeartbeat(admin, body);
     else if (action === "submitted") response = await actionSubmitted(admin, body);
+    else if (action === "defer_file_speech") response = await actionDeferFileSpeech(admin, body);
+    else if (action === "file_speech_finish") response = await actionComplete(admin, body, "succeeded", true);
+    else if (action === "file_speech_fail") response = await actionComplete(admin, body, "failed", true);
     else if (action === "finish") response = await actionComplete(admin, body, "succeeded");
     else if (action === "fail") response = await actionComplete(admin, body, "failed");
     else if (action === "outcome_unknown") response = await actionComplete(admin, body, "outcome_unknown");

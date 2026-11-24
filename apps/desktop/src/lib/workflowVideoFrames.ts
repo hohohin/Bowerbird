@@ -1,29 +1,37 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "./api";
-import { generationInputNode, type WorkflowInput, type WorkflowNode, type WorkflowValue } from "./canvasWorkflow";
+import { generationInputNode, workflowFrameLabel, type WorkflowInput, type WorkflowNode, type WorkflowValue } from "./canvasWorkflow";
 import type { CanvasNode } from "./types";
 import { isVideoPath } from "./videoGeneration";
 import { readVideoBoundaryFrame, readVideoLastFrame } from "./videoFrame";
 import { saveVideoFrame } from "./saveVideoFrame";
 import type { AutomaticOutput } from "./workflowAutoConnect";
+import { WorkflowInputError } from "./workflowDiagnostics";
 
 type VideoFramePosition = NonNullable<WorkflowInput["videoFrame"]>["position"];
 
-/** Use the selected video identity while planning; only a saved frame is committed. */
+/** A card binding follows its producer on every run. A material binding keeps its saved frame. */
 export function videoFrameOutputPreview(output: AutomaticOutput, position: VideoFramePosition): AutomaticOutput {
   const assetId = output.binding.assetId;
-  if (!assetId) throw new Error("视频来源尚无可用文件");
-  return { ...output, media: "image", binding: { ...output.binding, videoFrame: { position, assetId } } };
+  if (!assetId && !(output.binding.nodeId && output.binding.portId)) throw new Error("视频来源尚无可用文件");
+  return { ...output, media: "image", binding: { ...output.binding, videoFrame: assetId ? { position, assetId } : { position } } };
 }
 
 export async function materializeVideoFrameOutput(projectId: string, output: AutomaticOutput, position: VideoFramePosition,
   isCurrent: () => boolean = () => true): Promise<AutomaticOutput> {
+  const plan = videoFrameOutputPreview(output, position);
+  const id = output.binding.assetId;
+  if (!id) throw new Error("视频来源尚无可用文件");
+  const assetId = await saveBoundaryFrame(projectId, id, position, isCurrent);
+  return { ...plan, binding: { ...plan.binding, videoFrame: { position, assetId } } };
+}
+
+async function saveBoundaryFrame(projectId: string, videoId: string, position: VideoFramePosition, isCurrent: () => boolean) {
   const ensureCurrent = () => {
     if (!isCurrent()) throw new DOMException("连接已取消", "AbortError");
   };
   ensureCurrent();
-  const plan = videoFrameOutputPreview(output, position);
-  const [asset] = await api.getAssetsByIds([plan.binding.assetId!]);
+  const [asset] = await api.getAssetsByIds([videoId]);
   ensureCurrent();
   const path = asset?.store_path;
   if (!path || !isVideoPath(path)) throw new Error("视频文件不可用，请检查来源卡片");
@@ -31,7 +39,23 @@ export async function materializeVideoFrameOutput(projectId: string, output: Aut
   ensureCurrent();
   const image = await saveVideoFrame(frame, projectId);
   ensureCurrent();
-  return { ...plan, binding: { ...plan.binding, videoFrame: { position, assetId: image.id } } };
+  return image.id;
+}
+
+/** Resolve only this consumer's values. The saved wire continues to follow the producer. */
+export async function resolveDynamicVideoFrame(projectId: string, node: WorkflowNode, binding: WorkflowInput,
+  value: WorkflowValue, halted: () => boolean): Promise<WorkflowValue> {
+  const frame = binding.videoFrame;
+  if (!frame || halted()) return value;
+  const ids = value.assetIds ?? [];
+  if (ids.length !== 1) throw new WorkflowInputError("首尾帧引用需要上游输出一个视频，请检查上游生成结果", node, binding);
+  try {
+    const frameId = await saveBoundaryFrame(projectId, ids[0], frame.position, () => !halted());
+    return { ...value, assetIds: [frameId], nodeIds: undefined };
+  } catch (error) {
+    if (halted()) return value;
+    throw new WorkflowInputError(`无法提取上游视频的${workflowFrameLabel(frame)}：${error instanceof Error ? error.message : String(error)}`, node, binding);
+  }
 }
 
 /** Only canvas video image sockets become frames; the generator's video output stays a video. */

@@ -124,10 +124,10 @@ try {
   await portrait.dblclick();
   assert.deepEqual(await page.evaluate(() => window.picked), ['b']);
   await page.waitForTimeout(600);
-  assert.equal(await page.getByRole('dialog', { name: '图片与会话预览' }).count(), 0);
+  assert.equal(await page.getByRole('dialog', { name: '图片与生成记录预览' }).count(), 0);
   await portrait.click();
   await page.waitForTimeout(800);
-  await page.getByRole('dialog', { name: '图片与会话预览' }).waitFor();
+  await page.getByRole('dialog', { name: '图片与生成记录预览' }).waitFor();
   await page.keyboard.press('Escape');
   await portrait.click({ button: 'right' });
   await page.getByRole('menuitem', { name: '添加到对话框', exact: true }).click();
@@ -168,7 +168,6 @@ try {
   await page.waitForFunction(() => !document.querySelector('.canvas-plane[data-canvas-connecting]'));
 
   await portrait.click({ button: 'right' });
-  await page.getByRole('menuitem', { name: '删除当前项', exact: true }).click();
   await page.getByRole('menuitem', { name: '移出画布', exact: true }).click();
   await page.waitForFunction(() => !JSON.parse(window.snapshot().nodes.find(node => node.id === 'media-table').payloadJson).cells[0][0].image_refs.length);
   assert.equal(JSON.parse((await state()).payloadJson).cells[0][1].image_refs[0].asset_id, 'video', 'removing a cell image preserves the table and other cells');

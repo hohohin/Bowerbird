@@ -17,12 +17,16 @@ async function drop(payload = { version: 1, imageUrl: "https://i.pinimg.com/imag
 try {
   // Exercise the production injection with a real DOM, including sites that disable image dragging.
   const source = await browser.newPage();
-  await source.route("https://fixture.example/**", route => route.fulfill({ contentType: "text/html", body: '<a href="/pin/1"><img id="source" draggable="false" src="/small.png" srcset="/small.png 1x, /large.png 2x"></a>' }));
+  await source.route("https://fixture.example/**", route => route.request().resourceType() === "image"
+    ? route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="blue"/></svg>' })
+    : route.fulfill({ contentType: "text/html", body: '<a href="/pin/1"><img id="source" width="100" height="100" draggable="false" src="/small.png" srcset="/small.png 1x, /large.png 2x"></a>' }));
   await source.addInitScript(await readFile("../extension/candidate-utils.js", "utf8"));
   await source.addInitScript(await readFile("src-tauri/src/commands/source_browser_drag.js", "utf8"));
   await source.goto("https://fixture.example/");
   const injected = await source.locator("#source").evaluate(image => {
-    image.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    const { left, top, width, height } = image.getBoundingClientRect();
+    const position = { clientX: left + width / 2, clientY: top + height / 2 };
+    image.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, ...position }));
     image.addEventListener("dragstart", event => event.preventDefault());
     const transfer = new DataTransfer();
     const allowed = image.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: transfer }));
@@ -37,8 +41,8 @@ try {
   await page.getByRole("button", { name: "探索", exact: true }).click();
   await page.waitForFunction(() => window.calls.some(c => c.command === "open_source_browser"));
   const explore = await page.getByRole("button", { name: "探索", exact: true }).boundingBox();
-  const create = await page.getByRole("button", { name: "新建创作", exact: true }).boundingBox();
-  assert.ok(explore.x < create.x);
+  const projects = await page.getByRole("button", { name: "项目", exact: true }).boundingBox();
+  assert.ok(explore.x < projects.x);
   const browserPanel = await page.getByRole("complementary", { name: "探索面板" }).boundingBox();
   const library = await page.locator('[aria-label="探索采集素材"]').boundingBox();
   assert.ok(browserPanel.x + browserPanel.width <= library.x, "browser is a left panel beside the existing main page");
@@ -76,7 +80,7 @@ try {
       if (!textOnly) transfer.setData("application/x-bowerbird-explorer", "invalid");
       el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
     }, textOnly);
-    await page.getByText("未能识别拖入的图片，请重新拖动网页图片", { exact: true }).last().waitFor();
+    await page.getByText("未能识别拖入的素材，请重新拖动网页图片或视频", { exact: true }).last().waitFor();
     assert.equal((await calls("import_image_bytes")).length, 0, "malformed capture metadata must not fall back to file import");
   }
   await page.evaluate(() => { window.calls = window.calls.filter(c => c.command !== "capture_source_browser_image"); window.store.setState({ assets: [], total: 0 }); });
@@ -124,7 +128,7 @@ try {
   await page.evaluate(() => document.querySelector("#sidebar-overlay-test").remove());
   await drop({ version: 1, imageUrl: "file:///secret", pageUrl: "https://example.com" });
   assert.equal((await calls("capture_source_browser_image")).length, 0);
-  await page.getByText("未能识别拖入的图片，请重新拖动网页图片", { exact: true }).last().waitFor();
+  await page.getByText("未能识别拖入的素材，请重新拖动网页图片或视频", { exact: true }).last().waitFor();
   await page.evaluate(() => { window.hold = true; });
   await drop(); await drop();
   await page.waitForFunction(() => window.release);
@@ -159,10 +163,16 @@ try {
   assert.equal(await page.locator('[aria-label="探索采集素材"] video').count(), 0, "passive collection previews must not initialize video decoders");
   await page.getByText("PSD", { exact: true }).waitFor();
   await page.evaluate(() => { window.fail = true; }); await drop();
-  await page.getByText("模拟网站拒绝图片", { exact: true }).waitFor();
-  const notice = await page.getByText("模拟网站拒绝图片", { exact: true }).boundingBox();
+  const failureNotice = page.getByRole("status").getByText("采集失败，请查看采集记录", { exact: true });
+  await failureNotice.waitFor();
+  const notice = await failureNotice.boundingBox();
   const native = await page.locator("[data-source-browser-viewport]").boundingBox();
   assert.ok(notice.x >= native.x + native.width, "capture errors stay outside the native view");
+  await page.getByRole("button", { name: "采集记录", exact: true }).click();
+  const captureHistory = page.getByRole("dialog", { name: "采集记录", exact: true });
+  await captureHistory.getByText("模拟网站拒绝图片", { exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await captureHistory.waitFor({ state: "hidden" });
   await page.setViewportSize({ width: 900, height: 650 });
   await page.waitForTimeout(250);
   const viewport = await page.locator("[data-source-browser-viewport]").boundingBox();
@@ -185,7 +195,7 @@ try {
   assert.deepEqual(errors, []);
   console.log("PASS explorer entry, side-by-side collection, sites, modal occlusion, drop validation, duplicate guard, frozen project, provisional materialize, errors, resize and close.");
 } catch (error) {
-  console.log(JSON.stringify({ errors, calls: await page.evaluate(() => window.calls.slice(-12)) }));
-  await page.screenshot({ path: ".tmp/explorer-failure.png" });
+  console.log(JSON.stringify({ errors, calls: await page.evaluate(() => window.calls?.slice(-12) ?? []).catch(() => []) }));
+  await page.screenshot({ path: ".tmp/explorer-failure.png" }).catch(() => {});
   throw error;
 } finally { await browser.close(); await server.close(); }

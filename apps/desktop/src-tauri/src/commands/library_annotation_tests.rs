@@ -12,7 +12,7 @@ impl Fixture {
             else { crate::core::ingest::ingest_generated(&paths, &db, &path, None, "test").unwrap() };
         Self { _dir: dir, paths, db, asset }
     }
-    fn request(&self) -> Overwrite { Overwrite { asset_id: self.asset.id.clone(), source_hash: fingerprint(Path::new(self.asset.store_path.as_deref().unwrap())).unwrap() } }
+    fn request(&self) -> Overwrite { Overwrite { asset_id: self.asset.id.clone(), source_hash: fingerprint(Path::new(self.asset.store_path.as_deref().unwrap())).unwrap(), annotation_id: None } }
     fn bytes(&self) -> Vec<u8> { fs::read(self.asset.store_path.as_deref().unwrap()).unwrap() }
     fn output(&self) -> (Vec<u8>, String) {
         let mut data = std::io::Cursor::new(Vec::new());
@@ -79,6 +79,45 @@ fn stale_edit_and_database_failures_leave_original_and_history_untouched() {
     }
     let first = f.request(); f.save(&first).unwrap();
     assert!(f.save(&first).is_err(),"two editors cannot overwrite the newer revision");
+}
+
+#[test]
+fn identical_edit_documents_keep_distinct_assets_and_one_revision_per_save() {
+    let f = Fixture::new("png", false);
+    let bytes = f.bytes();
+    let output_hash = bytes_hash(&bytes);
+    let source_hash = "8".repeat(64);
+    let payload = serde_json::json!({
+        "schema_version": 1, "source_asset_id": f.asset.id, "source_store_path": f.asset.store_path,
+        "source_sha256": source_hash, "output_sha256": output_hash,
+        "image": {"width": 80, "height": 40}, "shapes": [],
+        "editable": {"base": {"kind": "asset"}, "shapes": []}
+    }).to_string();
+    let ingest = || crate::core::ingest::ingest_annotation_from_bytes(&f.paths, &f.db, &bytes, "草稿", false, Some(&payload));
+    f.db.conn.lock().unwrap().execute_batch("CREATE TRIGGER reject_annotation BEFORE INSERT ON analyses BEGIN SELECT RAISE(ABORT,'test'); END;").unwrap();
+    assert!(ingest().is_err());
+    assert_eq!(f.db.count_assets(None).unwrap(), 1);
+    f.db.conn.lock().unwrap().execute_batch("DROP TRIGGER reject_annotation;").unwrap();
+    let first = ingest().unwrap();
+    let second = ingest().unwrap();
+    assert_ne!(f.asset.id, first.id);
+    assert_ne!(first.id, second.id);
+    let annotation_id = f.db.list_analyses_by_asset(&first.id).unwrap().remove(0).id;
+    let mut request = Overwrite { asset_id: first.id.clone(), source_hash: output_hash.clone(), annotation_id: Some(annotation_id) };
+    let revised = overwrite(&f.paths, &f.db, &request, &bytes, &payload).unwrap();
+    assert_eq!(revised.id, first.id);
+    assert_eq!(revised.store_path, first.store_path);
+    assert_ne!(revised.thumb_path, first.thumb_path);
+    let analyses = f.db.list_analyses_by_asset(&revised.id).unwrap();
+    assert_eq!(analyses.len(), 2);
+    let latest: Value = serde_json::from_str(&analyses[0].payload).unwrap();
+    assert_eq!(latest["source_sha256"], source_hash);
+    assert_eq!(latest["output_sha256"], output_hash);
+    assert_eq!(latest["save_mode"], "revision");
+    assert!(latest["editable"].is_object());
+    assert!(overwrite(&f.paths, &f.db, &request, &bytes, &payload).is_err(), "same raster hash does not make the stale document editable");
+    request.annotation_id = Some(analyses[0].id.clone());
+    assert_eq!(overwrite(&f.paths, &f.db, &request, &bytes, &payload).unwrap().id, revised.id);
 }
 
 #[test]

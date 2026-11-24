@@ -16,6 +16,7 @@ export interface ModelOption {
   source: ModelSource;
   group?: string;
   reason?: string;
+  selectableWithIssue?: boolean;
 }
 
 const useFavorites = create<{ keys: string[]; toggle: (key: string) => void }>()(persist(set => ({
@@ -59,7 +60,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
     setOpen(false);
     setOpenGroup(null);
     groupFocus.current = null;
-    if (restore) trigger.current?.focus();
+    if (restore) trigger.current?.focus({ preventScroll: true });
   }
   useLayoutEffect(() => {
     if (!open) return;
@@ -99,10 +100,12 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
   useEffect(() => {
     if (!open) return;
     function outside(event: PointerEvent) {
-      if (!menu.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) close();
+      const target = event.target;
+      if (target instanceof Node && !menu.current?.contains(target) && !trigger.current?.contains(target)) close();
     }
-    document.addEventListener("pointerdown", outside);
-    return () => document.removeEventListener("pointerdown", outside);
+    // Canvas cards stop bubbling pointer events to keep pointer gestures local.
+    window.addEventListener("pointerdown", outside, true);
+    return () => window.removeEventListener("pointerdown", outside, true);
   }, [open]);
   useEffect(() => { if (open && trigger.current?.matches(":disabled")) close(); });
 
@@ -153,7 +156,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
       }}>
       <OverlayScrollArea label="模型列表滚动条" viewportStyle={{ maxHeight: position?.height }}>
         {favorites.length > 0 && <section className="model-select-favorites" aria-label="收藏的模型">
-          <strong>收藏</strong>{favorites.map(option => <button type="button" key={option.key} disabled={!!option.reason}
+          <strong>收藏</strong>{favorites.map(option => <button type="button" key={option.key} disabled={!!option.reason && !option.selectableWithIssue}
             title={option.reason ? userErrorMessage(option.reason, "此模型暂不可用") : option.label}
             onClick={() => { onChange(option.key); close(true); }}>
             {option.source === "cloud" ? <Coins size={12} /> : option.source === "personal" ? <UserRound size={12} /> : <Monitor size={12} />}{option.label}
@@ -178,7 +181,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
               {activeGroup && <button type="button" className="model-select-option model-select-group" data-model-option data-model-group={activeGroup}
                 aria-label={column === "personal" ? "返回自有订阅" : "返回 Bowerbird Bcoin"} onClick={() => switchGroup(activeGroup)}><ChevronLeft size={13} />{activeGroup}</button>}
               {ordered.map(option => <div key={option.key} className="model-select-row">
-              <button type="button" data-model-option data-model-key={option.key} className="model-select-option" disabled={!!option.reason}
+              <button type="button" data-model-option data-model-key={option.key} className="model-select-option" disabled={!!option.reason && !option.selectableWithIssue}
                 aria-pressed={value === option.key} title={option.reason ? userErrorMessage(option.reason, "此模型暂不可用，请检查账号和服务状态。") : option.label}
                 onClick={() => { onChange(option.key); close(true); }}>
                 <span>{option.label}</span>{value === option.key && <Check size={13} aria-hidden="true" />}
@@ -194,7 +197,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
           </section>;
         })}</div>
         {localOption && <div className="model-select-local-row" data-source="local"><button type="button" className="model-select-local" data-model-option data-model-key={localOption.key} aria-pressed={value === localOption.key}
-          disabled={!!localOption.reason} title={localOption.reason ? userErrorMessage(localOption.reason, "本地模型暂不可用，请检查账号和本机环境。") : "本地部署，不消耗积分"} onClick={() => { onChange(localOption.key); close(true); }}>
+          disabled={!!localOption.reason && !localOption.selectableWithIssue} title={localOption.reason ? userErrorMessage(localOption.reason, "本地模型暂不可用，请检查账号和本机环境。") : "本地部署，不消耗积分"} onClick={() => { onChange(localOption.key); close(true); }}>
           <span className="model-source-badge"><Monitor size={12} strokeWidth={2.8} aria-hidden="true" /></span><span>本地部署</span><small>{localOption.label.replace("本地部署 · ", "")}</small>{value === localOption.key && <Check size={13} aria-hidden="true" />}
         </button>{favoriteButton(localOption)}{onSetDefault && <button type="button" className={`model-select-default${defaultKey === localOption.key ? " is-default" : ""}`}
           disabled={!!localOption.reason} aria-label={`${defaultKey === localOption.key ? "取消默认" : "设为默认"}：${localOption.label}`}

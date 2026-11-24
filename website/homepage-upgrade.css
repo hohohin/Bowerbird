@@ -1,0 +1,182 @@
+.module[id] { scroll-margin-top: 72px; }
+.nav-account {
+  padding: 0;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--blue-soft);
+  cursor: pointer;
+  text-align: left;
+}
+.nav-account:hover { color: var(--ink); }
+[data-account-open][hidden] { display: none; }
+a:focus-visible, button:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 4px;
+}
+
+.hero-spread {
+  display: grid;
+  grid-template-columns: 1.04fr 1fr;
+  border-bottom: 1px solid var(--line);
+}
+.hero-copy {
+  min-height: 0;
+  justify-content: center;
+  padding: clamp(34px, 4vw, 62px);
+  border: 0;
+}
+.hero-kicker, .home-eyebrow {
+  margin: 0;
+  font-size: 13px;
+  color: var(--blue-soft);
+  letter-spacing: .06em;
+}
+.hero h1 {
+  margin: 40px 0 24px;
+  font-size: clamp(52px, 6.1vw, 86px);
+  line-height: 1.12;
+  letter-spacing: -.055em;
+}
+.hero h1 span { color: #829aff; }
+.hero-description, .home-heading > p {
+  max-width: 27em;
+  margin: 0;
+  color: #bcbcb5;
+  font-size: 16px;
+  line-height: 1.85;
+}
+.hero-actions { flex-wrap: wrap; justify-content: flex-start; margin-top: 34px; }
+.hero-actions button { cursor: pointer; }
+.hero-actions .button { padding-inline: 20px; }
+
+.reference-board {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  margin: 0;
+  padding: clamp(22px, 3.3vw, 46px);
+  border-left: 1px solid var(--line);
+  background-color: #18171b;
+  background-image: radial-gradient(circle, #424045 1px, transparent 1.25px);
+  background-size: 18px 18px;
+  overflow: hidden;
+}
+.reference-stack { position: relative; aspect-ratio: 1.18; }
+.reference-stack img {
+  position: absolute;
+  height: auto;
+  border: 1px solid rgba(255, 255, 255, .27);
+  box-shadow: 0 16px 26px rgba(0, 0, 0, .32);
+}
+.reference-swatch { width: 32%; left: 5%; top: 17%; transform: rotate(-11deg); }
+.reference-print { width: 37%; right: 3%; top: 26%; transform: rotate(10deg); }
+.reference-flower { width: 58%; left: 21%; top: 5%; transform: rotate(-3deg); }
+.reference-board figcaption {
+  color: #d8d7d2;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 15px;
+  border-top: 1px solid #565158;
+  font-size: 12px;
+}
+.reference-board figcaption span { color: var(--lime); }
+
+.home-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 35px;
+  padding: 54px 48px 34px;
+  border-bottom: 1px solid var(--line);
+}
+.home-heading h2, .project-copy h2 {
+  margin: 12px 0 0;
+  font-size: clamp(32px, 4vw, 56px);
+  line-height: 1.15;
+  letter-spacing: -.05em;
+  font-weight: 600;
+}
+.home-heading > p { max-width: 25em; font-size: 14px; }
+.feature-grid article { min-height: 0; padding: 32px clamp(24px, 3vw, 44px); }
+.feature-grid h3 { font-size: 22px; margin: 0 0 13px; }
+.feature-grid p, .project-copy > p { color: #b4b3af; font-size: 15px; line-height: 1.8; }
+.project-showcase { min-height: 0; border-bottom: 1px solid var(--line); }
+.project-copy h2 { margin-bottom: 24px; }
+.project-copy { min-height: 0; }
+.project-copy .home-eyebrow { color: var(--blue-soft); font-size: 13px; }
+.project-steps small, .download-option small { color: #aaa9a5; font-size: 12px; }
+.download-inner .download-trial { max-width: 32em; color: #bcbcb5; font-size: 14px; line-height: 1.7; }
+.download-trial strong { display: block; margin-bottom: 6px; color: var(--ink); font-size: 19px; }
+.project-visual { min-height: 0; }
+.faq-title { min-height: 0; }
+.faq-list a { color: var(--blue-soft); text-decoration: underline; text-underline-offset: .23em; }
+.faq-list p { color: #b4b3af; }
+.home-film .home-heading { border: 0; }
+.launch-video-frame { padding-top: 0; }
+.workflow-demos {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  padding-bottom: 46px;
+  border-bottom: 1px solid var(--line);
+}
+.workflow-demos figure { margin: 0; }
+.workflow-demos figcaption { padding-bottom: 12px; font-size: 16px; }
+.workflow-demos video { display: block; width: 100%; border: 1px solid var(--line); border-radius: 9px; }
+.footer-main { min-height: 160px; }
+.footer-links a, .footer-main p { font-size: 13px; }
+.footer-main p, .footer-bottom { color: #a4a39d; }
+
+@media (max-width: 900px) {
+  html:not(.js) .site-header { position: static; height: auto; }
+  html:not(.js) .header-inner { flex-wrap: wrap; height: auto; padding-block: 12px; gap: 6px; }
+  html:not(.js) .menu-toggle { display: none; }
+  html:not(.js) .site-nav {
+    position: static;
+    display: flex;
+    flex-flow: row wrap;
+    width: 100%;
+    max-height: none;
+    padding: 0;
+    border: 0;
+    column-gap: 16px;
+  }
+  .hero-copy { padding: 40px 24px; }
+  .hero h1 { font-size: clamp(44px, 6.6vw, 60px); }
+  .home-heading { padding: 38px 24px 24px; }
+  .site-nav { gap: 0; max-height: calc(100dvh - 72px); overflow-y: auto; }
+  .site-nav a { display: flex; align-items: center; min-height: 44px; }
+  .menu-toggle { width: 44px; height: 44px; }
+}
+@media (max-width: 700px) {
+  .hero-spread { grid-template-columns: 1fr; }
+  .hero-copy { padding: 38px 24px 30px; }
+  .hero h1 { margin: 24px 0 16px; font-size: clamp(48px, 10vw, 67px); }
+  .hero-actions { flex-direction: row; margin-top: 22px; }
+  .hero-actions .button { width: auto; gap: 12px; padding-inline: 14px; }
+  .hero-description { font-size: 15px; }
+  .reference-board { border: 0; border-top: 1px solid var(--line); padding: 15px 24px; }
+  .reference-stack { width: min(100%, 320px); margin: 0 auto; }
+  .reference-board figcaption { padding-top: 10px; }
+  .home-heading { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .feature-grid article { padding: 24px; }
+  .feature-grid p { max-width: none; }
+  .workflow-demos { grid-template-columns: 1fr; }
+  .project-window-head, .project-window-foot { padding-block: 12px; gap: 6px; }
+  .download-inner h2 { font-size: clamp(34px, 8vw, 50px); }
+  .download-section, .download-inner { min-height: 0; }
+  .download-inner { padding-block: 32px; }
+  .download-inner h2 { margin: 14px 0; }
+  .download-actions { margin-top: 16px; }
+  .download-option { gap: 6px; }
+  .footer-main { padding-bottom: 32px; gap: 28px; }
+}
+@media (max-width: 380px) {
+  .hero-actions .button { padding-inline: 12px; gap: 8px; }
+  .download-trial strong { font-size: 17px; }
+  .download-inner { padding-block: 24px; }
+}

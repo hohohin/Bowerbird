@@ -1,15 +1,36 @@
 //! Fixed local H3 adapter. No Cloud generation, arbitrary graph execution or global interrupt.
-use std::{fs, path::{Path, PathBuf}, sync::Arc, time::Duration};
+use std::{collections::HashMap, fs, io::{Read, Write}, path::{Path, PathBuf}, sync::{Arc, LazyLock, Mutex, Weak}, time::Duration};
+use tokio::sync::{Mutex as AsyncMutex, watch};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use rusqlite::OptionalExtension;
 use tauri::{AppHandle, Emitter, State};
-use crate::{cloud::{AuthClient, EntitlementService}, core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}};
+use crate::{cloud::{AuthClient, EntitlementService}, core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}, media::audio};
 use crate::core::library::{GenerationHistory, GenerationHistoryTurn};
 #[path = "comfy_progress.rs"]
 mod progress;
+#[path = "comfy_video_r2v.rs"]
+mod r2v;
 
-static IO: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+struct RequestIo {
+    account: String,
+    project: String,
+    lock: AsyncMutex<()>,
+    stop: watch::Sender<()>,
+}
+static REQUESTS: LazyLock<Mutex<HashMap<String, Weak<RequestIo>>>> = LazyLock::new(Default::default);
+
+fn request_io(request: &str, account: &str, project: &str) -> AppResult<Arc<RequestIo>> {
+    let mut requests = REQUESTS.lock().unwrap();
+    requests.retain(|_, io| io.strong_count() > 0);
+    if let Some(io) = requests.get(request).and_then(Weak::upgrade) {
+        if io.account != account || io.project != project { return Err(error("任务归属不匹配")); }
+        return Ok(io);
+    }
+    let io = Arc::new(RequestIo { account: account.into(), project: project.into(), lock: AsyncMutex::new(()), stop: watch::channel(()).0 });
+    requests.insert(request.into(), Arc::downgrade(&io));
+    Ok(io)
+}
 const WORKFLOW: &str = "10_H3_768p_Turbo8_Review_First";
 const UNET: &str = "minimax_h3_fl2va_pruned_int8_convrot.safetensors";
 const REFERENCE_UNET: &str = "minimax_h3_ref2va_pruned_int8_convrot.safetensors";
@@ -20,24 +41,34 @@ const LORA: &str = "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetenso
 pub(super) fn model_names() -> [&'static str; 5] { [UNET, CLIP, VAE, AUDIO, LORA] }
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum Mode { #[default] Frames, Reference, Text }
+pub enum Mode { #[default] Frames, Reference, Text, R2v }
 impl Mode {
     fn workflow(self) -> &'static str {
-        match self { Self::Frames => WORKFLOW, Self::Reference => "13_H3_R2V_768p_Base20_Review_First", Self::Text => "12_H3_T2V_768p_Turbo8_Review_First" }
+        match self { Self::Frames => WORKFLOW, Self::Reference => "13_H3_R2V_768p_Base20_Review_First", Self::Text => "12_H3_T2V_768p_Turbo8_Review_First", Self::R2v => "video_minimax_h3_r2v" }
     }
 }
 pub(super) fn model_names_for_mode(mode: Mode) -> &'static [&'static str] {
-    match mode { Mode::Reference => &[REFERENCE_UNET, CLIP, VAE, AUDIO], _ => &[UNET, CLIP, VAE, AUDIO, LORA] }
+    match mode { Mode::Reference | Mode::R2v => &[REFERENCE_UNET, CLIP, VAE, AUDIO], _ => &[UNET, CLIP, VAE, AUDIO, LORA] }
 }
 
 fn error(message: impl Into<String>) -> AppError { AppError::Other(message.into()) }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct Input { endpoint: String, seconds: f64, ratio: String, resolution: f64, #[serde(default)] mode: Mode, #[serde(default)] first_frame: String, last_frame: Option<String>, prompt: String }
+pub struct Input {
+    endpoint: String, seconds: f64, ratio: String, resolution: f64,
+    #[serde(default)] mode: Mode,
+    #[serde(default)] first_frame: String,
+    last_frame: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audio_asset_id: Option<String>,
+    #[serde(flatten)]
+    references: r2v::References,
+    prompt: String,
+}
 #[derive(Deserialize, Serialize)]
-struct Record { account: String, project: String, input: Input, prompt_id: Option<String>, submitted: bool, asset_id: Option<String>, failure: Option<String>, #[serde(default)] cancelled: bool, #[serde(default)] elapsed_ms: Option<u64> }
+struct Record { #[serde(default)] installation: Option<PathBuf>, account: String, project: String, input: Input, prompt_id: Option<String>, submitted: bool, asset_id: Option<String>, failure: Option<String>, #[serde(default)] cancelled: bool, #[serde(default)] cancel_acknowledged: bool, #[serde(default)] elapsed_ms: Option<u64> }
 #[derive(Serialize)]
-pub struct Status { #[serde(rename="originalService", skip_serializing_if="Option::is_none")] original_service: Option<(String, Mode)>, status: &'static str, message: String, asset: Option<Asset>, progress: Option<progress::Progress>, #[serde(rename = "elapsedMs")] elapsed_ms: Option<u64> }
+pub struct Status { #[serde(rename="originalService", skip_serializing_if="Option::is_none")] original_service: Option<(String, Mode, Option<PathBuf>)>, status: &'static str, message: String, asset: Option<Asset>, progress: Option<progress::Progress>, #[serde(rename = "elapsedMs")] elapsed_ms: Option<u64> }
 fn status(state: &'static str, message: &str) -> Status { Status { original_service: None, status: state, message: message.into(), asset: None, progress: None, elapsed_ms: None } }
 
 /// Old local videos predate generation_meta. Recover the frozen request by its
@@ -67,9 +98,9 @@ pub(super) fn generation_history(root: &Path, db: &Database, asset_id: &str) -> 
         return Ok(None);
     }
     let input = record.input;
-    let references = [Some(input.first_frame), input.last_frame].into_iter().flatten()
-        .filter(|id| !id.is_empty())
-        .map(|id| db.get_prompted_asset(&id))
+    let references = [Some(input.first_frame.as_str()), input.last_frame.as_deref(), input.audio_asset_id.as_deref()].into_iter().flatten()
+        .chain(input.references.ids().map(String::as_str)).filter(|id| !id.is_empty())
+        .map(|id| db.get_prompted_asset(id))
         .collect::<AppResult<Vec<_>>>()?.into_iter().flatten().collect::<Vec<_>>();
     let turn = GenerationHistoryTurn {
         error: None,
@@ -126,7 +157,7 @@ async fn parse_json_response(response: reqwest::Response) -> AppResult<Value> {
 }
 fn validate_options(input: &Input) -> AppResult<()> {
     if !matches!(input.ratio.as_str(), "9:16" | "16:9" | "4:3" | "3:4" | "1:1" | "auto") { return Err(error("不支持的宽高比")); }
-    if !([0.6,0.8,1.0].contains(&input.resolution) || input.mode != Mode::Frames && input.resolution == 0.98)
+    if ![0.6,0.8,0.98,1.0].contains(&input.resolution)
         || !input.seconds.is_finite() || input.seconds.fract() != 0.0 || !(1.0..=15.0).contains(&input.seconds) {
         return Err(error("请选择当前模式支持的分辨率，时长需为 1–15 秒的整数"));
     }
@@ -136,6 +167,8 @@ fn validate_options(input: &Input) -> AppResult<()> {
 fn validate_input(input: &Input) -> AppResult<()> {
     validate_options(input)?;
     if input.prompt.trim().is_empty() || input.prompt.chars().count() > 16000 { return Err(error("请填写 1–16000 字提示词")); }
+    if input.audio_asset_id.as_deref().is_some_and(|id| id.trim().is_empty()) { return Err(error("请选择有效的参考音频素材")); }
+    input.references.validate(input.mode, !input.first_frame.is_empty() || input.last_frame.is_some() || input.audio_asset_id.is_some())?;
     match input.mode {
         Mode::Text if !input.first_frame.is_empty() || input.last_frame.is_some() => return Err(error("文生视频不接收图片，请移除图片或切换模式")),
         Mode::Reference if input.first_frame.is_empty() || input.last_frame.is_some() => return Err(error("单图模式需要一张参考图，不接收尾帧")),
@@ -156,7 +189,7 @@ fn dimensions(input: &Input, first_size: Option<(u32,u32)>) -> AppResult<(u32, u
     if width == 0 || height == 0 { return Err(error("首帧比例过于极端，请指定视频比例")); }
     Ok((width, height, (((input.seconds*24.0-5.0)/17.0).ceil()*17.0+5.0).max(5.0) as u32))
 }
-fn graph(input: &Input, first: &str, last: Option<&str>, seed: u64, request: &str, first_size: Option<(u32,u32)>) -> AppResult<Value> {
+fn graph(input: &Input, first: &str, last: Option<&str>, audio: Option<&str>, seed: u64, request: &str, first_size: Option<(u32,u32)>) -> AppResult<Value> {
     let (width,height,length) = dimensions(input, first_size)?;
     let mut graph = json!({
         "1":{"class_type":"UNETLoader","inputs":{"unet_name":UNET,"weight_dtype":"default"}},
@@ -180,30 +213,65 @@ fn graph(input: &Input, first: &str, last: Option<&str>, seed: u64, request: &st
     match input.mode {
         Mode::Frames => if let Some(last) = last { graph["30"] = json!({"class_type":"LoadImage","inputs":{"image":last}}); graph["9"]["inputs"]["last_frame"] = json!(["30",0]); },
         Mode::Text => { graph.as_object_mut().unwrap().remove("5"); graph["9"]["inputs"].as_object_mut().unwrap().remove("first_frame"); },
-        Mode::Reference => {
+        Mode::Reference | Mode::R2v => {
             graph["1"]["inputs"]["unet_name"] = json!(REFERENCE_UNET);
             graph.as_object_mut().unwrap().remove("7");
-            graph["8"]["inputs"]["model"] = json!(["1",0]);
-            graph["8"]["inputs"]["shift_video"] = json!(12.0);
-            graph["9"] = json!({"class_type":"MiniMaxH3ReferenceToVideo","inputs":{"clip":["2",0],"vae":["3",0],"audio_vae":["4",0],"ref_images.ref_image_0":["5",0],"ref_image_size":"match","width":width,"height":height,"length":length,"prompt":input.prompt}});
+            graph["9"] = json!({"class_type":"MiniMaxH3ReferenceToVideo","inputs":{"clip":["2",0],"vae":["3",0],"audio_vae":["4",0],"ref_image_size":"match","width":width,"height":height,"length":length,"prompt":input.prompt}});
             graph["12"]["inputs"]["sampler_name"] = json!("res_multistep");
             graph["13"]["inputs"]["steps"] = json!(20);
+            if input.mode == Mode::Reference {
+                graph["8"]["inputs"]["model"] = json!(["1",0]);
+                graph["8"]["inputs"]["shift_video"] = json!(12.0);
+                graph["9"]["inputs"]["ref_images.ref_image_0"] = json!(["5",0]);
+            } else {
+                // Comfy-Org R2V's default Base20 path uses the unmodified Ref2VA model.
+                for node in ["5", "8"] { graph.as_object_mut().unwrap().remove(node); }
+                graph["11"]["inputs"]["model"] = json!(["1",0]);
+                graph["13"]["inputs"]["model"] = json!(["1",0]);
+            }
         },
     }
-    if input.mode != Mode::Frames {
+    if matches!(input.mode, Mode::Text | Mode::Reference) {
         graph["15"] = json!({"class_type":"VAEDecodeTiled","inputs":{"samples":["14",0],"vae":["3",0],"tile_size":256,"overlap":64,"temporal_size":64,"temporal_overlap":8}});
+    }
+    if let Some(audio) = audio {
+        graph["31"] = json!({"class_type":"LoadAudio","inputs":{"audio":audio}});
+        if input.mode == Mode::Reference {
+            graph["9"]["inputs"]["ref_audios.ref_audio_0"] = json!(["31",0]);
+        } else {
+            graph["32"] = json!({"class_type":"MiniMaxH3AddGuide","inputs":{
+                "positive":["9",0],"latent":["9",1],"audio_vae":["4",0],"audio":["31",0],"frame_idx":0
+            }});
+            graph["11"]["inputs"]["conditioning"] = json!(["32",0]);
+        }
     }
     Ok(graph)
 }
 pub(super) async fn check_for_mode(http: &reqwest::Client, base: &str, mode: Mode) -> AppResult<()> {
+    check_workflow(http, base, mode, false).await
+}
+
+async fn check_workflow(http: &reqwest::Client, base: &str, mode: Mode, has_audio: bool) -> AppResult<()> {
     let info = json_response(http.get(format!("{base}/object_info"))).await?;
-    let sample = Input { endpoint: base.into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode, first_frame:"".into(), last_frame:None, prompt:"".into() };
-    for node in graph(&sample,"",None,0,"check",None)?.as_object().unwrap().values() {
+    let sample = Input { endpoint: base.into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode, first_frame:"".into(), last_frame:None, audio_asset_id:None, references:Default::default(), prompt:"".into() };
+    if has_audio && (!info["LoadAudio"]["input"]["required"]["audio"].is_array() || match mode {
+        Mode::Reference | Mode::R2v => info["MiniMaxH3ReferenceToVideo"]["input"]["optional"]["ref_audios"][0] != "COMFY_AUTOGROW_V3",
+        Mode::Frames | Mode::Text => info["MiniMaxH3AddGuide"]["input"]["optional"]["audio"][0] != "AUDIO",
+    }) {
+        return Err(error("当前 ComfyUI 不支持 H3 参考音频，请选择兼容的本机环境"));
+    }
+    let mut sample_graph = graph(&sample,"",None,has_audio.then_some(""),0,"check",None)?;
+    if mode == Mode::R2v {
+        r2v::check_schema(&info)?;
+        r2v::add_reference_nodes(&mut sample_graph, &r2v::References { images:vec![String::new()], videos:vec![String::new()], audios:vec![String::new()] });
+    }
+    for node in sample_graph.as_object().unwrap().values() {
         let class = node["class_type"].as_str().unwrap();
         if !info[class].is_object() { return Err(error("本机 ComfyUI 尚不支持此 H3 工作流，需要准备兼容版本")); }
     }
-    for (class,field,model,label) in [("UNETLoader","unet_name",if mode == Mode::Reference {REFERENCE_UNET} else {UNET},"视频主模型"),("CLIPLoader","clip_name",CLIP,"文本理解模型"),("VAELoader","vae_name",VAE,"画面解码模型"),("VAELoader","vae_name",AUDIO,"音频解码模型"),("LoraLoaderModelOnly","lora_name",LORA,"8 步加速模型")] {
-        if mode == Mode::Reference && model == LORA { continue; }
+    let reference = matches!(mode, Mode::Reference | Mode::R2v);
+    for (class,field,model,label) in [("UNETLoader","unet_name",if reference {REFERENCE_UNET} else {UNET},"视频主模型"),("CLIPLoader","clip_name",CLIP,"文本理解模型"),("VAELoader","vae_name",VAE,"画面解码模型"),("VAELoader","vae_name",AUDIO,"音频解码模型"),("LoraLoaderModelOnly","lora_name",LORA,"8 步加速模型")] {
+        if reference && model == LORA { continue; }
         if !info[class]["input"]["required"][field][0].as_array().is_some_and(|list| list.iter().any(|v| v.as_str() == Some(model))) {
             return Err(error(format!("缺少{label}，需要下载完整的 H3 模型包")));
         }
@@ -252,25 +320,74 @@ pub(crate) async fn upload_image_path(http: &reqwest::Client, base: &str, path: 
         Ok((bytes.into_inner(),(image.width(),image.height())))
     }).await.map_err(|e| error(e.to_string()))??;
     let part = reqwest::multipart::Part::bytes(bytes).file_name(format!("{request}-{role}.png")).mime_str("image/png").map_err(|e| error(e.to_string()))?;
-    let result = json_response(http.post(format!("{base}/upload/image")).multipart(reqwest::multipart::Form::new().part("image",part).text("type","input").text("overwrite","true").text("subfolder","bowerbird"))).await?;
-    let name = result["name"].as_str().ok_or_else(|| error("ComfyUI 未返回上传图片名称"))?;
-    let folder = result["subfolder"].as_str().unwrap_or("");
-    Ok((if folder.is_empty() { name.into() } else { format!("{folder}/{name}") },size))
+    let name = upload_input(http, base, part, "图片").await?;
+    Ok((name, size))
 }
-// /prompt has no idempotency guarantee: a durable submitted marker prevents retries.
-async fn start(http: &reqwest::Client, db: &Database, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<()> {
+
+async fn upload_input(http: &reqwest::Client, base: &str, part: reqwest::multipart::Part, media: &str) -> AppResult<String> {
+    let result = json_response(http.post(format!("{base}/upload/image")).multipart(reqwest::multipart::Form::new().part("image",part).text("type","input").text("overwrite","true").text("subfolder","bowerbird"))).await?;
+    let name = result["name"].as_str().ok_or_else(|| error(format!("ComfyUI 未返回上传{media}名称")))?;
+    let folder = result["subfolder"].as_str().unwrap_or("");
+    Ok(if folder.is_empty() { name.into() } else { format!("{folder}/{name}") })
+}
+
+async fn upload_audio(http: &reqwest::Client, base: &str, db: &Database, id: &str, request: &str, role: &str, mode: Mode) -> AppResult<String> {
+    let asset = db.get_asset(id)?.ok_or_else(|| error("参考音频素材不存在，请重新选择"))?;
+    let ext = asset.ext.filter(|ext| audio::is_audio(ext)).ok_or_else(|| error("请选择 WAV、MP3、FLAC、M4A 或 OGG 音频素材"))?.to_ascii_lowercase();
+    let path = db.resolve_asset_original(id)?;
+    let (bytes, ext) = tokio::task::spawn_blocking(move || -> AppResult<_> {
+        // Bound the in-memory multipart body. 64 MiB allows high-rate uncompressed stereo clips.
+        const MAX_AUDIO_BYTES: u64 = 64 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        fs::File::open(path)?.take(MAX_AUDIO_BYTES + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_AUDIO_BYTES { return Err(error("参考音频超过 64 MB，请导出短片段后重新选择")); }
+        // Decode the same bytes we send even if the user edits the connected original concurrently.
+        let mut snapshot = tempfile::Builder::new().suffix(&format!(".{ext}")).tempfile()?;
+        snapshot.write_all(&bytes)?;
+        let wave = audio::decode(snapshot.path())?;
+        if !wave.duration.is_finite() || wave.duration <= 0.0 || wave.duration > 15.0 {
+            return Err(error("参考音频时长须大于 0 秒且不超过 15 秒，请裁剪后重新选择"));
+        }
+        if mode == Mode::Reference && wave.duration < 2.0 {
+            return Err(error("单图模式的参考音频至少需要 2 秒，请重新选择"));
+        }
+        if !matches!(wave.channels, 1 | 2) {
+            return Err(error("参考音频仅支持单声道或立体声，请转换后重新选择"));
+        }
+        Ok((bytes, ext))
+    }).await.map_err(|e| error(e.to_string()))??;
+    let part = reqwest::multipart::Part::bytes(bytes).file_name(format!("{request}-{role}.{ext}"));
+    upload_input(http, base, part, "音频").await
+}
+
+async fn prepare_prompt(http: &reqwest::Client, db: &Database, record: &Record, request: &str) -> AppResult<Value> {
     validate_input(&record.input)?;
     let base = endpoint(&record.input.endpoint)?;
-    check_for_mode(http,&base,record.input.mode).await?;
+    check_workflow(http, &base, record.input.mode, record.input.audio_asset_id.is_some()).await?;
+    let seed = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()) & ((1_u64<<53)-1);
+    if record.input.mode == Mode::R2v {
+        let (uploaded, size) = r2v::upload_references(http, &base, db, &record.input.references, request).await?;
+        let mut prompt = graph(&record.input, "", None, None, seed, request, Some(size))?;
+        r2v::add_reference_nodes(&mut prompt, &uploaded);
+        return Ok(prompt);
+    }
+    let audio = match record.input.audio_asset_id.as_deref() {
+        Some(id) => Some(upload_audio(http, &base, db, id, request, "audio", record.input.mode).await?),
+        None => None,
+    };
     let (first,first_size) = if record.input.mode == Mode::Text { (String::new(),None) }
         else { let (name,size) = upload(http,&base,db,&record.input.first_frame,request,"first").await?; (name,Some(size)) };
     let last = match record.input.last_frame.as_deref() { Some(id) => Some(upload(http,&base,db,id,request,"last").await?.0), None => None };
-    let seed = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()) & ((1_u64<<53)-1);
-    let prompt = graph(&record.input,&first,last.as_deref(),seed,request,first_size)?;
+    graph(&record.input,&first,last.as_deref(),audio.as_deref(),seed,request,first_size)
+}
+
+// /prompt has no idempotency guarantee: a durable submitted marker prevents retries.
+async fn submit_prompt(http: &reqwest::Client, path: &Path, record: &mut Record, request: &str, prompt: Value, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<()> {
+    let base = endpoint(&record.input.endpoint)?;
     owner()?;
     record.submitted = true; save(path,record)?;
     let response = http.post(format!("{base}/prompt")).json(&json!({"prompt":prompt,"client_id":request,"extra_data":{"bowerbird_request_id":request,"workflow":record.input.mode.workflow()}}))
-        .send().await.map_err(|e| error(format!("提交结果未知：{e}")))?;
+        .timeout(Duration::from_secs(5)).send().await.map_err(|e| error(format!("提交结果未知：{e}")))?;
     let code = response.status();
     let response: Value = response.json().await.map_err(|_| error("提交结果未知，请继续查询原任务"))?;
     if !code.is_success() {
@@ -279,6 +396,11 @@ async fn start(http: &reqwest::Client, db: &Database, path: &Path, record: &mut 
     }
     record.prompt_id = Some(response["prompt_id"].as_str().ok_or_else(|| error("ComfyUI 提交结果未知，请继续取回原任务"))?.into());
     save(path,record)
+}
+#[cfg(test)]
+async fn start(http: &reqwest::Client, db: &Database, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<()> {
+    let prompt = prepare_prompt(http, db, record, request).await?;
+    submit_prompt(http, path, record, request, prompt, owner).await
 }
 fn request_match(item: &Value, request: &str) -> bool { item[3]["bowerbird_request_id"].as_str() == Some(request) }
 fn execution_elapsed(result: &Value, prompt_id: &str) -> Option<u64> {
@@ -294,13 +416,13 @@ async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path:
     if let Some(message) = &record.failure { return Ok(status("failed",message)); }
     if !record.submitted { return Ok(status("failed","尚未提交到 ComfyUI，请停止后重新运行")); }
     let base = endpoint(&record.input.endpoint)?;
-    let response = match http.get(format!("{base}/queue")).send().await {
+    let response = match http.get(format!("{base}/queue")).timeout(Duration::from_secs(8)).send().await {
         Ok(response) => response,
-        Err(e) if e.is_connect() && !e.is_timeout() => {
+        Err(e) if e.is_connect() || super::comfy_setup::video_abort_detected(&base) => {
             // Only restart services on ports owned by the Bowerbird video launcher.
             if base == "http://127.0.0.1:18189" || base == "http://127.0.0.1:18188" {
                 let mut offline = status("offline", "本机视频服务已断开。");
-                offline.original_service = Some((base, record.input.mode));
+                offline.original_service = Some((base, record.input.mode, record.installation.clone()));
                 return Ok(offline);
             }
             return Err(error("无法连接此任务使用的本机 ComfyUI 服务，原任务记录已保留。"));
@@ -308,6 +430,9 @@ async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path:
         Err(e) => return Err(error(format!("查询本机视频队列失败：{e}"))),
     };
     let queue = parse_json_response(response).await?;
+    if !queue["queue_running"].is_array() || !queue["queue_pending"].is_array() {
+        return Err(error("原视频服务返回了无法识别的队列，原任务记录已保留。"));
+    }
     let history = json_response(http.get(match &record.prompt_id { Some(id) => format!("{base}/history/{id}"), None => format!("{base}/history?max_items=500") })).await?;
     if record.prompt_id.is_none() {
         record.prompt_id = queue["queue_running"].as_array().into_iter().flatten().chain(queue["queue_pending"].as_array().into_iter().flatten())
@@ -315,24 +440,54 @@ async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path:
             .or_else(|| history.as_object().and_then(|items| items.iter().find(|(_,item)| request_match(&item["prompt"],request)).map(|(id,_)| id.clone())));
         save(path,record)?;
     }
-    let Some(id) = &record.prompt_id else { return Ok(status("unknown","提交结果尚无法确认；继续只查找原任务，不会重复生成")); };
+    let Some(id) = &record.prompt_id else {
+        return recover_saved_output(http, db, paths, path, record, request, owner).await;
+    };
     let result = &history[id];
     if result["status"]["status_str"] == "error" {
-        let message = result["status"]["messages"].as_array().and_then(|messages| messages.iter().find(|m| m[0] == "execution_error" || m[0] == "execution_interrupted"))
+        let mut message = result["status"]["messages"].as_array().and_then(|messages| messages.iter().find(|m| m[0] == "execution_error" || m[0] == "execution_interrupted"))
             .map(|m| format!("ComfyUI 生成失败：{}",m[1]["exception_message"].as_str().unwrap_or("任务被中断"))).unwrap_or_else(|| "ComfyUI 生成失败".into());
+        let diagnostic = message.to_ascii_lowercase();
+        if diagnostic.contains("cuda out of memory") || diagnostic.contains("cuda_error_out_of_memory") {
+            message = format!("本机视频生成时显存不足。请关闭占用显存的应用，或降低视频分辨率后重新生成。{message}");
+        }
         record.failure = Some(message.clone()); save(path,record)?; return Ok(status("failed",&message));
     }
     if result["status"]["completed"] != true {
-        return Ok(if queue["queue_running"].as_array().is_some_and(|items| items.iter().any(|item| item[1].as_str() == Some(id))) { status("running","本机正在生成视频") }
-            else if queue["queue_pending"].as_array().is_some_and(|items| items.iter().any(|item| item[1].as_str() == Some(id))) { status("queued","已加入本机队列") }
-            else { status("unknown","原任务暂不可见，请确认 ComfyUI 仍在运行；不会自动重新提交") });
+        if queue["queue_running"].as_array().is_some_and(|items| items.iter().any(|item| item[1].as_str() == Some(id))) { return Ok(status("running","本机正在生成视频")); }
+        if queue["queue_pending"].as_array().is_some_and(|items| items.iter().any(|item| item[1].as_str() == Some(id))) { return Ok(status("queued","已加入本机队列")); }
+        let recovered = recover_saved_output(http, db, paths, path, record, request, owner).await?;
+        if recovered.status == "unknown" && record.cancel_acknowledged {
+            owner()?;
+            record.cancelled = true;
+            save(path, record)?;
+            return Ok(status("cancelled","本机生成已中断"));
+        }
+        return Ok(recovered);
     }
     record.elapsed_ms = execution_elapsed(result,id);
     let outputs = result["outputs"]["27"]["images"].as_array().filter(|v| v.len()==1).ok_or_else(|| error("基准工作流未返回唯一视频"))?;
     let output = &outputs[0];
     let filename = output["filename"].as_str().filter(|v| v.ends_with(".mp4") && !v.contains(['/', '\\'])).ok_or_else(|| error("ComfyUI 视频文件名无效"))?;
     if output["type"] != "output" { return Err(error("ComfyUI 未返回输出文件")); }
-    let mut response = http.get(format!("{base}/view")).query(&[("filename",filename),("subfolder",output["subfolder"].as_str().unwrap_or("")),("type","output")]).send().await.map_err(|e| error(e.to_string()))?.error_for_status().map_err(|e| error(e.to_string()))?;
+    let response = http.get(format!("{base}/view")).query(&[("filename",filename),("subfolder",output["subfolder"].as_str().unwrap_or("")),("type","output")]).send().await.map_err(|e| error(e.to_string()))?.error_for_status().map_err(|e| error(e.to_string()))?;
+    import_video(response, db, paths, path, record, owner).await
+}
+
+async fn recover_saved_output(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<Status> {
+    let unknown = status("unknown","原任务暂不可见，可以继续查询原任务。");
+    if uuid::Uuid::parse_str(request).is_err() { return Ok(unknown); }
+    // SaveVideo writes one file for this unique prefix. ComfyUI history may be empty after restart.
+    let base = endpoint(&record.input.endpoint)?;
+    let filename = format!("{request}_00001_.mp4");
+    let response = http.get(format!("{base}/view"))
+        .query(&[("filename", filename.as_str()), ("subfolder", "video/Bowerbird"), ("type", "output")])
+        .send().await.map_err(|e| error(e.to_string()))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND { return Ok(unknown); }
+    import_video(response.error_for_status().map_err(|e| error(e.to_string()))?, db, paths, path, record, owner).await
+}
+
+async fn import_video(mut response: reqwest::Response, db: &Database, paths: &LibraryPaths, path: &Path, record: &mut Record, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<Status> {
     let video = path.with_extension("mp4");
     let mut file = fs::File::create(&video)?;
     let mut size = 0_u64;
@@ -358,6 +513,10 @@ async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path:
 }
 
 async fn cancel(http: &reqwest::Client, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<Status> {
+    tokio::time::timeout(Duration::from_secs(12), confirm_cancel(http, path, record, request, owner))
+        .await.map_err(|_| error("等待本机确认停止超时。可重试停止或继续查询原任务。"))?
+}
+async fn confirm_cancel(http: &reqwest::Client, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<Status> {
     owner()?;
     if record.asset_id.is_some() { return Ok(status("done","视频已完成，可取回已有结果")); }
     if record.cancelled { return Ok(status("cancelled","本机生成已取消")); }
@@ -366,10 +525,13 @@ async fn cancel(http: &reqwest::Client, path: &Path, record: &mut Record, reques
         return Ok(status("cancelled","已取消，未提交生成"));
     }
     let base = endpoint(&record.input.endpoint)?;
-    let mut dispatched = false;
-    for _ in 0..30 {
+    let mut acknowledged_this_attempt = false;
+    loop {
         owner()?;
         let queue = json_response(http.get(format!("{base}/queue")).timeout(Duration::from_secs(5))).await?;
+        if !queue["queue_running"].is_array() || !queue["queue_pending"].is_array() {
+            return Err(error("本机视频队列响应无效，尚未确认停止"));
+        }
         let history = json_response(http.get(match &record.prompt_id {
             Some(id) => format!("{base}/history/{id}"), None => format!("{base}/history?max_items=500"),
         }).timeout(Duration::from_secs(5))).await?;
@@ -379,17 +541,25 @@ async fn cancel(http: &reqwest::Client, path: &Path, record: &mut Record, reques
                 .or_else(|| history.as_object().and_then(|items| items.iter().find(|(_,item)| request_match(&item["prompt"],request)).map(|(id,_)| id.clone())));
             save(path,record)?;
         }
-        let id = record.prompt_id.as_deref().ok_or_else(|| error("未能确认原任务编号，无法确认已停止；请稍后再次停止，不会重新生成"))?;
+        let Some(id) = record.prompt_id.as_deref() else {
+            // The POST may have reached ComfyUI before its response was lost.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
+        };
         let result = &history[id];
         if result["status"]["completed"] == true && result["status"]["status_str"] == "success" {
             return Ok(status("done","视频已先于停止请求完成，可取回已有结果"));
         }
         if !queued.clone().any(|item| item[1].as_str() == Some(id)) {
-            if dispatched || result["status"]["status_str"] == "error" {
+            if record.cancel_acknowledged || result["status"]["status_str"] == "error" {
                 record.cancelled = true; save(path,record)?;
                 return Ok(status("cancelled","本机生成已中断"));
             }
             return Err(error("原任务不在队列且没有完成记录，暂无法确认已停止；请稍后再次停止"));
+        }
+        if acknowledged_this_attempt {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
         }
         // ComfyUI's job API atomically checks the running prompt ID. Never use global /interrupt.
         let mut cancel_url = reqwest::Url::parse(&base).map_err(|_| error("服务地址无效"))?;
@@ -400,26 +570,59 @@ async fn cancel(http: &reqwest::Client, path: &Path, record: &mut Record, reques
         }
         let response = response.error_for_status().map_err(|e| error(format!("取消请求失败：{e}")))?
             .json::<Value>().await.map_err(|_| error("取消接口返回无效响应，尚未确认停止"))?;
-        dispatched |= response["cancelled"] == true;
+        if response["cancelled"] == true {
+            acknowledged_this_attempt = true;
+            record.cancel_acknowledged = true;
+            save(path, record)?;
+        }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    Err(error("已请求中断，但 ComfyUI 仍在处理当前计算；尚未确认停止，请稍后再次停止"))
 }
+
+fn stopped_before_start(path: &Path, account: &str, project: &str, stopping: bool) -> AppResult<bool> {
+    let marker = path.with_extension("stop-before-start");
+    match fs::read(&marker) {
+        Ok(data) => {
+            let (saved_account, saved_project): (String, String) = serde_json::from_slice(&data)?;
+            if saved_account != account || saved_project != project { return Err(error("任务归属不匹配")); }
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if stopping {
+                let temp = marker.with_extension("stop-tmp");
+                fs::write(&temp, serde_json::to_vec(&(account, project))?)?;
+                fs::rename(temp, marker)?;
+            }
+            Ok(stopping)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[tauri::command]
 pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>,
     action: String, project_id: String, request_id: String, input: Option<Input>) -> AppResult<Status> {
     let account = account(&auth,&entitlement).await?;
     let request = uuid::Uuid::parse_str(&request_id).map_err(|_| error("任务身份无效"))?.to_string();
     if db.get_project(&project_id)?.is_none() { return Err(error("项目不存在")); }
-    let _guard = IO.lock().await;
+    if !matches!(action.as_str(), "start" | "status" | "cancel") { return Err(error("未知的视频操作")); }
+    let io = request_io(&request, &account, &project_id)?;
+    let mut stop = io.stop.subscribe();
+    let _guard = if action == "cancel" {
+        io.stop.send_replace(());
+        tokio::time::timeout(Duration::from_secs(7), io.lock.lock()).await
+            .map_err(|_| error("本机视频仍在处理上一条请求。可稍后重试停止或继续查询原任务。"))?
+    } else { io.lock.lock().await };
     let directory: PathBuf = paths.root.join("comfy-video"); fs::create_dir_all(&directory)?;
     let path = directory.join(format!("{request}.json"));
     let mut record: Record = if path.exists() { serde_json::from_slice(&fs::read(&path)?)? } else {
-        if action == "cancel" { return Ok(status("cancelled","已取消，未提交生成")); }
+        if stopped_before_start(&path, &account, &project_id, action == "cancel")? {
+            return Ok(status("cancelled","已取消，未提交生成"));
+        }
         if action != "start" { return Ok(status("unknown","未找到本地提交记录；请核对本机队列，不会重新提交")); }
         let input = input.clone().ok_or_else(|| error("缺少视频参数"))?;
         endpoint(&input.endpoint)?; validate_input(&input)?;
-        Record { account:account.clone(),project:project_id.clone(),input,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,elapsed_ms:None }
+        Record { installation: super::comfy_setup::video_installation(&endpoint(&input.endpoint)?), account:account.clone(),project:project_id.clone(),input,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,cancel_acknowledged:false,elapsed_ms:None }
     };
     if record.account != account || record.project != project_id || input.as_ref().is_some_and(|i| i != &record.input) { return Err(error("任务归属或参数不匹配")); }
     let http = client()?;
@@ -429,10 +632,31 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
         progress::stop(&request);
         return Ok(result);
     }
-    if !record.cancelled && record.asset_id.is_none() && record.failure.is_none() { progress::watch(&request,&endpoint(&record.input.endpoint)?).await; }
-    if action == "start" && !path.exists() { save(&path,&record)?; start(&http,&db,&path,&mut record,&request,&owner).await?; }
-    else if !matches!(action.as_str(),"start"|"status") { return Err(error("未知的视频操作")); }
-    let mut result = poll(&http,&db,&paths,&path,&mut record,&request,&owner).await?;
+    let interrupted = || status("unknown", "已暂停本机查询，等待确认原任务状态。");
+    if action == "start" && !path.exists() {
+        save(&path,&record)?;
+        let prompt = tokio::select! {
+            biased;
+            _ = stop.changed() => return Ok(interrupted()),
+            prompt = async {
+                progress::watch(&request,&endpoint(&record.input.endpoint)?).await;
+                prepare_prompt(&http,&db,&record,&request).await
+            } => prompt?,
+        };
+        // Let a committed POST settle before starting queue cancellation. Its response has a deadline.
+        if stop.has_changed().unwrap_or(true) { return Ok(interrupted()); }
+        submit_prompt(&http,&path,&mut record,&request,prompt,&owner).await?;
+    }
+    let mut result = tokio::select! {
+        biased;
+        _ = stop.changed() => return Ok(interrupted()),
+        result = async {
+            if !record.cancelled && record.asset_id.is_none() && record.failure.is_none() {
+                progress::watch(&request,&endpoint(&record.input.endpoint)?).await;
+            }
+            poll(&http,&db,&paths,&path,&mut record,&request,&owner).await
+        } => result?,
+    };
     if result.status == "running" { result.progress = progress::current(&request,record.prompt_id.as_deref()); }
     if matches!(result.status,"done"|"failed"|"cancelled") { progress::stop(&request); }
     if result.asset.is_some() { let _ = app.emit("library://assets-changed",()); }
@@ -442,6 +666,33 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn h3_stop_signal_is_scoped_to_one_request() {
+        let first = request_io("stop-test-first", "owner", "project").unwrap();
+        let other = request_io("stop-test-other", "owner", "project").unwrap();
+        let _other_guard = other.lock.lock().await;
+        let first_guard = first.lock.lock().await;
+        let mut waiting = first.stop.subscribe();
+        let other_waiting = other.stop.subscribe();
+        assert!(request_io("stop-test-first", "other-account", "project").is_err());
+        let same = request_io("stop-test-first", "owner", "project").unwrap();
+        same.stop.send_replace(());
+        waiting.changed().await.unwrap();
+        drop(first_guard);
+        assert!(same.lock.try_lock().is_ok());
+        assert!(!other_waiting.has_changed().unwrap());
+    }
+
+    #[test]
+    fn h3_stop_before_start_survives_a_late_start_and_checks_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("job.json");
+        assert!(!stopped_before_start(&path, "owner", "project", false).unwrap());
+        assert!(stopped_before_start(&path, "owner", "project", true).unwrap());
+        assert!(stopped_before_start(&path, "owner", "project", false).unwrap());
+        assert!(stopped_before_start(&path, "other", "project", false).is_err());
+        assert!(stopped_before_start(&path, "owner", "other-project", false).is_err());
+    }
     #[test]
     fn completed_local_video_history_matches_exact_asset() {
         let workspace = tempfile::tempdir().unwrap();
@@ -452,15 +703,16 @@ mod tests {
         fs::create_dir(&directory).unwrap();
         let origin = directory.join(format!("{request}.mp4"));
         db.conn.lock().unwrap().execute(
-            "INSERT INTO assets(id,name,source,origin_path,store_path,created_at) VALUES('clip','影片','comfy-h3',?1,'clip.mp4',1),('other','另一素材','comfy-h3',?1,'other.mp4',1),('first','首帧','external','first.png','first.png',1)",
+            "INSERT INTO assets(id,name,source,origin_path,store_path,created_at) VALUES('clip','影片','comfy-h3',?1,'clip.mp4',1),('other','另一素材','comfy-h3',?1,'other.mp4',1),('first','首帧','external','first.png','first.png',1),('sound','参考音频','external','sound.wav','sound.wav',1)",
             [origin.to_str().unwrap()],
         ).unwrap();
-        let record: Record = serde_json::from_value(json!({
+        let mut record: Record = serde_json::from_value(json!({
             "account": "owner", "project": "original-project", "submitted": true, "asset_id": "clip",
             "input": {"endpoint": "http://localhost:8000", "seconds": 4, "ratio": "16:9",
                 "resolution": 0.8, "firstFrame": "first", "prompt": "原始提示词"}
         })).unwrap();
-        fs::write(directory.join(format!("{request}.json")), serde_json::to_vec(&record).unwrap()).unwrap();
+        let path = directory.join(format!("{request}.json"));
+        save(&path, &record).unwrap();
         let history = generation_history(workspace.path(), &db, "clip").unwrap().unwrap();
         let turn = &history.turns[0];
         assert_eq!(turn.turn_key.as_deref(), Some(request.to_string().as_str()));
@@ -468,6 +720,12 @@ mod tests {
         assert_eq!(turn.references, ["first.png"]);
         assert_eq!(turn.images, ["clip.mp4"]);
         assert!(generation_history(workspace.path(), &db, "other").unwrap().is_none());
+
+        record.input.audio_asset_id = Some("sound".into());
+        save(&path, &record).unwrap();
+        let history = generation_history(workspace.path(), &db, "clip").unwrap().unwrap();
+        assert_eq!(history.turns[0].references, ["first.png", "sound.wav"]);
+        assert_eq!(history.references[1].asset.id, "sound");
     }
 
     #[test]
@@ -518,7 +776,7 @@ mod tests {
                 let own = json!([0,"own",{},{"bowerbird_request_id":"request"},[]]);
                 Json(match s.mode.load(Ordering::SeqCst) {
                     0 => json!({"queue_running":[[1,"other",{},{}]],"queue_pending":[own]}),
-                    1 => json!({"queue_running":[own],"queue_pending":[[1,"other",{},{}]]}),
+                    1 | 4 => json!({"queue_running":[own],"queue_pending":[[1,"other",{},{}]]}),
                     _ => json!({"queue_running":[[1,"other",{},{}]],"queue_pending":[]}),
                 })
             }))
@@ -527,7 +785,7 @@ mod tests {
             }))
             .route("/api/jobs/own/cancel",post(|AxumState(s): AxumState<Arc<Mock>>| async move {
                 s.posts.fetch_add(1,Ordering::SeqCst);
-                s.mode.store(2,Ordering::SeqCst);
+                if s.mode.load(Ordering::SeqCst) != 4 { s.mode.store(2,Ordering::SeqCst); }
                 Json(json!({"cancelled":true}))
             })).with_state(shared.clone());
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -535,33 +793,80 @@ mod tests {
         let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap()});
         let root=std::env::temp_dir().join(format!("h3-cancel-{}",uuid::Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
         let path=root.join("record.json");let http=client().unwrap();
-        let mut record=Record { account:"tester".into(),project:"p".into(),input:i,prompt_id:Some("own".into()),submitted:true,asset_id:None,failure:None,cancelled:false,elapsed_ms:None };
+        let mut record=Record { installation: None, account:"tester".into(),project:"p".into(),input:i,prompt_id:Some("own".into()),submitted:true,asset_id:None,failure:None,cancelled:false,cancel_acknowledged:false,elapsed_ms:None };
         for mode in [0,1] {
-            shared.mode.store(mode,Ordering::SeqCst);record.cancelled=false;
+            shared.mode.store(mode,Ordering::SeqCst);record.cancelled=false;record.cancel_acknowledged=false;
             assert_eq!(cancel(&http,&path,&mut record,"request",&|| Ok(())).await.unwrap().status,"cancelled");
             assert!(serde_json::from_slice::<Record>(&fs::read(&path).unwrap()).unwrap().cancelled);
         }
         assert_eq!(shared.posts.load(Ordering::SeqCst),2);
-        record.cancelled=false;shared.mode.store(3,Ordering::SeqCst);
+        record.cancelled=false;record.cancel_acknowledged=false;shared.mode.store(3,Ordering::SeqCst);
         assert_eq!(cancel(&http,&path,&mut record,"request",&|| Ok(())).await.unwrap().status,"done");
         assert!(!record.cancelled);assert_eq!(shared.posts.load(Ordering::SeqCst),2);
         shared.mode.store(2,Ordering::SeqCst);
         assert!(cancel(&http,&path,&mut record,"request",&|| Ok(())).await.is_err());
         assert!(!record.cancelled);
         assert!(cancel(&http,&path,&mut record,"request",&|| Err(error("account switched"))).await.is_err());
+        shared.mode.store(4,Ordering::SeqCst);
+        let wait = cancel(&http,&path,&mut record,"request",&|| Ok(())).await.err().expect("still running");
+        assert!(wait.to_string().contains("超时"));
+        let mut persisted: Record = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(persisted.cancel_acknowledged && !persisted.cancelled);
+        assert_eq!(shared.posts.load(Ordering::SeqCst),3);
+        shared.mode.store(2,Ordering::SeqCst);
+        assert_eq!(cancel(&http,&path,&mut persisted,"request",&|| Ok(())).await.unwrap().status,"cancelled");
+        assert_eq!(shared.posts.load(Ordering::SeqCst),3);
         server.abort(); let _=server.await; fs::remove_dir_all(root).unwrap();
     }
-    fn input() -> Input { Input { endpoint:"http://127.0.0.1:8188".into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode:Mode::Frames, first_frame:"first".into(), last_frame:None, prompt:"test prompt".into() } }
+    fn input() -> Input { Input { endpoint:"http://127.0.0.1:8188".into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode:Mode::Frames, first_frame:"first".into(), last_frame:None, audio_asset_id:None, references:Default::default(), prompt:"test prompt".into() } }
     fn mode_input(mode: &str) -> Input {
         let mut value = serde_json::to_value(input()).unwrap();
         value["mode"] = json!(mode); value["seconds"] = json!(5);
-        if mode == "text" { value["firstFrame"] = json!(""); }
+        if matches!(mode, "text" | "r2v") { value["firstFrame"] = json!(""); }
         serde_json::from_value(value).unwrap()
+    }
+    #[test]
+    fn h3_mode_r2v_preserves_official_graph_and_independent_reference_order() {
+        let mut i = mode_input("r2v");
+        i.ratio = "auto".into();
+        i.prompt = "Follow <Picture 1>, <Video 2>, <Audio 1>".into();
+        assert!(validate_input(&i).is_err());
+        i.references.images = (0..9).map(|n| format!("pic-{n}.png")).collect();
+        i.references.videos = (0..3).map(|n| format!("vid-{n}.mp4")).collect();
+        i.references.audios = (0..3).map(|n| format!("sound-{n}.wav")).collect();
+        assert!(validate_input(&i).is_ok());
+        let freeze = serde_json::to_value(&i).unwrap();
+        assert_eq!(freeze["referenceVideos"][0], "vid-0.mp4");
+        assert_eq!(serde_json::from_value::<Input>(freeze).unwrap(), i);
+        let mut graph = graph(&i,"",None,None,42,"r2v",Some((9,16))).unwrap();
+        r2v::add_reference_nodes(&mut graph,&i.references);
+        assert_eq!(graph["1"]["inputs"]["unet_name"],REFERENCE_UNET);
+        assert_eq!(graph["9"]["class_type"],"MiniMaxH3ReferenceToVideo");
+        assert_eq!(graph["9"]["inputs"]["prompt"],i.prompt);
+        assert_eq!(graph["9"]["inputs"]["length"],124);
+        assert!(graph["9"]["inputs"]["width"].as_u64() < graph["9"]["inputs"]["height"].as_u64());
+        assert_eq!(graph["9"]["inputs"]["ref_images.ref_image_8"],json!(["108",0]));
+        assert_eq!(graph["9"]["inputs"]["ref_videos.ref_video_1"],json!(["113",0]));
+        assert_eq!(graph["9"]["inputs"]["ref_video_audios.ref_video_audio_1"],json!(["113",1]));
+        assert_eq!(graph["9"]["inputs"]["ref_audios.ref_audio_2"],json!(["122",0]));
+        assert_eq!(graph["112"]["inputs"]["file"],"vid-1.mp4");
+        assert_eq!(graph["113"]["inputs"]["video"],json!(["112",0]));
+        assert_eq!(graph["122"]["inputs"]["audio"],"sound-2.wav");
+        assert_eq!(graph["12"]["inputs"]["sampler_name"], "res_multistep");
+        assert_eq!(graph["13"]["inputs"],json!({"model":["1",0],"scheduler":"simple","steps":20,"denoise":1.0}));
+        assert!(graph.get("7").is_none() && graph.get("8").is_none());
+        assert_eq!(graph["15"]["class_type"],"VAEDecode");
+        assert_eq!(graph["26"]["inputs"]["fps"],24.0);
+        i.references.images.push("too-many".into());
+        assert!(validate_input(&i).is_err());
+        i.references.images.pop();
+        i.mode = Mode::Frames; i.first_frame = "first".into();
+        assert!(validate_input(&i).is_err());
     }
     #[test]
     fn h3_mode_text_has_no_image_dependency_and_uses_turbo_tiled_decode() {
         let i = mode_input("text");
-        let graph = graph(&i,"",None,42,"text",None).unwrap();
+        let graph = graph(&i,"",None,None,42,"text",None).unwrap();
         assert!(graph.as_object().unwrap().values().all(|node| node["class_type"] != "LoadImage"));
         assert!(graph["9"]["inputs"].get("first_frame").is_none());
         assert_eq!(graph["9"]["inputs"]["length"],124);
@@ -575,7 +880,7 @@ mod tests {
     #[test]
     fn h3_mode_reference_uses_independent_model_and_unanchored_image() {
         let mut i = mode_input("reference"); i.prompt = "Follow <Picture 1>".into();
-        let graph = graph(&i,"reference.png",None,42,"reference",None).unwrap();
+        let graph = graph(&i,"reference.png",None,None,42,"reference",None).unwrap();
         assert_eq!(graph["1"]["inputs"]["unet_name"],"minimax_h3_ref2va_pruned_int8_convrot.safetensors");
         assert!(graph.get("7").is_none());
         assert_eq!(graph["9"]["class_type"],"MiniMaxH3ReferenceToVideo");
@@ -601,11 +906,40 @@ mod tests {
     fn h3_mode_legacy_and_unknown_mode_contract() {
         let mut value = serde_json::to_value(input()).unwrap(); value.as_object_mut().unwrap().remove("mode");
         let legacy: Input = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(serde_json::to_value(legacy).unwrap()["mode"],"frames");
+        assert_eq!(legacy.audio_asset_id, None);
+        let saved = serde_json::to_value(legacy).unwrap();
+        assert_eq!(saved["mode"],"frames");
+        assert!(saved.get("audioAssetId").is_none());
         value["mode"] = json!("unknown");
         assert!(serde_json::from_value::<Input>(value.clone()).is_err());
         value["mode"] = json!("text"); value.as_object_mut().unwrap().remove("firstFrame");
         assert!(serde_json::from_value::<Input>(value).is_ok());
+    }
+    #[test]
+    fn h3_audio_graph_conditions_every_mode_without_changing_video_delivery() {
+        for mode in ["frames", "reference", "text"] {
+            let i = mode_input(mode);
+            let last = (i.mode == Mode::Frames).then_some("last.png");
+            let baseline = graph(&i, "first.png", last, None, 42, "r", None).unwrap();
+            let prompt = graph(&i, "first.png", last, Some("bowerbird/ref.wav"), 42, "r", None).unwrap();
+            assert_eq!(prompt["31"], json!({"class_type":"LoadAudio","inputs":{"audio":"bowerbird/ref.wav"}}));
+            assert_eq!(prompt["27"], baseline["27"]);
+            assert_eq!(prompt["26"], baseline["26"]);
+            assert_eq!(prompt["14"], baseline["14"]);
+            assert_eq!(prompt["1"], baseline["1"]);
+            if i.mode == Mode::Reference {
+                assert_eq!(prompt["9"]["inputs"]["ref_audios.ref_audio_0"], json!(["31",0]));
+                assert_eq!(prompt["9"]["inputs"]["ref_images.ref_image_0"], json!(["5",0]));
+                assert_eq!(prompt["9"]["inputs"]["audio_vae"], json!(["4",0]));
+                assert!(prompt.get("32").is_none());
+            } else {
+                assert_eq!(prompt["9"], baseline["9"]);
+                assert_eq!(prompt["32"], json!({"class_type":"MiniMaxH3AddGuide","inputs":{
+                    "positive":["9",0],"latent":["9",1],"audio_vae":["4",0],"audio":["31",0],"frame_idx":0
+                }}));
+                assert_eq!(prompt["11"]["inputs"]["conditioning"], json!(["32",0]));
+            }
+        }
     }
     #[test]
     fn h3_mode_rejects_incompatible_bindings_before_submission() {
@@ -625,7 +959,7 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn h3_mode_submit_uploads_only_expected_image_and_recovers_original_mode() {
+    async fn h3_mode_submit_uploads_only_expected_inputs_and_recovers_original_mode() {
         use axum::{Router, routing::{get,post}, Json, extract::State as AxumState};
         use std::sync::{Mutex,atomic::{AtomicUsize,Ordering}};
         struct Mock { prompt: Mutex<Option<Value>>, uploads: AtomicUsize, posts: AtomicUsize }
@@ -634,18 +968,48 @@ mod tests {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         let image = root.path().join("reference.png"); image::RgbImage::new(32,64).save(&image).unwrap();
         let asset = ingest::ingest_generated(&paths,&db,&image,None,"test").unwrap();
-        for mode in [Mode::Text,Mode::Reference] {
+        let wave = root.path().join("reference.wav");
+        audio::tests::write_wav(&wave, 16000, false);
+        let sound = ingest::ingest_generated(&paths, &db, &wave, None, "test").unwrap();
+        let wav_bytes = fs::read(wave).unwrap();
+        let short_wave = root.path().join("short.wav");
+        audio::tests::write_wav(&short_wave, 8000, true);
+        let short = ingest::ingest_generated(&paths, &db, &short_wave, None, "test").unwrap();
+        let long_wave = root.path().join("long.wav");
+        audio::tests::write_wav(&long_wave, 128000, false);
+        let long = ingest::ingest_generated(&paths, &db, &long_wave, None, "test").unwrap();
+        let http = client().unwrap();
+        let no_service = "http://127.0.0.1:0";
+        for (id, mode, expected) in [(&asset.id, Mode::Text, "请选择 WAV"), (&short.id, Mode::Reference, "至少需要 2 秒"), (&long.id, Mode::Frames, "不超过 15 秒")] {
+            let error = upload_audio(&http, no_service, &db, id, "request", "audio", mode).await.unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+        for (mut i, has_audio) in [(mode_input("text"),false), (mode_input("reference"),false), (mode_input("text"),true), (mode_input("reference"),true), (input(),true)] {
             let shared = Arc::new(Mock { prompt:Mutex::new(None),uploads:AtomicUsize::new(0),posts:AtomicUsize::new(0) });
-            let mut i = mode_input(if mode == Mode::Text { "text" } else { "reference" });
-            if mode == Mode::Reference { i.first_frame = asset.id.clone(); }
+            let mode = i.mode;
+            if mode != Mode::Text { i.first_frame = asset.id.clone(); }
+            if has_audio { i.audio_asset_id = Some(sound.id.clone()); }
             let mut info = json!({});
-            for node in graph(&i,"x",None,0,"r",None).unwrap().as_object().unwrap().values() { info[node["class_type"].as_str().unwrap()] = json!({"input":{"required":{}}}); }
+            for node in graph(&i,"x",None,has_audio.then_some("x"),0,"r",None).unwrap().as_object().unwrap().values() { info[node["class_type"].as_str().unwrap()] = json!({"input":{"required":{}}}); }
             for (class,field,models) in [("UNETLoader","unet_name",vec![if mode == Mode::Reference {REFERENCE_UNET} else {UNET}]),("CLIPLoader","clip_name",vec![CLIP]),("VAELoader","vae_name",vec![VAE,AUDIO])] { info[class]["input"]["required"][field] = json!([models]); }
-            if mode == Mode::Text { info["LoraLoaderModelOnly"]["input"]["required"]["lora_name"] = json!([[LORA]]); }
+            if mode != Mode::Reference { info["LoraLoaderModelOnly"]["input"]["required"]["lora_name"] = json!([[LORA]]); }
+            if has_audio {
+                info["LoadAudio"]["input"]["required"]["audio"] = json!(["COMBO",{}]);
+                if mode == Mode::Reference { info["MiniMaxH3ReferenceToVideo"]["input"]["optional"]["ref_audios"] = json!(["COMFY_AUTOGROW_V3",{}]); }
+                else { info["MiniMaxH3AddGuide"]["input"]["optional"]["audio"] = json!(["AUDIO",{}]); }
+            }
+            let source_audio = wav_bytes.clone();
             let app = Router::new().route("/object_info",get(move || async move { Json(info) }))
-                .route("/upload/image",post(|AxumState(s): AxumState<Arc<Mock>>, body: axum::body::Bytes| async move {
-                    assert!(body.windows(8).any(|w| w == b"\x89PNG\r\n\x1a\n"));
-                    s.uploads.fetch_add(1,Ordering::SeqCst); Json(json!({"name":"reference.png","subfolder":"bowerbird"}))
+                .route("/upload/image",post(move |AxumState(s): AxumState<Arc<Mock>>, body: axum::body::Bytes| async move {
+                    let name = if body.windows(4).any(|w| w == b"RIFF") {
+                        assert!(body.windows(source_audio.len()).any(|w| w == source_audio.as_slice()));
+                        assert!(body.windows(17).any(|w| w == b"request-audio.wav"));
+                        "request-audio.wav"
+                    } else {
+                        assert!(body.windows(8).any(|w| w == b"\x89PNG\r\n\x1a\n"));
+                        "reference.png"
+                    };
+                    s.uploads.fetch_add(1,Ordering::SeqCst); Json(json!({"name":name,"subfolder":"bowerbird"}))
                 }))
                 .route("/prompt",post(|AxumState(s): AxumState<Arc<Mock>>, Json(body): Json<Value>| async move {
                     s.posts.fetch_add(1,Ordering::SeqCst); *s.prompt.lock().unwrap() = Some(body); Json(json!({"prompt_id":"original"}))
@@ -656,19 +1020,20 @@ mod tests {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             i.endpoint = format!("http://{}",listener.local_addr().unwrap());
             let server = tokio::spawn(async move { axum::serve(listener,app).await.unwrap() });
-            let path = root.path().join(format!("{mode:?}.json"));
-            let mut record = Record { account:"tester".into(),project:"p".into(),input:i,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,elapsed_ms:None };
-            let http = client().unwrap();
+            let path = root.path().join(format!("{mode:?}-{has_audio}.json"));
+            let mut record = Record { installation: None, account:"tester".into(),project:"p".into(),input:i,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,cancel_acknowledged:false,elapsed_ms:None };
             start(&http,&db,&path,&mut record,"request",&|| Ok(())).await.unwrap();
-            assert_eq!(shared.uploads.load(Ordering::SeqCst),usize::from(mode == Mode::Reference));
+            let expected_uploads = usize::from(mode != Mode::Text) + usize::from(has_audio);
+            assert_eq!(shared.uploads.load(Ordering::SeqCst),expected_uploads);
             assert_eq!(shared.prompt.lock().unwrap().as_ref().unwrap()["extra_data"]["workflow"],mode.workflow());
             record.prompt_id = None; save(&path,&record).unwrap();
             let mut restored: Record = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
             assert_eq!(restored.input.mode,mode);
+            assert_eq!(restored.input.audio_asset_id, has_audio.then_some(sound.id.clone()));
             assert_eq!(poll(&http,&db,&paths,&path,&mut restored,"request",&|| Ok(())).await.unwrap().status,"running");
             assert_eq!(restored.prompt_id.as_deref(),Some("original"));
             assert_eq!(shared.posts.load(Ordering::SeqCst),1);
-            assert_eq!(shared.uploads.load(Ordering::SeqCst),usize::from(mode == Mode::Reference));
+            assert_eq!(shared.uploads.load(Ordering::SeqCst),expected_uploads);
             server.abort(); let _ = server.await;
         }
     }
@@ -679,7 +1044,7 @@ mod tests {
             i.ratio=ratio.into();i.resolution=resolution;
             let (w,h,frames)=dimensions(&i,None).unwrap();assert_eq!((w,h),expected);assert_eq!(frames,192);
         }
-        let graph=graph(&i,"first.png",Some("last.png"),42,"request",None).unwrap();
+        let graph=graph(&i,"first.png",Some("last.png"),None,42,"request",None).unwrap();
         assert_eq!(graph["9"]["inputs"]["last_frame"],json!(["30",0]));
         assert_eq!(graph["30"]["inputs"]["image"],"last.png");
         assert_eq!(graph["10"]["inputs"]["noise_seed"],42);
@@ -688,12 +1053,12 @@ mod tests {
         assert_eq!(graph["27"]["inputs"]["format.codec"],"auto");
         assert_eq!(graph.as_object().unwrap().values().filter(|v|v["class_type"]=="SaveVideo").count(),1);
         assert!(!graph.to_string().contains("Upscale"));
-        let single=super::graph(&i,"first.png",None,42,"request",None).unwrap();
+        let single=super::graph(&i,"first.png",None,None,42,"request",None).unwrap();
         assert!(single.get("30").is_none());assert!(single["9"]["inputs"].get("last_frame").is_none());
         i.seconds=11.0;assert_eq!(dimensions(&i,None).unwrap().2,277);
         for seconds in [0.0,16.0,f64::NAN] { i.seconds=seconds;assert!(dimensions(&i,None).is_err()); }
         i=input();i.ratio="5:7".into();assert!(dimensions(&i,None).is_err());
-        i=input();i.resolution=0.98;assert!(dimensions(&i,None).is_err());
+        i=input();i.resolution=0.98;assert_eq!(dimensions(&i,None).unwrap(), (768,1344,192));
     }
     #[test]
     fn h3_auto_ratio_uses_current_first_frame_and_keeps_resolution_budget() {
@@ -703,7 +1068,7 @@ mod tests {
             for (size,ratio) in [((600,800),"3:4"),((800,600),"4:3"),((900,900),"1:1"),((900,1600),"9:16")] {
                 let mut fixed=i.clone();fixed.ratio=ratio.into();
                 assert_eq!(dimensions(&i,Some(size)).unwrap(),dimensions(&fixed,None).unwrap());
-                let graph=graph(&i,"first",Some("different-last"),1,"auto",Some(size)).unwrap();
+                let graph=graph(&i,"first",Some("different-last"),None,1,"auto",Some(size)).unwrap();
                 let (w,h,_)=dimensions(&fixed,None).unwrap();
                 assert_eq!(graph["9"]["inputs"]["width"],w);
                 assert_eq!(graph["9"]["inputs"]["height"],h);
@@ -732,19 +1097,22 @@ mod tests {
         db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)",[]).unwrap();
         let source=root.join("frame.png");image::RgbImage::new(32,32).save(&source).unwrap();
         let frame=ingest::ingest_generated(&paths,&db,&source,None,"test").unwrap();
+        let tail_source=root.join("tail.png");image::RgbImage::new(32,64).save(&tail_source).unwrap();
+        let tail=ingest::ingest_generated(&paths,&db,&tail_source,None,"test").unwrap();
         let video=root.join("fixture.mp4");
         let output=crate::media::tools::command(crate::media::tools::resolve(crate::media::tools::Tool::Ffmpeg).unwrap())
             .args(["-y","-f","lavfi","-i","color=c=blue:s=64x96:r=24","-t","0.25","-pix_fmt","yuv420p"]).arg(&video).output().unwrap();
         assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
         let shared=Arc::new(Mock { prompt:Mutex::new(None),uploads:AtomicUsize::new(0),posts:AtomicUsize::new(0),phase:AtomicUsize::new(0),video:fs::read(video).unwrap() });
         let mut info=json!({});
-        for node in graph(&input(),"x",None,0,"r",None).unwrap().as_object().unwrap().values() { info[node["class_type"].as_str().unwrap()]=json!({"input":{"required":{}}}); }
+        for node in graph(&input(),"x",None,None,0,"r",None).unwrap().as_object().unwrap().values() { info[node["class_type"].as_str().unwrap()]=json!({"input":{"required":{}}}); }
         for (class,field,models) in [("UNETLoader","unet_name",vec![UNET]),("CLIPLoader","clip_name",vec![CLIP]),("VAELoader","vae_name",vec![VAE,AUDIO]),("LoraLoaderModelOnly","lora_name",vec![LORA])] { info[class]["input"]["required"][field]=json!([models]); }
         async fn history(AxumState(s): AxumState<Arc<Mock>>) -> Json<Value> {
             let prompt=s.prompt.lock().unwrap().clone().unwrap();
             match s.phase.load(Ordering::SeqCst) {
                 0 => Json(json!({})),
                 1 => Json(json!({"mock-id":{"prompt":[0,"mock-id",prompt["prompt"],prompt["extra_data"],[]],"status":{"completed":true,"status_str":"success"},"outputs":{"27":{"images":[{"filename":"clip.mp4","subfolder":"video/Bowerbird","type":"output"}]}}}})),
+                3 => Json(json!({})),
                 _ => Json(json!({"mock-id":{"status":{"completed":false,"status_str":"error","messages":[["execution_error",{"exception_message":"mock GPU error"}]]}}}))
             }
         }
@@ -760,13 +1128,21 @@ mod tests {
                 let prompt=s.prompt.lock().unwrap().clone().unwrap();
                 Json(if s.phase.load(Ordering::SeqCst)==0 {json!({"queue_running":[[0,"mock-id",prompt["prompt"],prompt["extra_data"],[]]],"queue_pending":[]})} else {json!({"queue_running":[],"queue_pending":[]})})
             })).route("/history",get(history)).route("/history/:id",get(history))
-            .route("/view",get(|AxumState(s): AxumState<Arc<Mock>>| async move {s.video.clone()})).with_state(shared.clone());
+            .route("/view",get(|AxumState(s): AxumState<Arc<Mock>>, axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>| async move {
+                if s.phase.load(Ordering::SeqCst) == 3 {
+                    let prompt = s.prompt.lock().unwrap();
+                    let request = prompt.as_ref().unwrap()["extra_data"]["bowerbird_request_id"].as_str().unwrap();
+                    assert_eq!(query["filename"], format!("{request}_00001_.mp4"));
+                    assert_eq!(query["subfolder"], "video/Bowerbird");
+                }
+                s.video.clone()
+            })).with_state(shared.clone());
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base=format!("http://{}",listener.local_addr().unwrap());
         let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap()});
-        let mut i=input();i.endpoint=base;i.first_frame=frame.id.clone();i.last_frame=Some(frame.id.clone());i.ratio="auto".into();
+        let mut i=input();i.endpoint=base;i.first_frame=frame.id.clone();i.last_frame=Some(tail.id);i.ratio="auto".into();
         let request=uuid::Uuid::new_v4().to_string();let path=root.join(format!("{request}.json"));
-        let mut record=Record {account:"tester".into(),project:"p".into(),input:i,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,elapsed_ms:None};
+        let mut record=Record {installation: None, account:"tester".into(),project:"p".into(),input:i,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,cancel_acknowledged:false,elapsed_ms:None};
         save(&path,&record).unwrap();let http=client().unwrap();
         start(&http,&db,&path,&mut record,&request,&|| Ok(())).await.unwrap();
         assert_eq!(shared.uploads.load(Ordering::SeqCst),2);assert_eq!(shared.posts.load(Ordering::SeqCst),1);
@@ -782,10 +1158,14 @@ mod tests {
         // Simulate a crash after DB import but before the JSON checkpoint.
         record.asset_id=None;save(&path,&record).unwrap();
         let again=poll(&http,&db,&paths,&path,&mut record,&request,&|| Ok(())).await.unwrap();assert_eq!(again.asset.unwrap().id,asset.id);
-        assert_eq!(db.count_assets(None).unwrap(),2);assert_eq!(shared.posts.load(Ordering::SeqCst),1);
+        record.asset_id = None;
+        shared.phase.store(3, Ordering::SeqCst);
+        let after_restart = poll(&http, &db, &paths, &path, &mut record, &request, &|| Ok(())).await.unwrap();
+        assert_eq!(after_restart.asset.unwrap().id, asset.id);
+        assert_eq!(db.count_assets(None).unwrap(),3);assert_eq!(shared.posts.load(Ordering::SeqCst),1);
         record.asset_id=None;shared.phase.store(2,Ordering::SeqCst);
         let failed=poll(&http,&db,&paths,&path,&mut record,&request,&|| Ok(())).await.unwrap();assert_eq!(failed.status,"failed");assert!(failed.message.contains("mock GPU error"));
-        let mut denied=Record {account:"tester".into(),project:"p".into(),input:record.input.clone(),prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,elapsed_ms:None};
+        let mut denied=Record {installation: None, account:"tester".into(),project:"p".into(),input:record.input.clone(),prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,cancel_acknowledged:false,elapsed_ms:None};
         let denied_path=root.join("denied.json");
         assert!(start(&http,&db,&denied_path,&mut denied,"denied",&|| Err(error("account switched"))).await.is_err());
         assert!(!denied.submitted);assert_eq!(shared.posts.load(Ordering::SeqCst),1);

@@ -64,14 +64,41 @@ async function complete() {
       turns: job.turns.map((turn, index) => index === job.turns.length - 1 ? { ...turn, images: [`${window.testOriginal.turns[0].images[0]}?continued=1`] } : turn) } } });
     window.testPending.shift().resolve('done');
   });
-  await page.waitForFunction(() => !document.querySelector('[aria-label="续轮对话"]').disabled);
+  await page.waitForFunction(() => document.querySelector('.creation-image-preview-image img[src*="continued=1"]')?.naturalWidth > 0 && document.querySelector('[aria-label="续轮对话"]:not(:disabled)'));
+  await modal.getByRole('region', { name: '生成记录', exact: true }).waitFor();
 }
 try {
+  await page.goto('http://127.0.0.1:17949/scripts/fixtures/creation-image-review/preview.html?single');
+  const record = modal.getByRole('region', { name: '生成记录', exact: true });
+  await record.waitFor();
+  assert.equal(await record.getByText('共 1 轮', { exact: true }).count(), 0);
+  assert.match(await record.innerText(), /画布生成卡 · gpt-image-2 · 3:4/);
+  assert.equal(await record.getByRole('img', { name: '城市肖像 · 画面一' }).count(), 1);
+  assert.equal(await record.locator('[data-generation-turn-key]').count(), 0, 'a single completed turn uses the parameter view');
+  await record.evaluate(section => Promise.all(section.getAnimations().map(animation => animation.finished.catch(() => {}))));
+  await page.screenshot({ path: `${output}/single-dark.png` });
+  await page.evaluate(() => document.documentElement.dataset.theme = 'light');
+  await page.screenshot({ path: `${output}/single-light.png` });
+  assert.equal(await record.getByRole('button', { name: /在画布(展开|固定)生成卡/ }).count(), 0);
+
+  await page.goto('http://127.0.0.1:17949/scripts/fixtures/creation-image-review/preview.html?group');
+  await record.getByText(/改成低机位/).waitFor();
+  await reply.fill('第二张图的草稿');
+  assert.equal(await record.getByText(/安静的街角/).count(), 0);
+  await modal.getByRole('button', { name: '上一项媒体' }).click();
+  await record.getByText(/安静的街角/).waitFor();
+  assert.equal(await record.getByText(/改成低机位/).count(), 0, 'a sibling from another run shows its own history');
+  assert.equal(await modal.locator('output[aria-label="媒体序号"]').innerText(), '1 / 2');
+  assert.equal(await reply.inputValue(), '');
+  await modal.getByRole('button', { name: '下一项媒体' }).click();
+  await record.getByText(/改成低机位/).waitFor();
+  assert.equal(await reply.inputValue(), '第二张图的草稿');
+
   await setup();
   const before = await mainImage.boundingBox();
   await reply.fill('把背景改为清晨，保留人物');
-  await modal.getByRole('button', { name: '收起会话面板', exact: true }).click();
-  await modal.getByRole('button', { name: '显示会话', exact: true }).click();
+  await modal.getByRole('button', { name: '收起生成记录面板', exact: true }).click();
+  await modal.getByRole('button', { name: '显示生成记录', exact: true }).click();
   assert.equal(await reply.inputValue(), '把背景改为清晨，保留人物', 'collapsing keeps the draft');
   await send.click();
   await page.waitForFunction(() => window.testRequests.length === 1);
@@ -88,12 +115,14 @@ try {
   await modal.getByRole('button', { name: '停止当前会话生成', exact: true }).click();
   assert.deepEqual(await page.evaluate(() => window.testStops), ['review-job'], 'stop targets this preview, not the active background job');
   await complete();
-  assert.equal(await modal.locator('img[src*="continued=1"]').count(), 1, 'new output appears in the same conversation');
+  assert.equal(await record.locator('img[src*="continued=1"]').count(), 1, 'new output appears in the same conversation');
+  assert.equal(await record.locator('[data-preview-turn="true"] img[src*="continued=1"]').count(), 1, 'the central preview and current-turn marker follow the completed output');
   await page.waitForFunction(() => {
-    const image = document.querySelector('img[src*="continued=1"]');
+    const image = document.querySelector('.creation-image-preview-history img[src*="continued=1"]');
     const scroller = image?.closest('.overflow-y-auto');
     return image?.naturalWidth > 0 && scroller && Math.abs(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) < 2;
   });
+  await record.evaluate(section => Promise.all(section.getAnimations().map(animation => animation.finished.catch(() => {}))));
   await page.screenshot({ path: `${output}/continued-dark.png` });
   await reply.fill('第二次修改'); await reply.press('Control+Enter');
   await page.waitForFunction(() => window.testRequests.length === 2);
@@ -120,7 +149,18 @@ try {
   assert.equal(recovered.conversationId, 'origin-conversation');
   await complete();
   assert.match(await modal.innerText(), /历史会话继续修改/);
-  assert.equal(await modal.locator('img[src*="continued=1"]').count(), 1);
+  assert.equal(await record.locator('img[src*="continued=1"]').count(), 1);
+
+  await setup();
+  await record.locator('[data-generation-turn-key="review-first"] button[title="点击放大"]').click();
+  await page.waitForFunction(() => document.querySelector('.creation-image-preview-image img')?.alt === '城市肖像 · 画面一');
+  await reply.fill('基于第一轮改光线'); await send.click();
+  await page.waitForFunction(() => window.testRequests.length === 1);
+  const branch = (await requests())[0];
+  assert.equal(branch.sessionId, 'review-session');
+  assert.equal(branch.creativeRelation, 'branch');
+  assert.equal(branch.parentAssetPath, '/src-tauri/resources/samples/preset-13.png');
+  assert.deepEqual(branch.referenceImages, [branch.parentAssetPath], 'a revision from an older result uses that exact reference');
 
   await setup(true);
   await page.evaluate(() => window.testLocationFailure = true);

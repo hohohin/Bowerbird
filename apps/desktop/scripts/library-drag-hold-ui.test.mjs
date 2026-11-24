@@ -143,7 +143,7 @@ try {
   await overlay.waitFor({ state: 'detached' });
   assert.equal(await page.getByRole('dialog').count(), 0, 'home image-preview capture cannot consume the hold tail');
   await liveCard.click();
-  await page.getByRole('dialog', { name: '图片与会话预览' }).waitFor();
+  await page.getByRole('dialog', { name: '图片与生成记录预览' }).waitFor();
   assert.deepEqual(errors, []);
   console.log('PASS library stationary hold: timing, 4px boundary, immediate persistent HUD, multi-selection, cancellation, click suppression and ordinary drag compatibility');
 } finally { await browser.close(); await server.close(); }

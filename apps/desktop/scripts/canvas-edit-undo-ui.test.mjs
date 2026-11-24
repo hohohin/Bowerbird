@@ -97,8 +97,7 @@ try {
   await page.waitForTimeout(1150); await page.mouse.up();
   const folder = page.locator('.canvas-node.is-folder'); await folder.waitFor();
   await folder.click({ button: 'right', position: { x: 60, y: 60 } });
-  await page.getByRole('menuitem', { name: '删除', exact: true }).hover();
-  await page.getByRole('menuitem', { name: /解散素材组|解散分组|解组|展开为独立/ }).click();
+  await page.getByRole('menuitem', { name: '解散素材组', exact: true }).click();
   await card('image-a').waitFor(); await undo(); await folder.waitFor();
   await saved(() => window.snapshot().groups.length === 1 && window.snapshot().groupItems.length === 2);
   await undo(); await card('image-a').waitFor();

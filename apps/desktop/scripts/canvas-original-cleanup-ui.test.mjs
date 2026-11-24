@@ -51,7 +51,7 @@ try {
       window.failAssetDelete = true;
     });
     await page.locator('[data-conversation-image="c"]').click({ button:'right' });
-    await page.getByRole('menuitem', { name:'删除当前组', exact:true }).click();
+    await page.getByRole('menuitem', { name:/^整组操作 · \d+ 项$/ }).click();
     await page.getByRole('menuitem', { name:'删除原文件…', exact:true }).click();
     const before = await page.evaluate(() => window.snapshot());
     await confirm.click();
@@ -76,7 +76,7 @@ try {
     await page.locator('[data-conversation-image="c"]').waitFor();
     for (const assetId of ['c','b','a']) {
       await page.locator(`[data-conversation-image="${assetId}"]`).click({ button: 'right' });
-      await page.getByRole('menuitem', { name: '删除当前项', exact: true }).click();
+      await page.getByRole('menuitem', { name: '项目与原文件', exact: true }).click();
       await page.getByRole('menuitem', { name: '删除原文件…', exact: true }).click();
       await confirm.waitFor();
       if (assetId === 'c') {

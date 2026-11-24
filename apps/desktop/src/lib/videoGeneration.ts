@@ -53,6 +53,9 @@ export function cloudVideoOptions(options: VideoOptions): VideoOptions {
 export function isVideoPath(path?: string | null): boolean {
   return !!path && /\.(mp4|mov|webm|m4v|avi|mkv)(?:[?#].*)?$/i.test(path);
 }
+export function isVideoAsset(asset?: Pick<Asset, "store_path" | "ext"> | null): boolean {
+  return isVideoPath(asset?.store_path) || isVideoPath(asset?.ext ? `asset.${asset.ext}` : null);
+}
 function isVideoImagePath(path?: string | null): boolean {
   return !!path && /\.(png|jpe?g|webp|bmp)(?:[?#].*)?$/i.test(path);
 }

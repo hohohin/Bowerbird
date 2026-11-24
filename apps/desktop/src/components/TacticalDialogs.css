@@ -31,6 +31,8 @@ html[data-theme] .settings-card > .text-ink:first-child::before {
   background: var(--holo-pixel);
   opacity: .65;
 }
+.settings-dialog > .app-modal { animation-name: modal-backdrop-enter; }
+.settings-dialog > .app-modal > .app-modal-body { display: flex; flex-direction: column; overflow: hidden; }
 .settings-dialog .settings-card > .rounded.bg-panel { background: transparent; }
 .settings-dialog :is(.rounded, .rounded-md, .rounded-lg, .rounded-xl) { border-radius: 0; }
 .settings-dialog .app-modal-header::after {
@@ -58,7 +60,7 @@ html[data-theme] .settings-nav {
   position: absolute;
   top: 12px;
   bottom: 12px;
-  right: -5px;
+  right: 0;
   width: 1px;
   background: linear-gradient(transparent, var(--bb-line) 12%, var(--bb-line) 88%, transparent);
   pointer-events: none;
@@ -369,7 +371,6 @@ html[data-theme] .file-workspace-move-dialog .app-modal-body > div.border {
 .comfy-environment-panel progress[value]::-moz-progress-bar { border-radius: 0; background: rgb(var(--holo-rgb) / .38); }
 
 /* Existing import/media chrome remains scoped outside dialog content. */
-[data-file-drop-overlay] { background: rgb(var(--bb-ink-rgb) / 6%); box-shadow: inset 0 0 0 1px var(--bb-muted); }
 .file-drop-feedback,
 .app-topbar .toolbar-import-notice { border-color: transparent; border-radius: 4px; background: var(--bb-surface-modal); box-shadow: 0 6px 20px rgb(var(--bb-shadow-rgb) / 14%); }
 .project-inspector-header .project-inspector-detail { border-color: transparent; border-radius: 3px; background: var(--bb-surface-2); }
@@ -397,7 +398,6 @@ html[data-theme] :is(.settings-nav-item, .settings-card [role="radio"], .setting
   .settings-card [role="radio"]:not(:disabled):hover::after,
   .account-billing-option:not(:has(input:disabled)):hover::after,
   .status-session-panel button.rounded-full:not(:disabled):hover::after { animation: projection-contact 160ms steps(1, end); }
-  .settings-dialog .app-modal-header::after { animation: projection-contact 160ms steps(1, end) 180ms; }
 }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme] .settings-nav-item,

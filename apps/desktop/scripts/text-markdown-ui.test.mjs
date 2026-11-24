@@ -17,7 +17,7 @@ const editor=page.getByRole('textbox',{name:'文档正文',exact:true});
 const floating=page.getByRole('toolbar',{name:'选中文字格式',exact:true});
 async function check(name,action){try{
   if(coverage && page.url()!=='about:blank'){coverageEntries.push(...await page.coverage.stopJSCoverage());await page.coverage.startJSCoverage({resetOnNavigation:false});}
-  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-workspace-live/preview.html?markdown`);
+  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-workspace-live/preview.html?markdown`, { timeout: 60000 });
   await editor.waitFor({timeout:15000}); await editor.locator('.text-document-block').first().click();
   await action(); console.log('PASS',name);
 }catch(error){failures.push(name+': '+error.stack); if(process.env.BOWERBIRD_TEXT_DEBUG)console.log(await page.evaluate(()=>({html:document.querySelector('.text-document-body')?.innerHTML,selection:window.getSelection()?.toString(),draft:window.draft,bar:document.querySelector('[aria-label="选中文字格式"]')?.getBoundingClientRect().toJSON(),body:document.querySelector('.text-document-body')?.getBoundingClientRect().toJSON()})));}}
@@ -43,7 +43,7 @@ await check('bullet and ordered lists continue and exit on empty Enter',async()=
   await page.keyboard.press('Enter'); await page.keyboard.type('1. first');
   await page.keyboard.press('Enter'); await page.keyboard.type('second');
   assert.equal(await editor.locator('ol').count(),2);
-  assert.match(await page.evaluate(()=>window.draft.markdown),/1\. first\n2\. second/);
+  await page.waitForFunction(()=>/1\. first\n2\. second/.test(window.draft?.markdown));
 });
 await check('quote and inline Markdown retain formatting after reopening',async()=>{
   await page.keyboard.type('> quote'); assert.equal(await editor.locator('blockquote').count(),1);
@@ -62,7 +62,7 @@ await check('selection toolbar preserves selection and toggles marks',async()=>{
   await floating.waitFor();
   await floating.locator('[aria-label="加粗"]').click();
   assert.equal(await editor.locator('strong').innerText(),'selected text');
-  assert.equal(await floating.locator('[aria-label="加粗"]').getAttribute('aria-checked'),'true');
+  assert.equal(await floating.locator('[aria-label="加粗"]').getAttribute('aria-pressed'),'true');
   await floating.locator('[aria-label="斜体"]').click();
   assert.equal(await editor.locator('em').innerText(),'selected text');
   await floating.locator('[aria-label="加粗"]').click();
@@ -71,15 +71,17 @@ await check('selection toolbar preserves selection and toggles marks',async()=>{
   await floating.waitFor({state:'hidden'});
   assert.equal(await page.getByRole('dialog',{name:'文本编辑器',exact:true}).count(),1);
   await page.keyboard.press('ArrowRight'); await page.keyboard.type('!');
-  assert.match(await page.evaluate(()=>window.draft.markdown),/selected text/);
+  await page.waitForFunction(()=>window.draft?.markdown.includes('selected text'));
 });
 await check('toolbar scoped to editor; fixed list button toggles off',async()=>{
   await page.keyboard.type('line'); await page.keyboard.press('Home'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End');
   await floating.waitFor();
   const fixed=page.getByRole('toolbar',{name:'文字格式',exact:true});
-  await fixed.locator('[aria-label="无序列表"] > span').first().click();
+  await fixed.getByRole('button', { name: '列表', exact: true }).click();
+  await page.getByRole('menuitem', { name: '无序列表', exact: true }).click();
   assert.equal(await editor.locator('[role=listitem][style*="disc"]').count(),1);
-  await fixed.locator('[aria-label="无序列表"] > span').first().click();
+  await fixed.getByRole('button', { name: '列表', exact: true }).click();
+  await page.getByRole('menuitem', { name: '无序列表', exact: true }).click();
   assert.equal(await editor.locator('[role=listitem][style*="disc"]').count(),0);
   await page.getByRole('textbox',{name:'文档名称',exact:true}).click();
   await floating.waitFor({state:'hidden'});
@@ -88,7 +90,7 @@ await check('keyboard selection across blocks; keyboard toolbar; scroll hides of
   await page.keyboard.type('first'); await page.keyboard.press('Enter'); await page.keyboard.type('second');
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowDown' : 'Control+Shift+End');
   await floating.waitFor(); await page.keyboard.press('Alt+F10');
-  await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowRight'); await page.keyboard.press('Enter');
+  await page.keyboard.press('ArrowRight'); await page.keyboard.press('Enter');
   assert.deepEqual(await editor.locator('strong').allTextContents(),['first','second']);
   await page.keyboard.press('ArrowRight'); await page.keyboard.press('Enter');
   for(let n=0;n<24;n++){await page.keyboard.type('paragraph '+n);await page.keyboard.press('Enter');}
@@ -104,24 +106,29 @@ await check('Chinese composition and literal mid-line Markdown',async()=>{
   await cdp.send('Input.insertText',{text:'中文'});
   await page.keyboard.type(' # text - text');
   assert.equal(await editor.locator('h1,ul').count(),0);
-  assert.match(await page.evaluate(()=>window.draft.markdown),/中文 # text - text/);
+  await page.waitForFunction(()=>window.draft?.markdown.includes('中文 # text - text'));
   await cdp.detach();
 });
-await check('shared heading and quote buttons toggle; bold and italic keyboard shortcuts',async()=>{
+await check('shared headings, mark shortcuts and slash quote insertion',async()=>{
   await page.keyboard.type('format me'); await page.keyboard.press('Home'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End');
   await floating.waitFor();
-  await floating.locator('[aria-label="段落类型"]').click();
+  await page.getByRole('toolbar',{name:'文字格式',exact:true}).getByRole('button',{name:'正文或标题',exact:true}).click();
   await page.getByRole('menuitemradio',{name:'标题 2',exact:true}).click();
   assert.equal(await editor.locator('h2').innerText(),'format me');
-  await floating.locator('[aria-label="段落类型"]').click();
+  await page.getByRole('toolbar',{name:'文字格式',exact:true}).getByRole('button',{name:'正文或标题',exact:true}).click();
   await page.getByRole('menuitemradio',{name:'正文',exact:true}).click();
   assert.equal(await editor.locator('h2').count(),0);
-  await floating.locator('[aria-label="段落类型"]').click();await page.getByRole('menuitemradio',{name:'引用',exact:true}).click();
-  assert.equal(await editor.locator('blockquote').innerText(),'format me');
-  await floating.locator('[aria-label="段落类型"]').click();await page.getByRole('menuitemradio',{name:'正文',exact:true}).click();
-  assert.equal(await editor.locator('blockquote').count(),0);
+  await editor.getByText('format me', { exact: true }).click();
+  await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
+  await page.waitForFunction(() => window.getSelection()?.toString() === 'format me');
   await page.keyboard.press('Control+b'); await page.keyboard.press('Control+i');
-  assert.equal(await editor.locator('strong em,em strong').innerText(),'format me');
+  await editor.locator('strong em,em strong').filter({ hasText: 'format me' }).waitFor();
+  await page.keyboard.press('End'); await page.keyboard.press('Enter');
+  await page.getByRole('toolbar',{name:'文字格式',exact:true}).getByRole('button',{name:'插入素材',exact:true}).click();
+  await page.getByRole('menuitem',{name:'插入其他块…',exact:true}).click();
+  await page.getByRole('option',{name:'引用',exact:true}).click();
+  await page.keyboard.type('quoted passage');
+  assert.equal(await editor.locator('blockquote').innerText(),'quoted passage');
 });
 await check('original asset detail shares toolbar; raw blocks remain literal',async()=>{
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-library/preview.html`);
@@ -131,7 +138,7 @@ await check('original asset detail shares toolbar; raw blocks remain literal',as
   await editor.locator('pre [data-slate-string]').click(); await page.keyboard.press('Home'); await page.keyboard.type('# ');
   assert.equal(await editor.locator('h1').count(),0);
   await editor.locator('.text-document-block').last().click(); await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
-  await floating.waitFor(); await floating.locator('[aria-label="行内代码"]').click();
+  await floating.getByRole('button',{name:'更多选区工具',exact:true}).click(); await page.getByRole('button',{name:'行内代码',exact:true}).click();
   assert.equal(await editor.locator('.slate-p code [data-slate-string]').innerText(),'plain');
 });
 await check('floating toolbar stays inside writing panel at narrow width and both themes',async()=>{

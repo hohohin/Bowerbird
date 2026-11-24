@@ -1,9 +1,9 @@
-import { localTextAgentJob, startTextAgent, type TextAgentJob } from "./textAgent";
+import { startTextAgent, type TextAgentJob } from "./textAgent";
 import { userErrorMessage } from "./userError";
 import { notifyError } from "./notify";
 
-export interface TextAgentTaskState { busy: boolean; resumable: boolean; status: string; error: string }
-export const initialTextAgentTask: TextAgentTaskState = { busy: false, resumable: false, status: "", error: "" };
+export interface TextAgentTaskState { busy: boolean; resumable: boolean; status: string; error: string; preview: string }
+export const initialTextAgentTask: TextAgentTaskState = { busy: false, resumable: false, status: "", error: "", preview: "" };
 type Input = Parameters<typeof startTextAgent>[0];
 
 /** One request owner per bubble; cancel/close invalidate pending reads before touching the editor. */
@@ -20,8 +20,7 @@ export class TextAgentTask {
     if (this.active) this.changed(this.state);
   }
   private async submit(input: Input, version: number) {
-    if (input.provider === "codex-cli") this.job = localTextAgentJob(input.requestId);
-    const job = await startTextAgent(input);
+    const job = await startTextAgent(input, job => { this.job = job; });
     if (!this.current(version)) { await this.cancelOnClose(job); return; }
     this.job = job;
   }
@@ -29,23 +28,26 @@ export class TextAgentTask {
     const job = this.job;
     if (!job) return;
     while (this.current(version)) {
-      const text = await job.read();
+      const text = await job.read(preview => {
+        if (this.current(version) && preview !== this.state.preview) this.update({ preview });
+      });
       if (!this.current(version)) return;
-      if (text !== null) { this.job = null; await this.result(text); if (!this.current(version)) return; this.update({ status: "已写入文档" }); return; }
-      await new Promise(resolve => setTimeout(resolve, 1200));
+      if (text !== null) { this.job = null; await this.result(text); if (!this.current(version)) return; this.update({ status: "回复已完成", preview: "" }); return; }
+      await new Promise(resolve => setTimeout(resolve, job.pollMs ?? 1200));
     }
   }
   async run(input?: Input) {
     if (this.state.busy || !this.active) return;
     const version = ++this.version;
-    this.update({ busy: true, error: "", status: "Agent 正在回复…" });
+    this.update({ busy: true, error: "", status: "Agent 正在回复…", ...(input ? { preview: "" } : {}) });
     try { if (input) await this.submit(input, version); if (this.current(version)) await this.receive(version); }
     catch (reason) { if (this.current(version)) this.update({ error: userErrorMessage(reason, "暂时无法取得 Agent 回复，请检查原任务后继续取回。"), status: "" }); }
     finally { if (this.current(version)) this.update({ busy: false }); }
   }
   async stop() {
+    if (!this.active || this.state.status === "正在停止…") return;
     const version = ++this.version;
-    this.update({ busy: true, status: "正在停止…", error: "" });
+    this.update({ busy: true, status: "正在停止…", error: "", preview: "" });
     try { await this.job?.cancel(); if (this.current(version)) { this.job = null; this.update({ status: "已停止" }); } }
     catch (reason) { if (this.current(version)) this.update({ error: userErrorMessage(reason, "尚未确认停止，请检查原任务。"), status: "" }); }
     finally { if (this.current(version)) this.update({ busy: false }); }

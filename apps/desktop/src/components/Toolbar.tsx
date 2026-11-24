@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowLeft, Compass, Images, LayoutDashboard, Link2, LoaderCircle } from "lucide-react";
 import { SidebarAccount } from "./SidebarAccount";
+import { ScreenshotMenu } from "./ScreenshotMenu";
 import { QuickTransfer } from "./QuickTransferPanel";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { MediaTypeFilter } from "./MediaTypeFilter";
@@ -114,7 +115,7 @@ export function Toolbar({
     const routeRevision = useStore.getState().projectRouteRevision;
     const guide = useOnboarding.getState().guide;
     const completeLesson = beginOnboardingOperation(guide.role === "designer" ? "folder" : "import", activeProjectId);
-    const paneId = useActiveLibraryPane.getState().pane?.id;
+    const pane = useActiveLibraryPane.getState().pane;
     const starterFolder = guide.status === "active" && guide.role === "designer"
       && [1, 7, 8].includes(guide.sessions.designer?.step ?? -1) && guide.sessions.designer?.projectId === activeProjectId;
     void withBusy(async () => {
@@ -131,9 +132,7 @@ export function Toolbar({
       const id = await folderConnections.connect(path, activeProjectId);
       const current = useStore.getState();
       if (current.activeProjectId === activeProjectId && current.projectRouteRevision === routeRevision && !current.projectRoutePending) {
-        navigateConnectedFolder(id, paneId);
-        useLocalFileMode.getState().setCatalogView("collections");
-        useLocalFileMode.getState().setOpen(true);
+        navigateConnectedFolder(id, pane?.id, pane?.mode ?? useLocalFileMode);
       }
       completeLesson();
       return "已建立连接，正在读取素材";
@@ -187,6 +186,7 @@ export function Toolbar({
           <MediaTypeFilter />
 
         </div>}
+        <ScreenshotMenu />
         <SidebarAccount placement="topbar" />
       </div>
       {collectedNotice && (

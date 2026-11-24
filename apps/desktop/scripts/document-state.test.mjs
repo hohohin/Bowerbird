@@ -22,7 +22,9 @@ test('simple Markdown stays readable, rich state is canonical across line ending
   const stored = writeDocumentState(plain, rich());
   assert.deepEqual(readDocumentState(stored).value, rich());
   assert.deepEqual(readDocumentState(stored.replaceAll('\n', '\r\n')).value, rich());
-  assert.deepEqual(readDocumentState(stored.replace('正文😀', '外部改写')), { source: '外部改写\n' });
+  assert.deepEqual(readDocumentState(stored.replace('正文😀', '外部改写')), {
+    source: '外部改写\n', mismatch: { source: '外部改写\n', value: rich() },
+  });
 });
 test('state preserves nested styles and removes ephemeral media URLs and placeholder ids', () => {
   const value = [block({ children: [{ text: '红字', color: '#f00' }] }), block({ type: 'img', assetId: 'image', url: 'blob:temp', caption: [{ text: '图注' }], placeholderId: 'upload' }), block({ type: 'file', attachmentId: 'file', url: 'asset://temp' })];

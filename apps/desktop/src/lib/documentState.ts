@@ -73,8 +73,13 @@ function discussionsFromJson(input: unknown): DocumentDiscussion[] | undefined {
   if (!Array.isArray(input)) throw new Error('Invalid discussions');
   return input.map(discussionFromJson);
 }
-/** The readable Markdown remains authoritative if another editor changes it. */
-export function readDocumentState(source: string): { source: string; value?: DocumentValue } {
+export interface DocumentStateMismatch {
+  source: string;
+  value: DocumentValue;
+}
+
+/** A valid but stale attachment is available for recovery by the editor. */
+export function readDocumentState(source: string): { source: string; value?: DocumentValue; mismatch?: DocumentStateMismatch } {
   const match = footer.exec(source);
   if (!match) return { source };
   try {
@@ -87,7 +92,9 @@ export function readDocumentState(source: string): { source: string; value?: Doc
     const discussions = discussionsFromJson(state.discussions);
     if (discussions) state.value.discussions = discussions;
     const readable = canonical(source.slice(0, match.index));
-    return { source: readable, ...(state.hash === fingerprint(readable) ? { value: state.value } : {}) };
+    return state.hash === fingerprint(readable)
+      ? { source: readable, value: state.value }
+      : { source: readable, mismatch: { source: readable, value: state.value } };
   } catch { return { source }; }
 }
 const simpleTypes = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'hr', 'raw', 'img', 'audio', 'video']);

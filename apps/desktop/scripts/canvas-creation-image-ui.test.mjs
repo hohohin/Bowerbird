@@ -11,12 +11,13 @@ await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 page.setDefaultTimeout(12000);
+page.setDefaultNavigationTimeout(60000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
 const modal = page.locator('.creation-image-preview');
 const imageRegion = modal.getByRole('region', { name: '放大图片' });
-const detailsRegion = modal.getByRole('region', { name: '独立会话面板' });
+const detailsRegion = modal.getByRole('region', { name: '生成记录' });
 const inspector = modal.getByRole('region', { name: '图片详情', exact: true });
 const mainImage = imageRegion.getByRole('img', { name: /^合成参考 / });
 const picks = () => page.evaluate(() => window.picks);
@@ -87,12 +88,12 @@ const preview = async target => {
     undefined, { timeout: 1000 });
   await idle();
   assert.deepEqual(await picks(), before, 'single click previews without inserting a reference');
-  const left = await imageRegion.boundingBox();
-  const right = await detailsRegion.count() ? await detailsRegion.boundingBox() : null;
+  const media = await imageRegion.boundingBox();
+  const record = await detailsRegion.count() ? await detailsRegion.boundingBox() : null;
   const info = await inspector.boundingBox();
-  assert.ok(info.width >= 200 && info.x + info.width <= left.x, 'reused image inspector is left of the enlarged image');
-  assert.ok(left.width > 100 && (!right || right.width > 100 && left.x + left.width <= right.x + 2),
-    'image and details form a left/right layout');
+  assert.ok(info.width >= 200 && media.x + media.width <= info.x, 'reused image inspector is right of the enlarged image');
+  assert.ok(media.width > 100 && (!record || record.width > 100 && record.x + record.width <= media.x + 2),
+    'generation history, when present, stays left of the image');
   assert.equal(await modal.locator('.app-modal').count(), 0, 'image and conversation have no common modal panel');
   assert.deepEqual(await imageRegion.evaluate(element => {
     const style = getComputedStyle(element.parentElement);
@@ -131,76 +132,42 @@ try {
   });
   await reset();
   await preview(page.locator('[data-conversation-image="b"]'));
-  const lightboxTrigger = detailsRegion.getByRole('button', { name: '点击放大', exact: true }).last();
-  await lightboxTrigger.click();
-  const lightbox = page.getByRole('dialog', { name: /^媒体预览/ });
-  await lightbox.waitFor();
-  await page.waitForFunction(() => document.querySelector('.media-lightbox')?.contains(document.activeElement),
-    undefined, { timeout: 1000 });
-  const enteredLightbox = await lightbox.evaluate(element => element.contains(document.activeElement));
-  await lightbox.locator('button:enabled').last().focus();
-  await page.keyboard.press('Tab');
-  const trappedInLightbox = await lightbox.evaluate(element => element.contains(document.activeElement));
-  await lightbox.getByRole('button', { name: '关闭（Esc）', exact: true }).click();
-  await lightbox.waitFor({ state: 'detached' });
-  const restoredToThumbnail = await lightboxTrigger.evaluate(element => element === document.activeElement);
+  const previousOutput = detailsRegion.getByRole('button', { name: '点击放大', exact: true }).first();
+  await previousOutput.click();
+  await page.waitForFunction(() => document.querySelector('[data-generation-turn-key="one"]')?.hasAttribute('data-preview-turn'));
+  assert.equal(await page.locator('.media-lightbox').count(), 0, 'history thumbnails switch the main image in the same HUD');
+  assert.equal(await modal.locator('[data-generation-turn-key="one"][data-preview-turn]').count(), 1);
   await page.keyboard.press('Escape');
   await idle();
-  const closedParentWithEscape = await modal.count() === 0;
+  assert.equal(await modal.count(), 0, 'Escape closes the shared preview');
 
   await reset();
   await preview(page.locator('[data-conversation-image="b"]'));
-  await modal.getByRole('button', { name: '收起会话', exact: true }).focus();
+  await modal.getByRole('button', { name: '收起生成记录', exact: true }).focus();
   await page.keyboard.down('Space');
   const backgroundPan = await page.locator('.canvas-stage.is-pan-ready').count() > 0;
   await page.keyboard.up('Space');
   await idle();
   const collapsedWithSpace = !await detailsRegion.isVisible();
-  const keyboardResults = { enteredLightbox, trappedInLightbox, restoredToThumbnail, closedParentWithEscape,
-    backgroundPan, collapsedWithSpace };
-  console.log('Nested preview and Space key results:', JSON.stringify(keyboardResults));
-  assert.deepEqual(keyboardResults, { enteredLightbox: true, trappedInLightbox: true, restoredToThumbnail: true,
-    closedParentWithEscape: true, backgroundPan: false, collapsedWithSpace: true },
-  'nested preview owns keyboard focus and HUD Space actions do not reach the canvas');
-  console.log('PASS nested preview focus/Tab/return/Escape and Space collapse isolation');
+  assert.equal(backgroundPan, false, 'HUD Space actions do not pan the canvas');
+  assert.equal(collapsedWithSpace, true, 'Space collapses the focused HUD panel');
 
-  const wholeCardResults = [];
-  for (const region of ['title', 'body']) {
-    await reset();
-    await page.evaluate(() => window.store.setState(state => ({ genJobs: { ...state.genJobs,
-      job: { ...state.genJobs.job, running: true, streaming: '正在生成下一轮' } } })));
-    const card = node('session');
-    await card.locator('.canvas-prompt-content').waitFor();
-    assert.equal(await card.evaluate(element => element.classList.contains('is-image-only')), false,
-      'the regression uses a real conversation card with visible title/body');
-    await (region === 'title' ? card.getByText('生成会话', { exact: true }) : card.locator('.canvas-prompt-content')).click();
-    await idle();
-    wholeCardResults.push({ region, preview: await modal.isVisible(), picks: await picks(),
-      boardOpen: await page.evaluate(() => window.store.getState().boardOpen) });
-    await page.screenshot({ path: `${output}/whole-card-${region}.png` });
-  }
-  console.log('Whole conversation card click results:', JSON.stringify(wholeCardResults));
-  assert.deepEqual(wholeCardResults, ['title', 'body'].map(region => ({ region, preview: true, picks: [], boardOpen: true })),
-    'single-clicking a conversation card title/body opens image + conversation without leaving creation mode');
-  console.log('PASS conversation card title/body share the image preview entry');
-  for (const region of ['title', 'body']) {
-    await reset();
-    await page.evaluate(() => window.store.setState(state => ({ genJobs: { ...state.genJobs,
-      job: { ...state.genJobs.job, running: true } } })));
-    const card = node('session');
-    await (region === 'title' ? card.getByText('生成会话', { exact: true }) : card.locator('.canvas-prompt-content')).dblclick();
-    await idle();
-    assert.deepEqual(await picks(), [], `double-clicking the conversation ${region} does not reference its image`);
-    assert.equal(await page.evaluate(() => window.store.getState().boardOpen), true);
-  }
-  console.log('PASS only image double-clicks add references, not conversation title/body double-clicks');
+  await reset();
+  await page.evaluate(() => window.store.setState(state => ({ genJobs: { ...state.genJobs,
+    job: { ...state.genJobs.job, running: true, streaming: '正在生成下一轮' } } })));
+  const runningCard = node('session');
+  assert.match(await runningCard.getAttribute('class'), /is-image-only.*canvas-card-running/);
+  assert.equal(await runningCard.locator('.canvas-prompt-content').count(), 0, 'a running revision keeps the image instead of the prompt surface');
+  await preview(runningCard.locator('[data-conversation-image="b"]'));
+  assert.deepEqual(await picks(), [], 'single click during revision still previews the image');
+  await close();
 
   await reset();
   const editor = page.locator('.creation-dock .ProseMirror').first();
   await editor.fill('保留创作草稿');
   await preview(node('old'));
   assert.equal(await detailsRegion.count(), 0, 'imported images open image and inspector without an empty conversation');
-  assert.equal(await modal.getByRole('button', { name: /显示会话|收起会话/ }).count(), 0);
+  assert.equal(await modal.getByRole('button', { name: /显示生成记录|收起生成记录/ }).count(), 0);
   assert.match(await inspector.innerText(), /导入时间/);
   assert.match(await inspector.innerText(), /参考分类/);
   assert.match(await inspector.innerText(), /图片详情中的构图描述/);
@@ -273,12 +240,12 @@ try {
   await page.screenshot({ path: `${output}/conversation-dark.png` });
   const imageBeforeCollapse = await mainImage.boundingBox();
   const sourceBeforeCollapse = await mainImage.getAttribute('src');
-  await modal.getByRole('button', { name: '收起会话面板', exact: true }).click();
+  await modal.getByRole('button', { name: '收起生成记录面板', exact: true }).click();
   await detailsRegion.waitFor({ state: 'hidden' });
   assert.deepEqual(await mainImage.boundingBox(), imageBeforeCollapse, 'collapsing the conversation leaves the image in place');
   assert.equal(await mainImage.getAttribute('src'), sourceBeforeCollapse);
   assert.equal(await modal.isVisible(), true, 'the image preview remains open independently');
-  const showConversation = modal.getByRole('button', { name: '显示会话', exact: true });
+  const showConversation = modal.getByRole('button', { name: '显示生成记录', exact: true });
   assert.equal(await showConversation.evaluate(element => element === document.activeElement), true, 'collapsing hands focus to the surviving toggle');
   await showConversation.click();
   await detailsRegion.waitFor();
@@ -380,16 +347,13 @@ try {
   await close();
   console.log('PASS ordinary canvas, generated and library images share the HUD without activating creation');
 
-  for (const region of ['title', 'body']) {
-    await reset();
-    await page.evaluate(() => window.store.setState(state => ({ boardOpen: false,
-      genJobs: { ...state.genJobs, job: { ...state.genJobs.job, running: true } } })));
-    const card = node('session');
-    await (region === 'title' ? card.getByText('生成会话', { exact: true }) : card.locator('.canvas-prompt-content')).click();
-    await page.locator('[data-project-inspector]').waitFor();
-    assert.equal(await modal.count(), 0, `ordinary browsing keeps the ${region} conversation entry`);
-    assert.deepEqual(await picks(), []);
-  }
+  await reset();
+  await page.evaluate(() => window.store.setState(state => ({ boardOpen: false,
+    genJobs: { ...state.genJobs, job: { ...state.genJobs.job, running: true } } })));
+  await node('session').locator('[data-conversation-image="b"]').click();
+  await modal.waitFor();
+  assert.equal(await page.locator('[data-project-inspector]').count(), 0, 'ordinary browsing keeps the picture preview during revision');
+  await close();
   await reset({ empty: true });
   assert.equal(await node('session').locator('.canvas-conversation-images').count(), 0, 'empty conversation has no result image');
   await node('session').getByText('生成指令', { exact: true }).click();

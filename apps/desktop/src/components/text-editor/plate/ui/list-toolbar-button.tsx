@@ -1,207 +1,57 @@
 // Adapted from Plate (MIT). See LICENSE.md in this directory tree.
 'use client';
 
-import * as React from 'react';
-
-import { ListStyleType, someList, toggleList } from '@platejs/list';
-import {
-  useIndentTodoToolBarButton,
-  useIndentTodoToolBarButtonState,
-} from '@platejs/list/react';
-import { List, ListOrdered, ListTodoIcon } from 'lucide-react';
-import { useEditorRef, useEditorSelector } from 'platejs/react';
+import { ListStyleType, toggleList } from '@platejs/list';
+import { List, ListOrdered } from 'lucide-react';
+import { useEditorRef } from 'platejs/react';
 
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from '@/components/text-editor/plate/primitives/dropdown-menu';
+} from '../primitives/dropdown-menu';
+import { ToolbarButton } from './toolbar';
 
-import {
-  ToolbarButton,
-  ToolbarSplitButton,
-  ToolbarSplitButtonPrimary,
-  ToolbarSplitButtonSecondary,
-} from './toolbar';
+const styles = [
+  [ListStyleType.Circle, '空心圆'],
+  [ListStyleType.Square, '方块'],
+  [ListStyleType.LowerAlpha, '小写字母'],
+  [ListStyleType.UpperAlpha, '大写字母'],
+  [ListStyleType.LowerRoman, '小写罗马数字'],
+  [ListStyleType.UpperRoman, '大写罗马数字'],
+] as const;
 
-export function BulletedListToolbarButton() {
+export function ListToolbarButton() {
   const editor = useEditorRef();
-  const [open, setOpen] = React.useState(false);
+  const changeList = (listStyleType: ListStyleType) => {
+    if (!editor.selection) {
+      const end = editor.api.end([]);
+      if (end) editor.tf.select(end);
+    }
+    toggleList(editor, { listStyleType });
+    editor.tf.focus();
+  };
 
-  const pressed = useEditorSelector(
-    (editor) =>
-      someList(editor, [
-        ListStyleType.Disc,
-        ListStyleType.Circle,
-        ListStyleType.Square,
-      ]),
-    []
-  );
-
-  return (
-    <ToolbarSplitButton aria-label="无序列表" pressed={open}>
-      <ToolbarSplitButtonPrimary
-        className="data-[state=on]:bg-accent data-[state=on]:text-accent-foreground"
-        onClick={() => {
-          toggleList(editor, {
-            listStyleType: ListStyleType.Disc,
-          });
-        }}
-        data-state={pressed ? 'on' : 'off'}
-      >
-        <List className="size-4" />
-      </ToolbarSplitButtonPrimary>
-
-      <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
-        <DropdownMenuTrigger asChild>
-          <ToolbarSplitButtonSecondary />
-        </DropdownMenuTrigger>
-
-        <DropdownMenuContent align="start" alignOffset={-32}>
-          <DropdownMenuGroup>
-            <DropdownMenuItem
-              onClick={() =>
-                toggleList(editor, {
-                  listStyleType: ListStyleType.Disc,
-                })
-              }
-            >
-              <div className="flex items-center gap-2">
-                <div className="size-2 rounded-full border border-current bg-current" />
-                默认
-              </div>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() =>
-                toggleList(editor, {
-                  listStyleType: ListStyleType.Circle,
-                })
-              }
-            >
-              <div className="flex items-center gap-2">
-                <div className="size-2 rounded-full border border-current" />
-                空心圆
-              </div>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() =>
-                toggleList(editor, {
-                  listStyleType: ListStyleType.Square,
-                })
-              }
-            >
-              <div className="flex items-center gap-2">
-                <div className="size-2 border border-current bg-current" />
-                方块
-              </div>
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </ToolbarSplitButton>
-  );
-}
-
-export function NumberedListToolbarButton() {
-  const editor = useEditorRef();
-  const [open, setOpen] = React.useState(false);
-
-  const pressed = useEditorSelector(
-    (editor) =>
-      someList(editor, [
-        ListStyleType.Decimal,
-        ListStyleType.LowerAlpha,
-        ListStyleType.UpperAlpha,
-        ListStyleType.LowerRoman,
-        ListStyleType.UpperRoman,
-      ]),
-    []
-  );
-
-  return (
-    <ToolbarSplitButton aria-label="有序列表" pressed={open}>
-      <ToolbarSplitButtonPrimary
-        className="data-[state=on]:bg-accent data-[state=on]:text-accent-foreground"
-        onClick={() =>
-          toggleList(editor, {
-            listStyleType: ListStyleType.Decimal,
-          })
-        }
-        data-state={pressed ? 'on' : 'off'}
-      >
-        <ListOrdered className="size-4" />
-      </ToolbarSplitButtonPrimary>
-
-      <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
-        <DropdownMenuTrigger asChild>
-          <ToolbarSplitButtonSecondary />
-        </DropdownMenuTrigger>
-
-        <DropdownMenuContent align="start" alignOffset={-32}>
-          <DropdownMenuGroup>
-            <DropdownMenuItem
-              onSelect={() =>
-                toggleList(editor, {
-                  listStyleType: ListStyleType.Decimal,
-                })
-              }
-            >
-              数字（1, 2, 3）
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() =>
-                toggleList(editor, {
-                  listStyleType: ListStyleType.LowerAlpha,
-                })
-              }
-            >
-              小写字母（a, b, c）
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() =>
-                toggleList(editor, {
-                  listStyleType: ListStyleType.UpperAlpha,
-                })
-              }
-            >
-              大写字母（A, B, C）
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() =>
-                toggleList(editor, {
-                  listStyleType: ListStyleType.LowerRoman,
-                })
-              }
-            >
-              小写罗马数字
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() =>
-                toggleList(editor, {
-                  listStyleType: ListStyleType.UpperRoman,
-                })
-              }
-            >
-              大写罗马数字
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </ToolbarSplitButton>
-  );
-}
-
-export function TodoListToolbarButton(
-  props: React.ComponentProps<typeof ToolbarButton>
-) {
-  const state = useIndentTodoToolBarButtonState({ nodeType: 'todo' });
-  const { props: buttonProps } = useIndentTodoToolBarButton(state);
-
-  return (
-    <ToolbarButton {...props} {...buttonProps} tooltip="待办列表">
-      <ListTodoIcon />
-    </ToolbarButton>
-  );
+  return <DropdownMenu modal={false}>
+    <DropdownMenuTrigger asChild><ToolbarButton aria-label="列表" tooltip="列表"><List /></ToolbarButton></DropdownMenuTrigger>
+    <DropdownMenuContent align="start" onCloseAutoFocus={event => { event.preventDefault(); editor.tf.focus(); }}>
+      <DropdownMenuItem onSelect={() => changeList(ListStyleType.Disc)}><List />无序列表</DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => changeList(ListStyleType.Decimal)}><ListOrdered />有序列表</DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger>列表样式</DropdownMenuSubTrigger>
+        <DropdownMenuPortal>
+          <DropdownMenuSubContent>
+            {styles.map(([style, name]) => <DropdownMenuItem key={style} onSelect={() => changeList(style)}>{name}</DropdownMenuItem>)}
+          </DropdownMenuSubContent>
+        </DropdownMenuPortal>
+      </DropdownMenuSub>
+    </DropdownMenuContent>
+  </DropdownMenu>;
 }

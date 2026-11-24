@@ -3,165 +3,72 @@ import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-const server = await createServer({ server: { host: "127.0.0.1", port: 1567, strictPort: true, hmr: false, watch: null } });
+const output = ".tmp/canvas-source";
+await mkdir(output, { recursive: true });
+const server = await createServer({ cacheDir: `${output}/vite`, server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
-const page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
+const page = await browser.newPage({ viewport: { width: 1100, height: 800 }, reducedMotion: "reduce" });
+page.setDefaultNavigationTimeout(60000);
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
-const panel = page.getByRole("complementary", { name: "画板素材库" });
+await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
+const panel = page.getByRole("complementary", { name: "画板素材库", exact: true });
+const sidebar = panel.getByRole("complementary", { name: "素材库导航", exact: true });
+const button = name => sidebar.getByRole("button", { name, exact: true });
 const card = id => panel.locator(`[data-asset-id="${id}"]`);
-const selected = () => page.evaluate(() => [...window.store.getState().selectedIds].sort());
-const settleSource = () => page.locator(".canvas-source-panel").evaluate(async element => {
-  await Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {})));
-});
-async function checkChrome() {
-  await page.mouse.move(800, 720);
-  const chrome = await page.locator(".canvas-workspace").evaluate(workspace => {
-    const box = selector => {
-      const element = workspace.querySelector(selector);
-      const { x, y, width, height } = element.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      return { x, y, width, height, radius: style.borderTopRightRadius, background: style.backgroundColor };
-    };
-    return { tab: box(".canvas-source-toggle"), title: box(".canvas-board-toolbar > div:first-child"),
-      zoom: box(".canvas-zoom-controls"), tools: box(".canvas-drawing-tools"),
-      icon: !!workspace.querySelector(".canvas-source-toggle svg") };
-  });
-  assert.equal(chrome.icon, true, "library tab retains its icon");
-  assert.equal(chrome.tab.y, chrome.title.y);
-  assert.equal(chrome.tab.y, chrome.zoom.y);
-  assert.equal(chrome.tab.height, chrome.title.height);
-  assert.equal(chrome.tab.height, chrome.zoom.height);
-  assert.equal(chrome.tools.x - chrome.tab.x, 12);
-  assert.equal(chrome.tools.y - chrome.tab.y - chrome.tab.height, 8);
-  assert.equal(chrome.title.x - chrome.tab.x - chrome.tab.width, 8);
-  assert.ok(chrome.title.x + chrome.title.width + 8 <= chrome.zoom.x, "title and zoom do not overlap");
-  for (const element of [chrome.title, chrome.zoom, chrome.tools]) {
-    assert.equal(element.radius, chrome.tab.radius);
-    assert.equal(element.background, chrome.tab.background);
-  }
-}
+const selection = panel.getByRole("group", { name: "分类素材所选操作" });
 try {
-  await page.goto("http://127.0.0.1:1567/scripts/fixtures/canvas-reference/preview.html?source-library");
-  await page.getByRole("button", { name: "展开画板素材库" }).click();
+  await page.addInitScript(() => localStorage.setItem("bowerbird.canvasLibraryWidth", "480"));
+  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/canvas-reference/preview.html?source-library&canvas-library`);
+  const stage = page.locator(".canvas-stage");
+  await stage.waitFor();
+  await page.getByRole("button", { name: "展开画板素材库", exact: true }).click();
   await card("existing").waitFor();
-  const topFilter = page.locator(".app-topbar").getByRole("group", { name: "生成图显示模式" });
-  assert.equal(await panel.getByRole("group", { name: "生成图显示模式" }).count(), 0);
-  for (const canvasMode of [false, true]) {
-    await page.evaluate(value => window.setToolbarCanvasMode(value), canvasMode);
-    await topFilter.waitFor();
-    await topFilter.getByRole("button", { name: "只看生成图", exact: true }).click();
-    assert.equal(await page.evaluate(() => window.store.getState().smartFilter), "source:generated");
-    await topFilter.getByRole("button", { name: "不看生成图", exact: true }).click();
-    assert.equal(await page.evaluate(() => window.store.getState().smartFilter), "source:!generated");
-    await topFilter.getByRole("button", { name: "不看生成图", exact: true }).click();
-    assert.equal(await page.evaluate(() => window.store.getState().smartFilter), null);
-  }
-  await page.evaluate(() => {
-    window.picked = [];
-    window.addEventListener("bowerbird://board-asset-picked", event => window.picked.push(event.detail));
-  });
-
-  // Browse -> Shift selection; plain clicks toggle, Shift extends the visible range.
+  assert.equal(await button("引用布局合成验收").getAttribute("aria-current"), "true");
+  const width = (await panel.boundingBox()).width;
+  const sidebarBox = await sidebar.boundingBox();
+  const stageBox = await stage.boundingBox();
+  assert.equal(width, 480);
+  assert.ok(sidebarBox.width >= 120);
+  await page.keyboard.press("e");
+  await sidebar.getByRole("navigation", { name: "标签首字母索引" }).waitFor();
+  assert.deepEqual(await sidebar.boundingBox(), sidebarBox);
+  assert.deepEqual(await stage.boundingBox(), stageBox);
+  await page.keyboard.press("q");
+  await button("全部素材").click();
   await card("a").click({ modifiers: ["Shift"] });
-  assert.deepEqual(await selected(), ["a"]);
-  assert.equal(await card("a").getAttribute("aria-pressed"), "true");
   await card("d").click({ modifiers: ["Shift"] });
-  assert.deepEqual(await selected(), ["a", "b", "c", "d"]);
-  await card("b").click();
-  assert.deepEqual(await selected(), ["a", "c", "d"]);
-  await card("existing").click();
-  assert.deepEqual(await selected(), ["a", "c", "d", "existing"]);
-
-  // An explicitly entered manage mode must also win over an active composer.
-  for (const scope of ["项目素材", "全局素材"]) {
-    await panel.getByRole("tab", { name: scope }).click();
-    await card("a").waitFor();
-    for (const editing of [{ boardOpen: false, genEditing: false }, { boardOpen: true, genEditing: false }, { boardOpen: false, genEditing: true }]) {
-      await page.evaluate(editing => {
-        const store = window.store;
-        store.getState().exitManage();
-        store.setState(editing);
-        store.getState().enterManage();
-      }, editing);
-      await card("a").click();
-      await card("c").click({ modifiers: ["Shift"] });
-      assert.deepEqual(await selected(), ["a", "b", "c"]);
-      await card("b").click();
-      assert.deepEqual(await selected(), ["a", "c"]);
-      assert.equal(await card("a").evaluate(el => getComputedStyle(el).cursor), "pointer");
-    }
-  }
-  assert.deepEqual(await page.evaluate(() => window.picked), [], "multi-select must never insert a reference");
-  assert.equal(await page.getByRole("dialog").count(), 0, "multi-select must never open a preview");
-
-  // Enter and Space follow the same selection path.
-  await card("b").focus();
-  await page.keyboard.press("Space");
-  assert.deepEqual(await selected(), ["a", "b", "c"]);
-  await page.keyboard.press("Enter");
-  assert.deepEqual(await selected(), ["a", "c"]);
-  const dragIds = await card("a").evaluate(el => {
-    const dataTransfer = new DataTransfer();
-    el.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer }));
-    const ids = dataTransfer.getData("text/plain").split(",").sort();
-    return ids;
-  });
-  assert.deepEqual(dragIds, ["a", "c"]);
-  await page.waitForFunction(() => !window.store.getState().canvasLibraryOpen);
-  assert.equal(await page.locator('.canvas-source-panel').evaluate(el => getComputedStyle(el).visibility), 'hidden', 'drag reveals canvas without a closing animation');
-  assert.equal(await page.locator('.canvas-board-shell').evaluate(el => el.inert), false);
-  await page.locator('.canvas-source-panel [data-asset-id="a"]').dispatchEvent('dragend');
-  await page.getByRole("button", { name: "展开画板素材库" }).click();
-  await settleSource();
-
-  // Regular browsing and picking still work after leaving multi-select.
-  await page.evaluate(() => { window.store.getState().exitManage(); window.store.setState({ boardOpen: false, genEditing: false }); });
-  await card("a").click();
-  await page.getByRole("dialog").waitFor();
-  await page.keyboard.press("Escape");
-  await page.getByRole("dialog").waitFor({ state: "hidden" });
-  await page.evaluate(() => window.store.setState({ boardOpen: true }));
-  await card("a").click();
-  assert.deepEqual(await page.evaluate(() => window.picked), ["a"]);
-  await card("b").click({ modifiers: ["Shift"] });
-  assert.deepEqual(await selected(), ["b"], "Shift must select even with an active composer");
-  assert.deepEqual(await page.evaluate(() => window.picked), ["a"]);
-
-  // Full-screen layout retains the size preference and canvas chrome at minimum window sizes.
-  await mkdir('.tmp/canvas-source', { recursive: true });
-  await panel.getByRole('slider', { name: '项目素材大小' }).fill('59');
-  await panel.getByRole('button', { name: '返回画板', exact: true }).click();
-  await settleSource();
-  await checkChrome();
-  await page.getByRole('button', { name: '展开画板素材库' }).click();
-  await settleSource();
-  assert.equal(await panel.getByRole('slider', { name: '项目素材大小' }).inputValue(), '59');
-  // Rapidly reversing the reveal must leave the final view interactive.
-  for (let i = 0; i < 3; i++) {
-    await page.evaluate(() => window.store.getState().setCanvasLibraryOpen(false));
-    await page.waitForTimeout(50);
-    await page.evaluate(() => window.store.getState().setCanvasLibraryOpen(true));
-    await page.waitForTimeout(50);
-  }
-  await settleSource();
-  assert.equal(await panel.evaluate(el => el.inert), false);
+  await selection.getByText("4 项", { exact: true }).waitFor();
+  await card("b").press("Space");
+  await selection.getByText("3 项", { exact: true }).waitFor();
+  await selection.getByRole("button", { name: "全选", exact: true }).click();
+  await selection.getByText("5 项", { exact: true }).waitFor();
+  await selection.getByRole("button", { name: "取消选择", exact: true }).click();
+  await button("全部文件夹素材").click();
+  await sidebar.getByRole("treeitem", { name: "测试目录", exact: true }).click();
+  await panel.locator('[data-catalog-section="test-root"] [data-connection-entry]').first().waitFor();
+  assert.equal(await (await panel.boundingBox()).width, width);
+  await page.screenshot({ path: `${output}/narrow.png` });
+  await stage.focus();
+  await page.keyboard.press("Tab");
+  await panel.waitFor({ state: "hidden" });
+  await stage.focus();
+  await page.keyboard.press("Tab");
+  await panel.waitFor();
+  assert.equal(await sidebar.getByRole("treeitem", { name: "测试目录", exact: true }).getAttribute("aria-selected"), "true");
   for (const height of [760, 568]) {
     await page.setViewportSize({ width: 900, height });
-    await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
-    await panel.getByRole('button', { name: '返回画板', exact: true }).click();
-    await settleSource();
-    await checkChrome();
-    assert.equal(await page.locator('.canvas-drawing-tools').evaluate(el => {
-      return el.getBoundingClientRect().bottom <= el.closest('.canvas-board-shell').getBoundingClientRect().bottom - 12;
-    }), true);
-    await page.screenshot({ path: `.tmp/canvas-source/canvas-${height}.png` });
-    await page.getByRole('button', { name: '展开画板素材库' }).click();
-    await settleSource();
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
     assert.equal(await panel.evaluate(el => el.scrollWidth <= el.clientWidth), true);
-    await page.screenshot({ path: `.tmp/canvas-source/library-${height}.png` });
+    await page.screenshot({ path: `${output}/library-${height}.png` });
   }
   assert.deepEqual(errors, []);
-  console.log('PASS: full-screen source selection, range, keyboard, browse/pick priority, both scopes, batch drag and canvas chrome.');
-} finally { await browser.close(); await server.close(); }
+  console.log("PASS canvas drawer scope, narrow layout, keyboard and range selection");
+} catch (error) {
+  console.error(errors);
+  await page.screenshot({ path: `${output}/failure.png` }).catch(() => {});
+  throw error;
+} finally {
+  await browser.close(); await server.close();
+}

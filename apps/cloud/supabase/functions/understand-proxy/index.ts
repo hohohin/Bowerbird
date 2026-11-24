@@ -1,5 +1,5 @@
 import { settleSyncUnderstand } from "./settlement.ts";
-import { acceptTextUpload, beginSyncUnderstand, inspectTextUpload, readableTextResult } from "../_shared/text-job-upload.ts";
+import { acceptTextUpload, beginSyncUnderstand, checkTextAcceptance, enqueueTextUpload, inspectTextUpload, readableTextResult, storeTextManifest, usageParameters } from "../_shared/text-job-upload.ts";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { createArkAdapter, type ImageInput, type MockScenario } from "../_shared/ark.ts";
 import { requireUser } from "../_shared/auth.ts";
@@ -8,6 +8,9 @@ import { assertReferenceImages, corsHeaders, readJsonBody, withTimeout } from ".
 import { isReplication, replicationOperations, replicationService, replicationPriceAvailable, validateReplication } from "../_shared/replication.ts";
 import { shortRewrite, standardTextFits } from "../_shared/bcoin-text.ts";
 import { imageMetadata } from "../_shared/image-metadata.ts";
+import { FILE_SPEECH_AUDIO_NAME, FILE_SPEECH_BUCKET, FILE_SPEECH_KEY_PREFIX, FILE_SPEECH_MAX_DURATION_MS, FILE_SPEECH_MIME, FILE_SPEECH_OPERATION, FILE_SPEECH_SERVICE, fileSpeechAudioKey, parseFileSpeechAudio } from "../_shared/file-speech.ts";
+import { LIBRARY_VISUAL_PREFIX } from "../_shared/library-visual.ts";
+import { commitLibraryVisual, getLibraryVisual, libraryVisualCapabilities, prepareLibraryVisual } from "../_shared/library-visual-edge.ts";
 
 // 双模式：UNDERSTAND_ASYNC=false（默认）保持旧的「单次 Edge 请求内同步调方舟」行为；
 // true 时切换为生图 G0 同款异步任务模式（create/get 短请求 + VPS Worker 领取执行），
@@ -41,6 +44,7 @@ interface UnderstandJob {
   content_expires_at: string;
   error_code: string | null;
   safe_message: string | null;
+  operation: string;
 }
 
 function validate(body: unknown): UnderstandRequest {
@@ -89,7 +93,7 @@ async function ownJob(admin: SupabaseClient, userId: string, jobId: string): Pro
   return await inspectTextUpload(admin, "understand_jobs", data as unknown as UnderstandJob);
 }
 
-function jobResponse(job: UnderstandJob, cors: HeadersInit): Response {
+function jobResponse(job: UnderstandJob, cors: HeadersInit, uploadUrl?: string): Response {
   const common = {
     status: job.status,
     job_id: job.id,
@@ -101,7 +105,7 @@ function jobResponse(job: UnderstandJob, cors: HeadersInit): Response {
     },
   };
   if (["uploading", "queued", "leased", "running", "cancel_requested"].includes(job.status)) {
-    return jsonResponse(common, 202, cors);
+    return jsonResponse(uploadUrl ? { ...common, upload_url: uploadUrl } : common, 202, cors);
   }
   if (job.status === "succeeded") {
     const text = readableTextResult(job);
@@ -155,6 +159,85 @@ async function replicationCapabilities(admin: SupabaseClient) {
   });
 }
 
+// true = an individually authorized pilot, false = public, null = recover only.
+function fileSpeechPilotMode(userId: string): boolean | null {
+  const pilotUserId = Deno.env.get("FILE_SPEECH_PILOT_USER_ID")?.trim();
+  if (pilotUserId) return pilotUserId === userId ? true : null;
+  return Deno.env.get("FILE_SPEECH_ENABLED") === "true" ? false : null;
+}
+
+async function fileSpeechCapabilities(admin: SupabaseClient, userId: string) {
+  const result = { available: false, credits: null as number | null, max_duration_ms: FILE_SPEECH_MAX_DURATION_MS };
+  const pilot = fileSpeechPilotMode(userId);
+  if (pilot === null) return result;
+  const { data, error } = await admin.from("service_costs").select("active,unit_cost,parameters")
+    .eq("service", FILE_SPEECH_SERVICE).maybeSingle();
+  if (error) throw new ApiError("internal_error", "读取视频转录报价失败", true);
+  if (data && replicationPriceAvailable(data) && Number.isSafeInteger(data.unit_cost) &&
+      (data.parameters?.pilot_only === true) === pilot) {
+    result.available = true;
+    result.credits = Number(data.unit_cost);
+  }
+  return result;
+}
+
+async function prepareFileSpeech(admin: SupabaseClient, userId: string, raw: Record<string, unknown>, cors: HeadersInit) {
+  const key = raw.idempotency_key;
+  const credits = raw.expected_credits;
+  if (typeof key !== "string" || !key.startsWith(FILE_SPEECH_KEY_PREFIX) || key.length > 200 ||
+      typeof credits !== "number" || !Number.isSafeInteger(credits) || credits <= 0) {
+    throw new ApiError("invalid_request", "视频转录需要有效的任务编号和已确认报价");
+  }
+  let audio;
+  try {
+    audio = parseFileSpeechAudio(raw.audio);
+  } catch {
+    throw new ApiError("invalid_request", "音轨格式、大小或时长不符合转录要求");
+  }
+  const manifest = JSON.stringify({ schema_version: 1, operation: FILE_SPEECH_OPERATION, audio });
+  const { data, error } = await admin.rpc("begin_file_speech_upload", {
+    p_user_id: userId, p_key: key, p_hash: await sha256Hex(manifest), p_expected_credits: credits,
+    p_source_duration_ms: audio.source_duration_ms, p_pilot: fileSpeechPilotMode(userId),
+    ...usageParameters(),
+  });
+  if (error?.details === "stale_quote") throw new ApiError("invalid_request", "视频转录价格已变化，请重新核对报价", false, 409);
+  if (error?.details === "file_speech_closed") throw new ApiError("not_configured", "整段转录暂未开放", false, 503);
+  if (error?.details === "file_speech_pilot_used") throw new ApiError("invalid_request", "本次试转录名额已使用。已提交的任务可在原视频预览中恢复。", false, 409);
+  if (error?.details === "price_unavailable") throw new ApiError("not_configured", "视频转录暂无可用报价");
+  checkTextAcceptance(error);
+  if (!data) throw new ApiError("internal_error", "视频转录任务状态未知，请按原任务恢复", true);
+  const job = data as UnderstandJob;
+  if (job.status !== "uploading") return jobResponse(job, cors);
+  await storeTextManifest(admin, job.request_object_key, manifest);
+  const { data: signed, error: signError } = await admin.storage.from(FILE_SPEECH_BUCKET)
+    .createSignedUploadUrl(fileSpeechAudioKey(job.id), { upsert: false });
+  if (signError || !signed?.signedUrl) throw new ApiError("internal_error", "音轨上传地址签发失败，请按原任务恢复", true);
+  return jobResponse(job, cors, signed.signedUrl);
+}
+
+async function commitFileSpeech(admin: SupabaseClient, userId: string, jobId: unknown, cors: HeadersInit) {
+  if (typeof jobId !== "string" || !jobId) throw new ApiError("invalid_request", "缺少转录任务编号");
+  const job = await ownJob(admin, userId, jobId);
+  if (job.operation !== FILE_SPEECH_OPERATION) throw new ApiError("invalid_request", "任务类型不匹配");
+  if (job.status !== "uploading") return jobResponse(job, cors);
+  const bucket = admin.storage.from(FILE_SPEECH_BUCKET);
+  const audioKey = fileSpeechAudioKey(job.id);
+  const [stored, list] = await Promise.all([
+    bucket.download(job.request_object_key),
+    bucket.list(audioKey.slice(0, audioKey.lastIndexOf("/")), { search: FILE_SPEECH_AUDIO_NAME, limit: 10 }),
+  ]);
+  if (stored.error || !stored.data || list.error) throw new ApiError("internal_error", "音轨上传状态未确认，请按原任务恢复", true);
+  const manifest = await stored.data.text();
+  if (await sha256Hex(manifest) !== job.input_manifest_hash) throw new ApiError("internal_error", "转录输入校验失败");
+  const expected = parseFileSpeechAudio(JSON.parse(manifest).audio);
+  const uploaded = list.data?.find(file => file.name === FILE_SPEECH_AUDIO_NAME);
+  if (!uploaded) return jobResponse(job, cors);
+  if (Number(uploaded.metadata?.size) !== expected.bytes || uploaded.metadata?.mimetype !== FILE_SPEECH_MIME) {
+    throw new ApiError("invalid_request", "上传的音轨大小或格式与原任务不一致");
+  }
+  return jobResponse(await enqueueTextUpload(admin, "understand_jobs", job), cors);
+}
+
 Deno.serve(async (request) => {
   const id = requestId(request);
   let cors: HeadersInit = {};
@@ -168,8 +251,24 @@ Deno.serve(async (request) => {
     userId = user.id;
     const raw = await readJsonBody(request, 50 * 1024 * 1024);
     if (raw.action === "replication-capabilities") return jsonResponse({ services: await replicationCapabilities(admin) }, 200, cors);
+    if (raw.action === "library-visual-capabilities") return jsonResponse(await libraryVisualCapabilities(admin), 200, cors);
+    if (raw.action === "library-visual-prepare") return await prepareLibraryVisual(admin, user.id, raw, cors);
+    if (raw.action === "library-visual-commit") return await commitLibraryVisual(admin, user.id, raw.job_id, cors);
+    if (raw.action === "library-visual-get") {
+      if (typeof raw.job_id !== "string") throw new ApiError("invalid_request", "缺少画面分析任务编号");
+      return await getLibraryVisual(admin, user.id, "id", raw.job_id, cors);
+    }
+    if (raw.action === "file-speech-capabilities") return jsonResponse(await fileSpeechCapabilities(admin, user.id), 200, cors);
+    if (raw.action === "file-speech-prepare") return await prepareFileSpeech(admin, user.id, raw, cors);
+    if (raw.action === "file-speech-commit") return await commitFileSpeech(admin, user.id, raw.job_id, cors);
     if (raw.action === "get-by-key") {
-      if (typeof raw.idempotency_key !== "string" || raw.idempotency_key.length > 200 || !raw.idempotency_key.startsWith("replication:")) throw new ApiError("invalid_request", "复刻幂等键无效");
+      if (typeof raw.idempotency_key === "string" && raw.idempotency_key.startsWith(LIBRARY_VISUAL_PREFIX) && raw.idempotency_key.length <= 200) {
+        return await getLibraryVisual(admin, user.id, "idempotency_key", raw.idempotency_key, cors);
+      }
+      if (typeof raw.idempotency_key !== "string" || raw.idempotency_key.length > 200 ||
+          !["replication:", FILE_SPEECH_KEY_PREFIX].some(prefix => (raw.idempotency_key as string).startsWith(prefix))) {
+        throw new ApiError("invalid_request", "原任务编号无效");
+      }
       const result = await admin.from("understand_jobs").select("*").eq("user_id", user.id).eq("idempotency_key", raw.idempotency_key).maybeSingle();
       if (result.error) throw new ApiError("internal_error", "查回原任务失败", true);
       if (!result.data) throw new ApiError("invalid_request", "尚未找到原 Cloud 任务，请稍后重查", false, 404);

@@ -4,6 +4,9 @@ import { createRoot } from "react-dom/client";
 import { LibraryHome } from "../../../src/components/LibraryHome";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { FileTaskStatusPanel } from "../../../src/components/FileTaskStatus";
+import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
+import { FileDropImport } from "../../../src/components/FileDropImport";
+import { ToastViewport } from "../../../src/components/ToastViewport";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import { useStore } from "../../../src/store";
@@ -13,30 +16,42 @@ import "../../../src/components/LocalFileWorkspace.css";
 import "../../../src/components/TacticalProjection.css";
 import "../../../src/components/IndustrialTheme.css";
 import "../../../src/components/IndustrialMenus.css";
+import "../../../src/components/MediaTactical.css";
 
 const w = window as any, listeners = new Map<number, (event: unknown) => void>();
 const eventNames = new Map<number, string>();
 const cold = new URLSearchParams(location.search).has("cold");
-const eventNames = new Map<number, string>();
+const captureDrop = new URLSearchParams(location.search).has("capture-drop");
 let callbackId = 0, nextId = 0;
 const thumb = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="180"><rect width="240" height="180" fill="#7b9eaa"/><path d="M0 150L90 30l100 140" stroke="#d1d7c8" fill="none" stroke-width="12"/></svg>');
 function folder(id: string, parent_id: string | null, name: string, available = true) {
   return { id, parent_id, root_id: parent_id ? "root" : id, name, path: `/fixture/${id}`, available, count: 0, scanning: false, error: null };
 }
 w.folders = [folder("root", null, "素材目录"), folder("child", "root", "风景"), folder("nested", "child", "晨间"), folder("empty", "root", "空集合"), folder("second", null, "另一目录"), folder("offline", null, "离线目录", false)];
+if (captureDrop) w.folders.push({ ...folder("offline-child", "offline", "离线子目录"), root_id: "offline" });
 function asset(id: string, video = false) { return { id, name: `${id}.${video ? "mp4" : "png"}`, ext: video ? "mp4" : "png", source: "external", width: 240, height: 180, store_path: `/fixture/${id}.${video ? "mp4" : "png"}`, thumb_path: cold ? null : thumb, file_mtime: 1, generation_session_id: null }; }
 function entry(id: string, folder_id: string, asset_id = id, is_reference = false, video = false) { return { id, folder_id, asset_id, name: `${id}.${is_reference ? "bowerbird" : video ? "mp4" : "png"}`, path: `/fixture/${folder_id}/${id}`, is_reference, available: true, version: "1", asset: asset(asset_id, video) }; }
 w.entries = [...Array.from({ length: 125 }, (_, i) => entry(`root-${i}`, "root")), entry("child-0", "child"), entry("ref-one", "child", "root-0", true), entry("ref-two", "child", "root-0", true), entry("nested-0", "nested"), entry("second-0", "second"), entry("video-0", "second", "video-0", false, true)];
 w.requests = []; w.picker = null; w.store = useStore; w.mode = useLocalFileMode; w.connections = folderConnections;
 w.previewActive = 0; w.previewPeak = 0; w.previewByPath = {}; w.previewDelay = cold ? 60 : 0;
-w.changed = () => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://assets-changed") fn({ payload: null }); });
+w.changed = (payload: unknown = null) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://assets-changed") fn({ payload }); });
 w.previewChanged = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://previews-changed") fn({ payload }); });
 w.connectionProgress = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://connection-progress") fn({ payload }); });
 w.connectionAvailability = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://connection-availability") fn({ payload }); });
+if (captureDrop) w.explorerDrag = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "source-browser://drag") fn({ payload }); });
 function entries(args: any) {
-  const filtered = w.entries.filter((item: any) => (!args.folderId || item.folder_id === args.folderId)
+  const folders = new Set([args.folderId]);
+  if (args.subtree) {
+    let size: number;
+    do {
+      size = folders.size;
+      for (const folder of w.folders) if (folders.has(folder.parent_id)) folders.add(folder.id);
+    } while (size !== folders.size);
+  }
+  const filtered = w.entries.filter((item: any) => (!args.folderId || folders.has(item.folder_id))
     && (!args.media || (item.asset.ext === "mp4") === (args.media === "videos"))
     && (args.filter?.generated == null || !!item.asset.generation_session_id === args.filter.generated)
+    && (!args.filter?.query || item.name.includes(args.filter.query) || item.asset.name.includes(args.filter.query))
     && (!args.filter?.color || item.color === args.filter.color));
   if (!args.filter?.grouped) return filtered;
   const groups = new Map<string, any[]>();
@@ -52,10 +67,19 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:event|listen") { eventNames.set(args.handler, args.event); return args.handler; }
     if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); eventNames.delete(args.eventId); return; }
     w.requests.push({ command, args });
+    if (captureDrop) {
+      if (command === "claim_source_browser_analysis") return false;
+      if (command === "release_source_browser_analysis" || command === "local_classification_example") return;
+      if (command === "capture_source_browser_image") return asset(`captured-${++nextId}`);
+      if (command === "import_files") return args.sources.map((path: string) => asset(path.split("/").pop()!.replace(/\.png$/, "")));
+    }
     if (w.catalogGate && ["folder_connections", "connection_entries"].includes(command)) await w.catalogGate;
     if (command === "folder_connections") return w.folders.map((item: any) => ({ ...item, count: entries({ ...args, folderId: item.id }).length }));
     if (command === "refresh_folder_connections") return;
-    if (command === "connection_entries") return structuredClone(entries(args).slice(args.offset, args.offset + args.limit));
+    if (command === "connection_entries") {
+      if (w.pageGate?.folderId === args.folderId) await w.pageGate.promise;
+      return structuredClone(entries(args).slice(args.offset, args.offset + args.limit));
+    }
     if (command === "connection_entry_ids") return entries(args).slice(args.offset, args.offset + args.limit).map((item: any) => item.id);
     if (command === "resolve_connection_entries") return args.ids.map((id: string) => w.entries.find((item: any) => item.id === id)).filter(Boolean);
     if (command === "plugin:dialog|open") return w.picker;
@@ -96,8 +120,8 @@ w.__TAURI_INTERNALS__ = {
       finally { w.previewActive--; }
     }
     if (command === "external_files_media") return thumb;
-    if (command === "catalog_overview") return { total: 1, untagged: 0, catalog: { tags: [{ id: "tag", name: "测试标签", description: "", count: 1, projectCount: 0 }], collections: [], prompts: [], tag_asset_ids: {} } };
-    if (command === "catalog_page") return [asset("root-0")];
+    if (command === "catalog_overview") return { total: captureDrop ? 2 : 1, untagged: captureDrop ? 1 : 0, catalog: { tags: [{ id: "tag", name: "测试标签", description: "", count: 1, projectCount: 0 }], collections: [], prompts: [], tag_asset_ids: {} } };
+    if (command === "catalog_page") return [asset(captureDrop ? `catalog-${args.filter.tagId ?? "all"}` : "root-0")];
     if (command === "list_generation_groups") return {};
     if (command === "list_generation_group") return [];
     if (command === "catalog_prepare_colors") return { after: null, more: false, failed: 0, updated: 0 };
@@ -105,16 +129,21 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 useStore.setState({ activeProjectId: null, libraryHomeView: "library", libraryThumbnailWidth: 150 });
-useLocalFileMode.getState().setCatalogView("collections");
+useLocalFileMode.getState().openBrowser();
 document.documentElement.dataset.theme = "dark";
 function Fixture() {
   const [visible, setVisible] = React.useState(true);
   w.setLibraryVisible = setVisible;
+  const library = visible && <LibraryHome onCreateProject={async ids => { w.createdAssets = ids; }}/>;
   return <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
   <Toolbar localFilesOpen canvasMode={false} onCanvasModeChange={() => {}} onRefresh={async () => {}} onCreateCreative={() => {}}/>
   <AssetContextMenu/>
   {new URLSearchParams(location.search).has("file-tasks") && <FileTaskStatusPanel/>}
-  {visible && <LibraryHome onCreateProject={async ids => { w.createdAssets = ids; }}/>}
+  {captureDrop ? <>
+    <ToastViewport/>
+    <FileDropImport/>
+    <ExploreWorkspace url={null} open onClose={() => {}}>{library}</ExploreWorkspace>
+  </> : library}
 </div>;
 }
 installDeletionTaskMock();

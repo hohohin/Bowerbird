@@ -9,7 +9,7 @@ import { commentPlugin } from '@/components/text-editor/plate/components/editor/
 
 import { ToolbarButton } from './toolbar';
 
-export function CommentToolbarButton() {
+export function CommentToolbarButton({ labeled = false }: { labeled?: boolean }) {
   const editor = useEditorRef();
 
   return (
@@ -21,6 +21,7 @@ export function CommentToolbarButton() {
       tooltip="评论"
     >
       <MessageSquareTextIcon />
+      {labeled && '评论'}
     </ToolbarButton>
   );
 }

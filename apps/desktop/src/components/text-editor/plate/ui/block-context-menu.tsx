@@ -28,16 +28,20 @@ import {
 } from '@/components/text-editor/plate/primitives/context-menu';
 import { setBlockType } from '@/components/text-editor/plate/components/editor/transforms';
 import { useIsTouchDevice } from '@/components/text-editor/plate/hooks/use-is-touch-device';
-
-type Value = 'askAI' | null;
+import { useContextMenuOwnership } from '@/lib/contextMenuOwnership';
 
 export function BlockContextMenu({ children }: { children: React.ReactNode }) {
   const { api, editor } = useEditorPlugin(BlockMenuPlugin);
-  const [value, setValue] = React.useState<Value>(null);
+  const openAgentOnClose = React.useRef(false);
+  const menuBlockIds = React.useRef<string[]>([]);
+  const pendingOpen = React.useRef<ReturnType<typeof setTimeout>>();
+  React.useEffect(() => () => clearTimeout(pendingOpen.current), []);
   const isTouch = useIsTouchDevice();
   const readOnly = useEditorReadOnly();
   const openId = usePluginOption(BlockMenuPlugin, 'openId');
   const isOpen = openId === BLOCK_CONTEXT_MENU_ID;
+  const owner = React.useId();
+  const superseded = useContextMenuOwnership(owner, isOpen && !isTouch, () => api.blockMenu.hide());
 
   const handleTurnInto = React.useCallback(
     (type: string) => {
@@ -84,11 +88,11 @@ export function BlockContextMenu({ children }: { children: React.ReactNode }) {
 
           if (disabled) return event.preventDefault();
 
-          setTimeout(() => {
-            api.blockMenu.show(BLOCK_CONTEXT_MENU_ID, {
-              x: event.clientX,
-              y: event.clientY,
-            });
+          menuBlockIds.current = Array.from(editor.getOption(BlockSelectionPlugin, 'selectedIds') ?? []);
+          const position = { x: event.clientX, y: event.clientY };
+          clearTimeout(pendingOpen.current);
+          pendingOpen.current = setTimeout(() => {
+            api.blockMenu.show(BLOCK_CONTEXT_MENU_ID, position);
           }, 0);
         }}
       >
@@ -99,19 +103,21 @@ export function BlockContextMenu({ children }: { children: React.ReactNode }) {
           className="w-64"
           onCloseAutoFocus={(e) => {
             e.preventDefault();
-            editor.getApi(BlockSelectionPlugin).blockSelection.focus();
-
-            if (value === 'askAI') {
-              editor.getApi(AIChatPlugin).aiChat.show();
+            const openAgent = openAgentOnClose.current;
+            openAgentOnClose.current = false;
+            if (!superseded.current) {
+              const selection = editor.getApi(BlockSelectionPlugin).blockSelection;
+              // The editor can release its block selection while the menu has focus.
+              if (openAgent) selection.set(menuBlockIds.current);
+              selection.focus();
+              if (openAgent) editor.getApi(AIChatPlugin).aiChat.show();
             }
-
-            setValue(null);
           }}
         >
           <ContextMenuGroup>
             <ContextMenuItem
-              onClick={() => {
-                setValue('askAI');
+              onSelect={() => {
+                openAgentOnClose.current = true;
               }}
             >
               Agent

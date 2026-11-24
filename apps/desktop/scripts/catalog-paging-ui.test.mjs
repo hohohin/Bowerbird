@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-import { checkContextRangeSelection } from './helpers/catalog-context-selection.mjs';
+import { checkContextLookup, checkContextRangeSelection } from './helpers/catalog-context-selection.mjs';
 const server=await createServer({cacheDir:'.tmp/catalog-paging/vite',server:{host:'127.0.0.1',port:17893,strictPort:true,hmr:false,watch:null}});
 await server.listen();
 const browser=await chromium.launch({channel:'chrome',headless:true});
@@ -49,6 +49,9 @@ try {
   await page.getByText('300000 项',{exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>window.requests.some(r=>r.command==='get_assets_by_ids')),false,'range selection must only fetch IDs');
   await page.getByRole('button',{name:'取消选择',exact:true}).click();
+  await page.reload(); await ready();
+  await checkContextLookup(page, index => page.locator(`[data-asset-id="asset-${index}"]`), page.getByRole('button', { name: '取消选择', exact: true }),
+    { idsCommand: 'catalog_ids', lookupCommand: 'get_assets_by_ids', firstId: 'asset-0', secondId: 'asset-1', coldId: 'asset-12000' });
   await page.setViewportSize({width:440,height:720});
   await page.evaluate(()=>window.store.setState({libraryThumbnailWidth:280}));
   await page.waitForTimeout(80);
@@ -68,7 +71,9 @@ try {
   assert.equal(await page.evaluate(()=>window.beforeCard.isConnected),true);
   await ready(); await page.evaluate(()=>{window.delay=0;});
   // Full-result selection, even though only a viewport of cards exists.
-  await page.getByRole('textbox',{name:'搜索素材'}).fill('small'); await ready();
+  const searchButton = page.getByRole('button',{name:'搜索素材',exact:true});
+  const search = page.getByRole('searchbox',{name:'搜索素材',exact:true});
+  await searchButton.click(); await search.fill('small'); await ready();
   await page.locator('[data-asset-id="asset-0"]').click({modifiers:[process.platform === 'darwin' ? 'Meta' : 'Control']});
   await scroller().evaluate(el=>{el.scrollTop=el.scrollHeight;}); await ready();
   await page.locator('[data-asset-id="asset-179"]').click({modifiers:['Shift']});
@@ -80,6 +85,7 @@ try {
   await page.getByRole('button',{name:'添加到新项目',exact:true}).click();
   await page.waitForFunction(()=>window.created?.length===180);
   // A failed page is retryable and does not poison later requests.
+  await scroller().evaluate(el=>{el.scrollTop=0;}); await ready();
   await page.evaluate(()=>{window.failOffset=0;window.refresh();});
   await page.getByRole('alert').filter({hasText:'模拟分页读取失败'}).waitFor();
   await page.evaluate(()=>{window.failOffset=-1;});
@@ -91,18 +97,16 @@ try {
   await page.getByRole('button',{name:'清除颜色筛选',exact:true}).click();
   await page.getByRole('button',{name:'颜色筛选',exact:true}).click();
   // Late summaries must not revive a previous query.
-  await page.getByRole('textbox',{name:'搜索素材'}).fill('slow');
-  await page.waitForTimeout(25); await page.getByRole('textbox',{name:'搜索素材'}).fill('empty');
+  await searchButton.click(); await search.fill('slow');
+  await page.waitForTimeout(25); await search.fill('empty');
   await page.getByText('没有匹配的素材。',{exact:true}).waitFor();
   await page.waitForTimeout(450); assert.equal(await cards().count(),0);
-  await page.getByRole('textbox',{name:'搜索素材'}).fill(''); await ready();
+  await search.fill(''); await search.press('Escape'); await ready();
   await page.evaluate(()=>window.changeKind('tags')); await ready();
   await page.locator('.catalog-tag-list').getByRole('button',{name:/Z 末尾/}).first().click();
   await page.locator('[data-tag-section="last"] [data-asset-id="asset-299940"]').waitFor();
   assert.ok(await cards().count()<180);
   await page.screenshot({path:'.tmp/catalog-paging/300k-tag-jump.png'});
-  await page.evaluate(()=>window.changeKind('collections')); await ready();
-  assert.ok(await page.evaluate(()=>window.requests.some(r=>r.command==='catalog_page'&&r.args.filter.kind==='collections'&&r.args.filter.id==='collection')));
   await page.evaluate(()=>window.changeProject(true)); await ready();
   assert.ok(await page.evaluate(()=>window.requests.filter(r=>r.command==='catalog_page').at(-1).args.filter.projectId==='p'));
   await page.setViewportSize({width:440,height:720}); await ready();

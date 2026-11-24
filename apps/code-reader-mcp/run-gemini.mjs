@@ -1,59 +1,67 @@
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeFileSync } from 'node:fs';
+import { usesLocalConfig } from './gemini-config-mode.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const useSsh = process.argv[2] === '--ssh';
-if (process.argv.length !== (useSsh ? 3 : 2)) throw new Error('Usage: node run-gemini.mjs [--ssh]');
-let ssh;
-if (useSsh) {
-  const config = JSON.parse(readFileSync(path.join(here, '.local/gemini/config.json'), 'utf8'));
-  const { host, user, identityFile, knownHosts } = config.ssh ?? {};
-  const port = config.port ?? 48731;
-  const remotePort = config.ssh?.remotePort ?? 48732;
-  if (!/^[a-z0-9][a-z0-9.-]{0,252}$/i.test(host ?? '') || !/^[a-z_][a-z0-9_-]{0,30}$/i.test(user ?? '')
-    || ![identityFile, knownHosts].every(file => typeof file === 'string' && path.isAbsolute(file) && !/[\r\n%]/.test(file))
-    || ![port, remotePort].every(value => Number.isInteger(value) && value >= 1024 && value <= 65535)) {
-    throw new Error('Configure an explicit SSH account, host, identity, known_hosts and loopback ports.');
+if (process.argv[2] === '--ssh' || usesLocalConfig()) {
+  await import('./run-local-gemini.mjs');
+} else {
+  const { attachOAuthStateFile } = await import('./oauth-state-file.mjs');
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const local = path.join(here, '.local/gemini');
+  writeFileSync(path.join(local, 'run.pid'), String(process.pid));
+  const env = {};
+  for (const key of ['SystemRoot', 'WINDIR', 'LANG']) if (process.env[key]) env[key] = process.env[key];
+  const server = spawn(process.execPath, ['--permission', '--disable-proto=throw',
+    ...['http-server.mjs', 'http-app.mjs', 'snapshot-store.mjs', 'core.mjs', 'package.json', '.local/snapshot.json', '.local/gemini/config.json'].map(file => `--allow-fs-read=${path.join(here, file)}`),
+    path.join(here, 'http-server.mjs')], { cwd: here, env, stdio: ['ignore', 'pipe', 'inherit', 'ipc'], windowsHide: true });
+  try {
+    attachOAuthStateFile(server, local);
+  } catch {
+    console.error('Gemini OAuth state directory could not be secured.');
+    server.kill();
+    process.exit(1);
   }
-  ssh = ['-F', 'none', '-N', '-T', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'IdentityAgent=none',
-    '-o', 'StrictHostKeyChecking=yes', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=15',
-    '-o', 'ServerAliveCountMax=3', '-o', `UserKnownHostsFile=${knownHosts}`, '-i', identityFile,
-    '-R', `127.0.0.1:${remotePort}:127.0.0.1:${port}`, '-l', user, host];
-}
-
-const env = {};
-for (const key of ['SystemRoot', 'WINDIR', 'LANG']) if (process.env[key]) env[key] = process.env[key];
-const allowed = ['gemini-server.mjs', 'http-app.mjs', 'gemini-oauth.mjs', 'core.mjs', 'protocol.mjs',
-  'package.json', '.local/snapshot.json', '.local/gemini/config.json'];
-const server = spawn(process.execPath, ['--permission', '--disable-proto=throw',
-  ...allowed.map(file => `--allow-fs-read=${path.join(here, file)}`), path.join(here, 'gemini-server.mjs')],
-{ stdio: ['ignore', 'pipe', 'inherit'], cwd: here, env, windowsHide: true });
-
-let forwarding;
-let retry;
-let stopping = false;
-function connect() {
-  if (!ssh || stopping || forwarding) return;
-  const process = spawn('ssh', ssh, { stdio: ['ignore', 'ignore', 'inherit'], windowsHide: true });
-  forwarding = process;
-  process.on('error', () => console.error('Unable to start SSH forwarding.'));
-  process.on('close', () => {
-    forwarding = undefined;
-    if (!stopping) {
-      console.error('SSH forwarding closed. Reconnecting in 5 seconds.');
-      retry = setTimeout(connect, 5000);
-    }
+  let tunnel;
+  let reconnect;
+  let stopping = false;
+  function stop(code) {
+    if (stopping) return;
+    stopping = true;
+    clearTimeout(startup);
+    clearTimeout(reconnect);
+    tunnel?.kill();
+    server.kill();
+    process.exitCode = code;
+  }
+  const startup = setTimeout(() => { console.error('Gemini MCP startup timed out.'); stop(1); }, 10_000);
+  function connect() {
+    if (stopping) return;
+    tunnel = spawn('ssh', ['-N', '-T', '-i', path.join(local, 'id_ed25519'),
+      '-o', 'UserKnownHostsFile=' + path.join(local, 'known_hosts'), '-o', 'StrictHostKeyChecking=yes',
+      '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ExitOnForwardFailure=yes',
+      '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
+      '-R', '127.0.0.1:48732:127.0.0.1:48731', 'bowerbird-mcp@106.55.44.143'],
+    { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
+    tunnel.on('error', () => console.error('SSH connection could not start.'));
+    tunnel.on('close', () => {
+      tunnel = undefined;
+      if (stopping) return;
+      console.error('Gemini SSH tunnel disconnected. Retrying in 5 seconds; local authorization remains active.');
+      reconnect = setTimeout(connect, 5000);
+    });
+  }
+  let output = '';
+  server.stdout.on('data', data => {
+    output += data;
+    if (tunnel || !output.includes('Gemini MCP listening on loopback.')) return;
+    clearTimeout(startup);
+    output = '';
+    connect();
+    console.log('Gemini MCP started. Waiting for SSH connection; verify public discovery before using.');
   });
+  server.on('error', () => { console.error('Gemini MCP process unavailable.'); stop(1); });
+  server.on('exit', () => stop(1));
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => stop(0));
 }
-server.stdout.on('data', chunk => { process.stdout.write(chunk); connect(); });
-function stop() {
-  stopping = true;
-  clearTimeout(retry);
-  forwarding?.kill();
-  if (server.exitCode === null && server.signalCode === null) server.kill();
-}
-server.on('error', () => { console.error('Unable to start restricted Gemini MCP.'); process.exitCode = 1; stop(); });
-server.on('exit', code => { process.exitCode = stopping ? 0 : (code ?? 1); stop(); });
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, stop);

@@ -30,8 +30,10 @@ export function useCheckout(userId: string | null) {
   const running = useRef(false);
   const generation = useRef(0);
   const refreshed = useRef(new Set<string>());
-  const isCurrent = useCallback((version: number) => generation.current === version && !!userId
-    && useStore.getState().cloudAuth?.user_id === userId, [userId]);
+  const isCurrent = useCallback((version: number) => {
+    const auth = useStore.getState().cloudAuth;
+    return generation.current === version && !!userId && auth?.logged_in === true && auth.user_id === userId;
+  }, [userId]);
   const save = useCallback((value: Attempt | null) => {
     attempt.current = value;
     setHasAttempt(!!value);
@@ -79,14 +81,16 @@ export function useCheckout(userId: string | null) {
   }, [userId, accept, isCurrent]);
 
   const query = useCallback(async () => {
-    if (!userId || running.current) return;
     const version = generation.current;
+    if (!userId || !isCurrent(version) || running.current) return;
     running.current = true; setBusy(true); setError("");
     try {
       const result = await api.cloudCheckoutStatus(userId, currentOrder.current?.order_id ?? attempt.current?.order_id);
       if (isCurrent(version)) setRecoveryFailed(false);
       if (result.order) await accept(result.order, version);
-      else if (isCurrent(version) && attempt.current) setError("尚未查到订单，请使用原请求重试。");
+      else if (isCurrent(version) && attempt.current) setError(attempt.current.order_id
+        ? "尚未查到原订单，请稍后重新查询。"
+        : "尚未查到订单，请使用原请求重试。");
     } catch (error) {
       if (isCurrent(version)) setError(userErrorMessage(error, "支付状态暂未确认，请查询原订单。"));
     } finally { if (isCurrent(version)) { running.current = false; setBusy(false); } }
@@ -98,13 +102,12 @@ export function useCheckout(userId: string | null) {
     return () => window.clearInterval(timer);
   }, [open, order?.status, query]);
 
-  const begin = async (product: string, customAmount?: number) => {
-    if (!userId || running.current || restoring || recoveryFailed) return;
-    setOpen(true);
-    if (currentOrder.current?.status === "pending") { void query(); return; }
-    if (!enabled) return;
+  const submit = async (request: Attempt) => {
     const version = generation.current;
-    const request = attempt.current ?? { product, idempotency_key: crypto.randomUUID(), ...(customAmount === undefined ? {} : { custom_amount_yuan: customAmount }) };
+    if (!userId || !isCurrent(version) || running.current || restoring || recoveryFailed) return;
+    setOpen(true);
+    if (request.order_id || currentOrder.current?.status === "pending") { await query(); return; }
+    if (!enabled) return;
     save(request);
     running.current = true; setBusy(true); setError(""); setOrder(null); currentOrder.current = null;
     try {
@@ -114,5 +117,13 @@ export function useCheckout(userId: string | null) {
       if (isCurrent(version)) setError(userErrorMessage(error, "订单状态暂未确认，请使用原请求重试。"));
     } finally { if (isCurrent(version)) { running.current = false; setBusy(false); } }
   };
-  return { enabled, maxAmount, order, open, setOpen, busy, restoring, recoveryFailed, error, hasAttempt, begin, query };
+  const begin = (product: string, customAmount?: number) => submit(attempt.current ?? {
+    product, idempotency_key: crypto.randomUUID(), custom_amount_yuan: customAmount,
+  });
+  const retry = () => {
+    const request = attempt.current;
+    return request ? submit(request) : query();
+  };
+  const canRetry = hasAttempt && !!attempt.current && !attempt.current.order_id;
+  return { enabled, maxAmount, order, open, setOpen, busy, restoring, recoveryFailed, error, hasAttempt, canRetry, begin, query, retry };
 }

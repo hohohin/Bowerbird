@@ -24,6 +24,7 @@ w.__TAURI_INTERNALS__.transformCallback = () => ++callback;
 w.__TAURI_INTERNALS__.unregisterCallback = () => {};
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+  if (command === "list_generation_groups") return {};
   const known = ["folder_connections", "refresh_folder_connections", "connection_entries", "connection_entry_ids", "resolve_connection_entries", "catalog_overview", "catalog_page", "catalog_ids", "catalog_prepare_colors", "get_assets_by_ids", "read_image_data_url", "plugin:event|listen", "plugin:event|unlisten"];
   if (!known.includes(command)) return base(command, args);
   w.calls.push({ command, args });

@@ -18,6 +18,7 @@ const server = await createServer({ plugins: [countWorkspaceRenders], cacheDir: 
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 page.setDefaultTimeout(15000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
@@ -78,10 +79,13 @@ try {
   await editor.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter');
   await panel.waitFor(); await card.waitFor();
   assert.equal(await card.count(), 1);
+  const agentTitle = card.locator(':scope > header').getByRole('button', { name: '查看 Agent 详情', exact: true });
+  assert.equal(await agentTitle.innerText(), 'Agent', 'the card title is Agent and remains accessible as a details action');
+  assert.equal(await card.locator(':scope > header .canvas-tactical-module-code').count(), 0);
   assert.equal(await panel.locator('[data-message-role="user"] .local-chat-text').first().textContent(), openingText, 'opening message preserves both newlines');
   const id = await panel.getAttribute('data-local-chat-id');
   await close();
-  const question = card.getByRole('group', { name: 'Agent 提问', exact: true });
+  const question = card.getByRole('group', { name: 'Agent有一个问题', exact: true });
   const turnId = await page.evaluate(async conversationId => {
     const mock = await import('/scripts/fixtures/local-chat/mock.ts');
     const chat = mock.inspect().conversations[conversationId];
@@ -89,14 +93,204 @@ try {
     const turnId = chat.messages[0].turnId;
     mock.setQuestions(conversationId, [{
       turnId, callId: 'codex-native-question', questions: [{
-        id: 'audience', question: '这张海报面向谁？', options: [{ label: '亲子家庭' }], multiSelect: false,
+        id: 'audience', question: '这张海报面向谁？',
+        options: [{ label: '亲子家庭' }, { label: '年轻影迷' }], multiSelect: false,
       }],
     }]);
     return turnId;
   }, id);
   const answer = question.getByRole('textbox', { name: /文字答案/ });
   await answer.fill('待提交的草稿');
-  await question.getByRole('button', { name: '关闭问题气泡', exact: true }).click();
+  const questionLayout = await question.evaluate(bubble => {
+    const card = bubble.closest('.workflow-card');
+    const rect = item => item.getBoundingClientRect().toJSON();
+    const stage = card.closest('.canvas-stage');
+    const frame = bubble.querySelector('.workflow-agent-question-answer');
+    const textarea = frame.querySelector('textarea');
+    const heading = bubble.querySelector('.workflow-agent-question-heading > span');
+    const controls = [...card.querySelectorAll(':scope > header > :is(button,[role=button]), :scope > .workflow-card-body footer button, .workflow-agent-composer :is(button,textarea)')];
+    const status = card.querySelector('.workflow-agent-question-status');
+    const statusContent = document.createRange();
+    statusContent.selectNodeContents(status);
+    const swatch = document.createElement('span');
+    swatch.style.cssText = 'display:none;background-color:var(--cs-card);color:var(--bb-warning)';
+    card.append(swatch);
+    const neutralSurface = getComputedStyle(swatch).backgroundColor;
+    const warningColor = getComputedStyle(swatch).color;
+    swatch.remove();
+    const panelStyle = getComputedStyle(bubble);
+    const tail = getComputedStyle(bubble.parentElement, '::before').backgroundColor;
+    return {
+      bubble: rect(bubble), card: rect(card), board: rect(stage),
+      dock: rect(stage.parentElement.querySelector('.canvas-composer-host')),
+      zoom: card.getBoundingClientRect().width / card.offsetWidth,
+      controls: controls.map(rect), options: [...bubble.querySelectorAll('.workflow-agent-question-option')].map(rect),
+      frame: rect(frame), frameBorder: parseFloat(getComputedStyle(frame).borderInlineStartWidth),
+      send: rect(frame.querySelector('button')), input: rect(textarea),
+      placeholder: textarea.placeholder, resize: getComputedStyle(textarea).resize,
+      status: rect(status), statusContent: statusContent.getBoundingClientRect().toJSON(),
+      surface: panelStyle.backgroundColor, radius: panelStyle.borderRadius, neutralSurface, tail,
+      markerColor: getComputedStyle(heading, '::before').backgroundColor, warningColor,
+    };
+  });
+  const { bubble, card: cardBox, board, dock, zoom, controls, options, frame, frameBorder, send, input,
+    placeholder, resize, status, statusContent, surface, radius, neutralSurface, tail, markerColor, warningColor } = questionLayout;
+  const tolerance = 1.5;
+  const right = bubble.left + bubble.width / 2 > cardBox.left + cardBox.width / 2;
+  const edgeOverlap = right ? cardBox.right - bubble.left : bubble.right - cardBox.left;
+  assert.ok(edgeOverlap <= 32 * zoom + tolerance, 'the question floats beside the Agent card');
+  assert.ok(right || board.right - cardBox.right < bubble.width + tolerance, 'left placement requires insufficient space on the right');
+  assert.ok(bubble.bottom <= dock.top + tolerance, 'the canvas composer cannot cover the question');
+  assert.equal(surface, neutralSurface, 'the question uses the neutral canvas reading surface');
+  assert.equal(radius, '0px', 'the question panel has square corners');
+  assert.equal(tail, surface, 'the pointer and question use the same surface');
+  assert.equal(markerColor, warningColor, 'the pending marker uses the theme warning accent');
+  assert.ok(controls.every(control => Math.min(bubble.right, control.right) - Math.max(bubble.left, control.left) <= tolerance
+    || Math.min(bubble.bottom, control.bottom) - Math.max(bubble.top, control.top) <= tolerance),
+  'the question does not obscure header, run, or composer controls');
+  assert.equal(options.length, 2);
+  assert.ok(options[0].bottom <= options[1].top + tolerance
+    && Math.abs(options[0].left - options[1].left) <= tolerance
+    && Math.abs(options[0].right - options[1].right) <= tolerance, 'the choices are arranged in separate aligned rows');
+  assert.ok([frame, ...options].every(row => Math.abs(row.height / zoom - 32) <= 1), 'simple choices and answer box are 32 px high');
+  assert.equal(resize, 'none');
+  assert.equal(placeholder, '编辑你的回答');
+  const encloses = (outer, inner) => inner.left >= outer.left - tolerance && inner.right <= outer.right + tolerance
+    && inner.top >= outer.top - tolerance && inner.bottom <= outer.bottom + tolerance;
+  assert.ok(frameBorder > 0 && encloses(frame, send) && encloses(frame, input), 'the text input and send button share one bordered field');
+  assert.ok(encloses(status, statusContent), 'the pending label fits inside its button');
+  const closeQuestion = question.getByRole('button', { name: '关闭问题气泡', exact: true });
+  assert.equal(await closeQuestion.isEnabled(), true);
+  const waitingBadge = card.getByRole('button', { name: '待你回答', exact: true });
+  assert.equal(await waitingBadge.getAttribute('data-awaiting-answer'), 'true');
+
+  const inspectWaitingBadge = () => waitingBadge.evaluate(button => {
+    const sample = document.createElement('span');
+    sample.style.cssText = 'display:none;color:var(--bb-warning);outline-color:var(--cs-selected-ink)';
+    button.append(sample);
+    const warning = getComputedStyle(sample).color;
+    const selectedInk = getComputedStyle(sample).outlineColor;
+    sample.remove();
+    const badge = getComputedStyle(button);
+    const marker = getComputedStyle(button, '::before');
+    return {
+      warning, color: badge.color, border: badge.borderTopColor, borderWidth: badge.borderTopWidth,
+      radii: [badge.borderTopLeftRadius, badge.borderTopRightRadius, badge.borderBottomLeftRadius, badge.borderBottomRightRadius],
+      markerColor: marker.backgroundColor, markerPosition: [marker.top, marker.left], markerSize: [marker.width, marker.height],
+      animation: marker.animationName, repeats: marker.animationIterationCount, opacity: Number(marker.opacity),
+      focusVisible: button.matches(':focus-visible'), outline: [badge.outlineWidth, badge.outlineStyle, badge.outlineColor], selectedInk,
+    };
+  });
+  const waitForBadgeColors = () => waitingBadge.evaluate(button => Promise.all(button.getAnimations()
+    .filter(animation => animation instanceof CSSTransition).map(animation => animation.finished)));
+  const assertWaitingBadge = badge => {
+    assert.equal(badge.color, badge.warning, 'the waiting label uses the shared gold warning color');
+    assert.equal(badge.border, badge.warning, 'the waiting outline is gold');
+    assert.equal(badge.borderWidth, '1px');
+    assert.deepEqual(badge.radii, ['0px', '0px', '0px', '0px']);
+    assert.equal(badge.markerColor, badge.warning);
+    assert.deepEqual(badge.markerPosition, ['0px', '0px']);
+    assert.deepEqual(badge.markerSize, ['3px', '3px'], 'the corner marker is square');
+  };
+  const animatedWaitingBadge = await inspectWaitingBadge();
+  assertWaitingBadge(animatedWaitingBadge);
+  assert.equal(animatedWaitingBadge.animation, 'workflow-agent-question-blink');
+  assert.equal(animatedWaitingBadge.repeats, 'infinite');
+  await page.waitForFunction(() => Number(getComputedStyle(
+    document.querySelector('.workflow-agent-question-status[data-awaiting-answer="true"]'), '::before').opacity) < .5);
+  await page.waitForFunction(() => Number(getComputedStyle(
+    document.querySelector('.workflow-agent-question-status[data-awaiting-answer="true"]'), '::before').opacity) > .9);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const reducedWaitingBadge = await inspectWaitingBadge();
+  assertWaitingBadge(reducedWaitingBadge);
+  assert.equal(reducedWaitingBadge.animation, 'none');
+  assert.equal(reducedWaitingBadge.opacity, 1);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  const inspectQuestionHeader = () => question.evaluate(bubble => {
+    const card = bubble.closest('.workflow-card');
+    const heading = bubble.querySelector('.workflow-agent-question-heading');
+    const scanlines = getComputedStyle(heading, '::before');
+    const warning = getComputedStyle(heading.querySelector('span'), '::before').backgroundColor;
+    const closeStyle = button => {
+      const style = getComputedStyle(button);
+      const glyph = getComputedStyle(button.querySelector('svg'));
+      const corner = getComputedStyle(button, '::before');
+      return {
+        sharedClass: button.classList.contains('canvas-tactical-card-close'),
+        outline: style.clipPath, width: style.width, height: style.height,
+        glyph: [glyph.width, glyph.height, glyph.strokeWidth],
+        corner: [corner.width, corner.height, corner.backgroundColor],
+      };
+    };
+    return {
+      stripes: scanlines.backgroundImage, fade: scanlines.maskImage,
+      opacity: Number(scanlines.opacity), warning,
+      bubbleClose: closeStyle(heading.querySelector('button[aria-label="关闭问题气泡"]')),
+      cardClose: closeStyle(card.querySelector(':scope > header button[aria-label="删除卡片"]')),
+    };
+  });
+  const assertQuestionHeader = style => {
+    assert.match(style.stripes, /^repeating-linear-gradient\(/);
+    assert.ok(style.stripes.includes(style.warning), 'the scanlines use the gold pending marker color');
+    assert.match(style.fade, /^linear-gradient\(to right,/);
+    assert.match(style.fade, /transparent|rgba\(0, 0, 0, 0\)/, 'the right end fades to transparent');
+    assert.ok(style.opacity > 0 && style.opacity < 1, 'the scanline accent leaves the title readable');
+    assert.equal(style.bubbleClose.sharedClass, true);
+    assert.match(style.bubbleClose.outline, /^polygon\(/);
+    assert.deepEqual(style.bubbleClose, style.cardClose, 'the question close and card delete share the cut corner, glyph and corner marker');
+  };
+  assertQuestionHeader(await inspectQuestionHeader());
+  await mkdir('.tmp/local-chat', { recursive: true });
+  await page.screenshot({ path: '.tmp/local-chat/desktop-question.png' });
+  // The isolated preview skips App.tsx, which loads the industrial palette for both themes.
+  await page.evaluate(async () => {
+    await import('/src/components/IndustrialTheme.css');
+    document.documentElement.dataset.theme = 'light';
+  });
+  await waitForBadgeColors();
+  const lightWaitingBadge = await inspectWaitingBadge();
+  assertWaitingBadge(lightWaitingBadge);
+  await fixture('深色');
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+  assertQuestionHeader(await inspectQuestionHeader());
+  await waitForBadgeColors();
+  const darkWaitingBadge = await inspectWaitingBadge();
+  assertWaitingBadge(darkWaitingBadge);
+  const questionClip = await question.evaluate(bubble => {
+    const card = bubble.closest('.workflow-card').getBoundingClientRect();
+    const questionRect = bubble.getBoundingClientRect();
+    const x = Math.max(0, Math.floor(Math.min(card.left, questionRect.left)) - 8);
+    const y = Math.max(0, Math.floor(Math.min(card.top, questionRect.top)) - 8);
+    const right = Math.min(innerWidth, Math.ceil(Math.max(card.right, questionRect.right)) + 8);
+    const bottom = Math.min(innerHeight, Math.ceil(Math.max(card.bottom, questionRect.bottom)) + 8);
+    return { x, y, width: right - x, height: bottom - y };
+  });
+  await page.screenshot({ path: '.tmp/local-chat/agent-card-question-title.png', clip: questionClip, animations: 'disabled' });
+  await closeQuestion.press('Enter');
+  await question.waitFor({ state: 'hidden' });
+  const focusedWaitingBadge = await inspectWaitingBadge();
+  assert.equal(focusedWaitingBadge.focusVisible, true);
+  assert.deepEqual(focusedWaitingBadge.outline, ['1px', 'solid', focusedWaitingBadge.selectedInk]);
+  console.log('Agent waiting badge', { light: lightWaitingBadge.warning, dark: darkWaitingBadge.warning, keyboardOutline: focusedWaitingBadge.outline });
+  await waitingBadge.blur();
+  await card.screenshot({ path: '.tmp/local-chat/agent-card-waiting.png', animations: 'disabled' });
+  await waitingBadge.click();
+  await question.waitFor();
+  await fixture('浅色');
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
+  await page.locator('style[data-vite-dev-id$="/IndustrialTheme.css"]').evaluate(style => style.remove());
+  await page.setViewportSize({ width: 1000, height: 780 });
+  await page.waitForFunction(() => {
+    const panel = document.querySelector('.workflow-agent-question-bubble');
+    const stage = panel?.closest('.canvas-stage');
+    if (!stage) return false;
+    const rect = panel.getBoundingClientRect();
+    const visible = stage.getBoundingClientRect();
+    const dock = stage.parentElement.querySelector('.canvas-composer-host').getBoundingClientRect();
+    return rect.left >= visible.left && rect.right <= visible.right && rect.top >= visible.top && rect.bottom <= dock.top;
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await closeQuestion.click();
   await question.waitFor({ state: 'hidden' });
   await card.getByRole('button', { name: '待你回答', exact: true }).click();
   assert.equal(await answer.inputValue(), '待提交的草稿');
@@ -108,12 +302,26 @@ try {
   }]);
   assert.equal(questionResult.conversations[id].status, 'running');
   assert.equal(questionResult.conversations[id].messages.filter(message => message.role === 'user').length, 1);
+  await fixture('追加回复片段');
+  await card.getByText('花影入月', { exact: true }).waitFor();
+  const action = card.locator('.workflow-agent-composer').getByRole('button');
+  const stop = card.getByRole('button', { name: '停止回复', exact: true });
+  await stop.waitFor();
+  assert.equal(await action.count(), 1);
+  assert.equal(await card.getByRole('button', { name: /^停止/ }).count(), 1, 'the card has only one stop control');
+  assert.equal(await action.getAttribute('aria-label'), '停止回复');
+  assert.equal(await card.getByRole('button', { name: '任务要求', exact: true }).count(), 0);
+  assert.equal(await card.getByRole('button', { name: '发送续聊消息', exact: true }).count(), 0);
+  const actionElement = await action.elementHandle();
+  await stop.click();
+  const sendAgain = card.getByRole('button', { name: '发送续聊消息', exact: true });
+  await sendAgain.waitFor();
+  assert.ok(await sendAgain.evaluate((button, activeButton) => button === activeButton, actionElement));
+  await actionElement.dispose();
+  assert.equal(await card.getByRole('button', { name: '停止回复', exact: true }).count(), 0);
   await card.getByRole('button', { name: '查看 Agent 详情', exact: true }).click();
   await panel.waitFor();
-  await fixture('追加回复片段');
   await panel.getByText('花影入月', { exact: true }).waitFor();
-  await card.getByText('花影入月', { exact: true }).waitFor();
-  await panel.getByRole('button', { name: '停止回复', exact: true }).click();
   await panel.getByText('已停止 · 已收到的内容已保留', { exact: true }).waitFor();
   assert.equal(await panel.locator('[data-message-role="user"]').count(), 1);
 
@@ -143,6 +351,57 @@ try {
   await card.locator('[data-chat-status="running"]').waitFor();
   await fixture('完成回复');
   await card.locator('[data-chat-status="idle"]').waitFor();
+  const records = card.locator('.workflow-agent-messages');
+  const historyReading = card.locator('.workflow-agent-reading');
+  assert.ok(await records.evaluate(el => el.scrollHeight > el.clientHeight), 'the fixture has enough messages to scroll');
+  await records.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await card.locator('.workflow-agent-reading[data-scrolled="true"]').waitFor();
+  const activeFade = await historyReading.evaluate(el => {
+    const fade = getComputedStyle(el, '::after');
+    return { height: fade.height, image: fade.backgroundImage, opacity: fade.opacity };
+  });
+  assert.equal(activeFade.height, '60px');
+  assert.match(activeFade.image, /linear-gradient\(/);
+  assert.equal(activeFade.opacity, '1');
+  const lastAssistant = records.locator('.workflow-agent-message.is-assistant').last();
+  assert.deepEqual(await lastAssistant.evaluate(el => {
+    const style = getComputedStyle(el);
+    return [style.backgroundColor, style.borderTopWidth, style.boxShadow];
+  }), ['rgba(0, 0, 0, 0)', '0px', 'none'], 'assistant replies are unframed text');
+  const replyActions = lastAssistant.getByRole('group', { name: '回复操作', exact: true });
+  const copyReply = replyActions.getByRole('button', { name: '复制 Agent 回答', exact: true });
+  const rerunReply = replyActions.getByRole('button', { name: '按当前输入重跑', exact: true });
+  assert.equal(await lastAssistant.locator(':scope > .local-chat-text + .workflow-agent-reply-actions').count(), 1);
+  assert.deepEqual(await replyActions.getByRole('button').evaluateAll(buttons =>
+    buttons.map(button => [button.getAttribute('aria-label'), button.textContent.trim(), button.querySelectorAll('svg').length])),
+  [['复制 Agent 回答', '', 1], ['按当前输入重跑', '', 1]], 'the reply toolbar has two icon-only actions');
+  assert.equal(await rerunReply.isEnabled(), true);
+  assert.equal(await card.locator('footer').getByRole('button', { name: '按当前输入重跑', exact: true }).count(), 0);
+  const rawReply = await page.evaluate(id => window.localChatFixture.inspect().conversations[id].messages.at(-1).text, id);
+  assert.match(rawReply, /^\*\*花影入月\*\*\n\n/);
+  await copyReply.click();
+  await page.waitForFunction(async text => (await navigator.clipboard.readText()) === text, rawReply);
+  await page.screenshot({ path: '.tmp/local-chat/desktop-agent-conversation.png' });
+  await records.evaluate(el => { el.scrollTop = 0; });
+  await card.locator('.workflow-agent-reading[data-scrolled="true"]').waitFor({ state: 'detached' });
+  assert.ok(await historyReading.evaluate(el => {
+    const fade = getComputedStyle(el, '::after');
+    return fade.content === 'none' || fade.display === 'none' || fade.backgroundImage === 'none' || fade.opacity === '0';
+  }), 'the first message is fully visible when the history is scrolled to the top');
+  const modelRow = card.locator('.workflow-agent-provider-row');
+  const provider = modelRow.getByRole('button', { name: /选择对话模型$/ });
+  const model = modelRow.getByRole('combobox', { name: 'Codex 模型', exact: true });
+  const effort = modelRow.getByRole('combobox', { name: 'Codex 推理强度', exact: true });
+  const positions = await Promise.all([provider, model, effort].map(control => control.boundingBox()));
+  assert.ok(positions.every(rect => rect && rect.height > 0 && rect.width > 0), 'provider, model and effort are visible');
+  const [providerRect, modelRect, effortRect] = positions;
+  assert.ok(positions.every(rect => Math.abs(rect.y + rect.height / 2 - providerRect.y - providerRect.height / 2) <= 2)
+    && providerRect.x + providerRect.width <= modelRect.x + 1
+    && modelRect.x + modelRect.width <= effortRect.x + 1, 'provider, model and effort share one row');
+  assert.equal(await model.locator('.tactical-select-icon svg').count(), 1);
+  assert.equal(await effort.locator('.tactical-select-icon svg').count(), 1);
+  assert.equal(await card.locator('.agent-card-icon').getAttribute('viewBox'), '0 0 1024 1024');
+  assert.equal(await card.locator('.agent-card-icon path').getAttribute('fill'), '#1296db');
   const oldAnswer = card.getByRole('button', { name: /^展开 Agent 回答/ });
   assert.equal(await oldAnswer.count(), 1, 'older replies render only the excerpt');
   await oldAnswer.click();
@@ -302,9 +561,22 @@ try {
   const cardId = await currentCard.getAttribute('data-workflow-card');
   const rerunCard = page.locator(`[data-workflow-card="${cardId}"]`);
   const taskPrompt = await page.evaluate(cardId => window.localChatFixture.inspect().projects.p.workflow.document.nodes.find(card => card.id === cardId).prompt, cardId);
+  const previousReply = await page.evaluate(id => window.localChatFixture.inspect().conversations[id].messages
+    .filter(message => message.role === 'assistant' && message.status === 'done').at(-2), id);
+  assert.ok(previousReply?.text);
+  const olderMessage = rerunCard.locator(`[data-message-id="${previousReply.id}"]`);
+  await olderMessage.getByRole('button', { name: /^展开 Agent 回答/ }).click();
+  const previousActions = olderMessage.getByRole('group', { name: '回复操作', exact: true });
+  await page.evaluate(() => navigator.clipboard.writeText('before copying the older answer'));
+  await previousActions.getByRole('button', { name: '复制 Agent 回答', exact: true }).click();
+  await page.waitForFunction(async text => (await navigator.clipboard.readText()) === text, previousReply.text);
+  assert.equal(await previousActions.getByRole('button', { name: '按当前输入重跑', exact: true }).count(), 0);
+  assert.equal(await rerunCard.getByRole('button', { name: '按当前输入重跑', exact: true }).count(), 1);
+  await olderMessage.getByRole('button', { name: '收起', exact: true }).click();
   let previousId = id;
   for (let iteration = 0; iteration < 2; iteration++) {
-    await rerunCard.getByRole('button', { name: '按当前输入重跑', exact: true }).click();
+    await rerunCard.getByRole('group', { name: '回复操作', exact: true })
+      .getByRole('button', { name: '按当前输入重跑', exact: true }).click();
     const running = rerunCard.locator('[data-local-chat-id][data-chat-status="running"]');
     await running.waitFor();
     const freshId = await running.getAttribute('data-local-chat-id');
@@ -318,8 +590,12 @@ try {
     assert.ok(!current.messages[0].text.includes(replyText), 'continuation draft never replaces the task');
     previousId = freshId;
   }
-  await rerunCard.getByRole('button', { name: '查看运行历史', exact: true }).click();
+  const runHistory = rerunCard.getByRole('button', { name: '查看运行历史', exact: true });
+  await runHistory.click();
   assert.equal(await rerunCard.locator('.workflow-agent-history-list > button').count(), 2);
+  await runHistory.click();
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await rerunCard.screenshot({ path: '.tmp/local-chat/agent-card-toolbar.png', animations: 'disabled' });
   assert.deepEqual(errors, []);
   console.log('PASS: independent and multiline drafts, Enter/Shift+Enter newlines, Ctrl+Enter sending, IME protection, composer history, stable/removable/restorable chat card, streaming/stop/close, revision ordering, failure recovery, refresh, project isolation and delayed draft cleanup, local access gates and layouts');
 } catch (error) {

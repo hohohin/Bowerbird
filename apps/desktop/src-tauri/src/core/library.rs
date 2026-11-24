@@ -377,6 +377,38 @@ const ASSET_COLS_A: &str = "a.id, a.name, a.ext, a.origin_path, a.store_path, a.
     a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id, \
     a.reference_count, a.library_hidden";
 
+// Search uses the current indexed revision. Reading an individual description also checks its original.
+const CURRENT_MEDIA_ANALYSIS_RECORD: &str = "CASE WHEN json_valid(vt.payload) THEN
+        json_extract(vt.payload,'$.current')=1 AND json_extract(vt.payload,'$.status')='completed' \
+        AND a.size IS json_extract(vt.payload,'$.assetSize') \
+        AND a.file_mtime IS json_extract(vt.payload,'$.assetModified') \
+        AND EXISTS(SELECT 1 FROM assets vta LEFT JOIN external_assets vte ON vte.asset_id=vta.id \
+            LEFT JOIN creative_file_fingerprints vtf ON vtf.asset_id=vta.id WHERE vta.id=a.id \
+            AND (COALESCE(vte.fingerprint,vtf.sha256) IS json_extract(vt.payload,'$.indexedHash') \
+                OR COALESCE(vte.fingerprint,vtf.sha256)=json_extract(vt.payload,'$.sourceHash'))) \
+        AND (vt.kind='video_transcript' OR (
+            json_type(vt.payload,'$.schemaVersion')='integer' AND json_extract(vt.payload,'$.schemaVersion')=1
+            AND json_type(vt.payload,'$.current')='true'
+            AND json_type(vt.payload,'$.sourceHash')='text' AND length(json_extract(vt.payload,'$.sourceHash'))=64
+            AND json_extract(vt.payload,'$.sourceHash') NOT GLOB '*[^0-9a-f]*'
+            AND json_type(vt.payload,'$.assetSize') IN ('integer','null')
+            AND json_type(vt.payload,'$.assetModified') IN ('integer','null')
+            AND json_type(vt.payload,'$.indexedHash') IN ('text','null')
+            AND json_type(vt.payload,'$.stamp.size')='integer' AND json_extract(vt.payload,'$.stamp.size')>=0
+            AND json_type(vt.payload,'$.stamp.modifiedNanos')='text' AND length(json_extract(vt.payload,'$.stamp.modifiedNanos'))>0
+            AND json_type(vt.payload,'$.text')='text' AND length(trim(json_extract(vt.payload,'$.text')))>0
+            AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id)
+            AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id)
+        )) ELSE 0 END";
+
+pub(super) fn media_understanding_keyword_match(pattern: &str) -> String {
+    use super::material_catalog::{AUDIO, VIDEO};
+    format!("(({VIDEO} OR {AUDIO}) AND EXISTS(SELECT 1 FROM analyses vt WHERE vt.asset_id=a.id \
+        AND vt.kind IN ('video_transcript','video_analysis') AND (vt.kind='video_transcript' OR {VIDEO}) \
+        AND ({CURRENT_MEDIA_ANALYSIS_RECORD}) \
+        AND (CASE WHEN json_valid(vt.payload) THEN json_extract(vt.payload,'$.text') LIKE {pattern} ESCAPE '\\' ELSE 0 END)))")
+}
+
 /// 瀑布流「同流程合并」：列表已 `ORDER BY created_at DESC` → 同 generation_session_id 的首见者
 /// 即最新一张。按 session 去重保首见、丢后续过程图；无 session（非生成图）原样全留。
 /// search_assets 同为 created_at DESC 序，行为一致。泛型：Asset 与 PromptedAsset 各传
@@ -535,6 +567,21 @@ impl Database {
     }
 
     pub(crate) fn insert_asset_with_auto_classification(&self, a: &Asset, automatic: bool) -> AppResult<()> {
+        self.insert_saved_asset(a, automatic, None)
+    }
+
+    pub(crate) fn insert_saved_asset(&self, a: &Asset, automatic: bool, annotation: Option<&str>) -> AppResult<()> {
+        self.insert_saved_asset_for_project(a, automatic, annotation, None, || Ok(()))
+    }
+
+    pub(super) fn insert_saved_asset_for_project(
+        &self,
+        a: &Asset,
+        automatic: bool,
+        annotation: Option<&str>,
+        project_id: Option<&str>,
+        publish: impl FnOnce() -> AppResult<()>,
+    ) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         tx.execute(
@@ -567,6 +614,15 @@ impl Database {
         )?;
         // A manual drop must never become visible to the background classifier.
         if !automatic { tx.execute("DELETE FROM local_auto_classification_pending WHERE asset_id=?1", [&a.id])?; }
+        if let Some(payload) = annotation {
+            tx.execute("INSERT INTO analyses(id,asset_id,kind,payload,created_at) VALUES(?1,?2,'annotation',?3,strftime('%s','now'))",
+                rusqlite::params![ulid::Ulid::new().to_string(),a.id,payload])?;
+        }
+        if let Some(project) = project_id {
+            tx.execute("INSERT INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,strftime('%s','now'))",
+                rusqlite::params![project, a.id])?;
+        }
+        publish()?;
         tx.commit()?;
         Ok(())
     }
@@ -775,6 +831,19 @@ impl Database {
         Ok(())
     }
 
+    /// Recheck a selected capture target before discarding newly received content.
+    /// File IO happens before the database lock; the final query checks current ownership.
+    pub(super) fn reusable_capture_asset(&self, id: &str, expected_path: &str) -> AppResult<Option<Asset>> {
+        let Ok(file) = std::fs::File::open(expected_path) else { return Ok(None); };
+        let Ok(metadata) = file.metadata() else { return Ok(None); };
+        if !metadata.is_file() || metadata.len() == 0 { return Ok(None); }
+        let conn = self.conn.lock().unwrap();
+        let visible = super::material_catalog::catalog_visibility(false);
+        let sql = format!("SELECT {ASSET_COLS_A} FROM assets a
+            WHERE a.id=?1 AND a.store_path=?2 AND a.library_hidden=0 AND {visible}");
+        Ok(conn.query_row(&sql, rusqlite::params![id, expected_path], asset_from_row).optional()?)
+    }
+
     /// 按 dHash 阈值找「近似重复」的已有资产（采集去重）。
     ///
     /// 同一张图被以不同分辨率采集（Pinterest 236w 网格缩略图 vs 原图 / srcset 变体）时，
@@ -789,13 +858,17 @@ impl Database {
             // 新图低熵：退化哈希不可信，不去重（否则会误并两张不同的纯色图）。
             return Ok(None);
         }
-        let conn = self.conn.lock().unwrap();
-        let sql = format!("SELECT {ASSET_COLS} FROM assets WHERE phash IS NOT NULL");
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([], asset_from_row)?;
+        let candidates = {
+            let conn = self.conn.lock().unwrap();
+            let visible = super::material_catalog::catalog_visibility(false);
+            let sql = format!("SELECT {ASSET_COLS_A} FROM assets a
+                WHERE a.phash IS NOT NULL AND a.library_hidden=0 AND a.source IS NOT 'annotation' AND {visible}");
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map([], asset_from_row)?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
         let mut best: Option<Asset> = None;
-        for row in rows {
-            let asset = row?;
+        for asset in candidates {
             let Some(candidate) = asset.phash.as_deref() else {
                 continue;
             };
@@ -809,6 +882,12 @@ impl Database {
             if dist > crate::media::phash::DEDUP_HAMMING_MAX {
                 continue;
             }
+            // Historical hashes survive file removal. Reusing one must still provide an original.
+            // Probe only near matches, outside the SQLite mutex (a path may be on a slow disk).
+            let Some(path) = asset.store_path.as_deref() else { continue; };
+            let Ok(file) = std::fs::File::open(path) else { continue; };
+            let Ok(metadata) = file.metadata() else { continue; };
+            if !metadata.is_file() || metadata.len() == 0 { continue; }
             let area = |a: &Asset| a.width.unwrap_or(0).saturating_mul(a.height.unwrap_or(0));
             if best.as_ref().is_none_or(|b| area(b) < area(&asset)) {
                 best = Some(asset);
@@ -966,7 +1045,7 @@ impl Database {
     }
 
     pub fn list_collections(&self) -> AppResult<Vec<Folder>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         let mut stmt = conn.prepare(
             "SELECT id, name, parent_id, kind, smart_query \
              FROM folders WHERE kind = 'collection' ORDER BY name",
@@ -1476,9 +1555,11 @@ impl Database {
         }
         // 每个词一个参数位 ?N；term_cond 生成该词的多维度 OR 块（正词取原式、负词包 NOT）。
         let term_cond = |p: usize| {
+            let media_text = media_understanding_keyword_match(&format!("?{p}"));
             format!(
                 "(a.name LIKE ?{p} ESCAPE '\\' \
-                  OR a.source_url LIKE ?{p} ESCAPE '\\' \
+                  OR COALESCE(a.source_url,'') LIKE ?{p} ESCAPE '\\' \
+                  OR {media_text} \
                   OR EXISTS(SELECT 1 FROM asset_tags at JOIN tags t ON t.id = at.tag_id \
                     WHERE at.asset_id = a.id AND t.name LIKE ?{p} ESCAPE '\\') \
                   OR EXISTS(SELECT 1 FROM asset_prompts ap JOIN prompts pm ON pm.id = ap.prompt_id \
@@ -1546,6 +1627,17 @@ impl Database {
     }
 
     // ============ 拆解分析（§5.6，Phase 5）============
+    pub(crate) fn current_video_analysis_payload(&self, asset_id: &str) -> AppResult<Option<String>> {
+        let video = super::material_catalog::VIDEO;
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            &format!("SELECT vt.payload FROM analyses vt JOIN assets a ON a.id=vt.asset_id
+                      WHERE a.id=?1 AND {video} AND vt.kind='video_analysis' AND ({CURRENT_MEDIA_ANALYSIS_RECORD})
+                      ORDER BY vt.created_at DESC,vt.id DESC LIMIT 1"),
+            [asset_id], |row| row.get(0),
+        ).optional()?)
+    }
+
     pub fn insert_analysis(&self, a: &Analysis) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -1560,7 +1652,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, asset_id, kind, payload, provider, created_at FROM analyses \
-             WHERE asset_id = ?1 ORDER BY created_at DESC",
+             WHERE asset_id = ?1 ORDER BY created_at DESC, rowid DESC",
         )?;
         let rows = stmt.query_map(rusqlite::params![asset_id], |r| {
             Ok(Analysis {

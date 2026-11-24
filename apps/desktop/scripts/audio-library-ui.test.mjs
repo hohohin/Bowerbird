@@ -54,6 +54,18 @@ const wave = id => page.locator(`div[data-audio-preview][data-asset-id="${id}"]`
 const playerState = () => page.evaluate(() => { const audio = document.querySelector('audio[data-audio-preview]'); return audio && { src: audio.getAttribute('src'), currentSrc: audio.currentSrc, time: audio.currentTime, paused: audio.paused, seeking: audio.seeking, duration: audio.duration }; });
 async function progressBeyond(time) { await page.waitForFunction(time => { const audio = document.querySelector('audio[data-audio-preview]'); return audio && !audio.paused && !audio.seeking && audio.currentTime >= time; }, time, { timeout: 12000 }); }
 async function stopped() { await page.waitForFunction(() => { const audio = document.querySelector('audio[data-audio-preview]'); return !audio || audio.paused && !audio.getAttribute('src'); }); }
+async function openAudioCatalog() {
+  await page.goto(url);
+  await page.locator('.library-home').waitFor();
+  await page.getByRole('button', { name: '全部素材', exact: true }).click();
+  await page.getByRole('group', { name: '素材类型' }).hover();
+  const audio = page.getByRole('button', { name: '音频', exact: true });
+  await audio.waitFor();
+  assert.equal(await audio.count(), 1, 'formal library must expose audio alongside image and video');
+  await audio.click();
+  await wave('wav').waitFor();
+  await page.waitForFunction(() => document.querySelector('div[data-audio-preview][data-asset-id="wav"]')?.dataset.waveReady === 'true');
+}
 async function playback(id) {
   const root = wave(id), waveform = root.locator('.audio-waveform-wave'), play = root.locator('.audio-waveform-play');
   await root.scrollIntoViewIfNeeded(); await page.waitForFunction(id => document.querySelector(`div[data-audio-preview][data-asset-id="${id}"]`)?.dataset.waveReady === 'true', id);
@@ -103,6 +115,9 @@ async function mutations() {
   await page.getByRole('button', { name: '删除原文件', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'detached' });
   mutation = await page.evaluate(() => window.mutations.at(-1)); assert.equal(mutation.command, 'trash_asset_original'); assert.equal(mutation.paused, true); assert.equal(mutation.src, null);
+  const firstMutations = await page.evaluate(() => window.mutations);
+  // Restart the fixture because successful deletion hides the original card in this window.
+  await openAudioCatalog();
   await play.click(); await progressBeyond(.2);
   await page.evaluate(() => window.openMutationDialog('delete-reference'));
   await page.getByRole('button', { name: '删除原文件', exact: true }).click();
@@ -110,14 +125,14 @@ async function mutations() {
   mutation = await page.evaluate(() => window.mutations.at(-1)); assert.equal(mutation.command, 'trash_asset_original');
   assert.equal(mutation.paused, true, 'explicitly recycling an external original also stops its player'); assert.equal(mutation.src, null);
   await stopped();
-  return page.evaluate(() => window.mutations);
+  return [...firstMutations, ...await page.evaluate(() => window.mutations)];
 }
 async function selection() {
   const card = page.locator('.audio-file-card[data-asset-id="wav"]');
   await wave('wav').locator('.audio-waveform-play').click(); await progressBeyond(.2);
   const before = await playerState();
   const plays = await page.evaluate(() => window.audioEvents.filter(event => event.type === 'playing').length);
-  await card.locator('.audio-file-meta').click();
+  await card.locator('.audio-file-meta').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await page.waitForTimeout(120);
   assert.deepEqual(errors, [], 'audio selection must render the real selection mark without a missing preview element');
   assert.equal(await card.evaluate(element => element.classList.contains('is-selected')), true);
@@ -133,6 +148,102 @@ async function selection() {
   await wave('wav').locator('.audio-waveform-play').click(); await progressBeyond(.2);
   await wave('wav').locator('.audio-waveform-play').click(); await stopped();
   return { selectionAndDeselect: true, preservedPlayback: true, selectedPause: true, extraPlayEvents: 0 };
+}
+async function audioDetails() {
+  const card = page.locator('.audio-file-card[data-asset-id="wav"]');
+  const detail = page.getByRole('dialog', { name: '音频详情', exact: true });
+  const workspace = page.getByRole('dialog', { name: '音频分析工作区', exact: true });
+  await page.evaluate(() => window.store.setState({ cloudAuth: { logged_in: true, user_id: 'audio-test', cloud_available: true } }));
+  await card.locator('.audio-file-meta').click();
+  await detail.getByText('转录 · 1 Bcoin', { exact: true }).waitFor();
+  assert.equal(await detail.getByRole('button', { name: '放大图片' }).count(), 0);
+  assert.equal(await card.evaluate(element => element.classList.contains('is-selected')), false);
+  await detail.getByRole('button', { name: '分析', exact: true }).click();
+  await workspace.getByRole('button', { name: '转录 · 1 Bcoin', exact: true }).click();
+  await workspace.getByRole('button', { name: '查看转录文稿' }).click();
+  await workspace.getByRole('searchbox', { name: '搜索文稿' }).fill('文稿');
+  const seek = workspace.getByRole('button', { name: /跳转至 .* · 文稿/ });
+  await seek.click();
+  await progressBeyond(3.4);
+  assert.ok((await playerState()).time < 4.4, 'word click starts playback at the matching timestamp');
+  await workspace.getByRole('button', { name: '关闭音频分析' }).click();
+  await workspace.waitFor({ state: 'hidden' });
+  await card.locator('.audio-file-meta').click({ button: 'right' });
+  await page.getByRole('menu').getByText('转录文稿', { exact: true }).click();
+  await workspace.getByRole('button', { name: /跳转至 .* · 文稿/ }).waitFor();
+  await workspace.getByRole('button', { name: '关闭音频分析' }).click();
+  await workspace.waitFor({ state: 'hidden' });
+  assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'video_analysis_get').length), 0);
+  assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'video_transcript_start').length), 1);
+  await page.keyboard.press('Escape');
+  await stopped();
+}
+async function audioTrim() {
+  await page.goto(`${url}?reference&trim`);
+  await page.evaluate(() => { window.transcripts = { wav: { status: 'completed', text: '区间之外',
+    utterances: [{ startMs: 6000, endMs: 6700, text: '区间之外', words: [{ startMs: 6000, endMs: 6700, text: '区间之外' }] }] } }; });
+  await page.locator('.audio-file-card[data-asset-id="wav"] .audio-file-meta').click();
+  const detail = page.getByRole('dialog', { name: '音频详情', exact: true });
+  const player = detail.getByRole('region', { name: '音频播放器' });
+  const trim = player.getByRole('button', { name: '裁剪音频' });
+  const start = player.getByRole('spinbutton', { name: '入点秒数' });
+  const end = player.getByRole('spinbutton', { name: '出点秒数' });
+  const progress = player.getByRole('slider', { name: '音频进度' });
+  await trim.click();
+  await start.fill('2.5');
+  await end.fill('4.0');
+  await end.press('Space');
+  await progressBeyond(2.5);
+  assert.ok((await playerState()).time < 3.2, 'Space starts from the in point after editing a timecode');
+  await player.getByRole('button', { name: '暂停', exact: true }).click();
+  assert.equal(await player.getByRole('button', { name: '试听选区' }).count(), 0);
+  await progress.press('End');
+  assert.equal(Number(await progress.getAttribute('aria-valuenow')), 4, 'keyboard seeking stops at the selected out point');
+  await progress.press('Space');
+  await progressBeyond(2.5);
+  assert.ok((await playerState()).time < 3.2, 'Space restarts from the in point after seeking to the end');
+  await player.getByRole('button', { name: '播放', exact: true }).waitFor();
+  assert.ok((await playerState()).paused, 'playback pauses at the selected out point');
+  await detail.getByRole('button', { name: '打开转录文稿' }).click();
+  const workspace = page.getByRole('dialog', { name: '音频分析工作区', exact: true });
+  await workspace.getByRole('button', { name: /跳转至 .* · 区间之外/ }).click();
+  await workspace.getByRole('button', { name: '返回音频预览' }).click();
+  assert.equal(Number(await progress.getAttribute('aria-valuenow')), 4);
+  assert.equal(await trim.getAttribute('aria-pressed'), 'true');
+  assert.ok((await playerState()).paused, 'word seek outside the range cannot reopen full playback');
+  await page.screenshot({ path: resolve(output, 'audio-trim-detail-dark.png'), animations: 'disabled' });
+  const save = player.getByRole('button', { name: '另存为新音频' });
+  await save.click();
+  await page.waitForFunction(() => window.mutations.some(mutation => mutation.command === 'trim_audio' && !mutation.args.overwrite));
+  assert.deepEqual(await page.evaluate(() => window.mutations.at(-1).args),
+    { sourcePath: '/audio-fixtures/chime.wav', start: 2.5, end: 4, overwrite: false, projectId: 'trim-project' });
+  await progress.press('Space');
+  await progressBeyond(2.5);
+  await player.getByRole('button', { name: '覆盖原音频' }).click();
+  await page.getByRole('button', { name: '确认覆盖' }).click();
+  await page.waitForFunction(() => window.mutations.some(mutation => mutation.command === 'trim_audio' && mutation.args.overwrite));
+  const overwritten = await page.evaluate(() => window.mutations.at(-1));
+  assert.equal(overwritten.paused, true);
+  assert.equal(overwritten.src, null, 'overwrite releases the original before IPC');
+  await player.getByText('已覆盖原音频', { exact: true }).waitFor();
+  assert.equal(Number(await progress.getAttribute('aria-valuemax')), 1.5);
+  await player.getByRole('button', { name: '播放', exact: true }).click();
+  await progressBeyond(.2);
+  assert.match((await playerState()).currentSrc, /audioVersion=b{64}$/);
+  await player.getByRole('button', { name: '暂停', exact: true }).click();
+  await detail.getByRole('button', { name: '打开转录文稿' }).click();
+  await workspace.getByText('暂无转录文稿', { exact: true }).waitFor();
+  await workspace.getByRole('button', { name: '返回音频预览' }).click();
+  await detail.getByRole('button', { name: '关闭预览' }).click();
+  await detail.waitFor({ state: 'hidden' });
+  await page.locator('.audio-file-card[data-asset-id="mp3"] .audio-file-meta').click();
+  await trim.click();
+  await start.fill('0.3');
+  await start.press('Tab');
+  const overwrite = player.getByRole('button', { name: '覆盖原音频' });
+  if (await overwrite.isEnabled()) await overwrite.click();
+  await player.getByText(/外部.*另存为新音频/).waitFor();
+  assert.equal(await page.evaluate(() => window.mutations.filter(mutation => mutation.command === 'trim_audio').length), 2);
 }
 try {
   if (!process.argv.includes('--ui-only')) {
@@ -150,15 +261,7 @@ try {
     assert.doesNotMatch(labels, /反推|添加到对话框/);
   }
   if (!process.argv.includes('--guards-only')) {
-    await page.goto(url);
-    await page.locator('.library-home').waitFor();
-    await page.getByRole('tab', { name: '全部素材', exact: true }).click();
-    await page.getByRole('group', { name: '素材类型' }).hover();
-    await page.getByRole('button', { name: '音频', exact: true }).waitFor();
-    assert.equal(await page.getByRole('button', { name: '音频', exact: true }).count(), 1, 'formal library must expose audio alongside image and video');
-    await page.getByRole('button', { name: '音频', exact: true }).click();
-    await wave('wav').waitFor();
-    await page.waitForFunction(() => document.querySelector('div[data-audio-preview][data-asset-id="wav"]')?.dataset.waveReady === 'true');
+    await openAudioCatalog();
     if (process.argv.includes('--selection-only')) result.ui = { selection: await selection() };
     else if (process.argv.includes('--mutations-only')) result.ui = { mutations: await mutations() };
     else {
@@ -171,6 +274,7 @@ try {
     assert.equal(await page.locator('audio').count(), 0, 'hover never creates a player');
     result.ui = { audioEntry: true, hoverMediaRequests: 0, playback: [await playback('wav'), await playback('mp3')] };
     result.ui.selection = await selection();
+    await audioDetails();
     await wave('wav').locator('.audio-waveform-play').click(); await progressBeyond(.2);
     await wave('mp3').locator('.audio-waveform-play').click(); await progressBeyond(.2);
     assert.match((await playerState()).currentSrc, /long-vbr\.mp3/);
@@ -189,15 +293,20 @@ try {
     await page.getByRole('button', { name: '音频', exact: true }).click(); await wave('wav').waitFor();
     await wave('mp3').locator('.audio-waveform-play').click(); await stopped();
     result.ui.mutations = await mutations();
-    await page.evaluate(() => window.mode.getState().setCatalogView('tags'));
+    await openAudioCatalog();
+    await page.getByRole('button', { name: '标签模式', exact: true }).click();
     await page.locator('[data-tag-section="tag-music"]').waitFor();
     assert.equal(await page.locator('[data-tag-section="tag-music"] div[data-audio-preview][data-asset-id="mp3"]').count(), 1, 'manual audio tags retain grouped browsing');
-    await page.evaluate(() => window.mode.getState().setCatalogView('collections'));
+    await page.getByRole('button', { name: '层级模式', exact: true }).click();
+    const folderTree = page.getByRole('button', { name: '文件夹', exact: true });
+    if (await folderTree.getAttribute('aria-expanded') !== 'true') await folderTree.click();
+    const rootFolder = page.getByRole('treeitem', { name: '声音素材' });
+    if (await rootFolder.getAttribute('aria-expanded') === 'false') await rootFolder.press('ArrowRight');
     await page.locator('[data-collection-id="child"]').waitFor();
     await page.locator('[data-collection-id="child"]').click(); await wave('mp3').waitFor();
-    assert.deepEqual(await page.locator('[data-catalog-section]').evaluateAll(elements => elements.map(element => element.dataset.catalogSection)), ['root', 'child', 'next']);
+    assert.deepEqual(await page.locator('[data-catalog-section]').evaluateAll(elements => elements.map(element => element.dataset.catalogSection)), ['child']);
     assert.ok((await page.evaluate(() => window.calls.filter(call => call.command === 'connection_entries'))).every(call => call.args.media === 'audios' && call.args.limit <= 60));
-    await page.locator('.catalog-scroller').evaluate(element => { element.scrollTop += 320; }); await wave('flac').waitFor();
+    await page.locator('[data-collection-id="next"]').click(); await wave('flac').waitFor();
     result.ui.boundedCards = await page.locator('.folder-media-card').count(); assert.ok(result.ui.boundedCards < 71);
     await page.locator('[data-collection-id="next"]').evaluate(element => {
       const file = new File([new Uint8Array([1, 2, 3])], 'chime.wav', { type: 'audio/wav' });
@@ -213,16 +322,23 @@ try {
     while (await page.getByRole('button', { name: '关闭通知', exact: true }).count()) await page.getByRole('button', { name: '关闭通知', exact: true }).first().click();
     await page.locator('[data-collection-id="root"]').click();
     await page.waitForFunction(() => document.querySelector('[data-connection-entry="entry-wav"] div[data-audio-preview]')?.dataset.waveReady === 'true');
+    const connected = page.locator('[data-connection-entry="entry-wav"] .audio-file-meta');
+    await connected.click();
+    const connectedDetail = page.getByRole('dialog', { name: '音频详情', exact: true });
+    await connectedDetail.getByRole('button', { name: '关闭预览' }).click();
+    await connectedDetail.waitFor({ state: 'hidden' });
     await page.waitForTimeout(150);
     await page.screenshot({ path: resolve(output, 'collections-dark.png') });
     await page.evaluate(() => window.store.getState().openDetail('wav'));
     await page.locator('.asset-detail div[data-audio-preview]').waitFor();
     assert.equal(await page.locator('.asset-detail').getByRole('button', { name: /反推/ }).count(), 0);
-    await page.getByRole('button', { name: '+ 加类别', exact: true }).click();
-    await page.getByPlaceholder('新类别名', { exact: true }).fill('音效');
-    await page.getByPlaceholder('新类别名', { exact: true }).press('Enter');
-    await page.waitForFunction(() => window.calls.some(call => call.command === 'set_asset_tags' && call.args.source === 'manual'));
-    assert.deepEqual(await page.evaluate(() => window.calls.find(call => call.command === 'set_asset_tags').args), { assetId: 'wav', names: ['音效'], source: 'manual' });
+    await page.getByRole('button', { name: '添加标签', exact: true }).click();
+    await page.getByRole('textbox', { name: '搜索或新建标签', exact: true }).fill('音效');
+    await page.getByRole('button', { name: '新建并添加“音效”', exact: true }).click();
+    await page.getByRole('button', { name: '移除标签 音效', exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.calls.find(call => call.command === 'local_classification_example').args),
+      { assetIds: ['wav'], tagId: 'tag-音效', positive: true });
+    await page.keyboard.press('Escape');
     await page.screenshot({ path: resolve(output, 'detail-dark.png') });
     const calls = await page.evaluate(() => window.calls);
     assert.ok(calls.some(call => call.command === 'audio_waveform' && call.args.expectedVersion === 'a'.repeat(64)), 'connected entries verify their source fingerprint');
@@ -243,6 +359,16 @@ try {
     await page.screenshot({ path: resolve(output, 'audio-all-dark.png') });
     await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
     await page.screenshot({ path: resolve(output, 'audio-all-light.png') });
+    await page.goto(`${url}?reference`);
+    const projectMeta = page.locator('.audio-file-card[data-asset-id="wav"] .audio-file-meta');
+    await projectMeta.click();
+    await page.getByRole('dialog', { name: '音频详情', exact: true }).getByRole('button', { name: '关闭预览' }).click();
+    await page.getByRole('dialog', { name: '音频详情', exact: true }).waitFor({ state: 'hidden' });
+    await projectMeta.dblclick();
+    await page.waitForFunction(() => window.picks?.includes('wav'));
+    assert.equal(await page.getByRole('dialog', { name: '音频详情', exact: true }).count(), 0);
+    await audioTrim();
+    result.ui.audioTrim = true;
     }
   }
   assert.deepEqual(errors, []);

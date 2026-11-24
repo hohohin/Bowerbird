@@ -2,7 +2,18 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ server: { host: '127.0.0.1', port: 1568, strictPort: true, hmr: false, watch: null } });
+const runtime = '/notification-test-runtime.js';
+const runtimeId = '\0' + runtime;
+const server = await createServer({
+  plugins: [{
+    name: 'notification-test-runtime',
+    resolveId: id => id === runtime ? runtimeId : null,
+    load: id => id === runtimeId
+      ? 'export { default as React } from "react"; export { createRoot } from "react-dom/client";'
+      : null,
+  }],
+  server: { host: '127.0.0.1', port: 1568, strictPort: true, hmr: false, watch: null },
+});
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1200, height: 850 } });
@@ -15,9 +26,9 @@ try {
   });
   await page.goto('http://127.0.0.1:1568/notification-test');
   await page.evaluate(async () => {
-    const [{ useStore }, { api }, notifications, { default: React }, { default: { createRoot } }, { ToastViewport }, { SettingsDialog }, { NotificationBell }] = await Promise.all([
+    const [{ useStore }, { api }, notifications, { React, createRoot }, { ToastViewport }, { SettingsDialog }, { NotificationBell }] = await Promise.all([
       import('/src/store.ts'), import('/src/lib/api.ts'), import('/src/lib/generationNotifications.ts'),
-      import('/node_modules/.vite/deps/react.js'), import('/node_modules/.vite/deps/react-dom_client.js'),
+      import('/notification-test-runtime.js'),
       import('/src/components/ToastViewport.tsx'), import('/src/components/SettingsDialog.tsx'), import('/src/components/NotificationBell.tsx'),
     ]);
     await import('/src/styles.css');
@@ -49,11 +60,12 @@ try {
       useStore.getState().applyGenChunk({ kind:'done', job_id:id, images:['result.png'], provider:'codex', session_id:'s' });
     };
   });
-  await page.getByRole('button', {name:'个性化与记忆',exact:true}).click();
+  await page.getByRole('button', {name:'个性化',exact:true}).click();
   await page.getByText('生成完成提醒', {exact:true}).waitFor();
   assert.equal(await page.getByRole('switch', {name:'弹窗提示',exact:true}).getAttribute('aria-checked'), 'true');
+  const newNotices = page.getByRole('status', { name: '新通知', exact: true });
   await page.evaluate(() => window.complete('image'));
-  await page.getByRole('status').filter({hasText:'图片生成完成'}).waitFor();
+  await newNotices.filter({hasText:'图片生成完成'}).waitFor();
   assert.equal(await page.locator('.app-toast').count(), 0, 'generation popup is routed only to the bell');
   assert.equal(await page.evaluate(() => window.sounds), 2);
   await page.evaluate(() => window.store.getState().applyGenChunk({kind:'done',job_id:'image',images:['result.png'],provider:'codex'}));
@@ -67,7 +79,7 @@ try {
   assert.equal(await page.evaluate(() => window.sounds), 4);
   await page.getByRole('switch', {name:'提示音',exact:true}).click();
   await page.evaluate(() => window.complete('video','video'));
-  await page.getByRole('status').filter({hasText:'视频生成完成'}).waitFor();
+  await newNotices.filter({hasText:'视频生成完成'}).waitFor();
   assert.equal(await page.evaluate(() => window.sounds), 4);
   await page.getByRole('switch', {name:'弹窗提示',exact:true}).click();
   await page.evaluate(() => window.complete('silent'));
@@ -100,12 +112,15 @@ try {
     await window.notifications.notifyGenerationComplete('agent:run:final','Agent 生成完成，2 张产物已加入素材库',window.saved);
     await window.notifications.notifyGenerationComplete('agent:run:final','Agent 生成完成，2 张产物已加入素材库',window.saved);
   });
-  await page.getByRole('status').filter({hasText:'Agent 生成完成'}).waitFor();
+  await newNotices.filter({hasText:'Agent 生成完成'}).waitFor();
   assert.equal(await page.evaluate(() => window.notices.length), 4);
   await page.waitForTimeout(250);
   await page.screenshot({path:'.tmp/generation-notifications.png'});
   assert.deepEqual(errors, []);
   console.log('PASS: settings, image/video, continuation, duplicate events, background project, silent recovery, sound-only, Agent deduplication');
+} catch (error) {
+  if (errors.length) console.error(errors);
+  throw error;
 } finally {
   await browser.close();
   await server.close();

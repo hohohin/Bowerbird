@@ -76,7 +76,7 @@ async function createPage(browser, kind) {
   return page;
 }
 
-async function pointerGesture(page, start, end) {
+async function pointerGesture(page, start, end, holdSelectedText) {
   const session = await page.context().newCDPSession(page);
   const intercepted = [];
   session.on("Input.dragIntercepted", ({data}) => intercepted.push(data));
@@ -84,6 +84,8 @@ async function pointerGesture(page, start, end) {
   try {
     await session.send("Input.dispatchMouseEvent", {type:"mouseMoved",x:start.x,y:start.y});
     await session.send("Input.dispatchMouseEvent", {type:"mousePressed",x:start.x,y:start.y,button:"left",buttons:1,clickCount:1});
+    // macOS starts a native selected-text drag after a stationary press.
+    if (holdSelectedText && process.platform === "darwin") await page.waitForTimeout(600);
     const pressed = await page.evaluate(() => ({
       target: window.lastPointerTarget.id, draggable: window.lastPointerTarget.getAttribute("draggable"),
       userDrag: window.lastPointerTarget.style.getPropertyValue("-webkit-user-drag"),
@@ -132,7 +134,7 @@ try {
           await page.mouse.click(start.x, start.y, {clickCount:3});
           assert.ok((await page.evaluate(() => String(window.getSelection()))).includes("小红书"), "native triple click selects paragraph text");
         }
-        const result = await pointerGesture(page, start, {x:start.x+210,y:start.y+(kind === "selected-text" ? 70 : 0)});
+        const result = await pointerGesture(page, start, {x:start.x+210,y:start.y+(kind === "selected-text" ? 70 : 0)}, kind === "selected-text");
         await writeFile(`${output}/${kind}.json`, JSON.stringify(result,null,2));
         assertNoCapture(result, kind);
         if (kind === "selected-text") {

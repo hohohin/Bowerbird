@@ -40,9 +40,11 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 .composer-description-actions .composer-expand { display: grid; place-items: center; width: 32px; height: 28px; border-radius: 999px; }
 .composer-chat-history { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 8px; border: 1px solid var(--bb-line); border-radius: 999px; white-space: nowrap; }
 .composer-chat-history:hover, .composer-chat-history[aria-expanded="true"] { color: var(--bb-ink); background: var(--library-glass-hover); }
-.composer-chat-key-hint { margin: 0; padding: 0 20px 8px; font-size: 10px; color: var(--bb-muted); }
+.composer-glass :is(.composer-description, .composer-feedback) { padding-inline: 20px; }
+.composer-feedback { display: grid; gap: 4px; padding-bottom: 8px; overflow-wrap: anywhere; }
+.composer-chat-key-hint { margin: 0; font-size: 10px; color: var(--bb-muted); }
 .composer-editor-scroll .collection-scroll-viewport { max-height: min(224px, 30vh); }
-.composer-glass .composer-description { padding: 0 20px 12px; font-size: 16px; line-height: 36px; }
+.composer-glass .composer-description { padding-block: 0 12px; font-size: 16px; line-height: 36px; }
 .composer-glass .creation-editor .ProseMirror { min-height: 76px; }
 .composer-glass .creation-editor .ProseMirror.is-empty::before { opacity: 1; }
 .composer-glass .composer-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 0; padding: 10px 14px 12px; border-top: 1px solid rgb(var(--bb-ink-rgb) / 10%); }
@@ -72,6 +74,35 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 .composer-video-fields { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .composer-video-fields > * { min-width: 0; white-space: nowrap; }
 .composer-video-fields .model-select { flex-shrink: 1; }
+.composer-parameters:has(.composer-environment) .composer-video-fields { flex-shrink: 1; }
+.composer-glass .composer-parameters .composer-environment { display: inline-flex; align-items: center; gap: 4px; min-width: 0; flex-shrink: 0; height: 30px; padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; color: var(--bb-danger-strong); font-size: 11px; white-space: nowrap; }
+.composer-environment > span { width: auto; height: auto; background: none; border-radius: 0; }
+.composer-environment .environment-short { display: none; }
+.composer-environment.is-ready > span:only-child { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; margin: 8px; }
+.composer-glass .composer-parameters .composer-frames-trigger { display: grid; place-items: center; width: 28px; height: 30px; flex-shrink: 0; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--bb-muted); }
+.composer-local-frames { z-index: 1000; padding: 12px 14px; border-radius: 14px; overflow-y: auto; }
+.composer-local-frames header { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.composer-local-frames header button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; background: transparent; color: var(--bb-muted); }
+.composer-frame-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: 12px; margin-top: 8px; }
+.composer-frame-pair:has(> figure:only-child) { grid-template-columns: minmax(0, 1fr); }
+.composer-frame-pair figure { margin: 0; min-width: 0; }
+.composer-frame-pair img { display: block; width: auto; height: auto; max-width: 100%; max-height: 140px; margin: 0 auto; }
+.composer-frame-empty { display: grid; place-items: center; height: 100px; font-size: 12px; color: var(--bb-muted); }
+.composer-frame-pair figcaption { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; font-size: 12px; }
+.composer-frame-pair figcaption > span:last-child { color: var(--bb-muted); }
+.composer-h3-audio { display: grid; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--bb-line); font-size: 12px; }
+.composer-h3-audio > div { display: flex; align-items: center; gap: 6px; }
+.composer-h3-audio strong, .composer-h3-audio svg { flex-shrink: 0; }
+.composer-h3-audio span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-h3-audio small { color: var(--bb-muted); }
+.composer-frames-warning { display: flex; align-items: flex-start; gap: 6px; margin-top: 10px; color: var(--bb-danger-strong); font-size: 12px; }
+.composer-frames-warning svg { flex-shrink: 0; margin-top: 2px; }
+@media (max-width: 1100px) {
+  .composer-environment .environment-full { display: none; }
+  .composer-environment .environment-short { display: inline; }
+  .composer-parameters:has(.composer-video-fields.is-local) .composer-environment:not(.is-ready) { width: 24px; justify-content: center; }
+  .composer-parameters:has(.composer-video-fields.is-local) .composer-environment .environment-short { display: none; }
+}
 .composer-glass .composer-parameters .composer-video-fields :is(select, .tactical-select-trigger) { width: auto; max-width: none; }
 .composer-toolbar.is-video .composer-add-material { flex-shrink: 0; }
 .composer-toolbar.is-video .composer-send { flex-shrink: 0; align-self: center; }
@@ -107,7 +138,7 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
   .composer-profile { order: 3; flex-basis: 100%; }
   .composer-glass .composer-collapse { margin-left: auto; }
   .composer-description-heading { padding-inline: 14px; }
-  .composer-glass .composer-description { padding-inline: 14px; }
+  .composer-glass :is(.composer-description, .composer-feedback) { padding-inline: 14px; }
   .composer-glass .composer-toolbar { gap: 6px; padding-inline: 10px; }
   .composer-parameters { flex-basis: calc(100% - 100px); }
 }

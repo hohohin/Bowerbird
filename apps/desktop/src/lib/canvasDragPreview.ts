@@ -1,5 +1,7 @@
 import type { CanvasPoint } from "./canvasLogic";
 
+export const CANVAS_DRAG_Z_LIFT = 10000;
+
 function curvePath(from: CanvasPoint, to: CanvasPoint, bend: number) {
   return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`;
 }
@@ -28,7 +30,9 @@ export function canvasDragPreview(plane: HTMLElement, ids: Set<string>, primary:
     if (!(el instanceof HTMLElement)) continue;
     const data = el.dataset;
     const id = data.canvasNodeId || data.workflowCard || data.workflowMaterial || data.cardName || data.workflowTextKey || data.canvasSelectionFrame;
-    if (id && ids.has(id)) {
+    if (data.workflowPeekAnchor) {
+      if (ids.has(data.workflowPeekAnchor)) items.push(el);
+    } else if (id && ids.has(id)) {
       items.push(el);
       if (data.canvasNodeId || data.workflowCard) found.add(id);
     }
@@ -44,7 +48,7 @@ export function canvasDragPreview(plane: HTMLElement, ids: Set<string>, primary:
   }
   const observer = new MutationObserver(records => {
     if (records.some(record => record.type === "childList"
-      ? [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element && !node.matches(".canvas-snap-guide,.canvas-cell-drop-target"))
+      ? [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element && !node.matches(".canvas-snap-guide,.canvas-cell-drop-target,[data-workflow-peek-anchor]"))
       : curves.get(record.target as SVGPathElement)?.last !== (record.target as SVGPathElement).getAttribute("d"))) invalidate();
   });
   observer.observe(plane, { childList: true });
@@ -54,7 +58,7 @@ export function canvasDragPreview(plane: HTMLElement, ids: Set<string>, primary:
   const lifted = items.filter(el => el.hasAttribute("data-canvas-node-id") && !el.classList.contains("is-section")
     && (!el.classList.contains("canvas-chat-node") || el.dataset.canvasNodeId === primary)).map(el => {
     const z = el.style.zIndex;
-    const level = String(10000 + (Number(z) || 0));
+    const level = String(CANVAS_DRAG_Z_LIFT + (Number(z) || 0));
     el.style.zIndex = level;
     const moving = el.matches(".canvas-node,.canvas-prompt-node,.canvas-agent-node");
     if (moving) el.classList.add("is-moving");

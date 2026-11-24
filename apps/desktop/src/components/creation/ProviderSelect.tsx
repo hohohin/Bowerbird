@@ -19,8 +19,9 @@ export function ProviderSelect({ value, onChange, codexHealth, dreaminaHealth,
   const options: ModelOption[] = genProviders(cloudEntitlement).map(option => {
     const cloud = isCloudProvider(option.key);
     const group = dreaminaWebModel(option.key) ? "即梦" : cloud && /^seedream\b/i.test(option.label) ? "Seedream" : undefined;
-    const reason = generationProviderIssue(option.key, { cloudAuth, cloudEntitlement, dreaminaHealth, codexHealth })?.message;
-    return { ...option, group, source: cloud ? "cloud" : option.key === H3_IMAGE ? "local" : "personal", reason };
+    const issue = generationProviderIssue(option.key, { cloudAuth, cloudEntitlement, dreaminaHealth, codexHealth });
+    return { ...option, group, source: cloud ? "cloud" : option.key === H3_IMAGE ? "local" : "personal",
+      reason: issue?.message, selectableWithIssue: option.key === "codex" && issue?.settings === "codex" };
   });
   // Legacy CLI jobs retain their original execution route until a new model is chosen.
   const quota = providerQuota(value);

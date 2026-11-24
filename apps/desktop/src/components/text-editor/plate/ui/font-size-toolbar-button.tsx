@@ -7,16 +7,15 @@ import type { TElement, RangeRef } from 'platejs';
 
 import { toUnitLess } from '@platejs/basic-styles';
 import { FontSizePlugin } from '@platejs/basic-styles/react';
-import { Minus, Plus } from 'lucide-react';
+import { CaseSensitive, Minus, Plus } from 'lucide-react';
 import { KEYS } from 'platejs';
 import { useEditorPlugin, useEditorSelector } from 'platejs/react';
 
 import {
   Popover,
   PopoverContent,
-  PopoverAnchor,
+  PopoverTrigger,
 } from '@/components/text-editor/plate/primitives/popover';
-import { cn } from '@/components/text-editor/plate/lib/utils';
 
 import { ToolbarButton } from './toolbar';
 import { readTextSelection } from '@/components/textBlockTransforms';
@@ -73,95 +72,66 @@ function useFontSizeSelection() {
   };
   const applyInput = (value: string) => {
     const at = bookmark.current?.unref(); bookmark.current = null;
-    if (at) editor.tf.select(at);
+    if (!at) return;
+    editor.tf.select(at);
     const size = validFontSize(value);
     if (size !== null) tf.fontSize.addMark(`${size}px`);
   };
-  return { editor, tf, bookmark, rememberSelection, applyInput };
+  return { editor, bookmark, rememberSelection, applyInput };
 }
 
-export function FontSizeToolbarButton() {
-  const [inputValue, setInputValue] = React.useState(DEFAULT_FONT_SIZE);
-  const [isFocused, setIsFocused] = React.useState(false);
-  const { editor, tf, bookmark, rememberSelection, applyInput } = useFontSizeSelection();
-  const cursorFontSize = useCursorFontSize();
-  const handleInputChange = (value: string, restoreFocus = true) => {
-    applyInput(value);
-    setIsFocused(false);
-    if (restoreFocus) editor.tf.focus();
-  };
+export function FontSizeToolbarButton({ children }: { children?: React.ReactNode }) {
+  const { editor, bookmark, rememberSelection, applyInput } = useFontSizeSelection();
+  const size = useCursorFontSize();
+  const [value, setValue] = React.useState(size);
+  const [open, setOpen] = React.useState(false);
+  const field = React.useRef<HTMLInputElement>(null);
+  const applied = React.useRef(false);
 
-  const handleFontSizeChange = (delta: number) => {
-    const newSize = Number(displayValue) + delta;
-    tf.fontSize.addMark(`${newSize}px`);
+  function finish(next: string) {
+    applyInput(next);
+    applied.current = true;
+    setOpen(false);
     editor.tf.focus();
-  };
+  }
 
-  const displayValue = isFocused ? inputValue : cursorFontSize;
-
-  return (
-    <div className="flex h-7 items-center gap-1 rounded-md bg-muted/60 p-0">
-      <ToolbarButton tooltip="缩小字号" onClick={() => handleFontSizeChange(-1)}>
-        <Minus />
-      </ToolbarButton>
-
-      <Popover open={isFocused} modal={false}>
-        <PopoverAnchor asChild>
-          <input
-            aria-label="字号"
-            className={cn(
-              'h-full w-10 shrink-0 bg-transparent px-1 text-center text-sm hover:bg-muted'
-            )}
-            value={displayValue}
-            onBlur={event => {
-              setIsFocused(false);
-              if (bookmark.current) handleInputChange(event.currentTarget.value, false);
-            }}
-            onChange={(e) => setInputValue(e.target.value)}
-            onFocus={() => {
-              rememberSelection();
-              setIsFocused(true);
-              setInputValue(toUnitLess(cursorFontSize));
-            }}
-            onPointerDown={() => { rememberSelection(); setIsFocused(true); }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleInputChange(e.currentTarget.value);
-              }
-            }}
-            data-plate-focus="true"
-            type="text"
-          />
-        </PopoverAnchor>
-        <PopoverContent
-          className="w-10 px-px py-1"
-          onEscapeKeyDown={() => { bookmark.current?.unref(); bookmark.current = null; setIsFocused(false); editor.tf.focus(); }}
-          onOpenAutoFocus={(e) => e.preventDefault()}
-          onCloseAutoFocus={(e) => e.preventDefault()}
-        >
-          {FONT_SIZES.map((size) => (
-            <button
-              key={size}
-              className={cn(
-                'flex h-8 w-full items-center justify-center text-sm hover:bg-accent data-[highlighted=true]:bg-accent'
-              )}
-              onClick={() => {
-                handleInputChange(size);
-              }}
-              onPointerDown={event => event.preventDefault()}
-              data-highlighted={size === displayValue}
-              type="button"
-            >
-              {size}
-            </button>
-          ))}
-        </PopoverContent>
-      </Popover>
-
-      <ToolbarButton tooltip="增大字号" onClick={() => handleFontSizeChange(1)}>
-        <Plus />
-      </ToolbarButton>
-    </div>
-  );
+  return <Popover modal={false} open={open} onOpenChange={next => {
+    if (next) {
+      applied.current = false;
+      rememberSelection();
+      setValue(size);
+    } else {
+      if (bookmark.current && value !== size) applyInput(value);
+      bookmark.current?.unref();
+      bookmark.current = null;
+    }
+    setOpen(next);
+  }}>
+    <PopoverTrigger asChild>
+      <ToolbarButton tooltip="字号" onPointerDownCapture={rememberSelection}><CaseSensitive />{children}</ToolbarButton>
+    </PopoverTrigger>
+    <PopoverContent
+      aria-label="调整字号"
+      className="ignore-click-outside/toolbar text-plate-selection-child text-plate-size-picker"
+      collisionPadding={8}
+      onOpenAutoFocus={event => { event.preventDefault(); field.current?.focus(); field.current?.select(); }}
+      onEscapeKeyDown={() => { bookmark.current?.unref(); bookmark.current = null; }}
+      onCloseAutoFocus={event => { if (applied.current) event.preventDefault(); }}
+    >
+      <div className="text-plate-size-input">
+        <ToolbarButton tooltip="缩小字号" onClick={() => finish(String(Math.max(1, Number(size) - 1)))}><Minus /></ToolbarButton>
+        <input aria-label="字号" ref={field} value={value} inputMode="numeric" data-plate-focus="true"
+          onChange={event => setValue(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter') { event.preventDefault(); finish(value); }
+          }}
+        />
+        <ToolbarButton tooltip="增大字号" onClick={() => finish(String(Math.min(100, Number(size) + 1)))}><Plus /></ToolbarButton>
+      </div>
+      <div className="text-plate-size-presets">
+        {FONT_SIZES.map(preset => <button key={preset} type="button" aria-pressed={preset === size}
+          onMouseDown={event => event.preventDefault()} onClick={() => finish(preset)}>{preset}</button>)}
+      </div>
+    </PopoverContent>
+  </Popover>;
 }

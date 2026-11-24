@@ -7,11 +7,16 @@ pub use manual::{GalleryMerge, GalleryMergeInput};
 
 pub(crate) const WORKFLOW_GALLERY_CTE: &str = concat!(r#"
 workflow_steps AS MATERIALIZED (
-  SELECT w.project_id,s.key AS source_id,s.value AS step
+  SELECT w.project_id,s.key AS source_id,
+    CASE WHEN json_extract(s.value,'$.comfyOptimization') IS NOT NULL
+      THEN json_remove(s.value,'$.agentRunId') ELSE s.value END AS step
   FROM canvas_workflows w,json_each(COALESCE(json_extract(w.document_json,'$.runs'),json_array(json_extract(w.document_json,'$.run')))) r,
     json_each(r.value,'$.steps') s
-  -- Prompt optimization can have an agentRunId, but produces no media.
-  WHERE json_extract(s.value,'$.comfyOptimization') IS NULL
+  -- Auto-optimized images use the ordinary image job. The optimizer's agentRunId is text-only.
+  WHERE json_extract(s.value,'$.comfyOptimization') IS NULL OR (
+    json_type(s.value,'$.comfyAutoGeneration.imageInput')='object'
+    AND json_type(s.value,'$.jobId')='text' AND json_extract(s.value,'$.jobId')<>''
+  )
 ),
 workflow_job_roots AS (
   SELECT project_id,source_id,json_extract(step,'$.jobId') AS job_id FROM workflow_steps
@@ -145,12 +150,20 @@ pub(super) fn with_gallery_cache<T>(
 ) -> crate::error::AppResult<T> {
     if !required { return query(conn, WORKFLOW_GALLERY_CTE); }
     let tx = conn.unchecked_transaction()?;
+    let provenance = catalog_provenance(&tx)?;
+    let value = query(&tx, provenance)?;
+    tx.commit()?;
+    Ok(value)
+}
+
+/// Reuse the connection's provenance cache inside a caller's existing transaction.
+pub(super) fn catalog_provenance(tx: &rusqlite::Transaction<'_>) -> crate::error::AppResult<&'static str> {
     // Pin the main database before checking data_version, including changes
     // committed by another connection (which cannot fire our TEMP triggers).
     tx.query_row("SELECT rootpage FROM main.sqlite_schema WHERE name='assets'", [], |_| Ok(()))?;
     let version: i64 = tx.query_row("PRAGMA main.data_version", [], |r| r.get(0))?;
     let initialized: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_temp_master WHERE name='catalog_cache_version')", [], |r| r.get(0))?;
-    if !initialized { init_catalog_cache(&tx)?; }
+    if !initialized { init_catalog_cache(tx)?; }
     let current: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM catalog_cache_version WHERE version=?1)", [version], |r| r.get(0))?;
     if !current {
         tx.execute_batch(&format!("DELETE FROM catalog_provenance;
@@ -160,9 +173,7 @@ pub(super) fn with_gallery_cache<T>(
         tx.execute("DELETE FROM catalog_cache_version", [])?;
         tx.execute("INSERT INTO catalog_cache_version VALUES(?1)", [version])?;
     }
-    let value = query(&tx, CACHED_GALLERY_CTE)?;
-    tx.commit()?;
-    Ok(value)
+    Ok(CACHED_GALLERY_CTE)
 }
 
 impl crate::db::Database {

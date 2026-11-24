@@ -5,6 +5,112 @@ use crate::db::Database;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoTextTagStatus {
+    has_transcript: bool,
+    has_description: bool,
+    available: bool,
+    credits: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn video_text_tags_status(
+    db: State<'_, Arc<Database>>,
+    asset_id: String,
+) -> Result<VideoTextTagStatus, String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || video_text_status(&db, &asset_id))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+fn video_text_status(db: &Database, asset_id: &str) -> crate::error::AppResult<VideoTextTagStatus> {
+    use super::video_asset_revision::{source, FileStamp, SourceUsage};
+    let mut status = VideoTextTagStatus::default();
+    let Ok(path) = source(db, asset_id, SourceUsage::VideoAnalysis) else { return Ok(status) };
+    let Ok(stamp) = FileStamp::read(&path) else { return Ok(status) };
+    if !db.connected_source_matches(asset_id, &path)? {
+        return Ok(status);
+    }
+    let conn = db.conn.lock().unwrap();
+    let mut statement = conn.prepare(
+        "SELECT kind, json_extract(payload, '$.stamp') FROM analyses WHERE asset_id=?1
+         AND kind IN ('video_transcript', 'video_analysis') AND json_valid(payload)
+         AND json_extract(payload, '$.current')=1 AND json_extract(payload, '$.status')='completed'
+         AND json_type(payload, '$.stamp')='object' AND json_type(payload, '$.text')='text'
+         AND trim(json_extract(payload, '$.text'), ' ' || char(9,10,11,12,13,160,12288)) != ''",
+    )?;
+    let mut rows = statement.query([asset_id])?;
+    while let Some(row) = rows.next()? {
+        let kind: String = row.get(0)?;
+        let saved_stamp: Option<String> = row.get(1)?;
+        if saved_stamp.as_deref().and_then(|saved| serde_json::from_str::<FileStamp>(saved).ok()).as_ref() == Some(&stamp) {
+            status.has_transcript |= kind == "video_transcript";
+            status.has_description |= kind == "video_analysis";
+        }
+    }
+    if FileStamp::read(&path).ok().as_ref() != Some(&stamp) {
+        return Ok(VideoTextTagStatus::default());
+    }
+    // No provider has verified production pure-text usage, and the independent
+    // Bcoin service is not activated. This command only inspects the local record.
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn video_text_tags_start(
+    asset_id: String,
+    expected_credits: u32,
+) -> Result<(), String> {
+    let _ = (asset_id, expected_credits);
+    Err("视频文本打标签服务暂未开放".into())
+}
+
+#[cfg(test)]
+mod video_text_tags_tests {
+    use super::*;
+    use crate::commands::video_asset_revision::FileStamp;
+    use serde_json::json;
+
+    #[test]
+    fn current_transcript_and_description_are_independent_and_service_stays_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("video.mp4");
+        std::fs::write(&path, b"original").unwrap();
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let stamp = FileStamp::read(&path).unwrap();
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO assets(id,name,ext,store_path,created_at) VALUES ('video','素材','mp4',?1,1)",
+            [path.to_str().unwrap()],
+        ).unwrap();
+
+        let save = |kind: &str, value: &str| {
+            db.conn.lock().unwrap().execute(
+                "INSERT OR REPLACE INTO analyses(id,asset_id,kind,payload,created_at) VALUES (?1,'video',?1,?2,1)",
+                (kind, json!({ "status": "completed", "current": true, "stamp": stamp, "text": value }).to_string()),
+            ).unwrap();
+        };
+        let check = |transcript, description| {
+            let status = video_text_status(&db, "video").unwrap();
+            assert_eq!((status.has_transcript, status.has_description), (transcript, description));
+            assert!(!status.available);
+            assert!(status.credits.is_none());
+        };
+        check(false, false);
+        save("video_transcript", "口播");
+        check(true, false);
+        save("video_analysis", "挥拍");
+        check(true, true);
+        save("video_transcript", "  \t\n");
+        check(false, true);
+        std::fs::write(&path, b"replaced original").unwrap();
+        check(false, false);
+    }
+}
+
 #[tauri::command]
 pub async fn global_classification_view(db: State<'_, Arc<Database>>, paths: Vec<String>) -> Result<crate::core::local_classification::global::View, String> {
     let db = db.inner().clone();

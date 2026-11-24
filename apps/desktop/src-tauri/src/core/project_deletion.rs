@@ -57,6 +57,7 @@ fn linked(conn: &Connection, project: &str, id: &str) -> AppResult<bool> {
     let mut stmt = conn.prepare_cached("SELECT
       EXISTS(SELECT 1 FROM external_assets WHERE asset_id=?2) OR
       EXISTS(SELECT 1 FROM connected_entries WHERE asset_id=?2) OR
+      EXISTS(SELECT 1 FROM independent_library_assets WHERE asset_id=?2) OR
       EXISTS(SELECT 1 FROM project_assets WHERE asset_id=?2 AND project_id<>?1) OR
       EXISTS(SELECT 1 FROM canvas_nodes WHERE asset_id=?2 AND project_id<>?1) OR
       EXISTS(SELECT 1 FROM asset_collections WHERE asset_id=?2) OR
@@ -90,6 +91,16 @@ fn referenced_assets(conn: &Connection, project: &str, candidates: &[Candidate],
     for (id, store, _, _) in candidates {
         if let Some(path) = store {
             paths.entry(path_key(Path::new(path))).or_default().push(id);
+        }
+    }
+    // A retained payload may predate a managed file move and name only its former path.
+    let mut aliases = conn.prepare_cached("SELECT path FROM external_asset_paths WHERE asset_id=?1")?;
+    for (id, _, _, _) in candidates {
+        check()?;
+        let mut rows = aliases.query([id])?;
+        while let Some(row) = rows.next()? {
+            let path: String = row.get(0)?;
+            paths.entry(path_key(Path::new(&path))).or_default().push(id);
         }
     }
     // Input references in retained audit rows remain protected even inside the deleted project.
@@ -899,6 +910,30 @@ mod tests {
         assert_eq!(impact.preserved_shared_count, 1);
         delete(&db, &paths).unwrap();
         assert!(file.exists());
+    }
+
+    #[test]
+    fn global_collection_and_workflow_using_a_historical_path_survive_project_deletion() {
+        let (db, paths) = fixture();
+        let independent = asset(&db, &paths, "independent");
+        let aliased = asset(&db, &paths, "moved");
+        let exclusive = asset(&db, &paths, "exclusive");
+        let old = paths.images.join("previous location.png");
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO independent_library_assets(asset_id) VALUES('independent')", []).unwrap();
+            conn.execute("INSERT INTO external_asset_paths(asset_id,path) VALUES('moved',?1)", [old.to_string_lossy()]).unwrap();
+            let workflow = serde_json::json!({"schema_version":1,"nodes":[{"inputs":{"image":[{"path":old}]}}]});
+            conn.execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('other',1,?1)", [workflow.to_string()]).unwrap();
+        }
+        let impact = db.project_exclusive_impact(&paths, "p").unwrap();
+        assert_eq!(impact.exclusive_asset_ids, ["exclusive"]);
+        delete(&db, &paths).unwrap();
+        assert!(independent.is_file());
+        assert!(aliased.is_file());
+        assert!(!exclusive.exists());
+        assert!(db.get_asset("independent").unwrap().is_some());
+        assert!(db.get_asset("moved").unwrap().is_some());
     }
 
     #[test]

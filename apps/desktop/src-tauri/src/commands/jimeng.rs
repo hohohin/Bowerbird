@@ -220,11 +220,27 @@ pub async fn dreamina_check_login(device_code: String) -> Result<DreaminaHealth,
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let out = tokio::time::timeout(std::time::Duration::from_secs(90), cmd.output())
-        .await
-        .map_err(|_| AppError::Jimeng("dreamina checklogin 超时（90s）".into()))?
-        .map_err(|e| AppError::Jimeng(format!("启动 checklogin 失败: {e}")))?;
-    let health = dreamina_login_health(&binary).await;
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    {
+        let mut slot = DREAMINA_LOGIN_CANCEL.lock().unwrap();
+        if slot.is_some() {
+            return Err(AppError::Jimeng("即梦正在确认授权，请等待当前操作结束。".into()));
+        }
+        *slot = Some(cancel_tx);
+    }
+    let check = async {
+        let out = tokio::time::timeout(std::time::Duration::from_secs(90), cmd.output())
+            .await
+            .map_err(|_| AppError::Jimeng("dreamina checklogin 超时（90s）".into()))?
+            .map_err(|e| AppError::Jimeng(format!("启动 checklogin 失败: {e}")))?;
+        Ok::<_, AppError>((out, dreamina_login_health(&binary).await))
+    };
+    let result = tokio::select! {
+        result = check => result,
+        _ = cancel_rx.changed() => Err(AppError::Jimeng("已取消".into())),
+    };
+    DREAMINA_LOGIN_CANCEL.lock().unwrap().take();
+    let (out, health) = result?;
     if health.status != DreaminaStatus::LoginRequired {
         Ok(store_health(health))
     } else {
@@ -339,6 +355,8 @@ fn dreamina_install_target() -> (String, PathBuf) {
 
 /// 当前 dreamina 安装的取消信号（独立于 codex SETUP_CANCEL / 生成取消；onboarding 顺序执行不并发）。
 static DREAMINA_SETUP_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>> =
+    std::sync::Mutex::new(None);
+static DREAMINA_LOGIN_CANCEL: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>> =
     std::sync::Mutex::new(None);
 
 /// 一键安装 dreamina CLI（对称 `codex_install`）：app 内 reqwest 下载官方二进制到本地，
@@ -467,21 +485,26 @@ pub async fn dreamina_install(app: AppHandle) -> Result<CodexHealth, AppError> {
     if !binary_ok {
         return Ok(CodexHealth {
             ok: false,
+            signed_in: None,
             reason: "dreamina 下载完成但无法执行；请重启应用后再试".into(),
         });
     }
     let _ = app.emit("dreamina://health-changed", ());
     Ok(CodexHealth {
         ok: true,
+        signed_in: None,
         reason: String::new(),
     })
 }
 
-/// 取消正在进行的 dreamina 安装（`dreamina_install`）。无任务在跑则空操作。
+/// 取消正在进行的即梦安装或授权轮询。无任务在跑则空操作。
 #[tauri::command]
 pub async fn cancel_dreamina_setup() -> Result<(), AppError> {
     if let Some(tx) = DREAMINA_SETUP_CANCEL.lock().unwrap().take() {
         let _ = tx.send(());
+    }
+    if let Some(tx) = DREAMINA_LOGIN_CANCEL.lock().unwrap().as_ref() {
+        let _ = tx.send(true);
     }
     Ok(())
 }

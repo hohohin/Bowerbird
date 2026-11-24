@@ -23,20 +23,21 @@ function selectedContent(editor: PlateEditor, messages: ChatMessage[]) {
     const entry = editor.api.node<TElement>({ at: [], match: candidate => candidate.id === node.id });
     return entry ? [entry[0]] : [];
   });
-  const original = serializeMd(editor, { value: current() });
+  const original = JSON.stringify(current());
   const before = serializeMd(editor, { value: selected });
   const history = messages.slice(0, -1).filter(message => message.role !== 'system').map(message => ({ role: message.role as 'user' | 'assistant', text: textOf(message) }));
-  return { before, source: textAgentSource(before, history), changed: () => serializeMd(editor, { value: current() }) !== original };
+  return { before, source: textAgentSource(before, history), changed: () => JSON.stringify(current()) !== original };
 }
 function prepareRequest(editor: PlateEditor, messages: ChatMessage[]) {
   const toolName = editor.getOption(AIChatPlugin, 'toolName') ?? 'generate';
+  const content = selectedContent(editor, messages);
   editor.setOption(AIChatPlugin, 'toolName', toolName);
   const cells = editor.getOption({ key: KEYS.table }, 'selectedCells') as TElement[] | null;
   const tableCells = toolName === 'edit' && cells && cells.length > 1 ? cells : null;
   const selection = editor.getOption(AIChatPlugin, 'chatSelection') ?? editor.selection;
   const bookmark = selection ? editor.api.rangeRef(selection) : null;
   const prompt = textOf(messages[messages.length - 1]) + (tableCells ? '\n请返回与所选单元格数量和顺序一致的 Markdown 表格，只返回修改后的表格内容。' : '');
-  return { ...selectedContent(editor, messages), toolName, tableCells, bookmark, prompt };
+  return { ...content, toolName, tableCells, bookmark, prompt };
 }
 type Request = ReturnType<typeof prepareRequest>;
 function addComment(editor: PlateEditor, request: Request, response: string) {
@@ -82,7 +83,7 @@ function responseStream(editor: PlateEditor, generate: Generate, request: Reques
       }
       controller.enqueue({ type: 'finish' });
       controller.close();
-    } catch (error) { controller.error(error); }
+    } catch (error) { if (signal?.aborted) controller.close(); else controller.error(error); }
     finally { request.bookmark?.unref(); }
   } });
 }

@@ -11,7 +11,7 @@ import { insertExcalidraw } from '@platejs/excalidraw';
 import { insertFootnote } from '@platejs/footnote';
 import { insertColumnGroup, toggleColumnGroup } from '@platejs/layout';
 import { triggerFloatingLink } from '@platejs/link/react';
-import { insertEquation, insertInlineEquation } from '@platejs/math';
+import { insertEquation, insertInlineEquation } from './plugins/math-schema';
 import {
   insertAudioPlaceholder,
   insertFilePlaceholder,

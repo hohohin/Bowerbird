@@ -3,7 +3,8 @@ import { createRoot } from "react-dom/client";
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { ScreenshotWindow } from "../../../src/components/ScreenshotWindow";
-import { ScreenshotSettings } from "../../../src/components/ScreenshotSettings";
+
+import { ScreenshotMenu } from "../../../src/components/ScreenshotMenu";
 import { useStore } from "../../../src/store";
 import "../../../src/screenshot.css";
 const w = window as any;
@@ -63,11 +64,19 @@ mockIPC(async (command, args) => {
     if (w.failOutput) throw new Error('剪贴板暂时不可用');
     return !(w.cancelSave && args.action === 'save');
   }
-  if (command === 'screenshot_set_shortcuts') {
-    if (w.conflict) throw new Error('快捷键已被占用');
-    w.settings = { ...w.settings, screenshot_shortcuts: args.shortcuts };
+  if (command === 'screenshot_history_list') return [{ id: 'history-image', created_at: '2026-11-01T01:00:00Z', width: 320, height: 240, bytes: 1024 }];
+  if (command === 'screenshot_history_image') return (await new Promise<Blob>(resolve => image.toBlob(blob => resolve(blob!)))).arrayBuffer();
+  if (command === 'screenshot_history_output' && args.action === 'canvas') return { savedToLibrary: true };
+  if (command === 'update_settings') {
+    if (args.applyScreenshotShortcuts && w.conflict) throw new Error('快捷键已被占用');
+    w.settings = args.settings;
   }
   if (command === 'get_settings') return w.settings;
   if (command === 'screenshot_shortcut_status') return { error: null };
 }, { shouldMockEvents: true });
-createRoot(document.getElementById('root')!).render(<React.StrictMode>{mode === 'settings' ? <div style={{ padding: 32, maxWidth: 800 }}><ScreenshotSettings /></div> : <ScreenshotWindow pinned={mode === 'pin'} />}</React.StrictMode>);
+const SettingsDialog = mode === 'settings' ? (await import("../../../src/components/SettingsDialog")).SettingsDialog : null;
+function SettingsFixture() {
+  const [open, setOpen] = React.useState(true);
+  return <><ScreenshotMenu />{open && SettingsDialog && <SettingsDialog initialSection="personalization" onClose={() => setOpen(false)} />}</>;
+}
+createRoot(document.getElementById('root')!).render(<React.StrictMode>{mode === 'settings' ? <SettingsFixture/> : <ScreenshotWindow pinned={mode === 'pin'} />}</React.StrictMode>);

@@ -19,7 +19,7 @@ export function LinkToolbarButton(
 
   return (
     <ToolbarButton {...props} {...buttonProps} data-plate-focus tooltip="链接">
-      <Link />
+      <Link />{props.children}
     </ToolbarButton>
   );
 }

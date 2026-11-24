@@ -1,4 +1,5 @@
 use super::{Decision, Gesture};
+use crate::windows_shell::{shell_path, ShellItem};
 use std::{cell::RefCell, path::PathBuf};
 use windows::{
     core::*,
@@ -55,59 +56,13 @@ impl IDropSource_Impl for Source_Impl {
 }
 
 pub fn files_data_object(paths: &[PathBuf]) -> Result<IDataObject> {
-    struct Item(*mut Common::ITEMIDLIST);
-    impl Drop for Item {
-        fn drop(&mut self) {
-            unsafe {
-                ILFree(Some(self.0));
-            }
-        }
-    }
     let mut items = Vec::new();
     for path in paths {
-        let mut item = std::ptr::null_mut();
-        unsafe {
-            SHParseDisplayName(
-                &HSTRING::from(shell_path(path).as_os_str()),
-                None,
-                &mut item,
-                0,
-                None,
-            )?;
-        }
-        items.push(Item(item));
+        items.push(ShellItem::parse(path)?);
     }
     let pointers: Vec<_> = items.iter().map(|item| item.0.cast_const()).collect();
     let array = unsafe { SHCreateShellItemArrayFromIDLists(&pointers)? };
     unsafe { array.BindToHandler(None, &BHID_DataObject) }
-}
-
-fn shell_path(path: &std::path::Path) -> PathBuf {
-    use std::path::{Component, Prefix};
-    let mut parts = path.components();
-    let mut ordinary = match parts.next() {
-        Some(Component::Prefix(prefix)) => match prefix.kind() {
-            Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", drive as char)),
-            Prefix::VerbatimUNC(server, share) => {
-                let mut value = PathBuf::from(r"\\");
-                value.push(server);
-                value.push(share);
-                value
-            }
-            _ => return path.to_path_buf(),
-        },
-        _ => return path.to_path_buf(),
-    };
-    for part in parts {
-        if part == Component::RootDir {
-            if !ordinary.has_root() {
-                ordinary.push(r"\");
-            }
-        } else {
-            ordinary.push(part.as_os_str());
-        }
-    }
-    ordinary
 }
 
 pub fn drag(

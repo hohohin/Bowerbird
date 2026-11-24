@@ -5,21 +5,13 @@ import { DeepSeekBackend, DeepSeekBackendError, deepSeekConfigFromEnv, type Deep
 import { dshDeepSeekConfig } from "../providers/deepseek/dsh-config.ts";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 import { ChatInputError, chatResult, DSH_CHAT_ENGINE, DSH_CHAT_ENGINE_V2, isDshChatEngine, validateChatInput, type ChatInput, type DshChatEngine } from "../../../cloud/supabase/functions/_shared/chat.ts";
-import { DshChatDeadline, DshChatLeaseLost, runDshChat, type DshChatOptions } from "./dsh.ts";
+import { isOfficialDeepSeekChatUpstream } from "../harness/metered-deepseek-proxy.ts";
+import { DshChatBillingLimit, DshChatDeadline, DshChatLeaseLost, runDshChat, type DshChatOptions } from "./dsh.ts";
+import { loadChatCardTool } from "./card-tool.ts";
 
 const shared = join(import.meta.dirname, "../../../cloud/supabase/functions/_shared");
 const instructions = readFileSync(join(shared, "chat-instructions.txt"), "utf8");
-const schema = JSON.parse(readFileSync(join(shared, "chat-card-tool.json"), "utf8"));
-delete schema.inputSchema.properties.cards.items.properties.provider; // Legacy completion jobs use the original card contract.
-const legacyFields = schema.inputSchema.properties.cards.items.properties;
-delete legacyFields.videoChannel;
-delete legacyFields.videoOptions;
-legacyFields.mode.enum = ["count", "rows"];
-legacyFields.mode.description = "loop only: count repeats the body; rows feeds source table rows to the body.";
-legacyFields.resolution.enum = [0.6, 0.8, 1];
-schema.description = schema.description
-  .replace("H3 video mode is text, reference (one image), or frames (default, first and optional last frame). ", "")
-  .replace("Frames may be omitted to create a draft; frames mode requires a first frame to run, reference mode requires one image, text mode needs none.", "Frames may be omitted to create a draft; running H3 requires a first frame.");
+const schema = loadChatCardTool();
 const tool = { type: "function", function: { name: schema.name, description: schema.description, parameters: schema.inputSchema } };
 
 export async function completeChatJob(input: ChatInput, model: Pick<DeepSeekBackend, "chat">) {
@@ -32,7 +24,7 @@ export async function completeChatJob(input: ChatInput, model: Pick<DeepSeekBack
   return normalized;
 }
 
-type ChatJob = { id: string; lease_id: string; input_hash: string; input_url: string; engine?: DshChatEngine; session_key?: string; previous_job_id?: string | null };
+type ChatJob = { id: string; lease_id: string; input_hash: string; input_url: string; engine?: DshChatEngine; session_key?: string; previous_job_id?: string | null; model_metering?: true; paid_billing?: unknown };
 export type ChatControl = (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
 function upstreamFailure(error: unknown): string {
@@ -62,11 +54,15 @@ export async function processChatJob(job: ChatJob, control: ChatControl, model: 
     const input = validateChatInput(JSON.parse(text));
     if (input.engine !== job.engine) throw new Error("chat_engine_identity_mismatch");
     inputReady = true;
+    if (job.paid_billing !== undefined && (input.engine !== DSH_CHAT_ENGINE_V2 || !job.session_key || job.previous_job_id === undefined)) {
+      throw new Error("dsh_paid_claim_invalid");
+    }
     if (isDshChatEngine(input.engine)) {
       if (!dsh) throw new Error("dsh_chat_worker_unavailable");
       modelName = input.dsh_options?.model ?? dsh.upstream.model;
       result = await runDshChat(input, { job_id: job.id, lease_id: job.lease_id }, control, dsh, () => { submissions++; },
-        job.session_key && job.previous_job_id !== undefined ? {session_key:job.session_key, previous_job_id:job.previous_job_id} : undefined);
+        job.session_key && job.previous_job_id !== undefined ? { session_key: job.session_key, previous_job_id: job.previous_job_id,
+          model_metering: job.model_metering, paid_billing: job.paid_billing } : undefined);
     } else {
       submissions++;
       result = await completeChatJob(input, model);
@@ -74,9 +70,10 @@ export async function processChatJob(job: ChatJob, control: ChatControl, model: 
   } catch (error) {
     if (error instanceof DshChatLeaseLost) return; // Cancellation/lease expiry owns settlement.
     const rejected = submissions === 1 && error instanceof DeepSeekBackendError && error.status !== undefined && error.status >= 400 && error.status < 500;
-    const code = submissions || error instanceof DshChatDeadline ? upstreamFailure(error)
+    const limited = error instanceof DshChatBillingLimit;
+    const code = limited ? "chat_dsh_billing_limit" : submissions || error instanceof DshChatDeadline ? upstreamFailure(error)
       : inputReady ? "chat_dsh_start_failed" : "chat_input_unavailable";
-    const status = !submissions || rejected ? "failed" : "outcome_unknown";
+    const status = !submissions || rejected || limited ? "failed" : "outcome_unknown";
     console.warn(JSON.stringify({ event: "chat_job_failed", job_id: job.id, status, error_code: code }));
     await control({ action: "finish", job_id: job.id, lease_id: job.lease_id, ...(job.engine ? { engine: job.engine } : {}), status, error_code: code });
     return;
@@ -101,12 +98,13 @@ export function chatUpstreamFetch(download: typeof fetch = fetch): DeepSeekFetch
   };
 }
 
-export async function consumeChatQueues(control: ChatControl, run: (job: ChatJob) => Promise<void>, dshEngine: DshChatEngine | false, signal?: AbortSignal) {
+export async function consumeChatQueues(control: ChatControl, run: (job: ChatJob) => Promise<void>, dshEngine: DshChatEngine | false, signal?: AbortSignal, paidTokenBilling = false) {
   async function consume(engine?: DshChatEngine) {
     const backoff = new IdlePollBackoff(1500, 15_000);
     while (!signal?.aborted) {
       try {
-        const claim = await control({ action: "claim", ...(engine ? { engine } : {}) });
+        const claim = await control({ action: "claim", ...(engine ? { engine } : {}),
+          ...(paidTokenBilling && engine === DSH_CHAT_ENGINE_V2 ? { paid_token_billing: true } : {}) });
         if (claim.job) { backoff.reset(); await run(claim.job as ChatJob); continue; }
       } catch { console.error(JSON.stringify({ event: "chat_worker_poll_failed" })); }
       await new Promise<void>(resolve => setTimeout(resolve, backoff.nextDelayMs()));
@@ -126,10 +124,13 @@ export async function runChatWorker(env: Record<string, string | undefined>): Pr
     return JSON.parse(await response.text());
   };
   const config = deepSeekConfigFromEnv(env);
+  const paidTokenBilling = env.BOWERBIRD_DSH_TOKEN_BILLING === "true";
   const dsh = env.BOWERBIRD_DSH_PROFILE_TEMPLATE && env.BOWERBIRD_DSH_RUNTIME_ROOT ? {
     profileTemplateDir: env.BOWERBIRD_DSH_PROFILE_TEMPLATE, runtimeRoot: env.BOWERBIRD_DSH_RUNTIME_ROOT,
-    skillDir: env.BOWERBIRD_TEXT_SKILL_DIR, upstream: dshDeepSeekConfig(env, config), sessionRoot: env.BOWERBIRD_DSH_SESSION_ROOT,
+    skillDir: env.BOWERBIRD_TEXT_SKILL_DIR, upstream: dshDeepSeekConfig(env, config), sessionRoot: env.BOWERBIRD_DSH_SESSION_ROOT, paidTokenBilling,
   } : undefined;
+  if (paidTokenBilling && (!dsh?.sessionRoot || !isOfficialDeepSeekChatUpstream(dsh.upstream.baseUrl))) throw new Error("chat_paid_worker_config_invalid");
   const model = new DeepSeekBackend({ ...config, timeoutMs: 90_000 }, chatUpstreamFetch());
-  await consumeChatQueues(control, job => processChatJob(job, control, model, config.model, fetch, dsh), dsh ? dsh.sessionRoot ? DSH_CHAT_ENGINE_V2 : DSH_CHAT_ENGINE : false);
+  await consumeChatQueues(control, job => processChatJob(job, control, model, config.model, fetch, dsh),
+    dsh ? dsh.sessionRoot ? DSH_CHAT_ENGINE_V2 : DSH_CHAT_ENGINE : false, undefined, paidTokenBilling);
 }

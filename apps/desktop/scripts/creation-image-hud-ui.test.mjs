@@ -37,7 +37,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.creation-image-preview-image img')?.naturalWidth > 0 && window.__reviewPending?.length === 4);
   await wait();
   const pendingInspector = modal.locator('.creation-image-preview-inspector');
-  const conversation = modal.locator('section[aria-label="独立会话面板"]');
+  const conversation = modal.locator('section[aria-label="生成记录"]');
   assert.equal(await pendingInspector.isVisible(), false, 'inspector does not flash empty content while data is pending');
   assert.equal(await conversation.isVisible(), false, 'conversation waits for its data');
   const beforeData = await mainImage.boundingBox();
@@ -62,15 +62,24 @@ try {
   await page.waitForFunction(() => document.querySelector('.creation-image-preview-inspector')?.getAnimations().some(animation => animation.animationName === 'creation-image-preview-panel-in'));
   await page.waitForTimeout(420);
   assert.deepEqual(await mainImage.boundingBox(), beforeData, 'revealing the inspector preserves the image placement');
+  const media = modal.getByRole('region', { name: '放大图片', exact: true });
+  assert.ok((await conversation.boundingBox()).x < (await media.boundingBox()).x, 'generation record occupies the left column');
+  assert.ok((await inspector.boundingBox()).x > (await media.boundingBox()).x, 'image details occupy the right column');
+  assert.deepEqual(await modal.locator('.creation-image-preview-layout > section').evaluateAll(sections => sections.map(section => section.ariaLabel)),
+    ['生成记录', '放大图片', '图片详情'], 'reading order follows the desktop columns');
+  assert.deepEqual(await modal.locator('.creation-image-preview-image-foot button[aria-pressed]').evaluateAll(buttons => buttons.map(button => button.ariaLabel)),
+    ['收起生成记录', '收起图片详情'], 'left and right HUD toggles follow the panel order');
+  assert.equal(await conversation.evaluate(section => getComputedStyle(section).getPropertyValue('--preview-exit-x')), '-8px');
+  assert.equal(await inspector.evaluate(section => getComputedStyle(section).getPropertyValue('--preview-exit-x')), '8px');
   await page.mouse.move(720, 505); await wait();
-  const neutralLeft = await inspector.boundingBox(), neutralRight = await conversation.boundingBox();
+  const neutralLeft = await conversation.boundingBox(), neutralRight = await inspector.boundingBox();
   await page.mouse.move(80, 505); await wait();
-  const leftwardLeft = await inspector.boundingBox(), leftwardRight = await conversation.boundingBox();
+  const leftwardLeft = await conversation.boundingBox(), leftwardRight = await inspector.boundingBox();
   assert.ok(leftwardLeft.height < neutralLeft.height - 4 && leftwardRight.height > neutralRight.height + 4,
     'looking left sinks the whole left panel and raises the whole right panel around the shared center');
   await page.screenshot({ path: `${output}/shared-plane-left.png` });
   await page.mouse.move(1360, 505); await wait();
-  assert.ok((await inspector.boundingBox()).height > neutralLeft.height + 4 && (await conversation.boundingBox()).height < neutralRight.height - 4,
+  assert.ok((await conversation.boundingBox()).height > neutralLeft.height + 4 && (await inspector.boundingBox()).height < neutralRight.height - 4,
     'looking right reverses the depth of both panels');
   await page.screenshot({ path: `${output}/shared-plane-right.png` });
   await page.mouse.move(1400, 920); await wait();
@@ -121,13 +130,14 @@ try {
   assert.equal(await modal.getAttribute('data-panels-locked'), null, 'removing an inline editor releases the shared motion lock');
   // Both toggles remain available while the reading panels are hidden.
   await modal.getByRole('button', { name: '收起图片详情', exact: true }).click();
-  await modal.getByRole('button', { name: '收起会话', exact: true }).click();
+  await modal.getByRole('button', { name: '收起生成记录', exact: true }).click();
   await pendingInspector.waitFor({ state: 'hidden' }); await conversation.waitFor({ state: 'hidden' });
   assert.deepEqual(await mainImage.boundingBox(), beforeCollapse, 'hiding both panels preserves the free image stage');
-  await modal.getByRole('button', { name: '显示会话', exact: true }).click();
+  await modal.getByRole('button', { name: '显示生成记录', exact: true }).click();
   await conversation.waitFor({ state: 'visible' });
   await modal.getByRole('button', { name: '显示图片详情', exact: true }).click();
-  await inspector.waitFor({ state: 'visible' }); await wait();
+  await inspector.waitFor({ state: 'visible' });
+  await inspector.evaluate(panel => Promise.allSettled(panel.getAnimations().map(animation => animation.finished)));
   await assertHudAccessible();
   await inspector.locator('.asset-detail-panel').evaluate(el => el.scrollTop = 0);
   await page.screenshot({ path: `${output}/projection-ready-dark.png` });
@@ -185,11 +195,11 @@ try {
   await page.waitForFunction(() => document.querySelector('.creation-image-preview-image img:not(.creation-image-preview-thumbnail)')?.naturalWidth > 0);
   assert.equal(await scale(), thumbnailScale, 'replacing the thumbnail with the original preserves zoom');
 
-  await page.goto('http://127.0.0.1:17948/scripts/fixtures/creation-image-review/preview.html');
+  await page.goto('http://127.0.0.1:17948/scripts/fixtures/creation-image-review/preview.html?reference');
   await mainImage.waitFor();
   await page.waitForFunction(() => [...document.querySelectorAll('.creation-image-preview img')].every(img => img.complete && img.naturalWidth > 0));
   await wait();
-  await modal.getByRole('button', { name: '点击放大', exact: true }).first().click();
+  await modal.getByRole('button', { name: '放大参考图 1', exact: true }).first().click();
   const nested = page.locator('.media-lightbox');
   const nestedImage = nested.locator('img');
   await nestedImage.waitFor();
@@ -296,11 +306,18 @@ try {
     }
   }
   await page.setViewportSize({ width: 1440, height: 960 });
+  await wait();
+  const generatedStage = await media.boundingBox();
   await page.getByRole('button', { name: '查看普通图片', exact: true }).click(); await wait();
   assert.equal(await mainImage.isVisible(), true);
   assert.equal(await inspector.isVisible(), true);
-  assert.equal(await modal.getByRole('region', { name: '独立会话面板' }).count(), 0);
-  assert.equal(await modal.getByRole('button', { name: /收起会话|显示会话/ }).count(), 0);
+  await inspector.evaluate(panel => Promise.allSettled(panel.getAnimations().map(animation => animation.finished)));
+  const plainStage = await media.boundingBox();
+  assert.deepEqual([plainStage.x, plainStage.width], [generatedStage.x, generatedStage.width], 'an ordinary image keeps the middle column');
+  assert.ok((await inspector.boundingBox()).x > plainStage.x, 'an ordinary image still has details on the right');
+  assert.equal(await modal.getByRole('region', { name: '生成记录', exact: true }).count(), 0,
+    await modal.locator('.creation-image-preview-conversation:not(.creation-image-preview-inspector)').allTextContents());
+  assert.equal(await modal.getByRole('button', { name: /收起生成记录|显示生成记录/ }).count(), 0);
   await page.screenshot({ path: `${output}/imported-light.png` });
   // Exercise the same image anchor at wide and tall aspect ratios without changing fixture data.
   for (const ratio of [2.4, .3]) {
@@ -320,10 +337,18 @@ try {
   assert.equal(await inspector.evaluate(el => getComputedStyle(el).transform), 'none', 'reduced motion also disables shared-plane perspective');
   await modal.getByRole('button', { name: '关闭预览', exact: true }).click();
   await modal.waitFor({ state: 'detached' });
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.getByRole('button', { name: '重播', exact: true }).click();
+  await inspector.waitFor({ state: 'visible' });
+  const columnCount = () => modal.locator('.creation-image-preview-layout').evaluate(layout => getComputedStyle(layout).gridTemplateColumns.split(' ').length);
+  assert.equal(await columnCount(), 2, 'a narrow preview keeps two explicit columns');
+  await modal.getByRole('button', { name: '关闭预览', exact: true }).click();
+  await modal.waitFor({ state: 'detached' });
   await page.setViewportSize({ width: 375, height: 900 });
   await page.getByRole('button', { name: '重播', exact: true }).click();
   await mainImage.waitFor();
   await inspector.waitFor({ state: 'visible' }); await wait();
+  assert.equal(await columnCount(), 1, 'the narrowest preview stacks all sections in one column');
   await assertHudAccessible();
   await page.screenshot({ path: `${output}/docked-375.png` });
   await page.mouse.click(8, 75);

@@ -11,13 +11,14 @@ const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 const modifier = process.platform === "darwin" ? "Meta" : "Control";
 const card = id => page.locator(`[data-workflow-card="${id}"]`);
+const handle = id => card(id).getByTitle("拖动卡片");
 const material = page.locator('[data-canvas-node-id="old"]');
 const stage = page.locator(".canvas-stage");
 const saved = () => page.evaluate(() => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes);
 async function selectPair() {
   await stage.click({ position: { x: 950, y: 600 } });
-  await card("first").getByLabel("拖动卡片").click();
-  await card("second").getByLabel("拖动卡片").click({ modifiers: [modifier] });
+  await handle("first").click();
+  await handle("second").click({ modifiers: [modifier] });
   await page.waitForFunction(() => document.querySelectorAll(".workflow-card.is-selected").length === 2);
 }
 async function undo() {
@@ -64,14 +65,14 @@ try {
   await selectPair(); await card("first").getByRole("button", { name: "删除卡片", exact: true }).click();
   await card("second").waitFor({ state: "detached" }); await undo();
   // An unselected right-click target is removed alone.
-  await selectPair(); await card("outside").getByLabel("拖动卡片").click({ button: "right" });
+  await selectPair(); await handle("outside").click({ button: "right" });
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: "从画布移出", exact: true }).click();
   await card("outside").waitFor({ state: "detached" }); assert.equal(await card("first").count(), 1);
   await stage.focus(); await page.keyboard.press(`${modifier}+z`); await card("outside").waitFor();
   // Native images and workflow cards are one deletion/undo action.
   await selectPair(); await material.click({ modifiers: [modifier], position: { x: 20, y: 20 } });
-  await card("first").getByLabel("拖动卡片").click({ button: "right" });
+  await handle("first").click({ button: "right" });
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: "从画布移出所选 3 项", exact: true }).click();
   await material.waitFor({ state: "detached" }); await card("second").waitFor({ state: "detached" });
@@ -85,7 +86,7 @@ try {
     controller.document = { ...controller.document, runs: [run], run };
   });
   await stage.focus(); await page.keyboard.press("Delete");
-  await page.getByText("此卡片关联的工作流正在运行，请先停止对应流程", { exact: false }).waitFor();
+  await page.getByText("卡片正在使用，请先停止对应任务再删除", { exact: true }).waitFor();
   assert.equal(await card("first").count(), 1); assert.equal(await material.count(), 1);
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import("/src/lib/canvasWorkflowRuntime.ts");

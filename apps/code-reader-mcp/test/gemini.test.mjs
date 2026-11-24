@@ -8,7 +8,7 @@ import { mkdtemp, mkdir, copyFile, readFile, writeFile, rm } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { digest, TOOLS } from '../core.mjs';
-import { createHttpApp } from '../http-app.mjs';
+import { createHttpApp } from '../local-http-app.mjs';
 import { validGoogleRedirect } from '../gemini-oauth.mjs';
 
 const origin = 'https://mcp.example.invalid';
@@ -198,8 +198,8 @@ test('restricted launcher keeps the HTTP port and authorization during SSH retri
   let child;
   try {
     await mkdir(path.join(root, '.local'));
-    const names = ['gemini-server.mjs', 'http-app.mjs', 'gemini-oauth.mjs', 'core.mjs', 'protocol.mjs',
-      'package.json', 'run-gemini.mjs', 'setup-gemini.mjs'];
+    const names = ['gemini-server.mjs', 'local-http-app.mjs', 'gemini-oauth.mjs', 'core.mjs', 'protocol.mjs',
+      'package.json', 'run-gemini.mjs', 'setup-gemini.mjs', 'run-local-gemini.mjs', 'setup-local-gemini.mjs', 'gemini-config-mode.mjs'];
     for (const name of names) await copyFile(new URL('../' + name, import.meta.url), path.join(root, name));
     const setup = (...args) => execFileSync(process.execPath, [path.join(root, 'setup-gemini.mjs'), ...args], { stdio: 'pipe' });
     setup('--origin', origin);

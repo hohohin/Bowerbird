@@ -22,7 +22,13 @@ await fresh();await page.keyboard.type('Original paragraph');await page.keyboard
 await fresh();await page.evaluate(()=>{window.agentReadError=true;});await ask('帮我继续写');await page.getByRole('button',{name:'取回原请求',exact:true}).click({trial:true});await page.evaluate(()=>{window.agentReadError=false;});await page.getByRole('button',{name:'取回原请求',exact:true}).click();await page.waitForFunction(()=>window.draft?.markdown.includes('雨落在空荡的街道'));assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='agent_ds_workflow_start').length),1);console.log('PASS editor Agent original-request recovery');
 await fresh();await page.keyboard.type('Original paragraph');await page.keyboard.press('Home');await page.keyboard.press('Shift+End');await toolbar.getByRole('button',{name:'Agent 指令',exact:true}).click();await page.getByRole('option',{name:'润色',exact:true}).click();await page.getByRole('option',{name:'接受',exact:true}).waitFor();await page.getByRole('option',{name:'接受',exact:true}).click();assert.match(await editor.innerText(),/雨落在空荡的街道/);assert.doesNotMatch(await editor.innerText(),/Original paragraph/);console.log('PASS preset rewrite applies tracked suggestions');
 for(const accept of [false,true]){
-await fresh();await page.keyboard.type('Comment target');await page.keyboard.press('Home');await page.keyboard.press('Shift+End');await toolbar.getByRole('button',{name:'Agent 指令',exact:true}).click();await page.getByRole('option',{name:'评论',exact:true}).click();await page.getByRole('button',{name:accept?'接受':'拒绝',exact:true}).click();const stored=readDocumentState(await page.evaluate(()=>window.draft.markdown));assert.equal(stored.value?.discussions?.length??0,accept?1:0);console.log('PASS Agent comment',accept?'accept':'reject');
+await fresh();await page.keyboard.type('Comment target');await page.keyboard.press('Home');await page.keyboard.press('Shift+End');await toolbar.getByRole('button',{name:'Agent 指令',exact:true}).click();await page.getByRole('option',{name:'评论',exact:true}).click();await page.getByRole('button',{name:accept?'接受':'拒绝',exact:true}).click();
+await page.waitForFunction(async count=>{
+ const {readDocumentState}=await import('/src/lib/documentState.ts');
+ const stored=readDocumentState(window.draft?.markdown??'');
+ return stored.source.includes('Comment target')&&(stored.value?.discussions?.length??0)===count;
+},accept?1:0);
+console.log('PASS Agent comment',accept?'accept':'reject');
 }
 
 for(const valid of [true,false]){
@@ -37,7 +43,26 @@ for(const valid of [true,false]){
 }
 await fresh();await toolbar.getByRole('button',{name:'Agent 指令',exact:true}).click();await page.getByRole('button',{name:/选择Agent模型/}).click();await page.getByRole('button',{name:'Cloud DSH',exact:true}).click();await page.getByPlaceholder('让 Agent 帮你写作…').fill('Cloud text');await page.keyboard.press('Enter');await page.getByRole('option',{name:'接受',exact:true}).click();assert.match(await editor.innerText(),/雨落在空荡的街道/);assert.equal(await page.evaluate(()=>window.calls.find(c=>c.command==='cloud_agent_start').args.agentRuntime),'dsh');console.log('PASS full editor Cloud DSH generation');
 
-await fresh();await page.keyboard.type('Original');await page.keyboard.press('Home');await page.keyboard.press('Shift+End');await page.evaluate(()=>window.agentHold=true);await ask('Rewrite');await page.waitForFunction(()=>window.calls.some(c=>c.command==='agent_ds_workflow_result'));await editor.locator('[data-slate-string]').first().click();await page.keyboard.press('End');await page.keyboard.type(' manual edit');await page.evaluate(()=>window.agentHold=false);await page.getByRole('option',{name:'接受',exact:true}).waitFor();assert.equal(readDocumentState(await page.evaluate(()=>window.draft.markdown)).source.trim(),'Original manual edit');assert.ok((await page.getByPlaceholder('让 Agent 帮你写作…').boundingBox()).width>=300);console.log('PASS concurrent edit retains manual text and shows a readable preview');
+await fresh();
+await page.evaluate(()=>{
+ window.agentHold=true;
+ window.cloudPreviewEvents=['','雨落在'].map(text=>({type:'text.rewrite.delta',display_payload:{schemaVersion:1,attempt:1,offset:0,text}}));
+});
+await toolbar.getByRole('button',{name:'Agent 指令',exact:true}).click();await page.getByRole('button',{name:/选择Agent模型/}).click();await page.getByRole('button',{name:'Cloud DSH',exact:true}).click();await page.getByPlaceholder('让 Agent 帮你写作…').fill('Cloud text');await page.keyboard.press('Enter');
+await page.getByLabel('Agent 回复预览').filter({hasText:'雨落在'}).waitFor();
+await page.evaluate(()=>window.cloudPreviewEvents.push(
+ {type:'text.rewrite.delta',display_payload:{schemaVersion:1,attempt:2,offset:0,text:''}},
+ {type:'text.rewrite.delta',display_payload:{schemaVersion:1,attempt:1,offset:3,text:'不应出现'}},
+ {type:'text.rewrite.delta',display_payload:{schemaVersion:1,attempt:2,offset:0,text:'雨落在空荡的'}}));
+await page.getByLabel('Agent 回复预览').filter({hasText:'雨落在空荡的'}).waitFor();
+assert.doesNotMatch(await editor.innerText(),/雨落|不应出现/);
+await page.evaluate(()=>{window.agentHold=false;});
+await page.getByRole('option',{name:'接受',exact:true}).click();assert.match(await editor.innerText(),/雨落在空荡的街道/);
+console.log('PASS Cloud preview extends the original stream before final response without changing the document');
+
+await fresh();await page.keyboard.type('Original');await page.keyboard.press('Home');await page.keyboard.press('Shift+End');await page.evaluate(()=>window.agentHold=true);await ask('Rewrite');await page.waitForFunction(()=>window.calls.some(c=>c.command==='agent_ds_workflow_result'));await editor.locator('[data-slate-string]').first().click();await page.keyboard.press('End');await page.keyboard.type(' manual edit');await page.evaluate(()=>window.agentHold=false);await page.getByRole('option',{name:'接受',exact:true}).waitFor();
+await page.waitForFunction(()=>window.draft?.markdown.includes('Original manual edit'));
+assert.equal(readDocumentState(await page.evaluate(()=>window.draft.markdown)).source.trim(),'Original manual edit');assert.ok((await page.getByPlaceholder('让 Agent 帮你写作…').boundingBox()).width>=300);console.log('PASS concurrent edit retains manual text and shows a readable preview');
 await fresh();await page.evaluate(()=>{window.agentHold=true;window.agentCancelError=true;});await ask('cancel test');await page.waitForFunction(()=>window.calls.some(c=>c.command==='agent_ds_workflow_result'));await page.keyboard.press('Escape');await page.getByRole('button',{name:'再次停止',exact:true}).waitFor();await page.evaluate(()=>{window.agentCancelError=false;});await page.getByRole('button',{name:'再次停止',exact:true}).click();await page.getByRole('button',{name:'再次停止',exact:true}).waitFor({state:'hidden'});assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='agent_ds_workflow_start').length),1);assert.doesNotMatch(await editor.innerText(),/雨落在空荡的街道/);console.log('PASS failed cancellation retries original request without writing');
 assert.deepEqual(errors,[]);
 }finally{console.log('PAGE_ERRORS',errors);console.log('AGENT_CALLS',await page.evaluate(()=>window.calls.filter(c=>/agent_ds|cloud_agent/.test(c.command))));console.log('VISIBLE',await page.locator('body').innerText());await mkdir('.tmp/text-editor-agent',{recursive:true});await page.screenshot({path:'.tmp/text-editor-agent/current.png'});if(process.env.BOWERBIRD_DEMO_COVERAGE){await mkdir('.tmp/text-editor-agent',{recursive:true});await writeFile('.tmp/text-editor-agent/coverage.json',JSON.stringify((await collect(),coverage)));}await browser.close();await server.close();}

@@ -1,6 +1,6 @@
 [package]
 name = "bowerbird-desktop"
-version = "26.10.1502"
+version = "26.11.2403"
 description = "Bowerbird desktop app"
 authors = ["Bowerbird"]
 edition = "2021"
@@ -56,7 +56,7 @@ tokio-tungstenite = "0.24"
 # SQLite + FTS5 + 迁移
 #   rusqlite bundled 自带 SQLite（libsqlite3-sys 0.30 bundled 模式默认启用 FTS5/JSON1）；
 #   运行时用 Database::fts5_enabled() 校验。
-rusqlite = { version = "0.32", features = ["backup", "bundled"] }
+rusqlite = { version = "0.32", features = ["backup", "bundled", "hooks"] }
 rusqlite_migration = "1"
 
 # 图像处理（Phase 1 导入流水线用）

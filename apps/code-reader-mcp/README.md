@@ -13,7 +13,88 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 
 采用官方 [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)：隧道客户端主动向 OpenAI 建立 HTTPS 连接，本机 MCP 没有 HTTP 监听端口。访问权限由 Platform 组织和 ChatGPT 工作区的隧道授权控制。不要把本服务接到匿名公网桥或无鉴权的普通隧道上。
 
-这是私有开发工具，不是 Bowerbird 产品内的 Agent Runner，不涉及 Cloud 部署、账号数据库或桌面安装包。
+这是私有开发工具，与 Bowerbird 产品内的 Agent Runner 独立。ChatGPT 使用官方私有隧道；Gemini 网页端使用下方独立子域名方案。
+
+## Gemini 网页端（已部署，账号连接待验收）
+
+2026-11-19 起，日常快照更新统一使用根目录 `update-mcp.ps1`。它导出一次共享快照并重启 GPT 隧道；正在运行的 Gemini 在下一次工具调用时检查并读取新快照，校验通过后切换，保留原访问／刷新令牌。新文件损坏、超限或暂时缺失时继续使用上一份有效快照，服务日志记录拒绝更新。Gemini 进程未运行时，统一入口会在导出成功后自动后台启动它；已有进程通过健康检查后继续使用，避免清除授权。启动互斥锁防止并发启动重复实例。首次升级旧服务需要重启一次，可能需要重新授权；后续单纯更新快照无需重启。
+
+目标地址为 `https://mcp.bowerbird.cn/mcp`。本机 `http-app.mjs` 复用 `core.mjs` 的四个只读工具与脱敏快照，通过 Streamable HTTP 提供 MCP 2025-03-26／2025-06-18／2025-11-25。HTTP 进程使用与 stdio 相同的 Node 只读文件权限，仅绑定 `127.0.0.1:48731`。公网 Nginx 经受限 SSH 反向转发到本机，VPS 只持有配置和转发公钥。
+
+OAuth 支持 Google 官方回调域名内的动态客户端注册及本机预注册客户端，使用精确回调、S256 PKCE、一次性短时授权码及本机随机授权密码。访问令牌有效期 1 小时。刷新令牌自签发或上次成功刷新起有效 30 天，刷新时复用原值。撤销授权会同时使该授权下的所有访问令牌和刷新令牌失效。授权密码、预注册客户端凭据及 SSH 私钥保留在 `.local/gemini/`。2026-11-15 经用户确认已部署，真实公网 OAuth／工具调用验证通过。详见[部署与验收记录](../../project_logs/2026-11-15-gemini-code-mcp.md)。
+
+2026-11-20 起，Gemini 启动器在本机私有目录 `.local/gemini/oauth/` 原子保存动态客户端注册、访问／刷新令牌的校验摘要和到期时间，HTTP 子进程保持只读。服务启动时校验并恢复有效记录。原始令牌、授权码和授权页面的临时会话不落盘。升级前签发的令牌只存在旧进程内存中，升级后需完成一次 Gemini 授权。之后用相同的本机配置重启服务或电脑可继续使用有效授权。修改本机授权密码或已配置的客户端凭据／回调会使原授权状态失效。
+
+### Mac 独立回环配置
+
+现有 Mac 回环配置使用 `clients` 数组、独立的 origin 和可选的 SSH 参数。保留原来的配置、注册客户端及 `node run-gemini.mjs` 启动方式。首次建立独立配置可用 `node setup-gemini.mjs --origin http://127.0.0.1:48731`。启动器默认只监听回环，显式使用 `--ssh` 时才按该配置启动转发。该模式的授权保存在进程内存中。下文的固定域名与授权持久化流程使用正式服务配置。
+
+### 本机准备
+
+```powershell
+node apps/code-reader-mcp/setup-gemini.mjs
+node apps/code-reader-mcp/prepare-gemini-deploy.mjs
+```
+
+准备程序生成独立 Ed25519 转发密钥、固定来源地址及随机授权密码，并复用本机已经信任的 VPS host key；Windows 文件 ACL 限于当前用户。查看授权密码时在本机打开 `.local/gemini/config.json` 的 `adminPassword`。部署包位于 `.local/gemini/deployment/`，只包含 `deploy/` 配置、安装／回滚脚本、公钥和 SHA256SUMS。
+
+### 本次已确认的部署范围
+
+1. 用户已在火山引擎 DNS 添加 `mcp.bowerbird.cn` 的 A 记录，值 `106.55.44.143`。部署前核实解析，服务器已签发新子域名独立证书，有效期至 2027-02-13。
+2. 使用历史部署脚本已核验的管理登录 `ubuntu@106.55.44.143`，身份为本机 `~/.ssh/bowerbird_lighthouse_ed25519`。`root` 公钥登录被拒绝；无需重置服务器密钥或开放 root 登录。
+3. 本次已上传部署包至 `/home/ubuntu/bowerbird-mcp-deploy-20261115` 并运行 `sudo bash activate.sh`。脚本先核对 SHA256SUMS、DNS 和空闲端口，再创建 `bowerbird-mcp` 专用账号及 `127.0.0.1:48732` 转发权限，配置专用 Nginx 站点、ACME webroot 和 Certbot 独立证书。SSH 与 Nginx 均先检查语法再 reload。首装若发现同名账号或文件会停止，由操作者检查现状。
+4. 专用 SSH key 只允许远程转发到 VPS 回环端口 48732；禁止 shell、SFTP、TTY、代理转发及本地转发。官网继续使用 4173。候选配置位于 `deploy/`，脚本包含失败时禁用 MCP 入口的回退。
+
+### 上线后启动与验收
+
+在任意 PowerShell 中运行以下命令导出快照并启动本机 HTTP 和 SSH 转发，保持窗口开启，Ctrl+C 会结束两个本机进程。已有 Gemini 进程须先 Ctrl+C 停止，再更新启动。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\H\Project\Bowerbird\update-gemini-mcp.ps1"
+```
+
+公网 HTTPS 证书、OAuth metadata、匿名 `/mcp` 返回 401、DCR／密码确认／PKCE／刷新／撤销及四工具调用均已验证。接下来在 Gemini Developer Mode 输入目标地址，完成本机授权密码确认，再实际调用 `project_overview` 与 `read_file`，比对快照日期和文件哈希。公网验证脚本属于受控测试客户端，尚不能计作 Google 账号实调。
+
+本轮后台进程记录在 `.local/gemini/run.pid`，输出在 `run.out.log`／`run.err.log`。该 PID 是本次启动实例的记录，操作前应核对实际进程及子进程身份；不要仅凭旧 PID 终止进程。后续使用前台启动命令时先结束当前实例，避免端口占用。
+
+2026-11-16 连接恢复：旧启动器在 SSH 收到 Connection reset 后同时退出 HTTP 服务，公网返回 502，Gemini 因而在打开授权页前显示无法访问。现改为保留 HTTP 及内存授权，每 5 秒重连 SSH；手动停止或 HTTP 本身退出时结束整个实例。真实公网已完成密码授权／PKCE 后，定向结束专用 SSH 子进程，再验证自动重连、原访问令牌和 `project_overview` 可用，测试令牌已撤销。回归使用真实受限 HTTP 子进程模拟掉线并验证 OAuth 注册保留。HTTP 进程前 100 个响应可记录固定路由、方法及状态码，不记录查询串、请求头、正文、密码或令牌。
+
+Gemini 连接窗口的 Client ID／Client secret 属于 OAuth 客户端注册信息。若显示 “Automatic registration with this server failed”，使用预注册凭据，不能继续假设可以留空，也不能把授权密码填入 Client secret：
+
+1. 点击 Gemini 的 **Copy redirect URI**，取得当前应用的完整回调 URL。在本机执行以下命令；占位内容须替换成复制的 URL：
+
+   ```powershell
+   node apps/code-reader-mcp/setup-gemini.mjs --redirect-uri '复制的Google回调URL'
+   ```
+
+2. 程序在 `.local/gemini/config.json` 保存 `oauthClient.clientId`、`oauthClient.clientSecret` 和精确的 `redirectUri`；再次执行保留原有 ID／secret。只有 Google 官方回调格式可注册，不接受通配符。配置文件仍限本机当前用户读取，不进入 Git、快照或 VPS 部署包。
+3. 重启本机 Gemini MCP 加载配置。将 `oauthClient.clientId` 填入 Gemini 的 **Client ID**，将 `oauthClient.clientSecret` 填入 **Client secret**，点击 Next。进入本站 `/oauth/authorize` 页面后，才使用同一文件中的 `adminPassword` 完成只读授权。若重新创建应用导致回调变化，重新执行第 1 步并重启。
+
+2026-11-16 已为用户提供的精确回调生成手动凭据并重启；25 项回归通过，真实公网手动客户端的 Basic／POST secret 认证、密码确认、PKCE、四工具列表、概览、刷新及撤销均通过。自动注册的回调数量上限从 5 调整为 16，可容纳 Google 文档列出的六类回调；每条仍单独校验并精确绑定。先前真实 DCR 400 只记录了状态，尚不能确定具体拒绝字段；现新增固定原因码诊断，不记录提交内容。Google 账号的实际连接结果仍需对应账号确认。
+
+2026-11-16 授权页原生表单修复：真实 Chrome 复现提交密码后 `Origin: null`、403 `forbidden`。根因为全局 `Referrer-Policy: no-referrer` 也会清除原生表单 POST 的 Origin；旧协议测试手动设置 Origin，未覆盖此浏览器行为。授权 HTML 现单独使用 `same-origin`，其余响应保留 `no-referrer`；CSP 的 `form-action` 仅额外允许当前精确注册回调所属的官方 Google 域名，避免 Chrome 阻止授权码回跳。同源／密码／Cookie／PKCE／精确回调校验仍保留，缺失或 `null` Origin 继续拒绝。已重启本机服务，以真实 Chrome 经公网完成原生密码提交、Google 回跳放行、PKCE 换码、四工具发现和测试授权撤销。重启前打开的授权页须关闭，从 Gemini 重新发起；原客户端凭据与授权密码无需更换。
+
+原有 25 项隔离回归之外，新增可选浏览器回归（需工作区 html-renderer 的 Playwright 与已安装 Chrome），覆盖原生 Origin／Secure Cookie、旧策略的 `null` Origin 拒绝及 Google 回跳放行；浏览器 DNS 禁用，使用隔离 HTTP fixture，不连接 Google 账号：
+
+```powershell
+node --test apps/code-reader-mcp/test/consent.browser.mjs
+```
+
+回退先停止本机窗口，在 VPS 部署目录运行 `sudo bash rollback.sh`。脚本禁用独立站点、撤销转发账号、公钥和连接，并重载通过语法检查的配置；证书和部署证据保留在 `/var/lib/bowerbird-mcp` 供复核。DNS 记录另行撤销。再次部署前需核对保留文件及证书，不能盲目重跑首装脚本。
+
+2026-11-15 准备核验：管理用户 SSH 成功，现役官网 active，证书 SAN 为 `bowerbird.cn`／`www.bowerbird.cn`，至 2027-01-22 到期；现役允许 SSH 转发且 GatewayPorts=no，48732 及专用账号可用。候选 Nginx 在内存配置中通过语法测试，测试时临时引用已有官网证书以校验配置；候选 sshd 及安装／回退 Bash 语法通过。展开候选 sshd 有效配置，确认仅允许 remote 转发、PermitListen=127.0.0.1:48732、PermitOpen=none、MaxSessions=0，禁用 TTY／密码／Agent 转发。18 项本机回归通过，含公有／机密客户端注册、PKCE／刷新／撤销、Host／Origin、真实受限 HTTP 进程及原 stdio 安全测试；Windows PowerShell 5.1 入口语法通过。没有启用候选配置、签发新证书或创建服务器账号。
+
+## 日常更新并启动（PowerShell）
+
+在项目根目录 `.env.tunnel` 填入 `MCP_UPDATE_KEY=你的隧道runtime key`，支持不带引号、单引号或双引号的单行值。文件已被 Git 忽略，且在快照排除范围内。
+
+在任意目录运行一行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\H\Project\Bowerbird\update-mcp.ps1"
+```
+
+入口复用 `start-tunnel.ps1 -KeyFile ... -UpdateSnapshot`，读取配置后先导出并检查最新快照，成功后停止同一可执行文件、同一项目 profile 的旧隧道，再检查并启动。此本机入口固定使用现有 tunnel ID 和 `http://127.0.0.1:7890` 代理，需保持代理和窗口开启。密钥文件缺失、配置为空或重复时停止操作；导出或覆盖检查失败会保留原快照及原隧道。密钥通过进程环境传给官方隧道客户端，退出时恢复原环境变量。PowerShell 脚本使用 UTF-8 BOM，兼容 Windows PowerShell 5.1；命令中的执行策略只作用于本次 PowerShell 进程。
 
 ## 首次使用（PowerShell）
 
@@ -64,7 +145,7 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 
 - **工具能力**：仅 `project_overview`、`list_files`、`read_file`、`search_code`；不提供 shell、文件写入、Git、网络请求或快照导出工具。所有工具声明 `readOnlyHint: true`，实际限制由实现执行。
 - **文件权限**：`run.mjs` 用 Node Permission Model 启动服务，只许可读取服务模块和固定快照；不授予文件写入、子进程、Worker 或原生 addon 权限。服务拒绝不带权限约束的直接启动。模型提供的路径只用于查内存索引，永不传给文件系统。
-- **导出范围**：固定项目根；只读当前工作区内 Git 已跟踪的文本文件（含未提交修改），另明确纳入 `dev-doc/Bowerbird开发计划.md`。未跟踪文件按下方依赖与关联测试规则补齐；文件增加或删除后需人工检查范围。`core.mjs` 的白名单控制目录及扩展名，排除点目录、`.env`、Git 数据、密钥文件、日志、数据库、构建产物、资源及测试 fixtures。
+- **导出范围**：固定项目根，以 Git 已跟踪文本及 `EXPLICIT_FILES` 为起点，递归补齐静态本地依赖，并按命名、源码文件名引用查找相关测试。发现的未跟踪源码也可进入候选。所有候选均执行相同的路径、链接、容量及脱敏检查，排除点目录、`.env`、Git 数据、密钥文件、日志、数据库、构建产物、资源及测试 fixtures。源码／测试／脚本目录中的 Python 文件受支持；`auth.ts`／`auth.rs` 等源码可读取，`auth.json` 等凭据配置继续排除。
 - **路径与容量**：拒绝绝对路径、`..`、反斜杠、百分号、Windows ADS；导出拒绝 symlink、junction、硬链接、二进制及单文件 >1 MiB；快照 ≤64 MiB / 10,000 文件。单次请求 ≤64 KiB，读取最多 200 行且有字符上限；搜索是字面匹配，避免正则回溯。
 - **凭据**：导出时隐藏疑似 token、带口令 URL、私钥块和常见带引号凭据赋值，保留行号。自动扫描可能漏掉自定义、拆分或未标注的敏感值；不能宣称任何代码都绝对无秘密。将特别敏感文件从白名单排除，审核快照后再授权隧道。
 - **信任边界**：Node 权限模型是可信代码的防误用限制，[不是抵御恶意本机代码的 OS 沙箱](https://nodejs.org/api/permissions.html)。本方案假设运行时、服务脚本和本机账号可信；本机管理员仍可改源码、快照或进程。导出期间应避免其他本机进程并发替换目录。需要抵御本机进程攻击时，应再用独立低权限账号/只读容器隔离。
@@ -72,39 +153,21 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 
 ## 更新与撤销
 
-委派网页 GPT 规划前，先导出当前工作区并重载隧道，再让规划者实际调用 `project_overview`。核对返回的 `createdAt` 与本地新快照一致后再读源码。相同 HEAD 下仍可能有新的未提交改动。未跟踪文件只有符合依赖或关联测试规则时才进入快照。
+委派网页 agent 规划前，先导出当前工作区并重载对应服务，再让规划者实际调用 `project_overview`。核对返回的 `createdAt` 与本地新快照一致，并检查 `coverageCheck`。相同 HEAD 下仍可能有新的未提交改动。
+
+### 自动依赖补齐与覆盖检查
+
+`dependencies.mjs` 只分析文本，不执行项目代码。支持 JS／TS 静态 import／export、字面量 require／import()、`@/` 源码别名、扩展名与 index 解析，以及 Rust `mod`／`#[path]`／`include_str!`／`include_bytes!`／`include!` 的字面量路径。自动补齐递归执行并去重，再发现相邻单元测试、scripts／test／tests 下的相关测试，测试的静态依赖也进入同一检查。新的无引用实现、生成器和独立数据库迁移仍可能需要显式清单。
+
+本机存在却因链接、容量或策略限制而不可导出的核心源码依赖，会使导出以失败状态结束，写出 `.local/report.json` 的具体来源、目标和原因，保留之前的 `snapshot.json`。fixtures、第三方依赖、构建产物及冻结预览 bundle 的排除单独记录。文件在本机就不存在、或路径由表达式动态拼接时，记录为待核验引用，不能据此宣称已覆盖其运行时行为。
+
+成功快照携带覆盖元数据。`project_overview.coverageCheck` 展示检查状态、补齐依赖／测试数量、未解决核心依赖数、排除数量、待核验引用数量和样例；完整清单在本机报告中。`checked` 表示已解析的现存静态核心依赖通过门禁，测试关联采用启发式，不能替代动态路径和业务行为审查。旧快照返回 `not_recorded`。
+
+2026-11-16 验证覆盖了 DSH 自动安装／登录／宿主、订阅设置组件和通知消除持久化，以及 Python 原生测试、账户 fixture 和 UI 测试。递归循环、Rust 原始字符串／生命周期、计算路径、关联测试、受限核心依赖失败保留旧快照和旧元数据兼容均有回归。
 
 更新代码后，停止隧道（Ctrl+C），重新运行 `export.mjs`，检查快照后重新启动隧道；运行中的服务保持启动时的内存快照，GPT 无权刷新。`revision` 是导出时 HEAD，**不代表未提交修改已提交**，文件 SHA-256 对应脱敏后内容。
 
 临时停用：Ctrl+C 停隧道。长期撤销：在 ChatGPT 移除连接，并在 Platform 禁用/删除隧道或撤销专用 runtime key。快照是本机副本，可按需删除 `.local`；这不能撤回已进入聊天的文本。
-
-## 自动依赖补齐与覆盖检查
-
-从 Git 跟踪文件和显式架构入口出发，递归补齐 JS／TS 字面量相对导入与导出、Rust 外部模块和字面量 include。按同应用、相同文件名规则找关联测试，Python 仅纳入源码、测试和脚本目录。所有补齐文件通过原路径白名单、链接检查、容量和凭据脱敏；Git 忽略文件不会作为未跟踪文件自动补齐。现存且符合文件类型白名单的核心依赖如果不可读取或不适合纳入，覆盖检查会拒绝替换原快照。
-
-`project_overview.coverageCheck` 与本机报告包含补齐文件、关联测试和未解析引用数。解析是静态规则，动态路径、导入别名、历史源码或部分内联 Rust 模块可能需要人工核实。快照发布前仍要审核实际内容。
-
-## Gemini 网页端已部署账号连接待验收
-
-11 月 15–16 日现役实例的部署和验收见 [历史记录](../../project_logs/2026-11-15-gemini-code-mcp.md)。11 月 19 日在 Mac 从仓库记录复现本机源码，使用四个原只读工具、Streamable HTTP 与带 S256 PKCE 的 OAuth，以及可选 SSH 反向转发和重连。当前 Mac 的验证范围为合成数据和本机回环，不代表 Gemini 账号或公网实例由本次复现重新验收。
-
-### 本机启动
-
-在 `apps/code-reader-mcp` 用 Node 24.10+ 执行以下命令。首先审核生成的 `.local/snapshot.json`。
-
-```sh
-node export.mjs
-node setup-gemini.mjs --origin http://127.0.0.1:48731
-node run-gemini.mjs
-```
-
-`/healthz` 可检查监听状态，匿名访问 `/mcp` 返回 401。首次配置生成独立访问密码保存在受限的 `.local/gemini/config.json`。手动客户端用 `node setup-gemini.mjs --redirect-uri <Gemini 提供的精确回调>` 注册，重启后读取本机配置中的 Client ID 和 secret。密码只用于本服务授权表单。访问令牌、动态客户端和会话驻留内存，进程重启后需重新授权。
-
-### 上线后启动与验收
-
-公网接入配置使用对应的 HTTPS origin 并保留代理传入的原 Host。已有独立转发账号时，可在本机配置填入 `ssh.host`、`ssh.user`、`ssh.identityFile`、`ssh.knownHosts` 和 `ssh.remotePort` 后执行 `node run-gemini.mjs --ssh`。固定监听本机回环，VPS 远程端口也绑定回环。SSH 校验已知主机，断线 5 秒后重连，本机 HTTP 与已授权会话继续运行。实际公网部署、账号授权和工具验收见历史记录。协议参考 [Gemini OAuth 指南](https://developers.google.com/connected-apps/mcp/oauth) 与 [MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)。
-
-2026-11-19 本机验证使用 `node --test test/*.test.mjs` 和 `node test/consent.browser.mjs`。后者需要 Chrome、工作区 Playwright 与 OpenSSL，在临时 HTTPS 环境验证原生表单 Origin 与精确回跳，并复现旧引用策略的 403。
 
 ## 本轮验证与限制
 

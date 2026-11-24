@@ -9,7 +9,7 @@ export const CATALOG_GAP = 8;
 export function catalogScrollScale(height: number, viewport: number) {
   return height <= 8_000_000 ? 1 : Math.max(1, 8_000_000 - viewport) / Math.max(1, height - viewport);
 }
-export interface CatalogSectionInfo { id: string; name: string; count: number; tagId: string | null }
+export interface CatalogSectionInfo { id: string; name: string; count: number; tagId: string | null; projectId?: string }
 export interface CatalogBlock {
   key: string; section: number; page: number; offset: number; count: number; top: number; height: number;
   columnTops: number[]; maxBottom: number;

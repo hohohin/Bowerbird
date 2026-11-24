@@ -10,6 +10,8 @@ mod pipeline;
 pub mod runtime;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod video_text_fixture;
 pub mod vector;
 
 use serde::Serialize;

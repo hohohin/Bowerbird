@@ -4,6 +4,9 @@
 mod error;
 #[path = "../src/core/settings.rs"]
 pub mod settings;
+#[path = "../src/core/file_workspace.rs"]
+mod file_workspace;
+mod migrate { pub type PendingMove = serde_json::Value; }
 mod core {
     pub mod canvas_frequent_assets {
         pub use bowerbird_desktop_lib::CanvasFrequentAssetsPreferences;
@@ -112,7 +115,7 @@ fn main() {
                     let mut bytes = std::io::Cursor::new(Vec::new());
                     image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
                     let data = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes.into_inner()));
-                    screenshot::screenshot_output(main.clone(), app.clone(), data.clone(), "pin".into(), None).await?;
+                    screenshot::screenshot_output(main.clone(), app.clone(), data.clone(), "pin".into(), None, None, None).await?;
                     let pinned = app.webview_windows().into_iter().find(|(label, _)| label.starts_with("pin-")).unwrap().1;
                     assert!(!pinned.is_decorated().unwrap()); assert!(pinned.is_always_on_top().unwrap()); assert!(!pinned.is_visible().unwrap());
                     let size = pinned.inner_size().unwrap().to_logical::<f64>(pinned.scale_factor().unwrap());

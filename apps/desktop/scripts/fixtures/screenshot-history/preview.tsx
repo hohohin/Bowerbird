@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { ScreenshotSettings } from '../../../src/components/ScreenshotSettings';
+import { ScreenshotMenu } from '../../../src/components/ScreenshotMenu';
 import { useStore } from '../../../src/store';
 import '../../../src/styles.css';
 
@@ -24,4 +25,4 @@ mockIPC(async (command, args) => {
   if (command === 'screenshot_history_clear') w.shots = [];
 }, { shouldMockEvents: true });
 useStore.setState({ settings: w.settings });
-createRoot(document.getElementById('root')!).render(<div style={{ padding: 24, maxWidth: 800 }}><ScreenshotSettings /></div>);
+createRoot(document.getElementById('root')!).render(<div style={{ padding: 24, maxWidth: 800 }}><ScreenshotMenu /><ScreenshotSettings /></div>);

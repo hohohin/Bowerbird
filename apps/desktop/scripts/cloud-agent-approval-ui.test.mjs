@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
+await mkdir(".tmp/cloud-agent-approval", { recursive: true });
+await writeFile(".tmp/cloud-agent-approval/mount.tsx", `
+  import React from "react";
+  import { createRoot } from "react-dom/client";
+  import { CloudAgentRuntimeCoordinator } from "/src/components/CloudAgentRuntimeCoordinator";
+  export function mountCoordinator() {
+    const root = document.createElement("div");
+    document.body.append(root);
+    createRoot(root).render(<React.StrictMode><CloudAgentRuntimeCoordinator /></React.StrictMode>);
+  }
+`);
 const server = await createServer({ server: { host: "127.0.0.1", port: 1575, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
@@ -12,9 +24,8 @@ try {
   await page.goto("http://127.0.0.1:1575/scripts/fixtures/canvas-reference/preview.html");
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(async () => {
-    const [{ useStore }, { api }, { default: React }, { default: { createRoot } }, { CloudAgentRuntimeCoordinator }] = await Promise.all([
-      import("/src/store.ts"), import("/src/lib/api.ts"), import("/node_modules/.vite/deps/react.js"),
-      import("/node_modules/.vite/deps/react-dom_client.js"), import("/src/components/CloudAgentRuntimeCoordinator.tsx"),
+    const [{ useStore }, { api }, { mountCoordinator }] = await Promise.all([
+      import("/src/store.ts"), import("/src/lib/api.ts"), import("/.tmp/cloud-agent-approval/mount.tsx"),
     ]);
     window.store = useStore;
     window.decisions = []; window.notices = []; window.failApproval = false;
@@ -22,7 +33,7 @@ try {
     window.addEventListener("bowerbird://notify", event => window.notices.push(event.detail.message));
     window.makeRun = (id = "initial", threadId = "t") => ({ runId: "run", conversationId: "conversation", skillId: "bowerbird-unified-agent",
       status: "awaiting_approval", projectId: "p", threadId, intentPrompt: "生成产品海报", referenceAssetIds: [], createdAt: 1, updatedAt: 1,
-      snapshot: { run: { skill_version: "0.1.0", agent_runtime: "dsh", progress: 20, budget_credits: 30 }, artifacts: [], clarifications: [], events: [],
+      snapshot: { run: { skill_version: "0.1.0", agent_runtime: "dsh", progress: 50, budget_credits: 30 }, artifacts: [], clarifications: [], events: [],
         approvals: [{ id, kind: "unified_agent_plan", status: "pending", requested_at: "2026-09-11T00:00:00Z", expires_at: "2099-01-01T00:00:00Z",
           planned_tool_count: 1, estimated_additional_credits: 10,
           proposal: { schemaVersion: 3, title: "产品海报", summary: "保留产品主体，生成一张海报", assetIds: [], outputCount: 1, modelTurns: 8,
@@ -61,8 +72,7 @@ try {
     };
     api.cloudAgentPreviewArtifact = async (runId, artifactId) => ({ runId, artifactId, path: "/missing-preview.png", mime: "image/png" });
     window.launch(true); window.addAgentGroup();
-    const root = document.createElement("div"); document.body.append(root);
-    createRoot(root).render(React.createElement(React.StrictMode, null, React.createElement(CloudAgentRuntimeCoordinator)));
+    mountCoordinator();
   });
   const card = page.locator('[data-canvas-node-id="agent-group:run:0:0"]');
   const toggle = card.getByRole("switch", { name: "自行批准" });
@@ -91,6 +101,21 @@ try {
   // Both surfaces share state; clarification still requires a human answer.
   await card.locator("strong").click();
   await page.getByRole("button", { name: "批准并执行", exact: true }).waitFor();
+  const progressBar = page.getByRole("progressbar", { name: "Agent 任务进度" });
+  assert.equal(await progressBar.getAttribute("aria-valuenow"), "50");
+  const previousTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  for (const theme of ["dark", "light"]) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    const progress = await progressBar.evaluate(bar => ({
+      track: getComputedStyle(bar).backgroundColor,
+      fill: getComputedStyle(bar.firstElementChild).backgroundColor,
+      fraction: bar.firstElementChild.offsetWidth / bar.offsetWidth,
+    }));
+    assert.match(progress.fill, /^rgb\(/);
+    assert.notEqual(progress.fill, progress.track);
+    assert.ok(Math.abs(progress.fraction - .5) < .01);
+  }
+  await page.evaluate(value => { document.documentElement.dataset.theme = value; }, previousTheme);
   assert.equal(await page.getByRole("switch", { name: "自行批准" }).count(), 2);
   await page.getByRole("switch", { name: "自行批准" }).last().click();
   await page.waitForFunction(() => window.decisions.length === 3);

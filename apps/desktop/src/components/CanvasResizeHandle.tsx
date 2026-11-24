@@ -41,6 +41,7 @@ export function CanvasResizeHandle({ label, size, position, corner = "se", zoom,
   return <button className="canvas-resize-handle" data-corner={corner} aria-label={label} title="拖动调整大小"
     onClick={event => event.stopPropagation()}
     onKeyDown={event => {
+      if (!drag.current && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") return;
       event.stopPropagation();
       if (event.key === "Escape" && drag.current) {
         const start = drag.current;

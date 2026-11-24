@@ -22,24 +22,32 @@ async function install() {await page.evaluate(audio=>{
 },audio);}
 try {
   await page.goto('http://127.0.0.1:1747/scripts/fixtures/canvas-reference/preview.html?strict&detail-route');
-  await page.evaluate(({audio,dir})=>sessionStorage.setItem('reference-drafts',JSON.stringify([audio,{id:'clip',name:'视频',ext:'mp4',store_path:`/${dir}/source.mp4`,width:180,height:320,duration:2}])),{audio,dir});
+  await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
+  await page.evaluate(({audio,dir})=>{
+    const clip={id:'clip',name:'视频',ext:'mp4',store_path:`/${dir}/source.mp4`,width:180,height:320,duration:2};
+    const snapshot=window.snapshot();
+    snapshot.nodes=[{...snapshot.nodes[0],id:'audio-source-clip',assetId:clip.id}];
+    sessionStorage.setItem('reference-fixture',JSON.stringify(snapshot));
+    sessionStorage.setItem('reference-drafts',JSON.stringify([audio,clip]));
+  },{audio,dir});
   await page.reload(); await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();await install();
-  await page.evaluate(()=>window.store.getState().openDetail('clip'));
-  const detail=page.locator('.asset-detail');await detail.waitFor();await page.waitForFunction(()=>document.querySelector('.asset-detail video')?.readyState>=2);
+  await page.locator('[data-canvas-node-id="audio-source-clip"]').click();
+  const preview=page.getByRole('dialog',{name:'视频与生成记录预览',exact:true});
+  await preview.waitFor();await page.waitForFunction(()=>document.querySelector('.creation-image-preview video')?.readyState>=2);
   await page.evaluate(()=>{window.failNodeSave=true;});
-  await detail.getByRole('button',{name:'提取视频音轨',exact:true}).click();await page.getByRole('menuitem',{name:'添加到画板',exact:true}).click();
-  await detail.getByRole('alert').waitFor();
+  await preview.getByRole('button',{name:'提取视频音轨',exact:true}).click();await page.getByRole('menuitem',{name:'添加到画板',exact:true}).click();
+  await preview.getByRole('alert').waitFor();
   await page.evaluate(()=>{window.failNodeSave=false;});
-  await detail.getByRole('button',{name:'提取视频音轨',exact:true}).click();await page.getByRole('menuitem',{name:'添加到画板',exact:true}).click();
-  await detail.getByRole('status').filter({hasText:'音轨已添加到画板'}).waitFor();
+  await preview.getByRole('button',{name:'提取视频音轨',exact:true}).click();await page.getByRole('menuitem',{name:'添加到画板',exact:true}).click();
+  await preview.getByRole('status').filter({hasText:'音轨已添加到画板'}).waitFor();
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='extract_video_audio').length),1);
   const saved=await page.evaluate(()=>window.snapshot().nodes.filter(n=>n.assetId==='exported-audio'));
   assert.equal(saved.length,1);assert.equal(saved[0].projectId,'p');
-  await detail.getByRole('button',{name:'返回',exact:true}).click();
+  await page.keyboard.press('Escape');await preview.waitFor({state:'hidden'});
   const card=page.locator(`[data-canvas-node-id="${saved[0].id}"]`);
   await page.screenshot({path:`${dir}/before-wave.png`});await card.locator('[data-wave-ready="true"]').waitFor();
-  await card.getByRole('button',{name:'从头播放 提取音轨',exact:true}).click();
-  await card.locator('[data-playing="true"]').waitFor();await card.getByRole('button',{name:'暂停 提取音轨',exact:true}).click();
+  await card.getByRole('button',{name:'从头播放 提取音轨',exact:true}).press('Enter');
+  await card.locator('[data-playing="true"]').waitFor();await card.getByRole('button',{name:'暂停 提取音轨',exact:true}).press('Enter');
   assert.equal(await card.locator('img').count(),0,'audio must never use the image renderer');
   await page.screenshot({path:`${dir}/canvas.png`});
   await page.evaluate(audio=>{window.save();const drafts=JSON.parse(sessionStorage.getItem('reference-drafts'));sessionStorage.setItem('reference-drafts',JSON.stringify([...drafts,audio]));},audio);

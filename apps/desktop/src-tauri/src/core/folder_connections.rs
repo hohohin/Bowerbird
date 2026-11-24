@@ -8,7 +8,7 @@ use rusqlite::{params, params_from_iter, types::Value, OptionalExtension};
 use super::{catalog_browser::{CatalogFilter, gallery_eligible, generation_display_group}, generation_gallery::with_gallery_cache};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -20,7 +20,7 @@ fn invalid(value: impl Into<String>) -> AppError {
 fn string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
-fn registered_path_spelling(path: &Path) -> PathBuf {
+pub(crate) fn registered_path_spelling(path: &Path) -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         let raw = string(path).replace('/', "\\");
@@ -28,7 +28,7 @@ fn registered_path_spelling(path: &Path) -> PathBuf {
         if let Some(unc) = raw.strip_prefix(r"\\") { return PathBuf::from(format!(r"\\?\UNC\{unc}")); }
         if path.is_absolute() { return PathBuf::from(format!(r"\\?\{raw}")); }
     }
-    path.to_owned()
+    super::paths::expand_macos_system_alias(path)
 }
 // Only the registered absolute location is probed. A recreated junction or a
 // different directory with the same basename is never a reconnect target.
@@ -69,6 +69,112 @@ fn directory(path: &Path) -> AppResult<PathBuf> {
 fn media(path: &Path) -> bool {
     external_files::image_path(path) || external_files::video_path(path) || external_files::audio_path(path) || crate::core::text_documents::text_path(path)
 }
+
+const SCAN_BATCH_SIZE: usize = 64;
+const FIRST_SCAN_BATCH_SIZE: usize = 16;
+const PARALLEL_SCAN_HASH_BYTES: u64 = 8 * 1024 * 1024;
+
+#[cfg(test)]
+std::thread_local! {
+    static SCAN_SEQUENTIAL_BASELINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+struct ScanFile {
+    source: PathBuf,
+    canonical: PathBuf,
+    metadata: fs::Metadata,
+    read_hash: bool,
+    prepared: Option<external_files::ConnectedFileFingerprint>,
+    previous: Option<String>,
+    size: i64,
+    mtime: String,
+    verification: Option<i64>,
+}
+
+impl ScanFile {
+    fn prepare(&mut self) -> AppResult<external_files::ConnectedFileFingerprint> {
+        if let Some(prepared) = self.prepared.take() {
+            return Ok(prepared);
+        }
+        Database::prepare_connected_path(self.canonical.clone(), self.metadata.clone(), self.read_hash)
+    }
+}
+
+fn prepare_scan_files(
+    batch: &mut [ScanFile],
+    initial_scan: bool,
+    yield_to_mutation: &mut impl FnMut() -> bool,
+) -> Option<Vec<AppResult<external_files::ConnectedFileFingerprint>>> {
+    if !initial_scan {
+        return Some(batch.iter_mut().map(ScanFile::prepare).collect());
+    }
+    let hash_bytes: u64 = batch.iter().filter(|entry| entry.read_hash).map(|entry| entry.metadata.len()).sum();
+    let workers = if hash_bytes >= PARALLEL_SCAN_HASH_BYTES {
+        std::thread::available_parallelism().map_or(1, |count| count.get().min(4).min(batch.len()))
+    } else {
+        1
+    };
+    // Prepare file bytes and media headers off the database lock. Keep the same
+    // enumeration order for the transaction and deterministic asset identities.
+    let mut prepared = Vec::with_capacity(batch.len());
+    for chunk in batch.chunks_mut(workers) {
+        if yield_to_mutation() {
+            // The queued paths and entry identities predate the mutation. The
+            // scanner will retry the interrupted directory from fresh state.
+            return None;
+        }
+        if chunk.len() == 1 {
+            prepared.push(chunk[0].prepare());
+        } else {
+            std::thread::scope(|scope| {
+                let jobs: Vec<_> = chunk.iter_mut().map(|file| scope.spawn(move || file.prepare())).collect();
+                prepared.extend(jobs.into_iter().map(|job| job.join().expect("scan preparation thread panicked")));
+            });
+        }
+    }
+    (!yield_to_mutation()).then_some(prepared)
+}
+
+struct IndexedScanEntry {
+    id: String,
+    asset_id: String,
+    size: i64,
+    mtime: String,
+    available: bool,
+    marked_missing: bool,
+    verification: Option<i64>,
+    scan_key: Option<String>,
+    original_path: Option<String>,
+}
+
+pub(crate) enum ScanChange<'a> {
+    Tick,
+    EnteringFolder(&'a str),
+    Root,
+    Folder(&'a str),
+    Folders(&'a HashSet<String>),
+    RetryFolder(&'a str),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ScanTarget<'a> {
+    Root { priority: Option<&'a str> },
+    Folder(&'a str),
+}
+
+impl ScanChange<'_> {
+    fn from_folder(folder: &str, changed: bool) -> ScanChange<'_> {
+        if changed { ScanChange::Folder(folder) } else { ScanChange::Tick }
+    }
+
+    fn changed(&self) -> bool {
+        match self {
+            Self::Tick | Self::EnteringFolder(_) | Self::RetryFolder(_) => false,
+            Self::Folders(ids) => !ids.is_empty(),
+            _ => true,
+        }
+    }
+}
 fn reference(path: &Path) -> bool {
     path.extension()
         .is_some_and(|v| v.eq_ignore_ascii_case("bowerbird"))
@@ -99,6 +205,7 @@ pub(crate) fn generated_connection_paths(paths: &LibraryPaths) -> Vec<PathBuf> {
 pub struct ConnectionFilter {
     pub generated: Option<bool>,
     pub color: Option<String>,
+    pub query: Option<String>,
     #[serde(default)]
     pub grouped: bool,
 }
@@ -115,7 +222,7 @@ impl ConnectionFilter {
     fn sql(&self, project: Option<&str>, media: Option<&str>) -> AppResult<(String, Vec<Value>)> {
         CatalogFilter { kind: "connections".into(), project_id: project.map(str::to_owned),
             media: media.unwrap_or("all").into(), generated: self.generated, color: self.color.clone(),
-            ..Default::default() }.sql()
+            query: self.query.clone(), ..Default::default() }.sql_with_entry_name(true)
     }
 }
 
@@ -343,7 +450,7 @@ impl Database {
     pub fn connected_folder(&self, id: &str) -> AppResult<FolderConnection> {
         let (condition, _) = ConnectionFilter::default().sql(None, None)?;
         let waiting = std::time::Instant::now();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         let lock_wait_us = waiting.elapsed().as_micros() as u64;
         let started = std::time::Instant::now();
         let mut stmt = conn.prepare_cached(&format!("SELECT f.id,f.parent_id,f.root_id,f.name,f.path,
@@ -369,7 +476,7 @@ impl Database {
     ) -> AppResult<Vec<FolderConnection>> {
         let (condition, values) = filter.sql(project, media_filter)?;
         let waiting = std::time::Instant::now();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         let lock_wait_us = waiting.elapsed().as_micros() as u64;
         let started = std::time::Instant::now();
         with_gallery_cache(&conn, filter.grouped || filter.generated.is_some(), |conn, provenance| {
@@ -413,15 +520,26 @@ impl Database {
         &self, folder: Option<&str>, project: Option<&str>, media_filter: Option<&str>,
         offset: i64, limit: i64, filter: &ConnectionFilter,
     ) -> AppResult<Vec<String>> {
+        self.connection_entry_ids_in_scope(folder, project, media_filter, offset, limit, filter, false)
+    }
+
+    pub fn connection_entry_ids_in_scope(
+        &self, folder: Option<&str>, project: Option<&str>, media_filter: Option<&str>,
+        offset: i64, limit: i64, filter: &ConnectionFilter, subtree: bool,
+    ) -> AppResult<Vec<String>> {
         let (mut condition, mut values) = filter.sql(project, media_filter)?;
         if let Some(folder) = folder {
-            condition.push_str(" AND e.folder_id=?");
+            if subtree {
+                condition.push_str(" AND e.folder_id IN (WITH RECURSIVE descendants(id) AS (SELECT id FROM connected_folders WHERE id=? UNION SELECT f.id FROM connected_folders f JOIN descendants d ON f.parent_id=d.id) SELECT id FROM descendants)");
+            } else {
+                condition.push_str(" AND e.folder_id=?");
+            }
             values.push(Value::Text(folder.into()));
         }
         values.push(Value::Integer(limit.clamp(1, 2000)));
         values.push(Value::Integer(offset.max(0)));
         let waiting = std::time::Instant::now();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         let lock_wait_us = waiting.elapsed().as_micros() as u64;
         let started = std::time::Instant::now();
         with_gallery_cache(&conn, filter.grouped || filter.generated.is_some(), |conn, provenance| {
@@ -445,10 +563,23 @@ impl Database {
         let placeholders = vec!["?"; entries.len()].join(",");
         let rows = {
             let waiting = std::time::Instant::now();
-            let conn = self.conn.lock().unwrap();
+            let conn = self.browser_connection();
             let lock_wait_us = waiting.elapsed().as_micros() as u64;
             let started = std::time::Instant::now();
             with_gallery_cache(&conn, true, |conn, provenance| {
+                // Probe only page entry IDs. Use the same eligibility expression as
+                // the gallery, including legacy workflow/chat provenance and manual merges.
+                let eligible = gallery_eligible();
+                let mut probe = conn.prepare_cached(&format!("WITH {provenance}
+                  SELECT EXISTS(SELECT 1 FROM connected_entries e JOIN assets a ON a.id=e.asset_id
+                  WHERE e.id IN ({placeholders}) AND {eligible})"))?;
+                let has_groups: bool = probe.query_row(
+                    params_from_iter(entries.iter().map(|entry| &entry.id)),
+                    |row| row.get(0),
+                )?;
+                if !has_groups {
+                    return Ok(Vec::new());
+                }
                 let gallery = filter.gallery(&condition, provenance);
                 // Both sides need the derived provenance key. Without this boundary
                 // SQLite can expand the self-join and recalculate it for every pair
@@ -514,13 +645,14 @@ impl Database {
         // distinct reference entries pointing at the same Asset.
         let requested = (0..ids.len()).map(|i| format!("(?,{i})")).collect::<Vec<_>>().join(",");
         let waiting = std::time::Instant::now();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.browser_connection();
         let lock_wait_us = waiting.elapsed().as_micros() as u64;
         let started = std::time::Instant::now();
         let mut stmt = conn.prepare_cached(&format!("WITH requested(id,ordinal) AS (VALUES {requested})
           SELECT a.*,e.id AS entry_id,e.folder_id AS entry_folder_id,e.name AS entry_name,e.path AS entry_path,
           e.is_reference AS entry_reference,e.available AND f.available AND r.available AS entry_available,
-          COALESCE(x.fingerprint,c.sha256,e.mtime||':'||e.size) AS entry_version
+          CASE WHEN a.size>33554432 AND a.connected_scan_key IS NOT NULL AND NOT e.is_reference
+            THEN 'preview:'||a.connected_scan_key ELSE COALESCE(NULLIF(x.fingerprint,''),c.sha256,e.mtime||':'||e.size) END AS entry_version
           FROM requested q JOIN connected_entries e ON e.id=q.id JOIN assets a ON a.id=e.asset_id
           JOIN connected_folders f ON f.id=e.folder_id JOIN connected_roots r ON r.id=f.root_id
           LEFT JOIN external_assets x ON x.asset_id=a.id LEFT JOIN creative_file_fingerprints c ON c.asset_id=a.id
@@ -560,8 +692,13 @@ impl Database {
     }
     fn register_connected_asset(&self, paths: &LibraryPaths, path: &Path, preferred_id: Option<&str>) -> AppResult<Asset> {
         // Recover a uniquely identifiable original moved outside the app. Never merge two live originals.
-        let known:bool=self.conn.lock().unwrap().query_row("SELECT EXISTS(SELECT 1 FROM external_asset_paths WHERE path=?1 UNION ALL SELECT 1 FROM assets WHERE store_path=?1)",[string(path)],|r|r.get(0))?;
         let prepared = Self::prepare_connected_file(path)?;
+        let names = external_files::connection_path_spellings(path, &prepared.path);
+        let known: bool = self.conn.lock().unwrap().query_row(
+            "SELECT EXISTS(SELECT 1 FROM external_asset_paths WHERE path IN (?1,?2,?3)
+                UNION ALL SELECT 1 FROM assets WHERE store_path IN (?1,?2,?3))",
+            names.each_ref(), |row| row.get(0),
+        )?;
         let candidates: Vec<(String, String)> = {
             let conn = self.conn.lock().unwrap();
             let mut stmt=conn.prepare("SELECT a.id,a.store_path FROM assets a JOIN external_assets e ON e.asset_id=a.id WHERE e.fingerprint=?1
@@ -583,6 +720,109 @@ impl Database {
             }
         }
         self.index_prepared_connected_file(paths, path, preferred_id, prepared)
+    }
+
+    fn scan_path_has_removed_original(&self, path: &Path) -> AppResult<bool> {
+        let names = external_files::connection_path_spellings(path, path);
+        Ok(self.conn.lock().unwrap().query_row(
+            "SELECT EXISTS(SELECT 1 FROM assets a WHERE a.store_path IN (?1,?2,?3)
+                AND EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id
+                    UNION ALL SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id))",
+            names.each_ref(), |row| row.get(0),
+        )?)
+    }
+
+    fn scan_relocation_candidate(&self, path: &Path, size: i64) -> AppResult<bool> {
+        let paths = {
+            let conn = self.conn.lock().unwrap();
+            let mut query = conn.prepare_cached("SELECT a.store_path FROM assets a JOIN external_assets e ON e.asset_id=a.id
+                WHERE a.store_path<>?1 AND (a.size=?2 OR a.size IS NULL) AND e.fingerprint<>''
+                AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id)
+                AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id)
+                AND NOT EXISTS(SELECT 1 FROM external_asset_paths WHERE path=?1)")?;
+            let rows = query.query_map(params![string(path),size], |r| r.get::<_,String>(0))?;
+            rows.collect::<Result<Vec<_>,_>>()?
+        };
+        for possible in paths {
+            let possible = Path::new(&possible);
+            if !possible.exists() && !self.original_under_offline_connection(possible)? { return Ok(true); }
+        }
+        Ok(false)
+    }
+
+    fn indexed_scan_entries(&self, folder: &str) -> AppResult<HashMap<String, IndexedScanEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut query = conn.prepare_cached("SELECT e.path,e.id,e.asset_id,COALESCE(e.size,-1),COALESCE(e.mtime,''),e.available,
+            EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=e.asset_id UNION ALL SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=e.asset_id),
+            (SELECT j.generation FROM semantic_jobs j JOIN semantic_index_state s ON s.model_key=j.model_key WHERE j.asset_id=e.asset_id AND j.verify_registered=1 AND s.run_state<>'off'),
+            a.connected_scan_key,CASE WHEN e.is_reference THEN a.store_path END
+            FROM connected_entries e JOIN assets a ON a.id=e.asset_id WHERE e.folder_id=?1")?;
+        let rows = query.query_map([folder], |row| Ok((row.get(0)?, IndexedScanEntry {
+            id: row.get(1)?, asset_id: row.get(2)?, size: row.get(3)?, mtime: row.get(4)?, available: row.get(5)?,
+            marked_missing: row.get(6)?, verification: row.get(7)?, scan_key: row.get(8)?, original_path: row.get(9)?,
+        })))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    fn scan_asset_folders(conn: &rusqlite::Connection, assets: &HashSet<String>) -> AppResult<HashSet<String>> {
+        if assets.is_empty() { return Ok(HashSet::new()); }
+        let ids = serde_json::to_string(assets).map_err(|error| invalid(error.to_string()))?;
+        let mut query = conn.prepare_cached("SELECT DISTINCT folder_id FROM connected_entries WHERE asset_id IN (SELECT value FROM json_each(?1))")?;
+        let rows = query.query_map([ids], |row| row.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    fn commit_scan_files(&self, folder: &str, images: &Path, batch: &mut Vec<ScanFile>, errors: &mut Vec<String>, interrupted: bool, initial_scan: bool, yield_to_mutation: &mut impl FnMut() -> bool) -> AppResult<Option<HashSet<String>>> {
+        if batch.is_empty() { return Ok(Some(HashSet::new())); }
+        let Some(fingerprints) = prepare_scan_files(batch, initial_scan, yield_to_mutation) else {
+            batch.clear();
+            return Ok(None);
+        };
+        let ready: Vec<_> = batch.drain(..).zip(fingerprints).filter(|(entry, prepared)| {
+            if !interrupted { return true; }
+            // A foreground mutation may have moved a queued original during the walk.
+            fs::symlink_metadata(&entry.source).is_ok_and(|metadata| metadata.is_file()
+                && prepared.as_ref().map_or_else(|_| metadata.len() == entry.metadata.len()
+                    && metadata.modified().ok() == entry.metadata.modified().ok(),
+                    |prepared| external_files::preview_key(&entry.source, &metadata).is_ok_and(|version| version == prepared.version)))
+        }).collect();
+        let Some((first, _)) = ready.first() else { return Ok(Some(HashSet::new())); };
+        if !first.source.parent().is_some_and(connection_root_readable) {
+            return Err(invalid("目录位置已变化，请重新定位后刷新"));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let mut tx = conn.transaction()?;
+        let mut assets = HashSet::new();
+        let mut unavailable = false;
+        for (entry, prepared) in ready {
+            let file = &entry.source;
+            let result = (|| -> AppResult<String> {
+                let prepared = prepared?;
+                let savepoint = tx.savepoint()?;
+                let asset = Self::index_connected_in(&savepoint, images, file, entry.previous.as_deref(), &prepared)?;
+                let file_name = name(file);
+                savepoint.execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference,size,mtime) VALUES(?1,?2,?3,?4,?5,0,?6,?7)
+                    ON CONFLICT(path) DO UPDATE SET asset_id=excluded.asset_id,available=1,size=excluded.size,mtime=excluded.mtime", params![id(),folder,asset,string(file),file_name,entry.size,entry.mtime])?;
+                savepoint.execute("DELETE FROM disconnected_library_assets WHERE asset_id=?1", [&asset])?;
+                if let (Some(previous), Some(generation)) = (&entry.previous, entry.verification) {
+                    savepoint.execute("UPDATE semantic_jobs SET verify_registered=0 WHERE asset_id=?1 AND generation=?2 AND model_key=(SELECT model_key FROM semantic_index_state WHERE id=1)",params![previous,generation])?;
+                }
+                if entry.previous.as_deref() != Some(asset.as_str()) { Self::connect_entry_projects_in(&savepoint, folder, &asset)?; }
+                savepoint.commit()?;
+                Ok(asset)
+            })();
+            match result {
+                Ok(asset) => { assets.insert(asset); }
+                Err(error) => {
+                    unavailable |= tx.execute("UPDATE connected_entries SET available=0 WHERE path=?1 AND available=1", [string(file)])? > 0;
+                    errors.push(format!("{}：{}", name(file), error));
+                }
+            }
+        }
+        let mut folders = Self::scan_asset_folders(&tx, &assets)?;
+        if unavailable { folders.insert(folder.to_owned()); }
+        tx.commit()?;
+        Ok(Some(folders))
     }
     fn resolve_reference(&self, paths: &LibraryPaths, path: &Path, value: &MaterialReference) -> AppResult<Option<Asset>> {
         if let Some(asset) = self.get_asset(&value.asset_id)? {
@@ -627,7 +867,10 @@ impl Database {
                     return Ok(Some(updated));
                 }
             }
-            let expected:Option<String>=self.conn.lock().unwrap().query_row("SELECT COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",[&value.asset_id],|r|r.get(0))?;
+            if asset.store_path.as_deref().is_some_and(|path| Path::new(path).is_file()) {
+                self.complete_connected_fingerprint(&value.asset_id)?;
+            }
+            let expected:Option<String>=self.conn.lock().unwrap().query_row("SELECT COALESCE(NULLIF(e.fingerprint,''),f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",[&value.asset_id],|r|r.get(0))?;
             let expected = expected.or_else(|| {
                 asset
                     .store_path
@@ -737,17 +980,29 @@ impl Database {
         priority_folder: Option<&str>,
         progress: impl FnMut(bool),
     ) -> AppResult<()> {
-        self.scan_connection_cooperatively(paths, root_id, priority_folder, progress, || false)
+        let mut progress = progress;
+        self.scan_connection_cooperatively(paths, root_id, priority_folder, |change| progress(change.changed()), || false)
     }
     pub(crate) fn scan_connection_cooperatively(
         &self,
         paths: &LibraryPaths,
         root_id: &str,
         priority_folder: Option<&str>,
-        mut progress: impl FnMut(bool),
+        progress: impl FnMut(ScanChange<'_>),
+        yield_to_mutation: impl FnMut() -> bool,
+    ) -> AppResult<()> {
+        self.scan_connection_target(paths, root_id, ScanTarget::Root { priority: priority_folder }, progress, yield_to_mutation)
+    }
+    pub(crate) fn scan_connection_target(
+        &self,
+        paths: &LibraryPaths,
+        root_id: &str,
+        target: ScanTarget<'_>,
+        mut progress: impl FnMut(ScanChange<'_>),
         mut yield_to_mutation: impl FnMut() -> bool,
     ) -> AppResult<()> {
-        let repaired = self.repair_connected_folder_paths(root_id)?;
+        let whole_root = matches!(target, ScanTarget::Root { .. });
+        let repaired = whole_root && self.repair_connected_folder_paths(root_id)?;
         // Scanners need the registered location, not the catalog's filtered media count.
         let (root_path, was_available): (String, bool) = self.conn.lock().unwrap().query_row(
             "SELECT f.path,f.available AND r.available FROM connected_folders f JOIN connected_roots r ON r.id=f.root_id WHERE f.id=?1",
@@ -758,27 +1013,30 @@ impl Database {
             self.conn.lock().unwrap().execute(
                 "UPDATE connected_roots SET scanning=0 WHERE id=?1", [root_id],
             )?;
-            progress(repaired || changed);
+            progress(if repaired || changed { ScanChange::Root } else { ScanChange::Tick });
             return Err(invalid("连接目录暂不可用，接回原目录后会自动恢复"));
         }
+        // Only reconciliation of the full connection can finish an offline recovery.
+        // The watcher queues it when the registered root becomes readable again.
+        if !whole_root && !was_available { return Ok(()); }
         self.conn.lock().unwrap().execute(
-            "UPDATE connected_roots SET scanning=1,error=NULL WHERE id=?1",
-            [root_id],
+            "UPDATE connected_roots SET scanning=1,error=CASE WHEN ?2 THEN NULL ELSE error END WHERE id=?1",
+            params![root_id, whole_root],
         )?;
-        progress(repaired);
-        let result = self.scan_connection_inner(paths, root_id, &root_path, priority_folder, &mut progress, &mut yield_to_mutation);
+        progress(if repaired { ScanChange::Root } else { ScanChange::Tick });
+        let result = self.scan_connection_inner(paths, root_id, &root_path, target, &mut progress, &mut yield_to_mutation);
         let message = result.as_ref().err().map(ToString::to_string);
         let available = connection_root_readable(Path::new(&root_path));
         self.conn.lock().unwrap().execute(
-            "UPDATE connected_roots SET scanning=0,error=?2,scanned_at=?3,available=?4 WHERE id=?1 AND path=?5",
+            "UPDATE connected_roots SET scanning=0,error=CASE WHEN ?6 THEN ?2 ELSE error END,scanned_at=?3,available=?4 WHERE id=?1 AND path=?5",
             params![
                 root_id,
                 message,
                 chrono::Utc::now().timestamp(),
-                available, root_path
+                available, root_path, whole_root
             ],
         )?;
-        if was_available != available { progress(true); }
+        if was_available != available { progress(ScanChange::Root); }
         result
     }
     fn repair_connected_folder_paths(&self, root_id: &str) -> AppResult<bool> {
@@ -826,20 +1084,27 @@ impl Database {
         paths: &LibraryPaths,
         root_id: &str,
         root_path: &str,
-        priority_folder: Option<&str>,
-        progress: &mut impl FnMut(bool),
+        target: ScanTarget<'_>,
+        progress: &mut impl FnMut(ScanChange<'_>),
         yield_to_mutation: &mut impl FnMut() -> bool,
     ) -> AppResult<()> {
-        let mut pending = vec![(root_id.to_owned(), PathBuf::from(root_path))];
-        if let Some(folder_id) = priority_folder.filter(|id| *id != root_id) {
-            let preferred: Option<String> = self.conn.lock().unwrap().query_row(
+        let whole_root = matches!(target, ScanTarget::Root { .. });
+        let mut pending = Vec::new();
+        if whole_root { pending.push((root_id.to_owned(), PathBuf::from(root_path))); }
+        let first = match target {
+            ScanTarget::Root { priority } => priority.filter(|id| *id != root_id),
+            ScanTarget::Folder(id) => Some(id),
+        };
+        if let Some(id) = first {
+            let path: Option<String> = self.conn.lock().unwrap().query_row(
                 "SELECT path FROM connected_folders WHERE id=?1 AND root_id=?2",
-                params![folder_id, root_id], |row| row.get(0),
+                params![id, root_id], |row| row.get(0),
             ).optional()?;
-            if let Some(path) = preferred { pending.push((folder_id.to_owned(), PathBuf::from(path))); }
+            if let Some(path) = path { pending.push((id.to_owned(), PathBuf::from(path))); }
         }
         let mut visited = HashSet::new();
         let generated = generated_connection_paths(paths);
+        let managed_images = fs::canonicalize(&paths.images)?;
         let mut errors = Vec::new();
         let mut yielded = false;
         let still_registered = |folder_id: &str, path: &Path| -> AppResult<bool> {
@@ -853,11 +1118,16 @@ impl Database {
                 continue;
             }
             yielded |= yield_to_mutation();
-            if yielded && !still_registered(&folder_id, &path)? { continue; }
+            if yielded && !still_registered(&folder_id, &path)? {
+                progress(ScanChange::RetryFolder(&folder_id));
+                continue;
+            }
+            progress(ScanChange::EnteringFolder(&folder_id));
             // Directory junctions can change without changing the registered path. Do not walk
             // outside the chosen location (or recurse into a cycle) after such a replacement.
             if fs::canonicalize(&path).is_ok_and(|canonical| canonical != path) {
-                progress(self.mark_folder_unavailable(&folder_id)?);
+                let changed = Self::mark_folder_unavailable(&self.conn.lock().unwrap(), &folder_id)?;
+                progress(ScanChange::Folders(&changed));
                 errors.push("目录位置已变化，请重新定位后刷新".to_owned());
                 continue;
             }
@@ -865,7 +1135,8 @@ impl Database {
                 match fs::read_dir(&path) {
                     Ok(value) => value,
                     Err(error) => {
-                        progress(self.mark_folder_unavailable(&folder_id)?);
+                        let changed = Self::mark_folder_unavailable(&self.conn.lock().unwrap(), &folder_id)?;
+                        progress(ScanChange::Folders(&changed));
                         errors.push(error.to_string());
                         continue;
                     }
@@ -874,17 +1145,33 @@ impl Database {
                 "UPDATE connected_folders SET available=1 WHERE id=?1 AND available=0",
                 [&folder_id],
             )?;
-            if restored > 0 { progress(true); }
+            if restored > 0 { progress(ScanChange::Folder(&folder_id)); }
+            let mut indexed = self.indexed_scan_entries(&folder_id)?;
+            let mut video_versions = external_files::ScanVideoVersions::default();
+            let initial_scan = indexed.is_empty();
+            #[cfg(test)]
+            let initial_scan = initial_scan && !SCAN_SEQUENTIAL_BASELINE.with(std::cell::Cell::get);
+            let mut batch_limit = if initial_scan { FIRST_SCAN_BATCH_SIZE } else { SCAN_BATCH_SIZE };
             let mut seen = HashSet::new();
             let mut seen_folders = HashSet::new();
             let mut complete = true;
+            let mut batch = Vec::with_capacity(SCAN_BATCH_SIZE);
+            let mut pause = || {
+                let paused = yield_to_mutation();
+                yielded |= paused;
+                paused
+            };
             for item in listed {
-                if yield_to_mutation() {
-                    yielded = true;
+                if pause() {
                     complete = false;
+                    progress(ScanChange::RetryFolder(&folder_id));
                     if !still_registered(&folder_id, &path)? || !connection_root_readable(&path) {
                         continue 'directories;
                     }
+                    // Commands that ran while the gate was released may have changed IDs,
+                    // availability, and pending semantic verification for this directory.
+                    indexed = self.indexed_scan_entries(&folder_id)?;
+                    video_versions = external_files::ScanVideoVersions::default();
                 }
                 let item = match item {
                     Ok(item) => item,
@@ -924,75 +1211,93 @@ impl Database {
                     let next_id = existing.unwrap_or_else(id);
                     let changed = conn.execute("INSERT INTO connected_folders(id,root_id,parent_id,path,name) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(path) DO UPDATE SET available=1 WHERE connected_folders.available=0",params![next_id,root_id,folder_id,string(&file),file_name])? > 0;
                     drop(conn);
-                    if changed { progress(true); }
-                    pending.push((next_id, file));
+                    if changed { progress(ScanChange::Folder(&next_id)); }
+                    // A scoped notice still needs to populate newly discovered or
+                    // restored subtrees. Indexed siblings are left to their own notices.
+                    if whole_root || changed { pending.push((next_id, file)); }
                     continue;
                 }
                 if !file_type.is_file() || (!media(&file) && !reference(&file)) {
                     continue;
                 }
-                seen.insert(string(&file));
-                let processed = (|| -> AppResult<bool> {
-                    let old:Option<(String,i64,String,bool)>=self.conn.lock().unwrap().query_row(
-                        "SELECT e.asset_id,COALESCE(e.size,-1),COALESCE(e.mtime,''),EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=e.asset_id UNION ALL SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=e.asset_id)
-                         FROM connected_entries e WHERE e.path=?1",[string(&file)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
-                    let reference_target = if reference(&file) {
-                        old.as_ref()
-                            .and_then(|(asset, _, _, _)| self.get_asset(asset).ok().flatten())
-                            .and_then(|a| a.store_path)
-                    } else {
-                        None
+                let file_path = string(&file);
+                let is_reference = reference(&file);
+                if is_reference {
+                    let Some(changed) = self.commit_scan_files(&folder_id, &managed_images, &mut batch, &mut errors, !complete, initial_scan, &mut pause)? else {
+                        progress(ScanChange::RetryFolder(&folder_id));
+                        continue 'directories;
                     };
-                    let target_before = reference_target
-                        .as_deref()
-                        .map(|target| stamp(Path::new(target)).ok());
-                    let file_stamp = || -> AppResult<(i64, String)> {
-                        let (size, mut mtime) = stamp(&file)?;
-                        if let Some(target) = reference_target.as_deref() {
-                            mtime.push_str(&format!("|{:?}", stamp(Path::new(target)).ok()));
+                    progress(ScanChange::Folders(&changed));
+                }
+                let old = indexed.get(&file_path);
+                let mut preparation_paused = false;
+                let processed = (|| -> AppResult<HashSet<String>> {
+                    let metadata = fs::symlink_metadata(&file)?;
+                    if !metadata.is_file() { return Err(invalid("原文件路径已变化，请核对原件位置")); }
+                    let reference_target = old.and_then(|entry| entry.original_path.as_deref()).map(Path::new);
+                    let target_before = reference_target.map(|target| stamp(target).ok());
+                    let size = metadata.len() as i64;
+                    // The index stores the full precision timestamp, including subsecond changes.
+                    let mut mtime = format!("{:?}", metadata.modified()?);
+                    if let Some(target_stamp) = &target_before { mtime.push_str(&format!("|{target_stamp:?}")); }
+                    let reference_resolved = !is_reference || reference_target.is_some_and(Path::is_file);
+                    if let Some(entry) = old.filter(|entry| reference_resolved && !entry.marked_missing
+                        && entry.verification.is_none() && entry.size == size && entry.mtime == mtime) {
+                        let same_version = !external_files::video_path(&file) || match &entry.scan_key {
+                            Some(version) => video_versions.version(&file, &metadata)? == *version,
+                            None => false,
+                        };
+                        if same_version {
+                            if entry.available { return Ok(HashSet::new()); }
+                            let restored = self.conn.lock().unwrap().execute(
+                                "UPDATE connected_entries SET available=1 WHERE id=?1 AND available=0", [&entry.id],
+                            )? > 0;
+                            return Ok(restored.then(|| folder_id.clone()).into_iter().collect());
                         }
-                        Ok((size, mtime))
-                    };
-                    let (size, mtime) = file_stamp()?;
-                    let reference_resolved = !reference(&file)
-                        || old
-                            .as_ref()
-                            .and_then(|(asset, _, _, _)| self.get_asset(asset).ok().flatten())
-                            .and_then(|a| a.store_path)
-                            .is_some_and(|p| Path::new(&p).is_file());
-                    if reference_resolved
-                        && old
-                            .as_ref()
-                            .is_some_and(|(_, s, m, marked_missing)| !marked_missing && *s == size && *m == mtime)
-                    {
-                        let changed = self.conn.lock().unwrap().execute(
-                            "UPDATE connected_entries SET available=1 WHERE path=?1 AND available=0",
-                            [string(&file)],
-                        )? > 0;
-                        return Ok(changed);
                     }
-                    let asset = if reference(&file) {
+                    if !is_reference {
+                        let previous = old.map(|entry| entry.asset_id.clone());
+                        let canonical = fs::canonicalize(&file)?;
+                        if canonical != file { return Err(invalid("原文件路径已变化，请核对原件位置")); }
+                        // Recycle/cleanup remove the directory entry but retain the original
+                        // in assets. Measure it before any write transaction can restore it.
+                        let strict_registry = file.starts_with(&managed_images)
+                            || old.is_some_and(|entry| entry.marked_missing)
+                            || (old.is_none() && (self.scan_path_has_removed_original(&canonical)?
+                                || self.scan_relocation_candidate(&file, size)?));
+                        if !strict_registry {
+                            let verification = old.and_then(|entry| entry.verification);
+                            let needs_hash = size <= external_files::DEFERRED_FINGERPRINT_BYTES as i64 || verification.is_some();
+                            let prepared = if initial_scan { None } else {
+                                Some(Self::prepare_connected_path(canonical.clone(), metadata.clone(), needs_hash)?)
+                            };
+                            batch.push(ScanFile { source: file.clone(), canonical, metadata, read_hash: needs_hash, prepared, previous, size, mtime, verification });
+                            if batch.len() == batch_limit {
+                                batch_limit = SCAN_BATCH_SIZE;
+                                let result = self.commit_scan_files(&folder_id, &managed_images, &mut batch, &mut errors, !complete, initial_scan, &mut pause)?;
+                                preparation_paused = result.is_none();
+                                return Ok(result.unwrap_or_default());
+                            }
+                            return Ok(HashSet::new());
+                        }
+                    }
+                    let asset = if is_reference {
                         let value = load_reference(&file)?;
                         let Some(asset) = self.resolve_reference(paths, &file, &value)? else {
-                            return if old.is_some() { Ok(false) } else {
-                                self.register_missing_reference(&folder_id, &file, &value, size, &mtime)
-                            };
+                            let registered = old.is_none() && self.register_missing_reference(&folder_id, &file, &value, size, &mtime)?;
+                            return Ok(registered.then(|| folder_id.clone()).into_iter().collect());
                         };
                         asset
                     } else {
-                        self.register_connected_asset(paths, &file, old.as_ref().map(|(id, _, _, _)| id.as_str()))?
+                        self.register_connected_asset(paths, &file, old.map(|entry| entry.asset_id.as_str()))?
                     };
-                    if !reference(&file) && file_stamp()? != (size, mtime.clone()) {
+                    if !is_reference && stamp(&file)? != (size, mtime.clone()) {
                         return Err(invalid("文件正在变化，请稍后刷新"));
                     }
-                    if target_before
-                        != reference_target
-                            .as_deref()
-                            .map(|target| stamp(Path::new(target)).ok())
-                    {
+                    if target_before != reference_target.map(|target| stamp(target).ok()) {
                         return Err(invalid("原文件正在变化，请稍后刷新"));
                     }
-                    let (size, mtime) = if reference(&file) {
+                    let (size, mtime) = if is_reference {
                         // Resolving a cached reference may update its fingerprint JSON. Store
                         // the final reference AND original stamp, including on its first scan.
                         let (size, mut mtime) = stamp(&file)?;
@@ -1003,70 +1308,77 @@ impl Database {
                     } else {
                         (size, mtime)
                     };
-                    {
+                    let changed = {
                         let conn = self.conn.lock().unwrap();
                         let tx = conn.unchecked_transaction()?;
-                        tx.execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference,size,mtime) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(path) DO UPDATE SET asset_id=excluded.asset_id,available=1,size=excluded.size,mtime=excluded.mtime",params![id(),folder_id,asset.id,string(&file),file_name,reference(&file),size,mtime])?;
+                        tx.execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference,size,mtime) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(path) DO UPDATE SET asset_id=excluded.asset_id,available=1,size=excluded.size,mtime=excluded.mtime",params![id(),folder_id,asset.id,file_path,file_name,is_reference,size,mtime])?;
                         tx.execute("DELETE FROM disconnected_library_assets WHERE asset_id=?1", [&asset.id])?;
+                        if let Some(entry) = old.filter(|entry| entry.verification.is_some()) {
+                            tx.execute("UPDATE semantic_jobs SET verify_registered=0 WHERE asset_id=?1 AND generation=?2 AND model_key=(SELECT model_key FROM semantic_index_state WHERE id=1)", params![entry.asset_id,entry.verification])?;
+                        }
+                        let changed = Self::scan_asset_folders(&tx, &HashSet::from([asset.id.clone()]))?;
                         tx.commit()?;
-                    }
+                        changed
+                    };
                     // Refresh preserves explicit project removals. A new entry/identity joins
                     // connected projects; explicitly reconnecting a folder restores cached members.
-                    if old
-                        .as_ref()
-                        .is_none_or(|(previous, _, _, _)| previous != &asset.id)
-                    {
+                    if old.is_none_or(|entry| entry.asset_id != asset.id) {
                         self.connect_entry_projects(&folder_id, &asset.id)?;
                     }
-                    Ok(true)
+                    Ok(changed)
                 })();
+                if preparation_paused {
+                    progress(ScanChange::RetryFolder(&folder_id));
+                    continue 'directories;
+                }
                 match processed {
-                    Ok(changed) => progress(changed),
+                    Ok(changed) => progress(ScanChange::Folders(&changed)),
                     Err(error) => {
                         let changed = self.conn.lock().unwrap().execute(
                             "UPDATE connected_entries SET available=0 WHERE path=?1 AND available=1",
-                            [string(&file)],
+                            [&file_path],
                         )? > 0;
                         errors.push(format!("{}：{}", file_name, error));
-                        progress(changed);
+                        progress(ScanChange::from_folder(&folder_id, changed));
                     }
                 }
+                seen.insert(file_path);
             }
+            let Some(changed) = self.commit_scan_files(&folder_id, &managed_images, &mut batch, &mut errors, !complete, initial_scan, &mut pause)? else {
+                progress(ScanChange::RetryFolder(&folder_id));
+                continue 'directories;
+            };
+            progress(ScanChange::Folders(&changed));
             // Reconcile only after all directory entries were read successfully; assets/creative data survive.
             if !complete || !connection_root_readable(&path) {
                 continue;
             }
-            let conn = self.conn.lock().unwrap();
-            let old: Vec<(String, String)> = {
-                let mut stmt =
-                    conn.prepare("SELECT id,path FROM connected_entries WHERE folder_id=?1")?;
-                let rows = stmt
-                    .query_map([&folder_id], |r| Ok((r.get(0)?, r.get(1)?)))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                rows
-            };
-            let mut removed = false;
-            for (id, path) in old {
-                if !seen.contains(&path) {
-                    conn.execute("DELETE FROM connected_entries WHERE id=?1", [id])?;
-                    removed = true;
+            let removed: Vec<_> = indexed.iter().filter_map(|(path, entry)| (!seen.contains(path)).then_some(&entry.id)).collect();
+            let changed = {
+                let mut conn = self.conn.lock().unwrap();
+                let missing_children: Vec<String> = {
+                    let mut stmt = conn.prepare_cached("SELECT id,path FROM connected_folders WHERE parent_id=?1")?;
+                    let rows = stmt.query_map([&folder_id], |r| Ok((r.get(0)?, r.get::<_, String>(1)?)))?;
+                    let rows = rows.collect::<Result<Vec<_>, _>>()?;
+                    rows.into_iter().filter_map(|(id, path)| (!seen_folders.contains(&path)).then_some(id)).collect()
+                };
+                let mut changed = HashSet::new();
+                if !removed.is_empty() || !missing_children.is_empty() {
+                    let tx = conn.transaction()?;
+                    if !removed.is_empty() {
+                        let ids = serde_json::to_string(&removed).map_err(|error| invalid(error.to_string()))?;
+                        if tx.execute("DELETE FROM connected_entries WHERE id IN (SELECT value FROM json_each(?1))", [ids])? > 0 {
+                            changed.insert(folder_id.clone());
+                        }
+                    }
+                    for id in missing_children {
+                        changed.extend(Self::mark_folder_unavailable(&tx, &id)?);
+                    }
+                    tx.commit()?;
                 }
-            }
-            let old: Vec<(String, String)> = {
-                let mut stmt =
-                    conn.prepare("SELECT id,path FROM connected_folders WHERE parent_id=?1")?;
-                let rows = stmt
-                    .query_map([&folder_id], |r| Ok((r.get(0)?, r.get(1)?)))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                rows
+                changed
             };
-            for (id, path) in old {
-                if !seen_folders.contains(&path) {
-                    removed |= conn.execute("WITH RECURSIVE tree(id) AS (SELECT ?1 UNION ALL SELECT f.id FROM connected_folders f JOIN tree t ON f.parent_id=t.id) UPDATE connected_folders SET available=0 WHERE id IN tree AND available=1",[id])? > 0;
-                }
-            }
-            drop(conn);
-            progress(removed);
+            progress(ScanChange::Folders(&changed));
         }
         if errors.is_empty() {
             Ok(())
@@ -1077,8 +1389,11 @@ impl Database {
             )))
         }
     }
-    fn mark_folder_unavailable(&self, id: &str) -> AppResult<bool> {
-        Ok(self.conn.lock().unwrap().execute("WITH RECURSIVE tree(id) AS (SELECT ?1 UNION ALL SELECT f.id FROM connected_folders f JOIN tree t ON f.parent_id=t.id) UPDATE connected_folders SET available=0 WHERE id IN tree AND available=1",[id])? > 0)
+    fn mark_folder_unavailable(conn: &rusqlite::Connection, id: &str) -> AppResult<HashSet<String>> {
+        let mut stmt = conn.prepare_cached("WITH RECURSIVE tree(id) AS (SELECT ?1 UNION ALL SELECT f.id FROM connected_folders f JOIN tree t ON f.parent_id=t.id)
+            UPDATE connected_folders SET available=0 WHERE id IN tree AND available=1 RETURNING id")?;
+        let rows = stmt.query_map([id], |row| row.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
     pub fn create_connected_directory(
         &self,
@@ -1291,6 +1606,20 @@ impl Database {
         tx.commit()?;
         Ok(())
     }
+
+    fn complete_fingerprints_before_directory_move(&self, path: &Path) -> AppResult<()> {
+        let pending = {
+            let conn = self.conn.lock().unwrap();
+            let mut query = conn.prepare("SELECT a.id,a.store_path FROM assets a JOIN external_assets e ON e.asset_id=a.id
+                WHERE a.connected_scan_key IS NOT NULL AND e.fingerprint='' AND a.store_path IS NOT NULL")?;
+            let rows = query.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        for (id, original) in pending {
+            if registered_path_spelling(Path::new(&original)).starts_with(path) { self.complete_connected_fingerprint(&id)?; }
+        }
+        Ok(())
+    }
     pub fn relocate_connected_directory(&self, id: &str, path: &Path) -> AppResult<()> {
         let folder = self.connected_folder(id)?;
         if folder.parent_id.is_some() {
@@ -1315,6 +1644,7 @@ impl Database {
                             .strip_prefix(&folder.path)
                             .map_err(|_| invalid("目录结构已变化"))?,
                     );
+                    if Path::new(&entry.path).is_file() { self.complete_connected_fingerprint(&entry.asset_id)?; }
                     let expected: Option<String> = self
                         .conn
                         .lock()
@@ -1325,7 +1655,7 @@ impl Database {
                             |r| r.get(0),
                         )
                         .optional()?;
-                    let expected = expected
+                    let expected = expected.filter(|hash| !hash.is_empty())
                         .or_else(|| external_files::fingerprint(Path::new(&entry.path)).ok())
                         .ok_or_else(|| invalid("原文件缺少校验信息，无法确认新位置"))?;
                     if external_files::fingerprint(&target)? != expected {
@@ -1343,6 +1673,7 @@ impl Database {
         if destination == Path::new(&folder.path) {
             return Ok(());
         }
+        self.complete_fingerprints_before_directory_move(Path::new(&folder.path))?;
         move_path_with(Path::new(&folder.path), &destination, || {
             self.repoint_tree(&folder, &destination, None)
         })?;
@@ -1358,6 +1689,7 @@ impl Database {
         if destination == Path::new(&source.path) {
             return Ok(());
         }
+        self.complete_fingerprints_before_directory_move(Path::new(&source.path))?;
         move_path_with(Path::new(&source.path), &destination, || {
             self.repoint_tree(&source, &destination, Some(&target))
         })?;
@@ -1388,12 +1720,14 @@ impl Database {
         let asset = self.get_asset(asset_id)?.ok_or_else(|| invalid("素材已不存在"))?;
         let original = Path::new(asset.store_path.as_deref().ok_or_else(|| invalid("原文件不可用"))?);
         let original_stamp = stamp(original)?;
+        let original_key = external_files::preview_key(original, &fs::symlink_metadata(original)?)?;
         let filename = name(original);
         let mut path = folder.join(format!("{filename}.bowerbird"));
         let data = material_reference(&path, &asset)?;
         if stamp(original)? != original_stamp {
             return Err(invalid("原文件正在变化，请稍后重试"));
         }
+        self.register_connected_fingerprint(asset_id, original, &original_key, &data.sha256)?;
         let expected: Option<String> = self.conn.lock().unwrap().query_row(
             "SELECT COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",
             [asset_id], |row| row.get(0))?;
@@ -1464,7 +1798,11 @@ impl Database {
                 return Err(invalid("原件位置已变化，请刷新后重新选择"));
             }
             if let Some(version) = &entry.version {
-                if version.len() != 64 {
+                if let Some(key) = version.strip_prefix("preview:") {
+                    if external_files::preview_key(source, &fs::symlink_metadata(source)?)? != key {
+                        return Err(invalid("原文件内容已变化，请刷新后重新选择"));
+                    }
+                } else if version.len() != 64 {
                     let (size, modified) = stamp(source)?;
                     if *version != format!("{modified}:{size}") {
                         return Err(invalid("原文件内容已变化，请刷新后重新选择"));
@@ -1666,6 +2004,7 @@ impl Database {
         if destination == Path::new(&entry.path) {
             return Ok(());
         }
+        if !entry.is_reference { self.complete_connected_fingerprint(&entry.asset_id)?; }
         move_path_with(Path::new(&entry.path), &destination, || {
             let conn = self.conn.lock().unwrap();
             let tx = conn.unchecked_transaction()?;
@@ -1727,16 +2066,17 @@ impl Database {
             }
             // The registered fingerprint anchors the confirmation. Always read the bytes at execution.
             if !verify_bytes {
-                if let Some(hash) = &expected { return Ok((path, hash.clone())); }
+                if let Some(hash) = expected.as_ref().filter(|hash| !hash.is_empty()) { return Ok((path, hash.clone())); }
             }
-            let before = stamp(&path)?;
+            let before = external_files::preview_key(&path, &fs::metadata(&path)?)?;
             let fingerprint = external_files::fingerprint(&path)?;
-            if stamp(&path)? != before {
+            if external_files::preview_key(&path, &fs::metadata(&path)?)? != before {
                 return Err(invalid("原文件正在变化，请稍后重新确认"));
             }
-            if expected.as_deref().is_some_and(|value| value != fingerprint) {
+            if expected.as_deref().is_some_and(|value| !value.is_empty() && value != fingerprint) {
                 return Err(invalid("原文件内容已变化，请刷新后重新确认"));
             }
+            self.register_connected_fingerprint(id, &path, &before, &fingerprint)?;
             Ok((path, fingerprint))
         })();
         let (path, fingerprint, missing) = match checked {
@@ -2057,7 +2397,7 @@ fn record_asset_move(tx: &rusqlite::Transaction<'_>, id: &str, old: &Path, new: 
         )?;
     }
     let names = external_files::connection_path_spellings(old, &registered_path_spelling(old));
-    tx.execute("UPDATE assets SET store_path=?2,origin_path=CASE WHEN origin_path IN (?3,?4,?5) THEN ?2 ELSE origin_path END,thumb_path=CASE WHEN thumb_path IN (?3,?4,?5) THEN ?2 ELSE thumb_path END WHERE id=?1",
+    tx.execute("UPDATE assets SET store_path=?2,connected_scan_key=NULL,origin_path=CASE WHEN origin_path IN (?3,?4,?5) THEN ?2 ELSE origin_path END,thumb_path=CASE WHEN thumb_path IN (?3,?4,?5) THEN ?2 ELSE thumb_path END WHERE id=?1",
         params![id,string(new),names[0],names[1],names[2]])?;
     Ok(())
 }

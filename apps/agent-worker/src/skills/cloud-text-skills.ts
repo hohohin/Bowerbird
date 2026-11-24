@@ -12,6 +12,7 @@ export interface CloudTextSkillSnapshot {
   instructions: string;
   instruction: string;
   parameters: Record<string, unknown>;
+  reasoningEffort?: "high";
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -21,11 +22,19 @@ function record(value: unknown): Record<string, unknown> {
 
 function h3Parameters(value: unknown): Record<string, unknown> {
   const p = record(value);
-  if (Object.keys(p).some(key => !["mode", "seconds", "ratio", "firstFrameCount", "lastFrameCount"].includes(key)) ||
-      !["text", "reference", "frames"].includes(String(p.mode)) ||
+  const r2v = p.mode === "r2v";
+  const counts = { referenceImageCount: 9, referenceVideoCount: 3, referenceAudioCount: 3 };
+  const mediaKeys = r2v ? Object.keys(counts) : ["audioReference"];
+  if (Object.keys(p).some(key => !["mode", "seconds", "ratio", "firstFrameCount", "lastFrameCount", ...mediaKeys].includes(key)) ||
+      !["text", "reference", "frames", "r2v"].includes(String(p.mode)) ||
       typeof p.seconds !== "number" || !Number.isFinite(p.seconds) || p.seconds <= 0 || p.seconds > 120 ||
       !["9:16", "16:9", "4:3", "3:4", "1:1", "auto"].includes(String(p.ratio)) ||
       ![0, 1].includes(p.firstFrameCount as number) || ![0, 1].includes(p.lastFrameCount as number) ||
+      (p.audioReference !== undefined && p.audioReference !== true) ||
+      (r2v && (p.firstFrameCount !== 0 || p.lastFrameCount !== 0 || Object.entries(counts).some(([key, limit]) => {
+        const count = p[key];
+        return typeof count !== "number" || !Number.isSafeInteger(count) || count < 0 || count > limit;
+      }))) ||
       (p.mode === "text" && (p.firstFrameCount !== 0 || p.lastFrameCount !== 0)) ||
       (p.mode === "reference" && (p.firstFrameCount !== 1 || p.lastFrameCount !== 0)) ||
       (p.mode === "frames" && p.firstFrameCount !== 1)) throw new Error("cloud_text_skill_parameters_invalid");
@@ -74,7 +83,8 @@ export function loadCloudTextSkill(request: Record<string, unknown>, directory =
   const instructions = readFileSync(join(directory, id, "SKILL.md"), "utf8");
   if (!instructions.trim() || instructions.length > 20000) throw new Error("cloud_text_skill_file_invalid");
   return { id, version: 1, sha256: sha256Hex(instructions), instructions,
-    instruction: id === "text-editor" ? request.instruction as string : "", parameters };
+    instruction: id === "text-editor" ? request.instruction as string : "", parameters,
+    ...(id === "text-editor" ? {} : { reasoningEffort: "high" as const }) };
 }
 
 /** Checkpoints keep the exact method used by this run, even after a VPS file update. */
@@ -82,7 +92,8 @@ export function validateCloudTextSkillSnapshot(value: unknown): CloudTextSkillSn
   const snapshot = record(value);
   if (!["h3-video-prompt", "h3-image-prompt", "text-editor"].includes(String(snapshot.id)) || snapshot.version !== 1 ||
       typeof snapshot.instructions !== "string" || !snapshot.instructions.trim() || snapshot.instructions.length > 20000 ||
-      snapshot.sha256 !== sha256Hex(snapshot.instructions) || typeof snapshot.instruction !== "string") {
+      snapshot.sha256 !== sha256Hex(snapshot.instructions) || typeof snapshot.instruction !== "string" ||
+      (snapshot.reasoningEffort !== undefined && (snapshot.id === "text-editor" || snapshot.reasoningEffort !== "high"))) {
     throw new Error("cloud_text_skill_snapshot_invalid");
   }
   if (snapshot.id === "h3-video-prompt") h3Parameters(snapshot.parameters);

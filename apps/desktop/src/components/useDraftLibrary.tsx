@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
-import { Search, X } from "lucide-react";
+import { X } from "lucide-react";
 import { api } from "../lib/api";
 import { getDragAssets, setDragAssets } from "../lib/dragPayload";
 import { DRAFT_MAX_LAYERS } from "../lib/draftDocument";
-import { useLocalFileMode, type LibrarySource } from "../lib/localFileMode";
-import type { CatalogKind } from "../lib/materialCatalog";
+import { createLibraryPane, LibraryPaneContext } from "../lib/libraryPane";
 import type { Asset } from "../lib/types";
-import { LibraryCatalogTransition } from "./LibraryCatalogTransition";
-import { LibraryViewSwitch } from "./LibraryViewSwitch";
+import { LibraryCatalog } from "./LibraryCatalog";
 import "./LocalFileWorkspace.css";
 import "./DraftLibrary.css";
 
@@ -17,7 +15,6 @@ type Props = {
   onImportFiles: (files: File[]) => Promise<void>;
   onError: (error: unknown) => void;
 };
-type Filters = Pick<ReturnType<typeof useLocalFileMode.getState>, "query" | "generatedFilter">;
 const typing = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest("input,textarea,select,[contenteditable=true],[data-draft-color-panel]");
 
 /** Reuse the library browser while owning its destination and keyboard scope. */
@@ -25,34 +22,27 @@ export function useDraftLibrary({ projectId, disabled, onImportFiles, onError }:
   const [open, setOpen] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [source, setSource] = useState<LibrarySource>("global");
-  const [kind, setKind] = useState<CatalogKind>("all");
+  const [pane] = useState(() => createLibraryPane("draft-picker"));
   const panelRef = useRef<HTMLElement | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
-  const savedFilters = useRef<Filters | null>(null);
   const importLock = useRef(false);
   const dragging = useRef(false);
   const mounted = useRef(true);
   const frame = useRef(0);
-  const query = useLocalFileMode(state => state.query);
-
-  function restoreFilters() {
-    if (!savedFilters.current) return;
-    useLocalFileMode.setState(savedFilters.current);
-    savedFilters.current = null;
-  }
   function hide() {
     setOpen(false);
-    if (!dragging.current) restoreFilters();
     if (previousFocus.current?.isConnected) previousFocus.current.focus({ preventScroll: true });
   }
   function toggle() {
     if (disabled || importLock.current) return;
     if (open) { hide(); return; }
-    const state = useLocalFileMode.getState();
-    if (!savedFilters.current) savedFilters.current = { query: state.query, generatedFilter: state.generatedFilter };
+    const mode = pane.mode.getState();
+    if (mode.contextProjectId !== projectId) {
+      mode.setProjectContext(projectId);
+      mode.selectHierarchy({ kind: "all" });
+    }
+    pane.mode.setState({ query: "", generatedFilter: null });
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    useLocalFileMode.setState({ query: "", generatedFilter: null });
     setInitialized(true); setOpen(true);
     cancelAnimationFrame(frame.current);
     frame.current = requestAnimationFrame(() => panelRef.current?.focus({ preventScroll: true }));
@@ -62,7 +52,6 @@ export function useDraftLibrary({ projectId, disabled, onImportFiles, onError }:
     const finishDrag = () => {
       if (!dragging.current) return;
       dragging.current = false;
-      restoreFilters();
     };
     window.addEventListener("dragend", finishDrag);
     window.addEventListener("drop", finishDrag);
@@ -74,7 +63,6 @@ export function useDraftLibrary({ projectId, disabled, onImportFiles, onError }:
       window.removeEventListener("drop", finishDrag);
       window.removeEventListener("blur", finishDrag);
       if (dragging.current) setDragAssets(null);
-      restoreFilters();
     };
   }, []);
 
@@ -131,10 +119,6 @@ export function useDraftLibrary({ projectId, disabled, onImportFiles, onError }:
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); event.stopImmediatePropagation(); }
     return true;
   }
-  const navigation = <header className="library-browser-heading"><div className="library-floating-navigation">
-    <LibraryViewSwitch value={kind} label="草稿素材视图" onChange={value => setKind(value as CatalogKind)}
-      options={[{ value: "all", label: "全部" }, { value: "tags", label: "标签" }, { value: "collections", label: "集合" }]} />
-  </div></header>;
   const panel = initialized ? <aside ref={element => { panelRef.current = element; if (element) element.inert = !open || disabled || importing; }}
     className={`draft-library library-browser${open ? " is-open" : ""}`} data-draft-library aria-label="草稿素材库" aria-hidden={!open} tabIndex={-1}
     onPointerDown={event => event.stopPropagation()} onDragOver={event => { event.preventDefault(); event.stopPropagation(); }}
@@ -149,13 +133,10 @@ export function useDraftLibrary({ projectId, disabled, onImportFiles, onError }:
     }}>
     <div className="draft-library-heading"><strong>素材库</strong><span>拖入画布或双击添加图层</span>
       <button type="button" aria-label="关闭草稿素材库" onClick={hide}><X size={16}/></button></div>
-    <div className="draft-library-search"><Search size={14} aria-hidden="true"/><input aria-label="搜索草稿素材" placeholder="搜索图片"
-      value={query} onChange={event => useLocalFileMode.getState().setQuery(event.target.value)}/>
-      {projectId && <LibraryViewSwitch value={source} label="草稿素材范围" onChange={value => setSource(value as LibrarySource)}
-        options={[{ value: "global", label: "全局" }, { value: "project", label: "项目" }]}/>}</div>
-    <div className="draft-library-content"><LibraryCatalogTransition key={source} kind={kind} media="images" projectId={projectId}
-      projectScope={source === "project"} navigation={navigation} onClose={hide}
-      onPickImages={(assets: Asset[]) => importIds(assets.map(asset => asset.id))}/></div>
+    <div className="draft-library-content"><LibraryPaneContext.Provider value={pane}>
+      <LibraryCatalog media="images" projectId={projectId} positionId={pane.id} onClose={hide}
+        onPickImages={(assets: Asset[]) => importIds(assets.map(asset => asset.id))}/>
+    </LibraryPaneContext.Provider></div>
     <p className="draft-library-hint">Tab 收起素材库 · Esc 返回编辑器</p>
   </aside> : null;
   return { panel, open, importing, toggle, handleDrop, handleKeyDown };

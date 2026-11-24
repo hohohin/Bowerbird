@@ -4,7 +4,10 @@ use std::time::Instant;
 struct ReadFixture { db: Database, temp: tempfile::TempDir }
 impl ReadFixture {
     fn new(current: usize, other: usize, history: usize) -> Self {
-        let db = Database::open_in_memory().unwrap();
+        Self::with_db(Database::open_in_memory().unwrap(), current, other, history)
+    }
+
+    fn with_db(db: Database, current: usize, other: usize, history: usize) -> Self {
         db.migrate().unwrap();
         let temp = tempfile::tempdir().unwrap();
         db.create_project("scope", "scope", "blank:scope", "blank:scope", "blank").unwrap();
@@ -39,6 +42,95 @@ impl ReadFixture {
         }
         Self { db, temp }
     }
+}
+
+#[test]
+fn wal_folder_browsing_reads_committed_pages_during_a_writer_transaction() {
+    use std::{sync::{mpsc, Arc}, thread, time::Duration};
+
+    let dir = tempfile::tempdir().unwrap();
+    let f = ReadFixture::with_db(Database::open(&dir.path().join("library.db")).unwrap(), 2, 0, 0);
+    let db = Arc::new(f.db);
+    let mut writer = db.conn.lock().unwrap();
+    let tx = writer.transaction().unwrap();
+    tx.execute("UPDATE connected_entries SET name='uncommitted' WHERE id='e-00000'", []).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let reader = Arc::clone(&db);
+    let task = thread::spawn(move || {
+        let result: AppResult<_> = (|| {
+            let filter = ConnectionFilter { grouped: true, ..Default::default() };
+            let folders = reader.connection_folders_filtered(None, None, &filter)?;
+            let ids = reader.connection_entry_ids_in_scope(Some("current"), None, None, 0, 60, &filter, true)?;
+            let mut entries = reader.visible_connection_entries(&ids)?;
+            reader.connection_entry_groups(&mut entries, None, None, &filter)?;
+            Ok((folders, entries))
+        })();
+        sender.send(result).unwrap();
+    });
+    let result = receiver.recv_timeout(Duration::from_secs(3));
+    tx.commit().unwrap();
+    drop(writer);
+    task.join().unwrap();
+    let (folders, entries) = result.expect("browser queries must finish while awaiting the writer's commit").unwrap();
+    assert_eq!(folders.iter().find(|folder| folder.id == "current").unwrap().count, 2);
+    assert_eq!(entries[0].name, "00000.csv");
+    assert_eq!(db.visible_connection_entries(&["e-00000".into()]).unwrap()[0].name, "uncommitted");
+}
+
+#[test]
+#[ignore = "isolated comparison of SQLite connection mutex wait"]
+fn compare_browser_lock_wait_under_active_writer() {
+    use std::{sync::{mpsc, Arc}, thread, time::Duration};
+
+    let dir = tempfile::tempdir().unwrap();
+    let f = ReadFixture::with_db(Database::open(&dir.path().join("library.db")).unwrap(), 2, 0, 0);
+    let db = Arc::new(f.db);
+    let hold = Duration::from_millis(75);
+    for separated in [false, true] {
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let mut writer = db.conn.lock().unwrap();
+            let tx = writer.transaction().unwrap();
+            tx.execute("UPDATE connected_entries SET name='updated' WHERE id='e-00000'", []).unwrap();
+            let (ready, started) = mpsc::channel();
+            let reader = Arc::clone(&db);
+            let task = thread::spawn(move || {
+                let start = Instant::now();
+                ready.send(()).unwrap();
+                let conn = if separated { reader.browser_connection() } else { reader.conn.lock().unwrap() };
+                let lock_wait_us = start.elapsed().as_micros();
+                conn.query_row("SELECT name FROM connected_entries WHERE id='e-00000'", [], |row| row.get::<_, String>(0)).unwrap();
+                lock_wait_us
+            });
+            started.recv_timeout(Duration::from_secs(3)).unwrap();
+            thread::sleep(hold);
+            tx.rollback().unwrap();
+            drop(writer);
+            samples.push(task.join().unwrap());
+        }
+        samples.sort_unstable();
+        println!("folder-lock separated={separated} writer_hold_ms={} median_us={}", hold.as_millis(), samples[2]);
+    }
+}
+
+#[test]
+fn ordinary_folder_page_skips_group_join_but_manual_merges_still_group() {
+    use rusqlite::hooks::{AuthContext, Authorization};
+
+    let f = ReadFixture::new(2, 0, 0);
+    let filter = ConnectionFilter { grouped: true, ..Default::default() };
+    let mut entries = f.db.visible_connection_entries(&["e-00001".into()]).unwrap();
+    f.db.browser_connection().authorizer(Some(|context: AuthContext<'_>| {
+        if context.accessor == Some("group_entries") { Authorization::Deny } else { Authorization::Allow }
+    }));
+    f.db.connection_entry_groups(&mut entries, None, None, &filter).unwrap();
+    assert!(entries[0].group.is_empty());
+    f.db.browser_connection().authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+
+    f.db.conn.lock().unwrap().execute_batch("INSERT INTO generation_gallery_merges(source_key,group_key)
+        VALUES('asset:a-00000','manual:fixture'),('asset:a-00001','manual:fixture')").unwrap();
+    f.db.connection_entry_groups(&mut entries, None, None, &filter).unwrap();
+    assert_eq!(entries[0].group.iter().map(|entry| entry.id.as_str()).collect::<Vec<_>>(), ["e-00000", "e-00001"]);
 }
 
 // Frozen pre-optimization query shape: retain a comparable baseline without
@@ -121,7 +213,7 @@ fn scoped_pages_and_aggregated_counts_match_legacy_with_history_filters_and_sepa
         if separated { f.db.dissolve_generation_group(Some("a-00002"), None).unwrap(); }
         for project in [None, Some("scope")] {
             for media in [None, Some("images"), Some("texts")] {
-                for filter in [ConnectionFilter::default(), ConnectionFilter { grouped:true, ..Default::default() }, ConnectionFilter { grouped:true, generated:Some(true), color:None }, ConnectionFilter { grouped:true, generated:Some(false), color:Some("red".into()) }] {
+                for filter in [ConnectionFilter::default(), ConnectionFilter { grouped:true, ..Default::default() }, ConnectionFilter { grouped:true, generated:Some(true), color:None, ..Default::default() }, ConnectionFilter { grouped:true, generated:Some(false), color:Some("red".into()), ..Default::default() }] {
                     let counts = f.db.connection_folders_filtered(project,media,&filter).unwrap().into_iter().map(|f| (f.id,f.count)).collect::<Vec<_>>();
                     assert_eq!(counts, legacy_counts(&f.db,project,media,&filter));
                     for folder in [None, Some("current"), Some("other")] {
@@ -196,4 +288,70 @@ fn group_materialization_bounds_work_in_a_large_current_folder() {
     }
     assert_eq!(outcomes[0].0,outcomes[1].0,"materialization must not change visible members or order");
     assert!(outcomes[1].1<outcomes[0].1,"shared provenance rows must reduce repeated VM work");
+}
+
+#[test]
+#[ignore = "isolated first-connection latency comparison"]
+fn compare_first_connection_preparation() {
+    use std::time::Instant;
+
+    const FILES: usize = 128;
+    let fixture = tempfile::tempdir().unwrap();
+    let source = fixture.path().join("originals");
+    fs::create_dir(&source).unwrap();
+    let exemplar = source.join("000.bmp");
+    image::RgbImage::from_pixel(1024, 1024, image::Rgb([17, 42, 123]))
+        .save(&exemplar)
+        .unwrap();
+    let size = fs::metadata(&exemplar).unwrap().len();
+    for index in 1..FILES {
+        let path = source.join(format!("{index:03}.bmp"));
+        fs::copy(&exemplar, &path).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_len(size + index as u64)
+            .unwrap();
+    }
+
+    let mut samples = [Vec::new(), Vec::new()];
+    for run in 0..6 {
+        // Match the same source files and alternate order on equally warm disk data.
+        for baseline in [run % 2 == 0, run % 2 != 0] {
+            let library = LibraryPaths::init(fixture.path().join(format!("library-{run}-{baseline}"))).unwrap();
+            let db = Database::open(&library.db).unwrap();
+            db.migrate().unwrap();
+            let start = Instant::now();
+            let root = db.connect_directory(&source, None).unwrap();
+            let mut first = None;
+            let result = SCAN_SEQUENTIAL_BASELINE.with(|flag| {
+                flag.set(baseline);
+                let scan = db.scan_connection_changes(&library, &root, None, |changed| {
+                    if changed && first.is_none() {
+                        let elapsed = start.elapsed().as_micros();
+                        let count = db.connected_folder(&root).unwrap().count;
+                        if count > 0 { first = Some((elapsed, count)); }
+                    }
+                });
+                flag.set(false);
+                scan
+            });
+            result.unwrap();
+            let total = start.elapsed().as_micros();
+            assert_eq!(db.connected_folder(&root).unwrap().count, FILES as i64);
+            assert!(db.pending_connected_fingerprints("").unwrap().is_empty());
+            let (first, count) = first.expect("first indexed batch should be observable");
+            if run > 0 { samples[usize::from(baseline)].push((first, total, count)); }
+        }
+    }
+    for (baseline, sample) in samples.into_iter().enumerate() {
+        let median = |get: fn((u128, u128, i64)) -> u128| {
+            let mut values: Vec<_> = sample.iter().copied().map(get).collect();
+            values.sort_unstable();
+            values[2]
+        };
+        println!("first-connect baseline={} files={FILES} first_items={} first_us={} total_us={}",
+            baseline == 1, sample[0].2, median(|value| value.0), median(|value| value.1));
+    }
 }

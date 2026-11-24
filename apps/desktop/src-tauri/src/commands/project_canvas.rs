@@ -5,6 +5,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::State;
 
+use crate::core::paths::LibraryPaths;
 use crate::core::project_canvas::{
     CanvasEdge, CanvasGroup, CanvasGroupItem, CanvasNode, CanvasNodeLayoutUpdate,
     CanvasNodeRemoval, CanvasView, CanvasViewInput, CreativeThread, NewCanvasEdge, NewCanvasGroup,
@@ -12,7 +13,7 @@ use crate::core::project_canvas::{
     ProjectCanvasSnapshot,
 };
 use crate::db::Database;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 #[tauri::command]
 pub async fn project_canvas_materialize(
@@ -42,10 +43,13 @@ pub async fn project_canvas_ensure(
 
 #[tauri::command]
 pub async fn project_canvas_get(
-    db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<LibraryPaths>>,
     project_id: String,
 ) -> AppResult<ProjectCanvasSnapshot> {
-    db.project_canvas_snapshot(&project_id)
+    let path = paths.db.clone();
+    tokio::task::spawn_blocking(move || Database::open_read_only(&path)?.project_canvas_snapshot(&project_id))
+        .await
+        .map_err(|error| AppError::Other(error.to_string()))?
 }
 
 #[tauri::command]

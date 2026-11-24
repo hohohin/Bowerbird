@@ -14,6 +14,7 @@ const failureReasons: Record<string, string> = {
   chat_worker_error: "云端处理回复时发生错误。",
   chat_cancelled: "这轮云端对话已停止。",
   chat_dsh_deadline: "云端 DSH 对话等待执行或桌面工具回执超时。",
+  chat_dsh_billing_limit: "本轮已达到已确认的积分授权上限。",
 };
 
 export function chatFailure(status: string, candidate: unknown) {
@@ -40,13 +41,19 @@ export type ChatMessage = {
 };
 export const DSH_CHAT_ENGINE = "dsh-vps-v1";
 export const DSH_CHAT_ENGINE_V2 = "dsh-vps-v2";
+export function h3OptimizationRunId(conversationId?: string): string | undefined {
+  return /^o-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.exec(conversationId ?? "")?.[1];
+}
 export type DshChatEngine = typeof DSH_CHAT_ENGINE | typeof DSH_CHAT_ENGINE_V2;
 export function isDshChatEngine(value: unknown): value is DshChatEngine {
   return value === DSH_CHAT_ENGINE || value === DSH_CHAT_ENGINE_V2;
 }
 type ChatSkill = { id: "h3-video-prompt"; parameters: Record<string, unknown> } | { id: "text-editor" };
 export type DshChatOptionsSelection = { model: "deepseek-flash" | "deepseek-v4-pro"; reasoningEffort: "off" | "low" | "high" | "max" };
-export type ChatInput = { dsh_options?: DshChatOptionsSelection; messages: ChatMessage[]; tools_enabled: boolean; image_card_provider?: true; video_card_options?: true; engine?: DshChatEngine; conversation_id?: string; skill?: ChatSkill };
+export function isDshChatModel(value: unknown): value is DshChatOptionsSelection["model"] {
+  return value === "deepseek-flash" || value === "deepseek-v4-pro";
+}
+export type ChatInput = { dsh_options?: DshChatOptionsSelection; messages: ChatMessage[]; tools_enabled: boolean; image_card_provider?: true; video_card_options?: true; h3_r2v?: true; engine?: DshChatEngine; conversation_id?: string; skill?: ChatSkill };
 export class ChatInputError extends Error {}
 const invalid = () => new ChatInputError("对话内容格式无效，请重新发送");
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -102,7 +109,7 @@ function parseMessage(value: unknown): ChatMessage {
 
 export function validateChatInput(value: unknown): ChatInput {
   if (
-    !record(value) || !keys(value, ["messages", "tools_enabled", "engine", "skill", "conversation_id", "image_card_provider", "video_card_options", "dsh_options"]) ||
+    !record(value) || !keys(value, ["messages", "tools_enabled", "engine", "skill", "conversation_id", "image_card_provider", "video_card_options", "h3_r2v", "dsh_options"]) ||
     (value.engine !== undefined && !isDshChatEngine(value.engine)) ||
     (value.skill !== undefined && !isDshChatEngine(value.engine)) ||
     (value.engine !== DSH_CHAT_ENGINE_V2 && value.conversation_id !== undefined) ||
@@ -110,6 +117,7 @@ export function validateChatInput(value: unknown): ChatInput {
     value.messages.length < 1 || value.messages.length > 128 ||
     (value.image_card_provider !== undefined && (value.image_card_provider !== true || value.engine !== DSH_CHAT_ENGINE_V2 || value.skill !== undefined || value.tools_enabled === false)) ||
     (value.video_card_options !== undefined && (value.video_card_options !== true || value.engine !== DSH_CHAT_ENGINE_V2 || value.skill !== undefined || value.tools_enabled === false)) ||
+    (value.h3_r2v !== undefined && (value.h3_r2v !== true || value.video_card_options !== true)) ||
     (value.tools_enabled !== undefined &&
       typeof value.tools_enabled !== "boolean")
   ) throw invalid();
@@ -144,6 +152,7 @@ export function validateChatInput(value: unknown): ChatInput {
       ...(options === undefined ? {} : { dsh_options: options as DshChatOptionsSelection }),
       ...(value.image_card_provider === true ? { image_card_provider: true as const } : {}),
       ...(value.video_card_options === true ? { video_card_options: true as const } : {}),
+      ...(value.h3_r2v === true ? { h3_r2v: true as const } : {}),
       ...(value.skill === undefined ? {} : { skill: parseChatSkill(value.skill) }) };
   }
   return { messages, tools_enabled: value.tools_enabled !== false };
@@ -167,6 +176,12 @@ function parseChatSkill(value: unknown): ChatSkill {
 export function validChatCallId(value: unknown): value is string {
   return typeof value === "string" && /^[\w-]{1,120}$/.test(value);
 }
+
+export type ChatModelObservation =
+  | { status: "observed"; input_tokens: number; output_tokens: number; cache_hit_tokens?: number; cache_miss_tokens?: number;
+    provider_request_id?: string; provider_model?: string }
+  | { status: "http_error"; http_status: number }
+  | { status: "unknown" };
 
 export function parseChatToolReceipt(value: unknown) {
   if (record(value)) {

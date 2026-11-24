@@ -1,19 +1,36 @@
 .comfy-video-card { display: grid; gap: 10px; }
-.comfy-prompt-field { position: relative; }
-.comfy-prompt-field > .h3-optimization-actions { position: absolute; right: 8px; bottom: 8px; }
-.workflow-card .comfy-video-prompt { display: block; width: 100%; margin: 0; padding-bottom: 44px; min-height: 220px; max-height: 360px; box-sizing: border-box; }
-.comfy-frame-slots { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.comfy-frame-slots .comfy-frame-action { position: absolute; z-index: 2; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border-radius: 4px; background: rgb(0 0 0 / 76%); color: #fff; }
-.comfy-frame-disconnect { top: 5px; right: 5px; }
-.comfy-frame-swap { top: 50%; left: 50%; transform: translate(-50%, -50%); }
-.comfy-frame-slot { position: relative; overflow: hidden; aspect-ratio: 4 / 3; border: 1px dashed var(--bb-line); border-radius: 8px; min-width: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; }
-.comfy-frame-slot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-.comfy-frame-badge { position: absolute; z-index: 1; top: 7px; left: 7px; padding: 3px 6px; border-radius: 4px; background: rgb(0 0 0 / 72%); color: #fff; font-weight: 500; white-space: nowrap; pointer-events: none; }
-.comfy-frame-slot span { padding: 28px 10px 10px; color: var(--bb-muted); text-align: center; }
-.comfy-video-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border: 0; padding: 0; margin: 0; min-width: 0; }
-.comfy-video-options label { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--bb-muted); }
-.comfy-video-options input { width: 56px; height: 28px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--bb-line); border-radius: 4px; background: var(--bb-surface-2); color: var(--bb-ink); }
-.workflow-card .comfy-video-options > :is(select, .tactical-select-trigger) { width: auto; height: 28px; padding: 0 8px; border-radius: 4px; }
+.workflow-card .comfy-video-prompt { display: block; width: 100%; margin: 0; max-height: 360px; box-sizing: border-box; }
+.comfy-frame-slots { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 30px; padding-bottom: 10px; border-bottom: 1px solid var(--bb-line); }
+.h3-frame-group, .h3-frame-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.h3-frame-meta { flex-direction: column; align-items: flex-start; gap: 2px; font-size: 12px; }
+.h3-frame-meta strong { font-weight: 500; }
+.h3-frame-meta small { color: var(--bb-muted); font: 10px ui-monospace, Consolas, monospace; white-space: nowrap; }
+.comfy-frame-slots .comfy-frame-action { position: absolute; z-index: 2; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border-radius: 0; background: rgb(0 0 0 / 76%); color: #fff; }
+.comfy-frame-disconnect { top: 2px; right: 2px; }
+.comfy-frame-slots .comfy-frame-swap { top: 27px; left: 50%; transform: translate(-50%, -50%); border: 1px solid var(--bb-line); background: transparent; color: var(--bb-muted); border-radius: 0; }
+.comfy-frame-slot { position: relative; flex: 0 0 70px; height: 54px; box-sizing: border-box; border: 1px dashed var(--bb-line); background: var(--bb-surface-2); font-size: 11px; }
+.comfy-frame-slot:has(.comfy-frame-thumbnail) { border-style: solid; }
+.comfy-frame-thumbnail { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
+.comfy-frame-thumbnail:focus-visible { outline: 1px solid var(--bb-blue); outline-offset: 2px; }
+.comfy-frame-preview {
+  position: absolute; z-index: 3; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%);
+  width: 160px; height: 120px; padding: 4px; object-fit: contain; pointer-events: none;
+  background: var(--bb-surface); border: 1px solid var(--bb-line); box-shadow: 0 8px 20px var(--bb-shadow-popover);
+}
+.comfy-frame-placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--bb-muted); text-align: center; }
+.comfy-audio-input { display: grid; gap: 3px; min-width: 0; padding: 4px 8px; border: 1px dashed var(--bb-line); border-radius: 6px; font-size: 12px; }
+.comfy-audio-input:has(button) { border-style: solid; }
+.comfy-audio-row { display: flex; align-items: center; gap: 6px; min-height: 24px; }
+.comfy-audio-row > :not(.comfy-audio-source) { flex-shrink: 0; }
+.comfy-audio-source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comfy-audio-input small, .comfy-audio-source { color: var(--bb-muted); }
+.workflow-card .comfy-audio-row button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; }
+.comfy-audio-row button:focus-visible { outline: 1px solid var(--bb-blue); outline-offset: -2px; }
+.comfy-r2v-groups { display:grid; gap:5px; }
+.comfy-r2v-groups > small { color:var(--bb-muted); }
+.comfy-r2v-source { border-top:1px solid var(--bb-line); }
+.comfy-r2v-source > small { max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.comfy-video-card .comfy-video-options { padding-bottom: 8px; border-bottom: 1px solid var(--bb-line); }
 /* The header keeps a full button hit target around the small status dot. */
 .workflow-card > header .comfy-environment-dot { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; }
 .comfy-environment-dot > span { width: 8px; height: 8px; border-radius: 50%; background: var(--bb-danger-strong); }
@@ -35,7 +52,6 @@
 .comfy-environment-actions > :last-child button { background: var(--bb-blue); color: white; border-color: transparent; }
 .comfy-environment-actions button:disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
 
-.comfy-generation-progress { display: grid; gap: 7px; margin: 10px 0; color: var(--bb-muted); font-size: 12px; }
 /* Adapted from dylanharriscameron / ancient-falcon-18 (Uiverse), MIT.
    https://uiverse.io/dylanharriscameron/ancient-falcon-18
    See ComfyVideoProgress.LICENSE.txt. Width follows service progress; no loop animation. */
@@ -51,17 +67,39 @@
 }
 button.h3-image-environment.is-ready > svg { color: var(--bb-success); }
 button.h3-image-environment > .lucide-ellipsis { color: var(--bb-muted); }
-.comfy-video-card .comfy-video-options { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); align-items: end; padding-bottom: 10px; border-bottom: 1px solid var(--bb-line); }
-.comfy-video-card .comfy-option, .comfy-video-card .comfy-video-options label { display: grid; gap: 4px; min-width: 0; font-size: 12px; color: var(--bb-muted); }
-.comfy-video-card .comfy-video-options label { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-.comfy-video-card .comfy-video-options label input { grid-column: 1; width: 100%; }
-.comfy-option > .tactical-select-trigger { width: 100%; min-height: 28px; }
-.comfy-prompt-caption { display: block; font-size: 12px; color: var(--bb-muted); margin-bottom: 4px; }
-.workflow-card .comfy-video-prompt { min-height: 144px; }
-.comfy-frame-slot:only-child { grid-column: 1 / -1; aspect-ratio: auto; height: 112px; }
-.comfy-frame-slot:has(img) { border-style: solid; }
-.comfy-frame-slots .comfy-frame-action { width: 28px; height: 28px; }
-.comfy-frame-slots .comfy-frame-action:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 1px; }
+.comfy-frame-slots .comfy-frame-action:focus-visible { outline: 1px solid white; outline-offset: -3px; }
 
-.comfy-video-card .comfy-video-options > * { grid-column:span 2; }
-.comfy-video-card .comfy-video-options > :nth-child(-n+2) { grid-column:span 3; }
+.workflow-card[data-h3-card] .workflow-card-body { padding: 7px 15px 12px; }
+.workflow-card[data-h3-card] .comfy-environment-dot > span { border-radius: 0; }
+.workflow-card[data-h3-card] .comfy-audio-input { padding: 5px 8px; border-radius: 0; }
+.workflow-card[data-h3-card] .comfy-video-options {
+  display: grid; grid-template-columns: auto minmax(0, max-content) auto auto auto; align-items: center; justify-content: start; gap: 2px;
+}
+.workflow-card[data-h3-card] .comfy-video-options > .tactical-select-trigger { min-width: 0; }
+.workflow-card[data-h3-card] .comfy-video-options > :not(:first-child) { border-inline-start: 1px solid var(--bb-line); padding-inline-start: 4px; }
+.workflow-card[data-h3-card] :is(.comfy-video-prompt[data-fit-content], .workflow-prompt-editor[data-fit-content] .ProseMirror) {
+  min-height: 64px; padding: 4px 5px; font-size: 13.5px; line-height: 1.65;
+}
+.workflow-card[data-h3-card] .workflow-media-settings { margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--bb-line); }
+html[data-theme] .canvas-tactical .workflow-card[data-h3-card] footer {
+  margin: 10px 0 0; padding: 10px 0 0; gap: 8px; background: none; border-top: 1px solid var(--bb-line); font-size: 11.5px;
+}
+.workflow-card[data-h3-card] .workflow-h3-status { flex: 1; }
+.workflow-card[data-h3-card] .workflow-video-auto-optimize { min-height: 26px; padding: 0 4px; font-size: 11.5px; color: var(--bb-muted); }
+.workflow-card[data-h3-card] .workflow-video-auto-optimize:has(:checked) { color: var(--bb-blue); outline: 1px solid currentColor; font-family: ui-monospace, Consolas, monospace; }
+html[data-theme] .canvas-tactical .workflow-card[data-h3-card] footer .h3-run-action {
+  min-height: 28px; border: 1px solid var(--bb-line); padding: 3px 10px; color: var(--bb-blue); font-size: 12px;
+}
+.workflow-card[data-h3-card] footer .h3-run-action::after { content: ""; position: absolute; right: 0; bottom: 0; width: 3px; height: 3px; background: currentColor; }
+.h3-run-guard { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--bb-warning); font-size: 12px; }
+.h3-run-guard strong { flex: 1; color: var(--bb-warning); font-weight: 500; }
+.h3-run-guard > div { width: 100%; display: flex; flex-wrap: wrap; gap: 12px; }
+.h3-run-guard button { padding: 4px 0; }
+.workflow-card[data-h3-card] .workflow-generation-history[data-has-runs]::after {
+  content: ""; position: absolute; width: 4px; height: 4px; top: 4px; right: 3px; background: var(--bb-blue);
+}
+.workflow-card[data-h3-card] .workflow-generation-history { position: relative; }
+.h3-dispatch-record { border-top: 1px solid var(--bb-line); padding: 8px; }
+.h3-dispatch-record summary { cursor: pointer; }
+.h3-dispatch-record pre { margin: 8px 0; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.h3-dispatch-record button { color: var(--bb-blue); }

@@ -5,7 +5,7 @@ import { ModalShell } from "./ModalShell";
 
 export function CheckoutDialog({ order, account, busy, error, onClose, onQuery, onRetry }: {
   order: CheckoutOrder | null; account: string; busy: boolean; error: string;
-  onClose: () => void; onQuery: () => void; onRetry: () => void;
+  onClose: () => void; onQuery: () => void; onRetry?: () => void;
 }) {
   const [qr, setQr] = useState("");
   const [qrError, setQrError] = useState(false);
@@ -25,7 +25,7 @@ export function CheckoutDialog({ order, account, busy, error, onClose, onQuery, 
   return <ModalShell title="微信支付" className="account-checkout-dialog" onClose={onClose}
     panelProps={{ onKeyDown: event => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } } }}
     footer={<>
-      {(!order || pending) && <button className="app-modal-button" disabled={busy} onClick={order ? onQuery : onRetry}>{busy ? "查询中…" : order ? "查询支付结果" : "重试原请求"}</button>}
+      {(!order || pending) && <button className="app-modal-button" disabled={busy} onClick={order ? onQuery : onRetry ?? onQuery}>{busy ? "查询中…" : !order && onRetry ? "重试原请求" : "查询支付结果"}</button>}
       <button className="app-modal-button" onClick={onClose}>{order?.status === "paid" ? "完成" : "关闭"}</button>
     </>}>
     <div className="account-checkout-content" aria-busy={busy}>

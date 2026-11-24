@@ -1,6 +1,6 @@
 import { statSync, readFileSync } from 'node:fs';
 import { MAX_SNAPSHOT_BYTES } from './core.mjs';
-import { createHttpApp } from './http-app.mjs';
+import { createHttpApp } from './local-http-app.mjs';
 
 const blocked = /^--(?:allow-fs-write|allow-child-process|allow-worker|allow-addons|allow-wasi|inspect)/;
 if (!process.permission || process.execArgv.some(arg => blocked.test(arg))

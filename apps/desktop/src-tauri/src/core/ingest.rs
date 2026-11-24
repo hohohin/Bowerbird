@@ -51,20 +51,24 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
 /// First durable save of newly received/generated content from a temporary workspace.
 /// Never use this for the user's existing local files; those use ingest_file.
 pub fn ingest_new_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppResult<Asset> {
-    ingest_file_with_dedup(paths, db, source, false, true)
+    ingest_file_with_dedup(paths, db, source, Deduplication::Exact, true)
 }
 
 fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<Asset>> {
     use std::io::Read;
     let candidates = {
         let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, store_path FROM assets WHERE size=?1 AND store_path IS NOT NULL AND id NOT IN (SELECT asset_id FROM external_assets)")?;
+        let visible = super::material_catalog::catalog_visibility(false);
+        let mut stmt = conn.prepare(&format!("SELECT a.id, a.store_path FROM assets a
+            WHERE a.size=?1 AND a.store_path IS NOT NULL AND a.library_hidden=0 AND a.source IS NOT 'annotation' AND {visible}
+            AND NOT EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id)"))?;
         let rows = stmt.query_map([size as i64], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
         rows.collect::<Result<Vec<_>, _>>()?
     };
     for (id, stored) in candidates {
         let Ok(mut existing) = fs::File::open(&stored) else { continue };
-        if existing.metadata()?.len() != size { continue; }
+        let Ok(metadata) = existing.metadata() else { continue; };
+        if !metadata.is_file() || metadata.len() != size { continue; }
         let mut incoming = fs::File::open(source)?;
         let mut left = [0u8; 65536];
         let mut right = [0u8; 65536];
@@ -79,7 +83,9 @@ fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<
             }
             remaining -= count as u64;
         }
-        if identical { return db.get_asset(&id); }
+        if identical {
+            if let Some(asset) = db.reusable_capture_asset(&id, &stored)? { return Ok(Some(asset)); }
+        }
     }
     Ok(None)
 }
@@ -89,7 +95,10 @@ fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<
 // byte comparison when nothing was inserted since the initial fast path.
 static INGEST_REVISION: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
 
-fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, approximate: bool, automatic: bool) -> AppResult<Asset> {
+#[derive(Clone, Copy)]
+enum Deduplication<'a> { Annotation { source: &'a str, payload: &'a str }, Exact, Similar }
+
+fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, dedup: Deduplication<'_>, automatic: bool) -> AppResult<Asset> {
     // Keep the user's HEIC untouched. All consumers receive a full-size PNG,
     // including previews, classification and providers that cannot read HEIC.
     let normalized = if media::heic::is_path(source) {
@@ -107,7 +116,7 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
             .map_err(|error| AppError::Media(format!("无法解码图片 {}: {error}", source.display())))?)
     };
     let initial_revision = *INGEST_REVISION.lock().unwrap();
-    if !approximate {
+    if matches!(dedup, Deduplication::Exact) {
         if let Some(mut existing) = exact_duplicate(db, input, meta.size)? {
             preset::recognize_and_prefill(db, source, &mut existing)?;
             return Ok(existing);
@@ -136,11 +145,14 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
     } else {
         let p = paths.thumb_path(&id);
         if meta.width > 0 && meta.height > 0 {
-            if let Some(ref img) = decoded {
-                if let Err(e) = media::thumb::generate_from_image(img, &p, 480) {
-                    tracing::warn!("thumb failed for {}: {e}", source.display());
-                }
-            } else if let Err(e) = media::thumb::generate(&store_path, &p, 480) {
+            let result = if cfg!(target_os = "macos") && normalized.is_some() {
+                media::heic::thumbnail(input, &p, 480)
+            } else if let Some(ref img) = decoded {
+                media::thumb::generate_from_image(img, &p, 480)
+            } else {
+                media::thumb::generate(&store_path, &p, 480)
+            };
+            if let Err(e) = result {
                 tracing::warn!("thumb failed for {}: {e}", source.display());
             }
         }
@@ -163,11 +175,19 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
     };
 
     let mut revision = INGEST_REVISION.lock().unwrap();
-    let duplicate = if approximate && phash.as_deref().is_some_and(media::phash::is_high_entropy) {
-        db.find_asset_by_phash(phash.as_deref().unwrap())?
-    } else if approximate || *revision != initial_revision {
-        exact_duplicate(db, input, meta.size)?
-    } else { None };
+    let duplicate = match dedup {
+        Deduplication::Similar if phash.as_deref().is_some_and(media::phash::is_high_entropy) => db.find_asset_by_phash(phash.as_deref().unwrap())?,
+        Deduplication::Similar => exact_duplicate(db, input, meta.size)?,
+        Deduplication::Exact if *revision != initial_revision => exact_duplicate(db, input, meta.size)?,
+        _ => None,
+    };
+    let duplicate = match duplicate {
+        Some(asset) => match asset.store_path.as_deref() {
+            Some(path) => db.reusable_capture_asset(&asset.id, path)?,
+            None => None,
+        },
+        None => None,
+    };
     if let Some(mut existing) = duplicate {
         drop(revision);
         let _ = fs::remove_file(&store_path);
@@ -184,11 +204,12 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         .map(|d| d.as_secs() as i64)
         .unwrap_or(now);
 
+    let annotation = match dedup { Deduplication::Annotation { source, payload } => Some((source, payload)), _ => None };
     let mut asset = Asset {
         id: id.clone(),
         name,
         ext: Some(meta.ext),
-        origin_path: Some(source.to_string_lossy().into_owned()),
+        origin_path: annotation.is_none().then(|| source.to_string_lossy().into_owned()),
         store_path: Some(store_path.to_string_lossy().into_owned()),
         // 与 ingest_generated 一致：缩略图生成失败时落 None，
         // 前端异步补封面，失败保留静态占位，不创建视频播放器。
@@ -200,8 +221,8 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         phash,
         colors,
         rating: Some(0),
-        source: Some("imported".to_string()),
-        source_url: None,
+        source: Some(annotation.map_or("imported", |(source, _)| source).to_string()),
+        source_url: annotation.map(|_| String::new()),
         folder_id: None,
         created_at: Some(now),
         file_mtime: Some(file_mtime),
@@ -209,12 +230,16 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         reference_count: 0,
         library_hidden: false,
     };
-    db.insert_asset_with_auto_classification(&asset, automatic)?;
+    if let Err(error) = db.insert_saved_asset(&asset, automatic, annotation.map(|(_, payload)| payload)) {
+        let _ = fs::remove_file(&store_path);
+        if thumb_path != store_path { let _ = fs::remove_file(&thumb_path); }
+        return Err(error);
+    }
     *revision += 1;
     drop(revision);
     link_colors(db, &asset.id, asset.colors.as_deref());
     // 预设图识别：文件名命中内置 manifest → 预填 generation 身份 + meta（不调 codex）。
-    preset::recognize_and_prefill(db, source, &mut asset)?;
+    if annotation.is_none() { preset::recognize_and_prefill(db, source, &mut asset)?; }
     Ok(asset)
 }
 
@@ -242,6 +267,33 @@ pub fn ingest_generated_with_visibility(
     source_tag: &str,
     library_hidden: bool,
 ) -> AppResult<Asset> {
+    persist_generated(paths, db, source, session_id, source_tag, library_hidden, None)
+}
+
+pub(crate) struct GeneratedAudioClip<'a> {
+    pub name: String,
+    pub duration: f64,
+    pub project_id: Option<&'a str>,
+}
+
+pub(crate) fn ingest_generated_audio_clip(
+    paths: &LibraryPaths,
+    db: &Database,
+    source: &Path,
+    clip: GeneratedAudioClip<'_>,
+) -> AppResult<Asset> {
+    persist_generated(paths, db, source, None, "audio-trim", false, Some(clip))
+}
+
+fn persist_generated(
+    paths: &LibraryPaths,
+    db: &Database,
+    source: &Path,
+    session_id: Option<&str>,
+    source_tag: &str,
+    library_hidden: bool,
+    clip: Option<GeneratedAudioClip<'_>>,
+) -> AppResult<Asset> {
     let meta = media::probe::probe(source)?;
     let id = Ulid::new().to_string();
     let name = source
@@ -251,10 +303,17 @@ pub fn ingest_generated_with_visibility(
         .to_string();
 
     let store_path = paths.asset_store_path(&id, &meta.ext)?;
-    fs::create_dir_all(store_path.parent().unwrap())?;
-    fs::copy(source, &store_path)?;
+    let parent = store_path.parent().unwrap();
+    fs::create_dir_all(parent)?;
+    let staged = clip.map(|clip| -> AppResult<_> {
+        let mut staged = tempfile::Builder::new().prefix(".audio-trim-").suffix(".tmp").tempfile_in(parent)?;
+        std::io::copy(&mut fs::File::open(source)?, staged.as_file_mut())?;
+        staged.as_file().sync_all()?;
+        Ok((clip, staged))
+    }).transpose()?;
+    if staged.is_none() { fs::copy(source, &store_path)?; }
 
-    let mut decoded = image::open(&store_path).ok();
+    let mut decoded = if staged.is_some() { None } else { image::open(&store_path).ok() };
 
     let thumb_path = if media::probe::is_video(&meta.ext) {
         let p = paths.thumb_path(&id);
@@ -290,7 +349,7 @@ pub fn ingest_generated_with_visibility(
     };
 
     let now = Utc::now().timestamp();
-    let asset = Asset {
+    let mut asset = Asset {
         id: id.clone(),
         name,
         ext: Some(meta.ext),
@@ -313,7 +372,25 @@ pub fn ingest_generated_with_visibility(
         reference_count: 0,
         library_hidden,
     };
-    db.insert_asset(&asset)?;
+    if let Some((clip, staged)) = staged {
+        asset.name = clip.name;
+        asset.origin_path = None;
+        asset.duration = Some(clip.duration);
+        asset.file_mtime = staged.as_file().metadata().and_then(|value| value.modified()).ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok()).map(|value| value.as_secs() as i64);
+        let mut published = false;
+        let saved = db.insert_saved_asset_for_project(&asset, false, None, clip.project_id, || {
+            staged.persist_noclobber(&store_path).map_err(|error| error.error)?;
+            published = true;
+            Ok(())
+        });
+        if let Err(error) = saved {
+            if published { let _ = fs::remove_file(&store_path); }
+            return Err(error);
+        }
+    } else {
+        db.insert_asset(&asset)?;
+    }
     link_colors(db, &asset.id, asset.colors.as_deref());
     Ok(asset)
 }
@@ -394,6 +471,22 @@ pub(crate) fn ingest_from_bytes_with_classification(
     paths: &LibraryPaths, db: &Database, bytes: &[u8], source_url: &str,
     file_name: Option<&str>, content_type: Option<&str>, source: &str, automatic: bool,
 ) -> AppResult<Asset> {
+    let dedup = if source_url.is_empty() { Deduplication::Exact } else { Deduplication::Similar };
+    ingest_uploaded_image(paths, db, bytes, source_url, file_name, content_type, source, automatic, dedup)
+}
+
+pub(crate) fn ingest_annotation_from_bytes(
+    paths: &LibraryPaths, db: &Database, bytes: &[u8], file_name: &str, screenshot: bool, annotation: Option<&str>,
+) -> AppResult<Asset> {
+    let source = if screenshot { "screenshot" } else { "annotation" };
+    let dedup = annotation.map_or(Deduplication::Exact, |payload| Deduplication::Annotation { source, payload });
+    ingest_uploaded_image(paths, db, bytes, "", Some(file_name), None, source, true, dedup)
+}
+
+fn ingest_uploaded_image(
+    paths: &LibraryPaths, db: &Database, bytes: &[u8], source_url: &str,
+    file_name: Option<&str>, content_type: Option<&str>, source: &str, automatic: bool, dedup: Deduplication<'_>,
+) -> AppResult<Asset> {
     if bytes.is_empty() {
         return Err(AppError::Media("extension uploaded an empty image".into()));
     }
@@ -424,7 +517,8 @@ pub(crate) fn ingest_from_bytes_with_classification(
     fs::write(&source_path, bytes)?;
 
     let result = (|| -> AppResult<Asset> {
-        let mut asset = ingest_file_with_dedup(paths, db, &source_path, !source_url.is_empty(), automatic)?;
+        let mut asset = ingest_file_with_dedup(paths, db, &source_path, dedup, automatic)?;
+        if matches!(dedup, Deduplication::Annotation { .. }) { return Ok(asset); }
         let has_temporary_origin =
             asset.origin_path.as_deref() == Some(source_path.to_string_lossy().as_ref());
         // An identical screenshot reuses the existing asset without replacing its provenance.
@@ -766,6 +860,104 @@ mod tests {
     }
 
     #[test]
+    fn recapture_persists_bytes_when_previous_original_is_missing_removed_or_hidden() {
+        for approximate in [true, false] {
+            for previous_state in ["missing", "cleaned", "trashed", "hidden", "disconnected", "directory", "null"] {
+                let (tmp, mut paths, db) = setup();
+                let files = super::super::file_workspace::FileWorkspace::open(
+                    tmp.dir.join("files.json"), tmp.dir.join("BowerbirdLibrary"),
+                ).unwrap();
+                paths.files = Some(std::sync::Arc::new(files));
+                let input = make_photo_file(&tmp.dir, "photo.png", 320, 7);
+                let bytes = fs::read(&input).unwrap();
+                let capture = || {
+                    if approximate {
+                        ingest_from_bytes(&paths, &db, &bytes, "https://example.com/photo", Some("photo.png"),
+                            Some("image/png"), "extension").unwrap()
+                    } else {
+                        // URL downloads and other byte-exact imports use this same durable entry point.
+                        ingest_new_file(&paths, &db, &input).unwrap()
+                    }
+                };
+                let previous = capture();
+                let original = previous.store_path.as_ref().unwrap();
+                match previous_state {
+                    "missing" => fs::remove_file(original).unwrap(),
+                    "cleaned" => { db.conn.lock().unwrap().execute(
+                        "INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)",
+                        rusqlite::params![previous.id, original],
+                    ).unwrap(); }
+                    "trashed" => { db.conn.lock().unwrap().execute(
+                        "INSERT INTO trashed_asset_originals(asset_id,path,fingerprint) VALUES(?1,?2,?3)",
+                        rusqlite::params![previous.id, original, super::super::external_files::fingerprint(Path::new(original)).unwrap()],
+                    ).unwrap(); }
+                    "hidden" => { db.conn.lock().unwrap().execute(
+                        "UPDATE assets SET library_hidden=1 WHERE id=?1", [&previous.id],
+                    ).unwrap(); }
+                    "disconnected" => { db.conn.lock().unwrap().execute(
+                        "INSERT INTO disconnected_library_assets(asset_id) VALUES(?1)", [&previous.id],
+                    ).unwrap(); }
+                    "directory" => { fs::remove_file(original).unwrap(); fs::create_dir(original).unwrap(); }
+                    "null" => { db.conn.lock().unwrap().execute(
+                        "UPDATE assets SET store_path=NULL WHERE id=?1", [&previous.id],
+                    ).unwrap(); }
+                    _ => unreachable!(),
+                }
+                let retained = serde_json::to_value(db.get_asset(&previous.id).unwrap()).unwrap();
+                assert!(db.reusable_capture_asset(&previous.id, original).unwrap().is_none());
+                let captured = capture();
+                assert_ne!(captured.id, previous.id, "{approximate}/{previous_state}");
+                assert_eq!(fs::read(captured.store_path.as_ref().unwrap()).unwrap(), bytes);
+                assert!(Path::new(captured.store_path.as_ref().unwrap()).starts_with(
+                    paths.files.as_ref().unwrap().ensure_root().unwrap().join("收集箱")));
+                assert_eq!(capture().id, captured.id);
+                assert_eq!(serde_json::to_value(db.get_asset(&previous.id).unwrap()).unwrap(), retained);
+                let conn = db.conn.lock().unwrap();
+                for (state, table) in [("cleaned", "removed_missing_asset_originals"), ("trashed", "trashed_asset_originals")] {
+                    let count: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE asset_id=?1"),
+                        [&previous.id], |row| row.get(0)).unwrap();
+                    assert_eq!(count, i64::from(previous_state == state));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn capture_rechecks_selected_original_path_before_reuse() {
+        let (tmp, paths, db) = setup();
+        let original = make_photo_file(&tmp.dir, "original.png", 320, 7);
+        let first = ingest_new_file(&paths, &db, &original).unwrap();
+        let previous_path = first.store_path.as_deref().unwrap();
+        assert!(db.reusable_capture_asset(&first.id, previous_path).unwrap().is_some());
+        let current_path = tmp.dir.join("current.png");
+        fs::copy(previous_path, &current_path).unwrap();
+        db.conn.lock().unwrap().execute("UPDATE assets SET store_path=?2 WHERE id=?1",
+            rusqlite::params![first.id, current_path.to_string_lossy()]).unwrap();
+        assert!(db.reusable_capture_asset(&first.id, previous_path).unwrap().is_none());
+        let captured = ingest_new_file(&paths, &db, &original).unwrap();
+        assert_eq!(captured.id, first.id);
+        assert_eq!(Path::new(captured.store_path.as_deref().unwrap()), current_path);
+    }
+
+    #[test]
+    fn approximate_capture_skips_a_missing_larger_match_and_keeps_the_readable_one() {
+        let (tmp, paths, db) = setup();
+        let full = make_photo_file(&tmp.dir, "large.png", 640, 42);
+        let first = ingest_new_file(&paths, &db, &full).unwrap();
+        let smaller = tmp.dir.join("smaller.png");
+        image::open(&full).unwrap().resize_exact(160,160,image::imageops::FilterType::Lanczos3).save(&smaller).unwrap();
+        let second = ingest_new_file(&paths, &db, &smaller).unwrap();
+        assert_ne!(first.id, second.id);
+        let hash = second.phash.as_deref().unwrap();
+        assert_eq!(db.find_asset_by_phash(hash).unwrap().unwrap().id, first.id);
+        fs::remove_file(first.store_path.as_ref().unwrap()).unwrap();
+        assert_eq!(db.find_asset_by_phash(hash).unwrap().unwrap().id, second.id);
+        let captured = ingest_from_bytes(&paths,&db,&fs::read(smaller).unwrap(),
+            "https://example.com/photo",None,Some("image/png"),"extension").unwrap();
+        assert_eq!(captured.id, second.id);
+    }
+
+    #[test]
     fn uploaded_bytes_use_real_format_and_extension_source() {
         let (_tmp, paths, db) = setup();
         let bytes = png_bytes(32, 24, [12, 34, 56]);
@@ -1043,11 +1235,11 @@ mod tests {
         );
         small_img.save(&small_path).unwrap();
 
-        let first = ingest_file_with_dedup(&paths, &db, &full, true, true).unwrap();
+        let first = ingest_file_with_dedup(&paths, &db, &full, Deduplication::Similar, true).unwrap();
         assert_eq!(db.count_assets(None).unwrap(), 1);
 
         // 导入低清变体：应被模糊去重归并到高分图，不新增。
-        let merged = ingest_file_with_dedup(&paths, &db, &small_path, true, true).unwrap();
+        let merged = ingest_file_with_dedup(&paths, &db, &small_path, Deduplication::Similar, true).unwrap();
         assert_eq!(
             db.count_assets(None).unwrap(),
             1,

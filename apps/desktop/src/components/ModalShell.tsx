@@ -4,13 +4,21 @@ import { usePortalTarget } from "../lib/portalTarget";
 import { X } from "lucide-react";
 
 const FOCUSABLE = [
-  "button:not(:disabled)",
-  "input:not(:disabled)",
-  "textarea:not(:disabled)",
-  "select:not(:disabled)",
+  "button",
+  "input",
+  "textarea",
+  "select",
   "[href]",
-  '[tabindex]:not([tabindex="-1"])',
+  "details > summary:first-of-type",
+  "[tabindex]",
 ].join(",");
+
+function isVisibleFocusTarget(element: HTMLElement) {
+  return !element.matches(":disabled")
+    && !element.closest('[hidden], [inert], [aria-hidden="true"], details:not([open]) > :not(summary:first-of-type)')
+    && element.getClientRects().length > 0
+    && getComputedStyle(element).visibility === "visible";
+}
 
 export function ModalShell({
   title,
@@ -50,36 +58,46 @@ export function ModalShell({
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const panel = panelRef.current;
-    const preferred = panel?.querySelector<HTMLElement>("[data-modal-autofocus]");
-    const first = panel?.querySelector<HTMLElement>(FOCUSABLE);
-    window.requestAnimationFrame(() => (preferred ?? first)?.focus({ preventScroll: true }));
+    if (!panel) return;
+    const focusableItems = () => Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE))
+      .filter(item => item.tabIndex >= 0 && isVisibleFocusTarget(item));
+    const frame = window.requestAnimationFrame(() => {
+      const preferred = Array.from(panel.querySelectorAll<HTMLElement>("[data-modal-autofocus]"))
+        .find(isVisibleFocusTarget);
+      (preferred ?? focusableItems()[0] ?? panel).focus({ preventScroll: true });
+    });
 
     function onKeyDown(event: KeyboardEvent) {
+      if (!panel || event.defaultPrevented) return;
       // A second modal (e.g. subscription settings above a composition) owns its own keys.
-      const activeDialog = document.activeElement?.closest('[role="dialog"]');
-      if (activeDialog && panel && !activeDialog.contains(panel)) return;
+      const active = document.activeElement;
+      const activeDialog = active?.closest('[role="dialog"]');
+      if (activeDialog && !activeDialog.contains(panel)) return;
       if (event.key === "Escape" && !preventCloseRef.current) {
         event.preventDefault();
         closeRef.current();
         return;
       }
-      if (event.key !== "Tab" || !panelRef.current) return;
-      const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE))
-        .filter(element => !element.closest('[inert], [hidden], [aria-hidden="true"]'));
-      if (focusable.length === 0) return;
+      if (event.key !== "Tab") return;
+      if (!activeDialog) {
+        const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]'))
+          .filter(isVisibleFocusTarget);
+        if (panel.closest('[role="dialog"]') !== dialogs[dialogs.length - 1]) return;
+      }
+      const focusable = focusableItems();
       const firstItem = focusable[0];
       const lastItem = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === firstItem) {
+      const atBoundary = event.shiftKey ? active === firstItem || active === panel : active === lastItem;
+      if (!firstItem || !panel.contains(active) || atBoundary) {
         event.preventDefault();
-        lastItem.focus();
-      } else if (!event.shiftKey && document.activeElement === lastItem) {
-        event.preventDefault();
-        firstItem.focus();
+        const target = (event.shiftKey ? lastItem : firstItem) ?? panel;
+        target.focus();
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => {
+      window.cancelAnimationFrame(frame);
       window.removeEventListener("keydown", onKeyDown);
       previous?.focus({ preventScroll: true });
     };
@@ -95,7 +113,7 @@ export function ModalShell({
         if (event.target === event.currentTarget && !preventClose) onClose();
       }}
     >
-      <div {...panelProps} ref={panelRef} className="app-modal" data-width={width}>
+      <div tabIndex={-1} {...panelProps} ref={panelRef} className="app-modal" data-width={width}>
         <header className="app-modal-header">
           <div className="min-w-0">
             {eyebrow && <div className="app-modal-eyebrow">{eyebrow}</div>}

@@ -4,6 +4,7 @@ import { workflowAgentProvider } from "../lib/workflowAgentChat";
 import { ChatProviderSelect, useChatProviderAccess } from "./creation/ChatProviderSelect";
 import { CodexModelSelect, useChatCodexModels } from "./creation/CodexModelSelect";
 import { localChatDraft, useLocalChatStore } from "../lib/localChatStore";
+import "./AgentChatControls.css";
 
 /** Agent cards use the exact provider/model controls and availability checks of the composer. */
 export function AgentChatControls({ node, busy, onChange, onProviderChange, newChatAction }: {
@@ -18,15 +19,16 @@ export function AgentChatControls({ node, busy, onChange, onProviderChange, newC
   const options = useLocalChatStore(state => conversationId
     ? state.drafts[conversationId]?.codexOptions ?? state.summaries[conversationId]?.codexOptions ?? node.chatCodexOptions : node.chatCodexOptions);
   return <div className="workflow-agent-chat-controls">
-    <div className="workflow-agent-provider-row"><ChatProviderSelect value={provider} access={access} disabled={busy}
-      onChange={next => { if (next !== provider) onProviderChange(next); }} />
+    <div className="workflow-agent-provider-row">
+      <ChatProviderSelect value={provider} access={access} disabled={busy}
+        onChange={next => { if (next !== provider) onProviderChange(next); }} />
+      <CodexModelSelect compact provider={provider} allowServiceDefault={provider !== "dsh-local"} value={agentChatOptions(provider, options) ?? {}} catalog={models} disabled={busy}
+        onChange={chatCodexOptions => {
+          if (provider === "dsh-local") rememberAgentDshOptions(chatCodexOptions);
+          if (conversationId) useLocalChatStore.getState().setDraft(conversationId, { ...localChatDraft(conversationId), codexOptions: chatCodexOptions });
+          else onChange({ chatCodexOptions });
+        }} />
       {newChatAction}
     </div>
-    <CodexModelSelect provider={provider} allowServiceDefault={provider !== "dsh-local"} value={agentChatOptions(provider, options) ?? {}} catalog={models} disabled={busy}
-      onChange={chatCodexOptions => {
-        if (provider === "dsh-local") rememberAgentDshOptions(chatCodexOptions);
-        if (conversationId) useLocalChatStore.getState().setDraft(conversationId, { ...localChatDraft(conversationId), codexOptions: chatCodexOptions });
-        else onChange({ chatCodexOptions });
-      }} />
   </div>;
 }

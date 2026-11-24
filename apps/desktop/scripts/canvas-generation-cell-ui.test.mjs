@@ -68,11 +68,11 @@ try{
   await picture.dblclick();
   assert.deepEqual(await page.evaluate(()=>window.picked),['b']);
   await page.waitForTimeout(550);assert.equal(await page.locator('[data-project-inspector]').count(),0,'double click cancels delayed session opening');
-  await picture.click();await page.getByRole('dialog',{name:'图片与会话预览'}).waitFor();await page.keyboard.press('Escape');
+  await picture.click();await page.getByRole('dialog',{name:'图片与生成记录预览'}).waitFor();await page.keyboard.press('Escape');
   assert.deepEqual(await page.evaluate(async()=>{const {canvasInputValue}=await import('/src/lib/canvasSessionOutputs.ts');const s=window.snapshot();return canvasInputValue(s.nodes.find(n=>n.id==='table'),'one',s.nodes).assetIds;}),['b']);
   await page.evaluate(()=>window.save());await page.reload();await cell.locator('.canvas-image-content img').waitFor();assert.equal(await source.count(),0);
   await page.evaluate(async()=>{ const {api}=await import('/src/lib/api.ts'); api.generationHistory=async()=>({turns:[],references:[]}); });
-  await cell.getByRole('button',{name:/查看生成会话/}).focus();await page.keyboard.press('Enter');await page.getByRole('dialog',{name:'图片与会话预览'}).waitFor();await page.keyboard.press('Escape');
+  await cell.getByRole('button',{name:/查看生成会话/}).focus();await page.keyboard.press('Enter');await page.getByRole('dialog',{name:'图片与生成记录预览'}).waitFor();await page.keyboard.press('Escape');
   await cell.hover();await cell.getByRole('button',{name:'清空第 1 行第 1 列图片'}).click();
   await source.waitFor();assert.equal((await saved()).cells[0][0].generation_ref,undefined);
   // A finished card can also be placed directly, without a workflow dependency.
@@ -83,7 +83,7 @@ try{
   assert.equal((await saved()).cells[0][0].generation_ref,undefined,'replacement cannot be overwritten by the old generation');
   await page.evaluate(async()=>{const {api}=await import('/src/lib/api.ts');await api.projectCanvasNodeUpdate('session',{x:70,y:120});window.emitChange();});
   const ordinary=cell.getByRole('button',{name:/放大图片/});
-  await ordinary.click();await page.getByRole('dialog',{name:'图片与会话预览'}).waitFor();
+  await ordinary.click();await page.getByRole('dialog',{name:'图片与生成记录预览'}).waitFor();
   assert.equal(await page.locator('[data-project-inspector]').count(),0,'replacement no longer opens the old session');
   await page.keyboard.press('Escape');
   // Selecting an older result before dropping freezes that exact turn and image.

@@ -111,14 +111,156 @@ pub fn browse_page(path: Option<&str>, offset: usize, all: bool) -> AppResult<Di
     })
 }
 
-fn preview_key(path: &Path, metadata: &fs::Metadata) -> AppResult<String> {
-    let key = format!(
+pub(crate) fn preview_key(path: &Path, metadata: &fs::Metadata) -> AppResult<String> {
+    #[cfg(windows)]
+    let change_time = if video_path(path) { windows_video_change_time(path) } else { None };
+    preview_key_with_metadata(path, metadata, #[cfg(windows)] change_time)
+}
+
+fn preview_key_with_metadata(path: &Path, metadata: &fs::Metadata, #[cfg(windows)] change_time: Option<i64>) -> AppResult<String> {
+    let mut key = format!(
         "{}:{}:{:?}",
         path.display(),
         metadata.len(),
         metadata.modified()?
     );
+    #[cfg(target_os = "macos")]
+    if crate::media::heic::is_path(path) { key.push_str(":heic-color-v2"); }
+    if video_path(path) {
+        use std::fmt::Write;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let _ = write!(key, ":{}:{}:{}:{}", metadata.dev(), metadata.ino(), metadata.ctime(), metadata.ctime_nsec());
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            let _ = write!(key, ":{}", metadata.creation_time());
+            if let Some(change_time) = change_time {
+                let _ = write!(key, ":{change_time}");
+            }
+        }
+    }
     Ok(format!("{:x}", Sha256::digest(key.as_bytes())))
+}
+
+#[cfg(windows)]
+fn windows_video_change_time(path: &Path) -> Option<i64> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use windows::Win32::{Foundation::HANDLE, Storage::FileSystem::{FileBasicInfo, GetFileInformationByHandleEx, FILE_BASIC_INFO, FILE_READ_ATTRIBUTES}};
+
+    let file = fs::OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES.0).open(path).ok()?;
+    let mut info = FILE_BASIC_INFO::default();
+    // SAFETY: the open file and writable, aligned FILE_BASIC_INFO live through the call.
+    unsafe {
+        GetFileInformationByHandleEx(HANDLE(file.as_raw_handle()), FileBasicInfo,
+            (&mut info as *mut FILE_BASIC_INFO).cast(), std::mem::size_of::<FILE_BASIC_INFO>() as u32)
+    }.ok()?;
+    Some(info.ChangeTime)
+}
+
+/// One metadata snapshot per directory walk; callers discard it when a walk yields.
+#[derive(Default)]
+pub(crate) struct ScanVideoVersions {
+    #[cfg(windows)]
+    entries: std::cell::OnceCell<Option<WindowsVideoDirectory>>,
+}
+
+impl ScanVideoVersions {
+    pub(crate) fn version(&self, path: &Path, metadata: &fs::Metadata) -> AppResult<String> {
+        #[cfg(windows)]
+        if let Some(change_time) = self.entries
+            .get_or_init(|| path.parent().and_then(windows_video_directory))
+            .as_ref()
+            .and_then(|listing| listing.get(path.file_name()?))
+            .and_then(|entry| entry.matching_change_time(metadata))
+        {
+            return preview_key_with_metadata(path, metadata, Some(change_time));
+        }
+        preview_key(path, metadata)
+    }
+}
+
+#[cfg(windows)]
+type WindowsVideoDirectory = std::collections::HashMap<std::ffi::OsString, WindowsVideoStamp>;
+
+#[cfg(windows)]
+struct WindowsVideoStamp {
+    size: u64,
+    modified: u64,
+    created: u64,
+    changed: i64,
+}
+
+#[cfg(windows)]
+impl WindowsVideoStamp {
+    fn matching_change_time(&self, metadata: &fs::Metadata) -> Option<i64> {
+        use std::os::windows::fs::MetadataExt;
+        (self.changed != 0 && self.size == metadata.len() && self.modified == metadata.last_write_time()
+            && self.created == metadata.creation_time()).then_some(self.changed)
+    }
+}
+
+#[cfg(windows)]
+fn windows_video_directory(path: &Path) -> Option<WindowsVideoDirectory> {
+    use std::{ffi::OsString, mem::{offset_of, size_of, size_of_val}, os::windows::{ffi::OsStringExt, fs::OpenOptionsExt, io::AsRawHandle}};
+    use windows::{core::HRESULT, Win32::{Foundation::{ERROR_NO_MORE_FILES, HANDLE}, Storage::FileSystem::{
+        FileIdBothDirectoryInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_DIRECTORY, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_BOTH_DIR_INFO, FILE_LIST_DIRECTORY,
+    }}};
+
+    let directory = fs::OpenOptions::new()
+        .access_mode(FILE_LIST_DIRECTORY.0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(path).ok()?;
+    // DWORDLONG alignment and a bounded buffer are required for directory records.
+    let mut buffer = vec![0_u64; 8192];
+    let capacity = size_of_val(buffer.as_slice());
+    let mut entries = WindowsVideoDirectory::new();
+    loop {
+        // SAFETY: the directory handle is open and buffer is aligned, initialized,
+        // writable, and capacity bytes long. SQLite never holds a lock here.
+        let result = unsafe {
+            GetFileInformationByHandleEx(HANDLE(directory.as_raw_handle()), FileIdBothDirectoryInfo,
+                buffer.as_mut_ptr().cast(), capacity as u32)
+        };
+        match result {
+            Ok(()) => (),
+            Err(error) if error.code() == HRESULT::from_win32(ERROR_NO_MORE_FILES.0) => return Some(entries),
+            Err(_) => return None,
+        }
+
+        let bytes = buffer.as_ptr().cast::<u8>();
+        let mut offset = 0_usize;
+        loop {
+            if offset.checked_add(size_of::<FILE_ID_BOTH_DIR_INFO>())? > capacity { return None; }
+            // SAFETY: offset starts aligned and every next offset is checked below.
+            let record = unsafe { bytes.add(offset).cast::<FILE_ID_BOTH_DIR_INFO>().read() };
+            let next = record.NextEntryOffset as usize;
+            let end = if next == 0 { capacity } else { offset.checked_add(next)? };
+            let start = offset + offset_of!(FILE_ID_BOTH_DIR_INFO, FileName);
+            let length = record.FileNameLength as usize;
+            if end > capacity || next % 8 != 0 || length == 0 || length % 2 != 0
+                || start.checked_add(length)? > end { return None; }
+            if record.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0 {
+                // SAFETY: the checked name range is wholly within the current record,
+                // the buffer is live, and FileName is aligned for u16.
+                let name = unsafe { std::slice::from_raw_parts(bytes.add(start).cast::<u16>(), length / 2) };
+                let name = OsString::from_wide(name);
+                if video_path(Path::new(&name)) {
+                    entries.insert(name, WindowsVideoStamp {
+                        size: record.EndOfFile as u64,
+                        modified: record.LastWriteTime as u64,
+                        created: record.CreationTime as u64,
+                        changed: record.ChangeTime,
+                    });
+                }
+            }
+            if next == 0 { break; }
+            offset = end;
+        }
+    }
 }
 
 /// Decoded HEIC is a disposable compatibility cache; the asset still owns its HEIC path.
@@ -184,22 +326,34 @@ pub fn preview_with_index(paths: &LibraryPaths, db: Option<&Database>, path: &Pa
         let result = (|| -> AppResult<()> {
         // Historical thumbnails remain usable after moving files. Validate content
         // once on a cache miss; subsequent browsing only checks metadata/cache.
-        let indexed: Option<(String, String)> = if let Some(db) = db {
+        let is_video = video_path(&path);
+        let color_managed_heic = cfg!(target_os = "macos") && crate::media::heic::is_path(&path);
+        let indexed: Option<(String, String, Option<String>)> = if let Some(db) = db {
             db.conn.lock().unwrap().query_row(
-                "SELECT a.thumb_path,COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path=?1 AND a.thumb_path IS NOT NULL AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL LIMIT 1",
-                [path.to_string_lossy().as_ref()], |row| Ok((row.get(0)?,row.get(1)?))).optional()?
+                "SELECT a.thumb_path,COALESCE(e.fingerprint,f.sha256),a.connected_scan_key FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path=?1 AND a.thumb_path IS NOT NULL AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL LIMIT 1",
+                [path.to_string_lossy().as_ref()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?
         } else { None };
-        let reused = if let Some((thumb, expected)) = indexed {
-            if Path::new(&thumb).is_file() && fingerprint(&path)? == expected {
+        let reused = if let Some((thumb, expected, indexed_key)) = indexed {
+            if Path::new(&thumb).is_file() && (indexed_key.as_deref() == Some(hash.as_str())
+                || (!is_video && !color_managed_heic && indexed_key.is_none() && fingerprint(&path)? == expected)) {
                 fs::copy(thumb, &temporary)?; true
             } else { false }
         } else { false };
-        if reused || shell_thumbnail(&path, &temporary) {
+        let mut video_meta = None;
+        if reused || (!is_video && shell_thumbnail(&path, &temporary)) {
             // Already rendered by the library or Windows; do not decode the original again.
-        } else if video_path(&path) {
-            crate::media::thumb::generate_video(&path, &temporary, 480)?;
+        } else if is_video {
+            video_meta = crate::media::thumb::generate_video_with_meta(&path, &temporary, 480, db.is_some())?;
+        } else if color_managed_heic {
+            crate::media::heic::thumbnail(&compatible_image(paths, &path)?, &temporary, 480)?;
         } else {
             crate::media::thumb::generate(&compatible_image(paths, &path)?, &temporary, 480)?;
+        }
+        if let Some(meta) = video_meta {
+            // Metadata belongs to the same immutable cache key as the JPEG.
+            let mut metadata = tempfile::NamedTempFile::new_in(&folder)?;
+            serde_json::to_writer(metadata.as_file_mut(), &meta)?;
+            let _ = metadata.persist_noclobber(destination.with_extension("json"));
         }
         if preview_key(&path, &fs::metadata(&path)?)? != hash {
             return Err(invalid("文件正在变化，请刷新后重试缩略图"));
@@ -220,7 +374,7 @@ use shell_thumbnail::cached as shell_thumbnail;
 
 #[path = "connected_media.rs"]
 mod connected_media;
-pub(crate) use connected_media::connection_path_spellings;
+pub(crate) use connected_media::{connection_path_spellings, ConnectedFileFingerprint, DEFERRED_FINGERPRINT_BYTES};
 
 pub(super) fn restore_present_original(conn: &rusqlite::Connection, id: &str, canonical: &Path, hash: Option<&str>) -> AppResult<()> {
     let marked: Option<(String, Option<String>)> = conn.query_row(
@@ -239,7 +393,7 @@ pub(super) fn restore_present_original(conn: &rusqlite::Connection, id: &str, ca
             Some(hash) => hash,
             None => { measured = fingerprint(canonical)?; &measured }
         };
-        if expected.as_deref() != Some(hash) {
+        if hash.is_empty() || expected.as_deref() != Some(hash) {
             return Err(invalid("原件校验不符，已保留失效条目的清理状态"));
         }
         conn.execute("DELETE FROM removed_missing_asset_originals WHERE asset_id=?1", [id])?;
@@ -286,6 +440,16 @@ impl Database {
         if audio_path(path) || crate::core::text_documents::text_path(path) { return self.index_connected_file(paths, path, preferred_id); }
         let supplied = path.to_string_lossy().into_owned();
         let path = original(path)?;
+        let pending_id: Option<String> = self.conn.lock().unwrap().query_row(
+            "SELECT a.id FROM assets a JOIN external_assets e ON e.asset_id=a.id WHERE a.store_path IN (?1,?2)
+                AND a.connected_scan_key IS NOT NULL AND e.fingerprint='' AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id)
+                AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id) ORDER BY a.id=?3 DESC,a.rowid LIMIT 1",
+            params![supplied,path.to_string_lossy(),preferred_id], |row| row.get(0),
+        ).optional()?;
+        if let Some(id) = pending_id {
+            self.complete_connected_fingerprint(&id)?;
+            return self.get_asset(&id)?.ok_or_else(|| invalid("素材已不存在"));
+        }
         // Files created in BowerbirdLibrary keep their existing image identity when browsed.
         let managed: Option<String> = self.conn.lock().unwrap().query_row(
             "SELECT id FROM assets WHERE store_path IN (?1,?2) AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id) ORDER BY assets.rowid LIMIT 1",
@@ -365,6 +529,78 @@ impl Database {
     pub fn resolve_external_paths(&self, references: &[String]) -> AppResult<Vec<String>> {
         self.resolve_external_files(references, false)
     }
+    /// Read an original for reveal, outgoing drag or export without changing its registration.
+    /// Destructive operations must keep using their own confirmed-path validation.
+    pub fn resolve_asset_original(&self, id: &str) -> AppResult<PathBuf> {
+        let registration = || -> AppResult<_> {
+            Ok(self.conn.lock().unwrap().query_row(
+                "SELECT a.store_path,COALESCE(NULLIF(e.fingerprint,''),NULLIF(f.sha256,'')),
+                    EXISTS(SELECT 1 FROM trashed_asset_originals WHERE asset_id=a.id)
+                    OR EXISTS(SELECT 1 FROM removed_missing_asset_originals WHERE asset_id=a.id)
+                 FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id
+                 LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",
+                [id], |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, bool>(2)?)),
+            ).optional()?)
+        };
+        let record = registration()?.ok_or_else(|| invalid("素材已不存在，请刷新后重试"))?;
+        if record.2 {
+            return Err(invalid("原文件已回收或条目已清理，恢复原件后请重新扫描"));
+        }
+        let stored = record.0.as_deref().ok_or_else(|| invalid("原文件位置不可用，请重新定位"))?;
+        let expected = record.1.as_deref();
+        let owns_alias = |alias: &Path, canonical: &Path| -> AppResult<bool> {
+            let names = connection_path_spellings(alias, canonical);
+            Ok(self.conn.lock().unwrap().query_row(
+                "SELECT EXISTS(SELECT 1 FROM external_asset_paths WHERE asset_id=?1 AND path IN (?2,?3,?4))
+                 AND NOT EXISTS(SELECT 1 FROM assets WHERE id<>?1 AND store_path IN (?2,?3,?4))
+                 AND NOT EXISTS(SELECT 1 FROM external_asset_paths WHERE asset_id<>?1 AND path IN (?2,?3,?4))",
+                params![id,names[0],names[1],names[2]], |row| row.get(0))?)
+        };
+        let (resolved, alias) = match fs::symlink_metadata(stored) {
+            Ok(_) => {
+                let path = original(Path::new(stored))?;
+                fs::File::open(&path)?;
+                (path, None)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let expected = expected.ok_or_else(|| invalid("原文件缺失且没有可核验的原件信息，请重新定位"))?;
+                let aliases: Vec<String> = {
+                    let conn = self.conn.lock().unwrap();
+                    let mut statement = conn.prepare("SELECT path FROM external_asset_paths WHERE asset_id=?1 AND path<>?2 ORDER BY path")?;
+                    let rows = statement.query_map(params![id, stored], |row| row.get(0))?.collect::<Result<_, _>>()?;
+                    rows
+                };
+                let mut found = None;
+                let mut unreadable = None;
+                for alias in aliases {
+                    if !Path::new(&alias).is_absolute() { continue; }
+                    let checked = (|| -> AppResult<Option<PathBuf>> {
+                        let path = fs::canonicalize(&alias)?;
+                        if !fs::metadata(&path)?.is_file() { return Ok(None); }
+                        let path = original(&path)?;
+                        if owns_alias(Path::new(&alias), &path)? && fingerprint(&path)? == expected { Ok(Some(path)) }
+                        else { Ok(None) }
+                    })();
+                    match checked {
+                        Ok(Some(path)) => { found = Some((path, Some(alias))); break; }
+                        Ok(None) => (),
+                        Err(AppError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => (),
+                        Err(error @ (AppError::Io(_) | AppError::Db(_))) => unreadable = Some(error),
+                        Err(_) => (),
+                    }
+                }
+                found.ok_or_else(|| unreadable.unwrap_or_else(|| invalid("原文件失联，请接回原目录或重新定位")))?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if registration()?.as_ref() != Some(&record) {
+            return Err(invalid("素材状态已变化，请刷新后重试"));
+        }
+        if let Some(alias) = alias {
+            if !owns_alias(Path::new(&alias), &resolved)? { return Err(invalid("原文件位置已变化，请刷新后重试")); }
+        }
+        Ok(resolved)
+    }
     pub fn resolve_external_image_paths(&self, references: &[String]) -> AppResult<Vec<String>> {
         self.resolve_external_files(references, true)
     }
@@ -379,10 +615,14 @@ impl Database {
     fn resolve_external_files(&self, references: &[String], compatible: bool) -> AppResult<Vec<String>> {
         references.iter().map(|path| {
             if compatible && (audio_path(Path::new(path)) || crate::core::text_documents::text_path(Path::new(path))) { return Err(invalid("此类素材暂不支持作为图片模型参考")); }
-            let row: Option<(String, Option<String>, Option<String>)> = self.conn.lock().unwrap().query_row(
-                "SELECT a.store_path,e.fingerprint,a.thumb_path FROM external_asset_paths p JOIN assets a ON a.id=p.asset_id LEFT JOIN external_assets e ON e.asset_id=a.id WHERE p.path=?1", [path], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-            if let Some((current, expected, thumb)) = row {
+            let row: Option<(String, String, Option<String>, Option<String>)> = self.conn.lock().unwrap().query_row(
+                "SELECT a.id,a.store_path,e.fingerprint,a.thumb_path FROM external_asset_paths p JOIN assets a ON a.id=p.asset_id LEFT JOIN external_assets e ON e.asset_id=a.id WHERE p.path=?1", [path], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+            if let Some((id, current, mut expected, thumb)) = row {
                 if compatible && (audio_path(Path::new(&current)) || crate::core::text_documents::text_path(Path::new(&current))) { return Err(invalid("此类素材暂不支持作为图片模型参考")); }
+                if expected.as_deref() == Some("") {
+                    self.complete_connected_fingerprint(&id)?;
+                    expected = self.conn.lock().unwrap().query_row("SELECT fingerprint FROM external_assets WHERE asset_id=?1", [&id], |r| r.get(0)).optional()?;
+                }
                 if let Some(expected) = expected {
                     let p = original(Path::new(&current))?;
                     if fingerprint(&p)? != expected { return Err(invalid("外部参考图已修改，请先确认更新引用")); }
@@ -408,6 +648,7 @@ impl Database {
         path: &Path,
         accept_changes: bool,
     ) -> AppResult<Asset> {
+        if !accept_changes { self.complete_connected_fingerprint(id)?; }
         let path = original(path)?;
         let managed: bool = self.conn.lock().unwrap().query_row(
             "SELECT EXISTS(SELECT 1 FROM assets WHERE store_path=?1 AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id))",
@@ -461,7 +702,7 @@ impl Database {
             "INSERT OR IGNORE INTO external_asset_paths(asset_id,path) VALUES(?1,?2)",
             params![id, path],
         )?;
-        tx.execute("UPDATE assets SET origin_path=?2,store_path=?2,thumb_path=?3,size=?4,width=?5,height=?6 WHERE id=?1",params![id,path,thumb,fs::metadata(&path)?.len() as i64,dimensions.0,dimensions.1])?;
+        tx.execute("UPDATE assets SET origin_path=?2,store_path=?2,thumb_path=?3,size=?4,width=?5,height=?6,connected_scan_key=NULL WHERE id=?1",params![id,path,thumb,fs::metadata(&path)?.len() as i64,dimensions.0,dimensions.1])?;
         let mtime = fs::metadata(&path)?.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|time| time.as_secs() as i64);
         tx.execute("UPDATE assets SET duration=?2,ext=?3,file_mtime=?4 WHERE id=?1", params![id,media.duration,media.ext,mtime])?;
         tx.execute("DELETE FROM removed_missing_asset_originals WHERE asset_id=?1", [id])?;
@@ -512,6 +753,23 @@ mod tests {
         ingest,
         projects::{AssetDeleteMode, ProjectDeleteMode},
     };
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_video_version_matches_single_file_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("测试.mp4");
+        fs::write(&video, b"video metadata fixture").unwrap();
+        fs::write(dir.path().join("image.png"), b"not a video").unwrap();
+        let metadata = fs::symlink_metadata(&video).unwrap();
+        let versions = ScanVideoVersions::default();
+        assert_eq!(versions.version(&video, &metadata).unwrap(), preview_key(&video, &metadata).unwrap());
+        let entries = versions.entries.get().unwrap().as_ref().expect("directory metadata should be available on the local test volume");
+        assert_eq!(entries.len(), 1);
+        let stamp = entries.get(video.file_name().unwrap()).unwrap();
+        assert_eq!(stamp.matching_change_time(&metadata), windows_video_change_time(&video));
+    }
+
     struct Fixture {
         root: PathBuf,
         paths: LibraryPaths,
@@ -551,6 +809,78 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+    #[test]
+    fn asset_original_uses_the_registered_file_then_a_verified_alias_without_writes() {
+        let f = Fixture::new();
+        let asset = f.index();
+        let alias = f.root.join("旧项目 原件.png");
+        fs::copy(&f.original, &alias).unwrap();
+        {
+            let conn = f.db.conn.lock().unwrap();
+            conn.execute("INSERT INTO external_asset_paths(asset_id,path) VALUES(?1,?2)", params![asset.id, alias.to_string_lossy()]).unwrap();
+            conn.execute("UPDATE assets SET origin_path=?2,thumb_path=?2 WHERE id=?1", params![asset.id, alias.to_string_lossy()]).unwrap();
+        }
+        let writes = f.db.conn.lock().unwrap().total_changes();
+        assert_eq!(f.db.resolve_asset_original(&asset.id).unwrap(), f.original);
+        fs::remove_file(&f.original).unwrap();
+        assert_eq!(f.db.resolve_asset_original(&asset.id).unwrap(), alias);
+        assert_eq!(f.db.conn.lock().unwrap().total_changes(), writes);
+        assert_eq!(f.db.get_asset(&asset.id).unwrap().unwrap().store_path, asset.store_path);
+        let reopened = Database::open(&f.paths.db).unwrap();
+        assert_eq!(reopened.resolve_asset_original(&asset.id).unwrap(), alias);
+        let deletion = f.db.preview_asset_originals(&[asset.id]).unwrap();
+        assert!(deletion[0].missing, "deletion still targets the missing registration");
+        assert_eq!(deletion[0].path, f.original.to_string_lossy());
+    }
+
+    #[test]
+    fn asset_original_rejects_untrusted_or_unverified_fallbacks_and_keeps_current_edits() {
+        let f = Fixture::new();
+        let asset = f.index();
+        let alias = f.root.join("alias.png");
+        fs::copy(&f.original, &alias).unwrap();
+        let bytes = fs::read(&f.original).unwrap();
+        fs::remove_file(&f.original).unwrap();
+        f.db.conn.lock().unwrap().execute("UPDATE assets SET origin_path=?2,thumb_path=?2 WHERE id=?1", params![asset.id, alias.to_string_lossy()]).unwrap();
+        assert!(f.db.resolve_asset_original(&asset.id).is_err(), "origin and thumbnail paths are not registered aliases");
+        f.db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,store_path,created_at) VALUES('other','other',?1,1)", [alias.to_string_lossy()]).unwrap();
+        f.db.conn.lock().unwrap().execute("INSERT INTO external_asset_paths(asset_id,path) VALUES('other',?1)", [alias.to_string_lossy()]).unwrap();
+        assert!(f.db.resolve_asset_original(&asset.id).is_err(), "another asset's matching bytes do not transfer identity");
+        f.db.conn.lock().unwrap().execute("INSERT INTO external_asset_paths(asset_id,path) VALUES(?1,?2)", params![asset.id, alias.to_string_lossy()]).unwrap();
+        assert!(f.db.resolve_asset_original(&asset.id).is_err(), "a path claimed by another asset must not be used as fallback");
+        f.db.conn.lock().unwrap().execute("DELETE FROM assets WHERE id='other'", []).unwrap();
+        fs::write(&alias, b"replaced alias").unwrap();
+        assert!(f.db.resolve_asset_original(&asset.id).is_err());
+        fs::write(&alias, &bytes).unwrap();
+        fs::write(&f.original, b"replaced original").unwrap();
+        assert_eq!(f.db.resolve_asset_original(&asset.id).unwrap(), f.original, "current edits remain usable at their registered path");
+        fs::remove_file(&f.original).unwrap();
+        f.db.conn.lock().unwrap().execute("UPDATE external_assets SET fingerprint='' WHERE asset_id=?1", [&asset.id]).unwrap();
+        assert!(f.db.resolve_asset_original(&asset.id).is_err(), "fallback needs a recorded SHA-256");
+        assert!(f.db.resolve_asset_original("unknown").is_err());
+    }
+
+    #[test]
+    fn asset_original_markers_block_existing_files_and_valid_aliases() {
+        for (trashed, cleaned) in [(true, false), (false, true), (true, true)] {
+            let f = Fixture::new();
+            let asset = f.index();
+            let alias = f.root.join("alias.png");
+            fs::copy(&f.original, &alias).unwrap();
+            {
+                let conn = f.db.conn.lock().unwrap();
+                conn.execute("INSERT INTO external_asset_paths(asset_id,path) VALUES(?1,?2)", params![asset.id, alias.to_string_lossy()]).unwrap();
+                if trashed { conn.execute("INSERT INTO trashed_asset_originals(asset_id,path,fingerprint) VALUES(?1,?2,?3)", params![asset.id, asset.store_path, fingerprint(&alias).unwrap()]).unwrap(); }
+                if cleaned { conn.execute("INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)", params![asset.id, asset.store_path]).unwrap(); }
+            }
+            let writes = f.db.conn.lock().unwrap().total_changes();
+            assert!(f.db.resolve_asset_original(&asset.id).is_err());
+            fs::remove_file(&f.original).unwrap();
+            assert!(f.db.resolve_asset_original(&asset.id).is_err());
+            assert_eq!(f.db.conn.lock().unwrap().total_changes(), writes);
+            assert!(alias.is_file());
         }
     }
     #[test]

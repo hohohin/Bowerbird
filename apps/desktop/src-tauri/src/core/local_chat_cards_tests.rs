@@ -429,7 +429,7 @@ fn local_chat_cards_h3_drafts_use_native_defaults_and_bounded_options() {
     assert_eq!(h3["provider"], "comfy-video");
     assert_eq!(
         h3["comfyVideo"],
-        json!({"mode":"frames","endpoint":"http://127.0.0.1:8000","seconds":8,"ratio":"9:16","resolution":0.8})
+        json!({"mode":"frames","endpoint":"http://127.0.0.1:8000","seconds":8,"ratio":"auto","resolution":0.8})
     );
     assert_eq!(
         h3["inputs"],
@@ -574,13 +574,48 @@ fn local_chat_cards_h3_survives_reopen_replay_and_undo_beside_active_runs() {
 }
 
 #[test]
+fn local_chat_cards_h3_r2v_routes_attached_media_and_batch_outputs() {
+    let references = [
+        CardReference { id: "still-asset".into(), extension: "png".into() },
+        CardReference { id: "clip-asset".into(), extension: "mp4".into() },
+        CardReference { id: "voice-asset".into(), extension: "wav".into() },
+    ];
+    let mut batch = json!({"cards":[
+        {"id":"still","kind":"generation","title":"图片","mediaType":"image","prompt":"画灯塔"},
+        {"id":"clip","kind":"comfy-video","title":"视频","mode":"text","prompt":"海岸推镜"},
+        {"id":"r2v","kind":"comfy-video","title":"多素材","mode":"r2v","prompt":"结合三类素材","referenceAliases":["image3","image2","image1"]}
+    ],"connections":[
+        {"from":"still","to":"r2v","output":"image","input":"reference-image"},
+        {"from":"clip","to":"r2v","output":"image","input":"reference-video"}
+    ],"runCard":"r2v"});
+    let defaults = ChatCardDefaults::default();
+    let compiled = compile(&batch, &defaults, &references, (0.0, 0.0), "r2v").unwrap();
+    let card = &compiled.nodes[2];
+    assert_eq!(card["comfyVideo"], json!({"mode":"r2v","endpoint":"http://127.0.0.1:8000","seconds":5,"ratio":"auto","resolution":0.98}));
+    assert_eq!(card["inputs"]["reference-image"], json!([{"assetId":"still-asset"},{"nodeId":compiled.nodes[0]["id"],"portId":"image"}]));
+    assert_eq!(card["inputs"]["reference-video"], json!([{"assetId":"clip-asset"},{"nodeId":compiled.nodes[1]["id"],"portId":"image"}]));
+    assert_eq!(card["inputs"]["r2v-audio"], json!([{"assetId":"voice-asset"}]));
+    crate::commands::canvas_workflow::validate(&json!({"schema_version":1,"nodes":compiled.nodes,"run":null})).unwrap();
+
+    batch["connections"][1]["input"] = json!("reference-image");
+    assert!(compile(&batch, &defaults, &references, (0.0, 0.0), "r2v").is_err());
+    batch["connections"] = json!([]);
+    batch["cards"][2]["referenceAliases"] = json!(["image3", "image3"]);
+    assert!(compile(&batch, &defaults, &references, (0.0, 0.0), "r2v").is_err());
+    batch["cards"][2]["referenceAliases"] = json!([]);
+    assert!(compile(&batch, &defaults, &references, (0.0, 0.0), "r2v").is_err());
+    batch.as_object_mut().unwrap().remove("runCard");
+    assert!(compile(&batch, &defaults, &references, (0.0, 0.0), "r2v").is_ok());
+}
+
+#[test]
 fn local_chat_cards_sections_compile_native_members_names_and_grid_without_execution() {
     for large in [false, true] {
         let args = section_batch(large);
         let compiled = compile(
             &args,
             &ChatCardDefaults::default(),
-            &["picture".into()],
+            &[CardReference { id: "picture".into(), extension: "png".into() }],
             (0.0, 0.0),
             "sections",
         )
@@ -1257,7 +1292,7 @@ fn local_chat_cards_place_by_moved_agent_and_leave_room_for_outputs() {
         let producer = doc["nodes"].as_array_mut().unwrap().iter_mut()
             .find(|node| node["id"] == action.cards[0].id).unwrap();
         producer["sessionNodeIds"] = json!(["gen-prompt:job:turn:0"]);
-        let result_origin = (producer["x"].as_f64().unwrap() + 320.0 + 64.0, producer["y"].as_f64().unwrap());
+        let result_origin = (producer["x"].as_f64().unwrap(), producer["y"].as_f64().unwrap());
         replace_document(&db, &doc);
         let graph = db.begin_project_generation_turn(&crate::core::project_canvas::ProjectGenerationTurnInput {
             project_id: "p".into(), thread_id: started.conversation.summary.thread_id.clone(),

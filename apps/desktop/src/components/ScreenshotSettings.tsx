@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Camera, Keyboard, Pin } from "lucide-react";
+import { Keyboard } from "lucide-react";
 import { useStore } from "../store";
 import { DEFAULT_SCREENSHOT_SHORTCUTS, displayShortcut, shortcutFromEvent } from "../lib/screenshot";
 import { userErrorMessage } from "../lib/userError";
-import { ScreenshotHistoryPanel } from "./ScreenshotHistoryPanel";
+import { SettingsToggle } from "./SettingsToggle";
 
 export function ScreenshotSettings() {
   const settings = useStore(s => s.settings);
@@ -12,13 +12,12 @@ export function ScreenshotSettings() {
   const [recording, setRecording] = useState<"capture" | "paste" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [historyOpen, setHistoryOpen] = useState(false);
   async function setAutoSave(enabled: boolean) {
     if (!settings || busy) return;
     setBusy(true); setError('');
     try {
       await useStore.getState().updateSettings({ screenshot_auto_save: enabled });
-    } catch (e) { setError(userErrorMessage(e, '设置未保存，请重试。')); }
+    } catch { /* The settings queue shows the error and offers retry. */ }
     finally { setBusy(false); }
   }
   useEffect(() => { void invoke<{ error: string | null }>("screenshot_shortcut_status").then(s => setError(s.error ? userErrorMessage(s.error, "暂时无法启用快捷键，请重新设置。") : "")).catch(e => setError(userErrorMessage(e, "暂时无法读取快捷键状态，请重新打开设置。"))); }, []);
@@ -29,18 +28,12 @@ export function ScreenshotSettings() {
   async function save(next: typeof shortcuts) {
     setRecording(null); setBusy(true); setError("");
     try {
-      await invoke("screenshot_set_shortcuts", { shortcuts: next });
-      await useStore.getState().loadSettings();
-    } catch (e) { setError(userErrorMessage(e, "快捷键未保存，请重试。")); }
+      await useStore.getState().updateSettings({ screenshot_shortcuts: next });
+    } catch { /* The settings queue shows the error and offers retry. */ }
     finally { setBusy(false); }
   }
-  async function run(command: string) {
-    setBusy(true); setError("");
-    try { await invoke(command); } catch (e) { setError(userErrorMessage(e, "截图操作未完成，请重试；如仍失败，请检查屏幕录制和剪贴板权限。")); }
-    finally { setBusy(false); }
-  }
-  return <section className="settings-card px-3 py-3" aria-label="截图工具">
-    <h3 className="flex items-center gap-2 text-ink"><Keyboard size={16} />截图工具</h3>
+  return <section className="settings-card px-3 py-3" aria-label="截图设置">
+    <h3 className="flex items-center gap-2 text-ink"><Keyboard size={16} aria-hidden="true" />截图设置</h3>
     <p className="mt-1 text-xs text-muted">应用运行时，全局快捷键在其他应用中也可使用。点击按键框录入，Esc 取消。</p>
     {([['capture', '区域截图'], ['paste', '剪贴板贴图']] as const).map(([key, label]) => <div key={key} className="mt-3 flex items-center justify-between gap-2">
       <span>{label}</span>
@@ -59,14 +52,14 @@ export function ScreenshotSettings() {
       </div>
     </div>)}
     <div className="mt-4 flex flex-wrap items-center gap-2">
-      <button type="button" disabled={busy} className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 text-xs text-white disabled:opacity-40" onClick={() => void run('screenshot_start')}><Camera size={14} />立即截图</button>
-      <button type="button" disabled={busy} className="flex items-center gap-1.5 rounded bg-panel2 px-3 py-1.5 text-xs disabled:opacity-40" onClick={() => void run('screenshot_paste')}><Pin size={14} />贴出剪贴板图片</button>
-      <button type="button" disabled={busy} className="rounded bg-panel2 px-3 py-1.5 text-xs disabled:opacity-40" onClick={() => setHistoryOpen(true)}>历史截图</button>
       <button type="button" disabled={busy || !settings} className="ml-auto text-xs text-muted hover:text-ink" onClick={() => void save(DEFAULT_SCREENSHOT_SHORTCUTS)}>恢复默认</button>
     </div>
-    <label className="mt-4 flex items-center justify-between gap-3"><span>截图自动保存到素材库</span><input type="checkbox" checked={settings?.screenshot_auto_save ?? true} disabled={busy || !settings} onChange={event => void setAutoSave(event.target.checked)} /></label>
-    <p className="mt-2 text-xs text-muted">拖动框选，支持标注、马赛克、复制、保存和置顶贴图。Mac 首次截图需允许屏幕录制；F 键可能需配合 Fn。</p>
+    <div className="mt-4 flex items-center justify-between gap-3">
+      <span>截图自动保存到素材库</span>
+      <SettingsToggle label="截图自动保存到素材库" checked={settings?.screenshot_auto_save ?? true}
+        disabled={busy || !settings} onChange={value => void setAutoSave(value)} />
+    </div>
+    <p className="mt-2 text-xs text-muted">Mac 首次截图需允许屏幕录制；F 键可能需配合 Fn。</p>
     {error && <p role="alert" className="mt-2 text-xs text-red-500">{error}</p>}
-    {historyOpen && <ScreenshotHistoryPanel onClose={() => setHistoryOpen(false)} />}
   </section>;
 }

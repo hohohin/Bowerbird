@@ -19,7 +19,7 @@ use crate::core::{
     visual_profile::VisualProfileCapsule,
 };
 use crate::db::Database;
-use crate::error::AppError;
+use crate::error::{AppError, AppResult};
 
 const SKILL_ID: &str = "bowerbird-controlled-image-edit";
 const HTML_SKILL_ID: &str = "bowerbird-html-layout-render";
@@ -2547,6 +2547,37 @@ pub async fn cloud_agent_get(
     let record = refresh_record(&db, &cloud, &auth, &run_id).await?;
     emit_creative_agent_changed(&app, &record);
     Ok(record)
+}
+
+#[tauri::command]
+pub async fn cloud_agent_open_h3_chat(
+    db: State<'_, Arc<Database>>,
+    cloud: State<'_, CloudClient>,
+    auth: State<'_, AuthClient>,
+    project_id: String,
+    node_id: String,
+    workflow_run_id: String,
+) -> AppResult<crate::core::local_chat::ChatConversation> {
+    let account = auth.snapshot().user_id.ok_or_else(|| AppError::Cloud("请先登录 Bowerbird 账号".into()))?;
+    let source = db.h3_optimization_chat_source(&project_id, &node_id, &workflow_run_id, &account)?;
+    let id = format!("h3-opt-{}", source.agent_run_id);
+    if let Some(chat) = db.get_local_chat(&id)? {
+        if chat.summary.project_id == project_id && chat.summary.provider == "dsh-cloud" {
+            return Ok(chat);
+        }
+        return Err(AppError::Cloud("该对话不属于当前项目".into()));
+    }
+    let record = refresh_record(&db, &cloud, &auth, &source.agent_run_id).await?;
+    if auth.snapshot().user_id.as_deref() != Some(account.as_str()) {
+        return Err(AppError::Cloud("请登录发起该优化的原账号后续聊".into()));
+    }
+    if record.project_id.as_deref() != Some(project_id.as_str()) || record.status != "succeeded"
+        || !record.snapshot["events"].as_array().is_some_and(|events| events.iter().any(|event|
+            event["type"] == "text.result" && event["display_payload"]["dshContinuation"] == true))
+    {
+        return Err(AppError::Cloud("这次优化没有可续接的对话".into()));
+    }
+    db.open_h3_optimization_chat(&project_id, &source)
 }
 
 #[tauri::command]

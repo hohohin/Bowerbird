@@ -19,6 +19,7 @@ import {
   judgeInput,
   readJson,
   text,
+  videoTextInput,
 } from "./protocol.ts";
 import { discoveryPrompt } from "./prompt.ts";
 import { recordDiscoveryUsage } from "./usage.ts";
@@ -91,6 +92,22 @@ export async function handler(req: Request): Promise<Response> {
     admin = auth.admin;
     userId = auth.user.id;
     const body = await readJson(req);
+    // The video service has no verified upstream cost or activated catalogue
+    // entry yet. Keep these operations before any image checkout or provider work.
+    if (body.action === "video_text_capabilities") {
+      return jsonResponse({ available: false, credits: null }, 200, cors);
+    }
+    if (body.action === "video_text_judge") {
+      if (Object.keys(body).some((key) => !["action", "idempotency_key", "sources"].includes(key))) {
+        throw new ApiError("invalid_request", "视频文本打标签仅接收文本");
+      }
+      text(body.idempotency_key, 100);
+      videoTextInput(body.sources);
+      throw new ApiError("not_configured", "视频文本打标签服务暂未开放");
+    }
+    if (body.action === "video_text_discover") {
+      throw new ApiError("not_configured", "视频文本打标签服务暂未开放");
+    }
     const advance = async (
       action: string,
       extra: Record<string, unknown> = {},

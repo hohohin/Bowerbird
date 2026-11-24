@@ -304,7 +304,7 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
     footer={deleting ? <>
       <span className="bv-footer-hint">仅删除所选规范版本</span>
       <button ref={cancelDelete} className="app-modal-button" disabled={!!busy} onClick={() => setDeleting(null)}>取消删除</button>
-      <button className="app-modal-button bv-delete-button" disabled={!!busy} onClick={deleteProfile}>确认删除</button>
+      <button className="app-modal-button is-danger" disabled={!!busy} onClick={deleteProfile}>确认删除</button>
     </> : leave ? <>
       <span className="bv-footer-hint">修改还没有保存</span>
       <button className="app-modal-button" disabled={!!busy} onClick={() => setLeave(null)}>继续修改</button>
@@ -320,7 +320,7 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
         <button className="app-modal-button" onClick={() => navigate(close)}>后台继续</button>
       </> : detail ? <>
         <button className="app-modal-button" onClick={() => navigate(backToCollection)}><ArrowLeft size={15} />返回</button>
-        <button className="app-modal-button bv-delete-button" onClick={() => setDeleting(detail)}><Trash2 size={15} />删除规范</button>
+        <button className="app-modal-button is-danger" onClick={() => setDeleting(detail)}><Trash2 size={15} />删除规范</button>
         {!draft && <button className="app-modal-button" onClick={exportProfile} title="导出规范文件，可发送给他人导入复用"><Download size={15} />导出分享</button>}
         {editing && <button className="app-modal-button" onClick={() => navigate(() => setEditing(false))}>返回预览</button>}
         <button className="app-modal-button is-primary" disabled={draft && !!invalid} onClick={draft ? confirmProfile : close}><Check size={15} />{draft ? "保存规范" : "完成"}</button>

@@ -284,7 +284,7 @@ mod tests {
             messages: vec![
                 ChatMessage {
                     id: "m1".into(),
-                    dsh_terminal_error: None, dsh_failure_code: None,
+                    dsh_terminal_error: None, dsh_failure_code: None, paid_cloud_chat: false,
                     turn_id: "turn-1".into(),
                     role: "user".into(),
                     text: "上一轮：第 1 项 /old-skill 只用于上一轮".into(),
@@ -295,7 +295,7 @@ mod tests {
                 },
                 ChatMessage {
                     id: "m2".into(),
-                    dsh_terminal_error: None, dsh_failure_code: None,
+                    dsh_terminal_error: None, dsh_failure_code: None, paid_cloud_chat: false,
                     turn_id: "turn-1".into(),
                     role: "assistant".into(),
                     text: "第一项的回复".into(),
@@ -306,7 +306,7 @@ mod tests {
                 },
                 ChatMessage {
                     id: "m3".into(),
-                    dsh_terminal_error: None, dsh_failure_code: None,
+                    dsh_terminal_error: None, dsh_failure_code: None, paid_cloud_chat: false,
                     turn_id: "turn-2".into(),
                     role: "user".into(),
                     text: "本轮：第 2 项".into(),

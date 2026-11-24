@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        folder_connections::{AssetOriginal, ConnectionEntry, ConnectionFilter, FolderConnection},
+        folder_connections::{AssetOriginal, ConnectionEntry, ConnectionFilter, FolderConnection, ScanChange, ScanTarget},
         missing_originals::{MarkedReferenceSweep, MissingOriginalSweep},
         paths::LibraryPaths,
     },
@@ -8,7 +8,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -46,12 +46,29 @@ mod watcher;
 pub use watcher::watch;
 
 #[derive(Default)]
+struct RefreshTargets {
+    roots: HashSet<String>,
+    folders: HashMap<String, String>,
+}
+impl RefreshTargets {
+    fn roots(roots: HashSet<String>) -> Self { Self { roots, ..Self::default() } }
+
+    fn is_empty(&self) -> bool { self.roots.is_empty() && self.folders.is_empty() }
+
+    fn merge(&mut self, other: Self) {
+        self.roots.extend(other.roots);
+        self.folders.extend(other.folders);
+        self.folders.retain(|_, root| !self.roots.contains(root));
+    }
+}
+
+#[derive(Default)]
 struct RefreshQueue {
     running: bool,
     all: bool,
     scanning_all: bool,
     last_full_scan: Option<Instant>,
-    roots: HashSet<String>,
+    targets: RefreshTargets,
     priority: Option<String>,
     originals: bool,
     reference_continuation: bool,
@@ -67,7 +84,7 @@ impl RefreshQueue {
         true
     }
     fn has_work(&self) -> bool {
-        self.all || !self.roots.is_empty() || self.originals
+        self.all || !self.targets.is_empty() || self.originals
     }
     fn advance_originals(&mut self, catalog_more: bool, pending: bool, references_more: bool) {
         if !self.reference_continuation { self.schedule.pending = pending; }
@@ -112,8 +129,39 @@ fn changed(app: &AppHandle) {
 }
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ScanCatalogScope {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    root_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    folder_ids: Vec<String>,
+}
+
+fn emit_scan_changes(app: &AppHandle, root: &str, root_changed: &mut bool, folders: &mut HashSet<String>) -> usize {
+    let roots = std::mem::take(root_changed).then(|| root.to_owned()).into_iter().collect();
+    emit_catalog_scopes(app, roots, folders.drain().collect())
+}
+
+fn emit_catalog_scopes(app: &AppHandle, roots: Vec<String>, folders: Vec<String>) -> usize {
+    let mut notifications = 0;
+    if !roots.is_empty() {
+        let _ = app.emit("library://assets-changed", ScanCatalogScope { root_ids: roots, folder_ids: Vec::new() });
+        notifications += 1;
+    }
+    if !folders.is_empty() {
+        let _ = app.emit("library://assets-changed", ScanCatalogScope { root_ids: Vec::new(), folder_ids: folders });
+        notifications += 1;
+    }
+    if notifications > 0 { let _ = app.emit("external-files://changed", ()); }
+    notifications
+}
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ConnectionProgress {
     root_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    folder_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_folder_id: Option<String>,
     scanning: bool,
     error: Option<String>,
 }
@@ -150,13 +198,13 @@ fn queue_refresh(
     app: AppHandle,
     db: Arc<Database>,
     paths: Arc<LibraryPaths>,
-    roots: Option<HashSet<String>>,
+    targets: Option<RefreshTargets>,
     priority: Option<String>,
     force: bool,
 ) {
     let mut queue = REFRESH.lock().unwrap();
-    if let Some(roots) = roots {
-        queue.roots.extend(roots);
+    if let Some(targets) = targets {
+        queue.targets.merge(targets);
     } else if !queue.request_full_scan(Instant::now(), force) {
         return;
     }
@@ -200,20 +248,33 @@ fn requested_root_ids(
     ids.sort_by_key(|id| Some(id) != priority_root.as_ref());
     Ok(ids)
 }
-fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id: String, priority: Option<&str>, permit: tokio::sync::SemaphorePermit<'static>) {
+fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id: String, folder: Option<String>, priority: Option<&str>, permit: tokio::sync::SemaphorePermit<'static>) {
     let mut last = Instant::now() - Duration::from_secs(1);
     let started = Instant::now();
-    let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id.clone(), scanning: true, error: None });
-    let mut dirty = false;
+    let publish_progress = |scanning, active_folder_id, error| {
+        let _ = app.emit("library://connection-progress", ConnectionProgress {
+            root_id: id.clone(), folder_id: folder.clone(), active_folder_id, scanning, error,
+        });
+    };
+    publish_progress(true, None, None);
+    let mut root_changed = false;
+    let mut folders = HashSet::new();
     let mut notifications = 0;
     let mut permit = Some(permit);
     let mut yielded = false;
-    let value = db.scan_connection_cooperatively(paths, &id, priority, |changed_data| {
-        dirty |= changed_data;
-        if dirty && last.elapsed() >= Duration::from_millis(500) {
-            changed(app);
-            notifications += 1;
-            dirty = false;
+    let mut retry_folders = HashSet::new();
+    let target = folder.as_deref().map_or(ScanTarget::Root { priority }, ScanTarget::Folder);
+    let value = db.scan_connection_target(paths, &id, target, |change| {
+        match change {
+            ScanChange::Tick => (),
+            ScanChange::EnteringFolder(active) => publish_progress(true, Some(active.to_owned()), None),
+            ScanChange::Root => root_changed = true,
+            ScanChange::Folder(folder) => { folders.insert(folder.to_owned()); }
+            ScanChange::Folders(changed) => folders.extend(changed.iter().cloned()),
+            ScanChange::RetryFolder(folder) => { retry_folders.insert(folder.to_owned()); }
+        }
+        if (root_changed || !folders.is_empty()) && last.elapsed() >= Duration::from_millis(500) {
+            notifications += emit_scan_changes(app, &id, &mut root_changed, &mut folders);
             last = Instant::now();
         }
     }, || {
@@ -222,12 +283,19 @@ fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id:
         paused
     });
     if yielded {
-        REFRESH.lock().unwrap().roots.insert(id.clone());
+        let mut queue = REFRESH.lock().unwrap();
+        if folder.is_some() {
+            if !queue.targets.roots.contains(&id) {
+                queue.targets.folders.extend(retry_folders.into_iter().map(|folder| (folder, id.clone())));
+            }
+        } else {
+            queue.targets.merge(RefreshTargets::roots(HashSet::from([id.clone()])));
+        }
     }
     // Flush changes even when a later directory failed. Progress alone never
     // invalidates pages or forces the expensive catalog counts to run again.
-    if dirty { changed(app); notifications += 1; }
-    let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id, scanning: false, error: value.as_ref().err().map(ToString::to_string) });
+    notifications += emit_scan_changes(app, &id, &mut root_changed, &mut folders);
+    publish_progress(false, None, value.as_ref().err().map(ToString::to_string));
     tracing::debug!(elapsed_ms = started.elapsed().as_millis(), notifications, "connection scan completed");
     if let Err(error) = value {
         tracing::warn!("connection scan: {error}");
@@ -251,6 +319,75 @@ fn finish_refresh(app: &AppHandle, originals: bool, result: AppResult<bool>) {
         changed(app);
     }
 }
+
+enum DeferredFingerprintSchedule {
+    Idle,
+    Running,
+    Recheck,
+}
+
+impl DeferredFingerprintSchedule {
+    fn request(&mut self) -> bool {
+        let start = matches!(self, Self::Idle);
+        *self = if start { Self::Running } else { Self::Recheck };
+        start
+    }
+
+    fn finish_pass(&mut self, after: &mut String) -> bool {
+        if matches!(self, Self::Recheck) {
+            *self = Self::Running;
+            after.clear();
+            true
+        } else {
+            *self = Self::Idle;
+            false
+        }
+    }
+}
+
+fn fill_deferred_fingerprints(db: Arc<Database>) {
+    // Checking for a rescan and releasing the worker are one transition. A
+    // refresh either requests another pass or takes ownership of a new worker.
+    static SCHEDULE: Mutex<DeferredFingerprintSchedule> = Mutex::new(DeferredFingerprintSchedule::Idle);
+    if !SCHEDULE.lock().unwrap().request() { return; }
+    tauri::async_runtime::spawn(async move {
+        let mut after = String::new();
+        loop {
+            let next = db.clone();
+            let batch = match tokio::task::spawn_blocking({
+                let after = after.clone();
+                move || next.pending_connected_fingerprints(&after)
+            }).await {
+                Ok(Ok(batch)) => batch,
+                Ok(Err(error)) => {
+                    tracing::debug!(%error, "connected fingerprint query failed");
+                    Vec::new()
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "connected fingerprint query interrupted");
+                    Vec::new()
+                }
+            };
+            if batch.is_empty() {
+                if SCHEDULE.lock().unwrap().finish_pass(&mut after) { continue; }
+                break;
+            }
+            after = batch.last().cloned().unwrap_or_default();
+            for id in batch {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                while REFRESH.lock().unwrap().running || mutation_waiting() || GATE.available_permits() == 0 {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                }
+                let db = db.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(error) = db.complete_connected_fingerprint(&id) {
+                        tracing::debug!(%error, "connected fingerprint remains pending");
+                    }
+                }).await;
+            }
+        }
+    });
+}
 fn start_refresh(
     app: AppHandle,
     db: Arc<Database>,
@@ -271,23 +408,30 @@ fn start_refresh(
                 queue.scanning_all = queue.all;
                 (
                     std::mem::take(&mut queue.all),
-                    std::mem::take(&mut queue.roots),
+                    std::mem::take(&mut queue.targets),
                     queue.priority.clone(),
                     std::mem::take(&mut queue.originals),
                 )
             };
             let result = async {
+                let RefreshTargets { roots, mut folders } = requested;
                 let (db2, priority2) = (db.clone(), priority.clone());
-                let ids = if all || !requested.is_empty() {
+                let ids = if all || !roots.is_empty() {
                     tauri::async_runtime::spawn_blocking(move ||
-                        requested_root_ids(&db2, all, &requested, priority2.as_deref()))
+                        requested_root_ids(&db2, all, &roots, priority2.as_deref()))
                         .await.map_err(|e| AppError::Other(e.to_string()))??
                 } else { Vec::new() };
-                for id in ids {
+                let full: HashSet<_> = ids.iter().collect();
+                folders.retain(|_, root| !full.contains(root));
+                let mut scoped: Vec<_> = folders.into_iter().collect();
+                scoped.sort_by_key(|(folder, _)| Some(folder) != priority.as_ref());
+                let jobs = ids.into_iter().map(|root| (root, None))
+                    .chain(scoped.into_iter().map(|(folder, root)| (root, Some(folder))));
+                for (id, folder) in jobs {
                     let (app, db, paths, priority) = (app.clone(), db.clone(), paths.clone(), priority.clone());
                     let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
                     tauri::async_runtime::spawn_blocking(move || {
-                        scan_requested_root(&app, &db, &paths, id, priority.as_deref(), permit);
+                        scan_requested_root(&app, &db, &paths, id, folder, priority.as_deref(), permit);
                     }).await.map_err(|e| AppError::Other(e.to_string()))?;
                 }
                 if originals {
@@ -309,6 +453,8 @@ fn start_refresh(
                 continue;
             }
             queue.running = false;
+            drop(queue);
+            fill_deferred_fingerprints(db.clone());
             break;
         }
     });
@@ -352,7 +498,7 @@ pub async fn connect_folder(
         app,
         db.inner().clone(),
         paths.inner().clone(),
-        Some(HashSet::from([root_id])),
+        Some(RefreshTargets::roots(HashSet::from([root_id]))),
         Some(id.clone()),
         true,
     );
@@ -366,20 +512,40 @@ pub async fn refresh_folder_connections(
     folder_id: Option<String>,
     force: Option<bool>,
 ) -> AppResult<()> {
-    queue_refresh(app, db.inner().clone(), paths.inner().clone(), None, folder_id, force.unwrap_or(true));
+    let force = force.unwrap_or(true);
+    if force {
+        let db = db.inner().clone();
+        let folder = folder_id.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::core::semantic_search::index::request_connection_verification(&db, folder.as_deref())
+        }).await.map_err(|error| AppError::Other(error.to_string()))??;
+    }
+    queue_refresh(app, db.inner().clone(), paths.inner().clone(), None, folder_id, force);
     Ok(())
 }
+const GRANT_CAPACITY: usize = 16_384;
+const GRANT_EVICT_COUNT: usize = 2_048;
 #[derive(Default)]
-struct CatalogFileGrants(Mutex<HashSet<(String, String)>>);
+struct GrantVersions {
+    inserted: u64,
+    versions: HashMap<(String, String), u64>,
+}
+#[derive(Default)]
+struct CatalogFileGrants(Mutex<GrantVersions>);
 impl CatalogFileGrants {
     fn allow(&self, path: &str, version: Option<&str>, allow: impl FnOnce() -> AppResult<()>) -> AppResult<()> {
         let key = version.map(|version| (path.to_owned(), version.to_owned()));
         let mut granted = self.0.lock().unwrap();
-        if key.as_ref().is_some_and(|key| granted.contains(key)) { return Ok(()); }
+        if key.as_ref().is_some_and(|key| granted.versions.contains_key(key)) { return Ok(()); }
         allow()?;
         if let Some(key) = key {
-            if granted.len() >= 16_384 { granted.clear(); }
-            granted.insert(key);
+            if granted.versions.len() >= GRANT_CAPACITY {
+                let oldest = granted.inserted - (GRANT_CAPACITY - GRANT_EVICT_COUNT) as u64;
+                granted.versions.retain(|_, age| *age > oldest);
+            }
+            granted.inserted += 1;
+            let age = granted.inserted;
+            granted.versions.insert(key, age);
         }
         Ok(())
     }
@@ -407,7 +573,7 @@ fn allow_entries(app: &AppHandle, entries: &[ConnectionEntry]) -> AppResult<()> 
 pub async fn connection_entries(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
-    folder_id: String,
+    folder_id: Option<String>,
     offset: i64,
     limit: i64,
     media: Option<String>,
@@ -421,7 +587,7 @@ pub async fn connection_entries(
         let started = Instant::now();
         let filter = filter.unwrap_or_default();
         let ids = db.connection_entry_ids_filtered(
-            Some(&folder_id),
+            folder_id.as_deref(),
             project_id.as_deref(),
             media.as_deref(),
             offset,
@@ -453,16 +619,18 @@ pub async fn connection_entry_ids(
     project_id: Option<String>,
     offset: Option<i64>,
     limit: Option<i64>,
+    subtree: Option<bool>,
 ) -> AppResult<Vec<String>> {
     let db = db.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        db.connection_entry_ids_filtered(
+        db.connection_entry_ids_in_scope(
             folder_id.as_deref(),
             project_id.as_deref(),
             media.as_deref(),
             offset.unwrap_or(0),
             limit.unwrap_or(2000),
             &filter.unwrap_or_default(),
+            subtree.unwrap_or(false),
         )
     })
     .await
@@ -473,12 +641,20 @@ pub async fn resolve_connection_entries(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     ids: Vec<String>,
+    verify_originals: Option<bool>,
 ) -> AppResult<Vec<ConnectionEntry>> {
     let db = db.inner().clone();
-    let values = tauri::async_runtime::spawn_blocking(move || db.resolve_visible_connection_entries(&ids))
+    let verify_originals = verify_originals.unwrap_or(true);
+    let values = tauri::async_runtime::spawn_blocking(move || {
+        if verify_originals {
+            db.resolve_visible_connection_entries(&ids)
+        } else {
+            db.visible_connection_entries(&ids)
+        }
+    })
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
-    allow_entries(&app, &values)?;
+    if verify_originals { allow_entries(&app, &values)?; }
     Ok(values)
 }
 #[tauri::command]
@@ -655,6 +831,40 @@ mod maintenance_tests {
     use super::*;
 
     #[test]
+    fn deferred_fingerprint_pass_rewinds_for_an_older_asset_requeued_during_pagination() {
+        let mut schedule = DeferredFingerprintSchedule::Idle;
+        assert!(schedule.request());
+        let mut after = String::from("asset-032");
+        let pending_after = |cursor: &str| ["asset-004", "asset-033"]
+            .into_iter().filter(|id| *id > cursor).collect::<Vec<_>>();
+
+        assert!(!schedule.request());
+        assert!(!schedule.request());
+        assert_eq!(pending_after(&after), ["asset-033"]);
+        after = String::from("asset-033");
+        assert!(pending_after(&after).is_empty());
+        assert!(schedule.finish_pass(&mut after));
+        assert_eq!(pending_after(&after).first(), Some(&"asset-004"));
+
+        assert!(!schedule.finish_pass(&mut after), "coalesced requests only require one extra pass");
+    }
+
+    #[test]
+    fn deferred_fingerprint_exit_hands_off_wakeups_on_both_sides_of_completion() {
+        let schedule = Mutex::new(DeferredFingerprintSchedule::Idle);
+        let mut after = String::from("last");
+        assert!(schedule.lock().unwrap().request());
+        assert!(!schedule.lock().unwrap().request());
+        assert!(schedule.lock().unwrap().finish_pass(&mut after));
+        assert!(after.is_empty());
+
+        assert!(!schedule.lock().unwrap().finish_pass(&mut after));
+        assert!(schedule.lock().unwrap().request(), "request after retirement starts a new worker");
+        assert!(!schedule.lock().unwrap().request(), "successor also coalesces concurrent requests");
+        assert!(schedule.lock().unwrap().finish_pass(&mut after));
+    }
+
+    #[test]
     fn catalog_grants_reuse_only_successful_same_version_in_the_same_app() {
         let grants = CatalogFileGrants::default();
         let calls = std::cell::Cell::new(0);
@@ -672,6 +882,19 @@ mod maintenance_tests {
         assert_eq!(calls.get(), 6);
         CatalogFileGrants::default().allow("source", Some("v1"), allow).unwrap();
         assert_eq!(calls.get(), 7);
+    }
+
+    #[test]
+    fn catalog_grants_evict_oldest_versions_without_dropping_other_grants() {
+        let grants = CatalogFileGrants::default();
+        for i in 0..=GRANT_CAPACITY {
+            grants.allow(&i.to_string(), Some("v"), || Ok(())).unwrap();
+        }
+        assert_eq!(grants.0.lock().unwrap().versions.len(), GRANT_CAPACITY - GRANT_EVICT_COUNT + 1);
+        grants.allow(&GRANT_EVICT_COUNT.to_string(), Some("v"), || panic!("recent grant was lost")).unwrap();
+        let called = std::cell::Cell::new(false);
+        grants.allow("0", Some("v"), || { called.set(true); Ok(()) }).unwrap();
+        assert!(called.get());
     }
 
     #[tokio::test]
@@ -720,7 +943,7 @@ mod maintenance_tests {
     fn checks_on_startup_without_roots_then_waits_between_healthy_sweeps() {
         let now = Instant::now();
         let mut queue = RefreshQueue::default();
-        assert!(queue.roots.is_empty());
+        assert!(queue.targets.is_empty());
         queue.originals = queue.schedule.request(now, false);
         assert!(queue.has_work());
         assert!(std::mem::take(&mut queue.originals));

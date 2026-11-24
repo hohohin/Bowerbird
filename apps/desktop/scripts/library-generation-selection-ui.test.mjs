@@ -13,7 +13,7 @@ try {
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
   const composer = page.getByRole('region', { name: '素材库创作', exact: true });
   const editor = composer.locator('.ProseMirror');
-  const preview = page.getByRole('dialog', { name: '图片与会话预览', exact: true });
+  const preview = page.getByRole('dialog', { name: '图片与生成记录预览', exact: true });
   await editor.fill('参考这些素材');
   const cards = page.locator('.library-home [data-asset-id]');
   await cards.first().waitFor();

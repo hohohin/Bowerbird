@@ -46,8 +46,9 @@ export function EmojiInputElement(props: PlateElementProps) {
         setValue={setValue}
         trigger=":"
         hideWhenNoValue
+        preserveOnCancel={!element.fromSlashMenu}
       >
-        <InlineComboboxInput />
+        <InlineComboboxInput aria-label="搜索表情" />
 
         <InlineComboboxContent>
           {!isPending && <InlineComboboxEmpty>没有匹配项</InlineComboboxEmpty>}

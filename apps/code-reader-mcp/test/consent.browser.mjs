@@ -1,79 +1,78 @@
+// Optional browser regression: uses the workspace renderer's Playwright and installed Chrome.
+// Requests are routed to this fixture; browser DNS is disabled to prevent external traffic.
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { request } from 'node:http';
-import { createServer } from 'node:https';
-import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-import { createHttpApp } from '../http-app.mjs';
+import { createMcpHttpServer } from '../http-app.mjs';
 import { digest } from '../core.mjs';
 
-const redirect = 'https://oauth-redirect.googleusercontent.com/r/test-app';
-const adminPassword = 'fixture'.repeat(8);
-const client = { client_id: 'c'.repeat(43), client_secret: 's'.repeat(43), redirect_uri: redirect };
-const content = '# Synthetic fixture';
-const dir = await mkdtemp(path.join(tmpdir(), 'bb-mcp-chrome-'));
-let proxy, server, browser;
-try {
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
-    '-subj', '/CN=127.0.0.1', '-keyout', 'key.pem', '-out', 'cert.pem'], { cwd: dir, stdio: 'ignore' });
-  let seenOrigin;
-  let useOldPolicy = false;
-  proxy = createServer({ key: await readFile(path.join(dir, 'key.pem')), cert: await readFile(path.join(dir, 'cert.pem')) },
-    (incoming, response) => {
-      if (incoming.method === 'POST') seenOrigin = incoming.headers.origin;
-      const outgoing = request({ host: '127.0.0.1', port: server.address().port, path: incoming.url,
-        method: incoming.method, headers: incoming.headers }, upstream => {
-        if (useOldPolicy && incoming.method === 'GET') upstream.headers['referrer-policy'] = 'no-referrer';
-        response.writeHead(upstream.statusCode, upstream.headers);
-        upstream.pipe(response);
-      });
-      outgoing.on('error', () => { response.writeHead(502); response.end(); });
-      incoming.pipe(outgoing);
-    });
-  proxy.listen(0, '127.0.0.1');
-  await once(proxy, 'listening');
-  const origin = `https://127.0.0.1:${proxy.address().port}`;
-  server = createHttpApp({ version: 1, createdAt: '2026-11-19T00:00:00Z', revision: 'fixture',
-    files: [{ path: 'PROJECT.md', content, sha256: digest(content) }] }, { origin, adminPassword, clients: [client] });
+test('native browser consent retains same-origin POST and secure cookie while null Origin stays denied', async t => {
+  const origin = 'https://mcp.bowerbird.cn';
+  const password = 'p'.repeat(43);
+  const clientId = 'c'.repeat(43);
+  const callback = 'https://oauth-redirect.googleusercontent.com/r/browser-fixture';
+  const server = createMcpHttpServer({ version: 1, createdAt: '2026-11-16T00:00:00Z', revision: 'fixture',
+    files: [{ path: 'PROJECT.md', content: 'fixture', sha256: digest('fixture') }] }, {
+    origin, port: 0, adminPassword: password,
+    oauthClient: { clientId, clientSecret: 's'.repeat(43), redirectUri: callback },
+  });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-
-  browser = await chromium.launch({ channel: 'chrome', headless: true,
-    args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'] });
-  const page = await browser.newPage({ ignoreHTTPSErrors: true });
-  await page.context().route('https://oauth-redirect.googleusercontent.com/**', route =>
-    route.fulfill({ status: 200, body: 'Synthetic Google callback' }));
-  const params = new URLSearchParams({ client_id: client.client_id, redirect_uri: redirect, response_type: 'code',
-    code_challenge_method: 'S256', code_challenge: createHash('sha256').update('v'.repeat(43)).digest('base64url') });
-  const authorize = origin + '/oauth/authorize?' + params;
-  const submit = async () => {
-    await page.goto(authorize);
-    await page.getByLabel('访问密码').fill(adminPassword);
-    const [response] = await Promise.all([
-      page.waitForResponse(response => response.request().method() === 'POST' && response.url() === origin + '/oauth/authorize'),
-      page.getByRole('button', { name: '授权' }).click({ noWaitAfter: true }),
-    ]);
-    return response.status();
-  };
-  const [callback, approved] = await Promise.all([
-    page.waitForRequest(request => request.url().startsWith(redirect + '?')), submit(),
-  ]);
-  assert.equal(approved, 302);
-  assert.equal(seenOrigin, origin);
-  assert.ok(new URL(callback.url()).searchParams.get('code'));
-  useOldPolicy = true;
-  assert.equal(await submit(), 403);
-  assert.equal(seenOrigin, 'null');
-  console.log('PASS: Chrome native consent preserves Origin and the exact callback; old no-referrer policy reproduces 403.');
-} finally {
-  await browser?.close();
-  for (const listener of [proxy, server]) if (listener) {
-    listener.closeAllConnections();
-    await new Promise(resolve => listener.close(resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const browser = await chromium.launch({ channel: 'chrome', headless: true,
+    args: ['--host-resolver-rules=MAP * ~NOTFOUND'] });
+  t.after(() => browser.close());
+  for (const legacyPolicy of [false, true]) {
+    const context = await browser.newContext();
+    t.after(() => context.close());
+    await context.route('**/*', async route => {
+      const incoming = route.request();
+      const url = new URL(incoming.url());
+      if (url.origin !== origin) return route.fulfill({ status: 200, contentType: 'text/plain', body: 'fixture callback' });
+      const headers = { ...await incoming.allHeaders(), host: 'mcp.bowerbird.cn' };
+      const forwarded = await new Promise((resolve, reject) => {
+        const req = request({ hostname: '127.0.0.1', port: server.address().port,
+          path: url.pathname + url.search, method: incoming.method(), headers }, response => {
+          const chunks = [];
+          response.on('data', chunk => chunks.push(chunk));
+          response.on('error', reject);
+          response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks) }));
+        });
+        req.on('error', reject);
+        req.end(incoming.postDataBuffer());
+      });
+      const responseHeaders = Object.fromEntries(Object.entries(forwarded.headers)
+        .map(([key, value]) => [key, Array.isArray(value) ? value.join('\n') : String(value)]));
+      delete responseHeaders['transfer-encoding'];
+      if (legacyPolicy && incoming.method() === 'GET' && url.pathname === '/oauth/authorize') responseHeaders['referrer-policy'] = 'no-referrer';
+      await route.fulfill({ ...forwarded, headers: responseHeaders });
+    });
+    const page = await context.newPage();
+    const query = new URLSearchParams({ client_id: clientId, redirect_uri: callback, response_type: 'code',
+      resource: origin + '/mcp', code_challenge_method: 'S256',
+      code_challenge: createHash('sha256').update('v'.repeat(43)).digest('base64url'), state: 'browser-fixture' });
+    assert.equal((await page.goto(origin + '/oauth/authorize?' + query)).status(), 200);
+    await page.locator('input[name=password]').fill(password);
+    const posted = page.waitForResponse(response => response.request().method() === 'POST');
+    const redirected = legacyPolicy ? null : page.waitForRequest(request => request.url().startsWith(callback + '?'));
+    await page.getByRole('button', { name: '授权只读访问' }).click({ noWaitAfter: true });
+    const result = await posted;
+    const submitted = await result.request().allHeaders();
+    assert.equal(submitted.origin, legacyPolicy ? 'null' : origin);
+    if (legacyPolicy) {
+      assert.equal(result.status(), 403);
+      assert.deepEqual(await result.json(), { error: 'forbidden' });
+    } else {
+      assert.match(submitted.cookie, /bb_mcp_approval_/);
+      assert.equal(result.status(), 303);
+      assert.match((await result.allHeaders()).location, /^\/oauth\/authorize\/continue\?nonce=/);
+      const destination = new URL((await redirected).url());
+      assert.equal(destination.origin + destination.pathname, callback);
+      assert.equal(destination.searchParams.get('state'), 'browser-fixture');
+      assert.ok(destination.searchParams.get('code'));
+    }
   }
-  await rm(dir, { force: true, recursive: true });
-}
+});

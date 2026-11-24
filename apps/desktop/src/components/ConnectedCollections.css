@@ -1,10 +1,7 @@
-.connected-collections .catalog-sidebar-heading button { width: 30px; height: 30px; display: grid; place-items: center; opacity: 0; pointer-events: none; }
-.connected-collections .catalog-sidebar-heading:is(:hover,:focus-within) button { opacity: 1; pointer-events: auto; }
 .connected-collections .catalog-tree-add { color: var(--bb-muted); }
 .connected-collections .catalog-tree-row.is-offline { color: var(--bb-muted); }
 .connected-media { position: absolute; left: 0; top: 0; }
 .connected-media > .folder-media-card { position: relative; margin: 0; }
-.connected-reference { position: absolute; bottom: 8px; left: 8px; padding: 4px 6px; display: flex; background: rgb(20 20 20 / .78); color: #eee; pointer-events: none; }
 .connected-missing { position: absolute; inset: 0; background: rgb(20 20 20 / .6); color: #eee; display: flex; flex-direction: column; gap: 8px; align-items: center; justify-content: center; font-size: 11px; pointer-events: none; }
 .connected-collections .catalog-sections > .is-empty { min-height: 0; }
 .connected-collections .is-empty .catalog-section-heading { display: flex; align-items: center; }

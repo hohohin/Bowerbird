@@ -78,6 +78,10 @@ fn main() {
             .compile("bowerbird_browser_capture");
         println!("cargo:rustc-link-lib=framework=WebKit");
         println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rerun-if-changed=macos/heic_preview.m");
+        cc::Build::new().file("macos/heic_preview.m").flag("-fobjc-arc").flag("-fblocks")
+            .compile("bowerbird_heic_preview");
+        println!("cargo:rustc-link-lib=framework=CoreImage");
         println!("cargo:rerun-if-changed=macos/video_thumbnail.m");
         cc::Build::new().file("macos/video_thumbnail.m").flag("-fobjc-arc")
             .compile("bowerbird_video_thumbnail");

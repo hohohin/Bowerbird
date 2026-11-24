@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { createStore } from 'zustand/vanilla';
 
 const lib = fileURLToPath(new URL('../src/lib/', import.meta.url));
 const clone = value => structuredClone(value);
@@ -18,6 +19,7 @@ function fixture(initial = doc([node('original')])) {
   const writes = [];
   const modules = new Map();
   const requests = new Map(), sends = [], stops = [];
+  const genJobs = {}, generationRequests = [];
   const chatListeners = new Set(), checkpoints = new Map();
   const reads = { checkpoints: 0, full: 0 };
   const chatApi = { revision: async id => { reads.checkpoints++; return checkpoints.get(id); }, getByRequest: async id => clone(requests.get(id) ?? null) };
@@ -62,17 +64,28 @@ function fixture(initial = doc([node('original')])) {
       if (specifier === './api') return { api };
       if (specifier === './userError') return load(resolve(dirname(path), 'userError.ts'));
       if (specifier === './dshSkill.ts' || specifier === './chatProvider.ts') return load(resolve(dirname(path), specifier));
-      if (specifier === './localChat') return { localChat: chatApi, localChatRunning: chat => chat && ['running', 'stopping'].includes(chat.status) };
+      if (specifier === './localChat') return { localChat: chatApi, localChatRunning: chat => chat && ['running', 'stopping'].includes(chat.status),
+        agentChatOptions: (...args) => load(resolve(lib, 'localChat.ts')).agentChatOptions(...args),
+        selectChatCodexModel: (...args) => load(resolve(lib, 'localChat.ts')).selectChatCodexModel(...args) };
       if (specifier === './localChatStore') return { ensureLocalChatEvents: async () => {},
         useLocalChatStore: { getState: () => chatStore, subscribe: listener => { chatListeners.add(listener); return () => chatListeners.delete(listener); } } };
-      if (specifier === './workflowProviderIssue') return { workflowProviderIssue: () => null };
-      if (specifier === './chatCapabilities') return { chatProviderAccessIssue: () => null };
-      if (specifier === '../store') return { useStore: { getState: () => ({ genJobs: {} }) } };
+      if (specifier === './workflowProviderIssue') return { workflowProviderIssue: () => null, workflowGenerationProvider: node => node.provider };
+      if (specifier === 'zustand') return { createStore };
+      if (specifier === './chatCapabilities') return { chatProviderAccessIssue: () => null,
+        selectedChatOptions: (...args) => load(resolve(lib, 'chatCapabilities.ts')).selectedChatOptions(...args) };
+      if (specifier === '../store') return { useStore: { getState: () => ({ genJobs,
+        startGeneration: async (...args) => { generationRequests.push(args.at(-1)); return { accepted: true }; } }) } };
+      if (specifier === '@tauri-apps/api/event') return { emit: async () => {} };
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
       if (specifier === './workflowLoop') return load(resolve(lib, 'workflowLoop.ts'));
       if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined, agentOutputTargets: () => [] };
-      if (specifier === './canvasSessionOutputs') return { completedCanvasSessions: () => [], reconcileCanvasWorkflowReferences: nodes => nodes };
+      if (specifier === './canvasSessionOutputs') return { completedCanvasSessions: () => [], reconcileCanvasWorkflowReferences: nodes => nodes,
+        canvasSessionCompletionLookup: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompletionLookup(...args),
+        workflowGenerationActivity: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).workflowGenerationActivity(...args) };
+      if (['./comfyVideo', './comfyVideo.ts', './genProviders', './genProviders.ts', './canvasNodePayload.ts', './projectNodeIds'].includes(specifier)) {
+        return load(resolve(lib, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
+      }
       if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts'].includes(specifier)) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       return {};
     };
@@ -81,7 +94,7 @@ function fixture(initial = doc([node('original')])) {
   }
   const { CanvasWorkflowController } = load(resolve(lib, 'canvasWorkflowRuntime.ts'));
   const { mergeWorkflowChanges } = load(resolve(lib, 'workflowExternalChanges.ts'));
-  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), writes, requests, sends, stops, chatStore, chatApi, chatListeners, checkpoints, reads, load,
+  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), writes, requests, sends, stops, chatStore, chatApi, chatListeners, checkpoints, reads, load, genJobs, generationRequests,
     external: document => { saved = { revision: saved.revision + 1, document: clone(document) }; },
     fail: value => { fail = value; }, failRead: value => { failRead = value; },
     interleave: (...changes) => { interleavedChanges.push(...changes); },
@@ -125,7 +138,7 @@ test('Agent execution submits through chat once and resumes the exact original t
   const step = { status: 'pending', agentInput: { prompt: agent.prompt, source: JSON.stringify({ source }), assetIds: [] } };
   const run = { id: 'run', startId: agent.id, threadId: 'thread', order: [agent.id], status: 'running', steps: { [agent.id]: step } };
   const f = fixture({ ...doc([agent]), run }); await f.controller.load();
-  const first = await f.controller.chatResult(run.id, agent, step, () => false);
+  const first = await f.controller.chatResult(run.id, agent, step, [], () => false);
   assert.equal(first.text.text, '原轮次输出');
   assert.equal(f.sends.length, 1);
   assert.ok(f.sends[0].text.includes(source));
@@ -135,18 +148,18 @@ test('Agent execution submits through chat once and resumes the exact original t
   const frozen = f.saved().document.run.steps[agent.id];
   const accepted = f.requests.get(frozen.chatInput.requestId);
   accepted.status = 'running'; accepted.messages.push({ turnId: 'later', role: 'assistant', status: 'running', text: '后续轮次', referenceAssetIds: [] });
-  const recovered = await f.controller.chatResult(run.id, agent, frozen, () => false);
+  const recovered = await f.controller.chatResult(run.id, agent, frozen, [], () => false);
   assert.equal(recovered.text.text, '原轮次输出'); assert.equal(f.sends.length, 1);
   accepted.messages[0].status = 'interrupted';
-  assert.equal(await f.controller.chatResult(run.id, agent, frozen, () => false), null);
+  assert.equal(await f.controller.chatResult(run.id, agent, frozen, [], () => false), null);
   assert.equal(f.saved().document.run.steps[agent.id].status, 'waiting');
   assert.equal(f.sends.length, 1);
   accepted.messages.pop(); // The original failed completion is now the latest turn again.
   accepted.status = 'failed';
   accepted.error = 'chat_no_reply: 上游模型服务返回 HTTP 502。本轮云端任务已结束，没有可取回的回复。';
-  await assert.rejects(() => f.controller.chatResult(run.id, agent, frozen, () => false), /HTTP 502/);
+  await assert.rejects(() => f.controller.chatResult(run.id, agent, frozen, [], () => false), /HTTP 502/);
   f.requests.delete(frozen.chatInput.requestId);
-  assert.equal(await f.controller.chatResult(run.id, agent, frozen, () => false), null);
+  assert.equal(await f.controller.chatResult(run.id, agent, frozen, [], () => false), null);
   assert.equal(f.sends.length, 1, 'an acknowledged turn that disappeared must never be resubmitted');
 });
 
@@ -163,7 +176,7 @@ test('only clicking run on the Agent itself opts its saved request into bound co
     const run = f.controller.run(f.saved().document.run.id);
     assert.equal(run.manualCardRun, expected);
     await f.controller.step(run.id, agent.id, { agentInput: { prompt: agent.prompt, source: '{}', assetIds: [] } });
-    await f.controller.chatResult(run.id, agent, run.steps[agent.id], () => false);
+    await f.controller.chatResult(run.id, agent, run.steps[agent.id], [], () => false);
     const request = f.sends[0];
     assert.equal(request.agentNodeId, agent.id);
     assert.equal(request.conversationId, agent.chatConversationId);
@@ -179,16 +192,16 @@ test('lost chat admission response keeps the request and stops the accepted orig
   const f = fixture({ ...doc([agent]), run }); await f.controller.load();
   const send = f.chatStore.send;
   f.chatStore.send = async input => { await send(input); throw new Error('IPC acknowledgement lost'); };
-  assert.equal(await f.controller.chatResult(run.id, agent, step, () => false), null);
+  assert.equal(await f.controller.chatResult(run.id, agent, step, [], () => false), null);
   const frozen = f.saved().document.run.steps[agent.id];
   assert.equal(frozen.status, 'waiting'); assert.ok(frozen.chatInput.requestId);
-  assert.equal((await f.controller.chatResult(run.id, agent, frozen, () => false)).text.text, '原轮次输出');
+  assert.equal((await f.controller.chatResult(run.id, agent, frozen, [], () => false)).text.text, '原轮次输出');
   assert.equal(f.sends.length, 1);
   const second = fixture({ ...doc([agent]), run }); await second.controller.load();
   let halted = false;
   const accept = second.chatStore.send;
   second.chatStore.send = async input => { const chat = await accept(input); halted = true; return { ...chat, status: 'running' }; };
-  assert.equal(await second.controller.chatResult(run.id, agent, step, () => halted), null);
+  assert.equal(await second.controller.chatResult(run.id, agent, step, [], () => halted), null);
   assert.deepEqual(second.stops, [['chat', 'turn']]);
 });
 
@@ -246,6 +259,135 @@ test('independent local run state is kept alongside newly created cards', () => 
   const run = { id: 'run', status: 'waiting', order: ['original'], steps: {} };
   const merged = f.mergeWorkflowChanges(base, { ...base, run, runs: [run] }, doc([node('original'), node('chat-card')]));
   assert.equal(merged.run.id, 'run'); assert.equal(merged.nodes.length, 2);
+});
+
+test('an external card add from an old snapshot preserves the active generation checkpoint through the next save', async () => {
+  const original = { ...node('original'), activeSessionNodeId: 'old-session', sessionNodeIds: ['old-session'],
+    outputs: { image: { type: 'image', nodeIds: ['old-session'] } } };
+  const agent = { ...node('agent'), kind: 'agent' };
+  const oldRun = { id: 'run', status: 'running', startId: original.id, order: [original.id, agent.id],
+    steps: { [original.id]: { status: 'pending' }, [agent.id]: { status: 'pending' } } };
+  const old = { ...doc([original, agent]), run: oldRun, runs: [oldRun] };
+  const f = fixture(old), c = f.controller;
+  await c.load();
+  const step = { status: 'running', jobId: 'job', turnKey: 'turn', generationSubmission: 'pending', detail: 'checking local progress' };
+  const liveRun = { ...oldRun, threadId: 'live-thread', steps: { ...oldRun.steps, [original.id]: step } };
+  const live = { ...original, activeSessionNodeId: 'gen-prompt:job:turn:0', sessionNodeIds: [...original.sessionNodeIds, 'gen-prompt:job:turn:0'],
+    outputs: { image: { type: 'image', nodeIds: ['gen-prompt:job:turn:0'] } }, resultNodeIds: ['current-output'] };
+  await c.saveRun(liveRun, [live, agent]);
+  const updatedAgent = { status: 'done', detail: 'agent completed separately' };
+  const external = { ...oldRun, steps: { ...oldRun.steps, [agent.id]: updatedAgent } };
+  const progressed = { ...liveRun, steps: { ...liveRun.steps, [agent.id]: updatedAgent } };
+  f.external({ ...old, nodes: [original, agent, node('chat-card')], run: external, runs: [external] });
+  await c.refreshExternalCards();
+  assert.deepEqual(plain(c.document.run), progressed);
+  assert.deepEqual(plain(c.document.nodes), [live, agent, node('chat-card')]);
+  await c.save();
+  assert.deepEqual(f.saved().document.run, progressed);
+  assert.deepEqual(f.saved().document.nodes, [live, agent, node('chat-card')]);
+
+  const terminal = { ...progressed, status: 'done', steps: { ...progressed.steps, [original.id]: { ...step, status: 'done', generationSubmission: 'submitted' } } };
+  f.external({ ...doc([live, agent, node('chat-card')]), run: terminal, runs: [terminal] });
+  await c.refreshExternalCards();
+  assert.deepEqual(plain(c.document.run), terminal);
+  f.external(doc([agent, node('chat-card')]));
+  await c.refreshExternalCards();
+  assert.deepEqual(plain(c.document.nodes), [agent, node('chat-card')]);
+  assert.equal(c.document.run, null, 'a historical submitted marker does not resurrect cards removed externally');
+});
+
+test('a locally submitted handoff stays owned until its exact new media reaches the board', async () => {
+  const original = node('original');
+  const oldRun = { id: 'run', status: 'waiting', startId: original.id, order: [original.id],
+    steps: { [original.id]: { status: 'pending' } } };
+  const old = { ...doc([original]), run: oldRun, runs: [oldRun] };
+  const f = fixture(old), c = f.controller;
+  await c.load();
+  await c.runWorkflowImageSession(oldRun.id, original, () => false, { prompt: 'new', rawPrompt: 'new', references: [], ratio: null });
+  await c.saveRun({ ...c.document.run, status: 'done' });
+  const submitted = plain(c.document), [request] = f.generationRequests;
+  assert.equal(submitted.run.steps[original.id].generationSubmission, 'submitted');
+  assert.equal(submitted.run.steps[original.id].jobId, request.jobId);
+  const card = node('chat-card');
+  f.external({ ...old, nodes: [original, card] });
+  await c.refreshExternalCards();
+  assert.deepEqual(plain(c.document.run), submitted.run);
+  assert.deepEqual(plain(c.document.nodes), [...submitted.nodes, card]);
+  const partiallyCheckpointed = { ...submitted.run, status: 'running' };
+  f.external({ ...old, nodes: [original, card], run: partiallyCheckpointed, runs: [partiallyCheckpointed] });
+  await c.refreshExternalCards();
+  assert.deepEqual(plain(c.document.run), submitted.run, 'an older overall checkpoint cannot roll back the completed handoff');
+  assert.deepEqual(plain(c.document.nodes), [...submitted.nodes, card]);
+
+  const turn = { id: `gen-prompt:${request.jobId}:${request.turnKey}:0`, kind: 'prompt', projectId: 'p',
+    payloadJson: JSON.stringify({ job_id: request.jobId, turn_key: request.turnKey, status: 'done' }) };
+  const remoteWithoutHandoff = doc([card]);
+  await c.syncCanvasReferences([turn]);
+  f.external(remoteWithoutHandoff);
+  await c.refreshExternalCards();
+  assert.deepEqual(plain(c.document.run), submitted.run, 'a done turn without its media is still waiting for delivery');
+  assert.deepEqual(plain(c.document.nodes), [...submitted.nodes, card]);
+  await c.save();
+
+  const output = { id: 'new-output', assetId: 'new', kind: 'asset', role: 'output', projectId: 'p',
+    payloadJson: JSON.stringify({ execution: { job_id: request.jobId, turn_key: request.turnKey } }) };
+  await c.syncCanvasReferences([turn, output]);
+  f.external(remoteWithoutHandoff);
+  await c.refreshExternalCards();
+  assert.equal(c.document.run, null);
+  assert.deepEqual(plain(c.document.nodes), [card]);
+});
+
+test('reopened submissions use the exact live job turn to protect an otherwise completed run', async () => {
+  const original = node('original');
+  const submitted = { id: 'run', status: 'done', startId: original.id, order: [original.id],
+    steps: { [original.id]: { status: 'done', generationSubmission: 'submitted', jobId: 'job', turnKey: 'active' } } };
+  const f = fixture({ ...doc([original]), run: submitted, runs: [submitted] });
+  const c = f.controller;
+  await c.load();
+  f.genJobs.job = { running: true, turns: [{ turnKey: 'active' }] };
+  const card = node('chat-card');
+  f.external(doc([card]));
+  await c.refreshExternalCards();
+  assert.deepEqual(plain(c.document.run), submitted);
+  assert.deepEqual(plain(c.document.nodes), [original, card]);
+  await c.save();
+
+  f.genJobs.job.turns.push({ turnKey: 'different' });
+  f.external(doc([card]));
+  await c.refreshExternalCards();
+  assert.equal(c.document.run, null, 'a different turn cannot keep the old submission alive');
+  assert.deepEqual(plain(c.document.nodes), [card]);
+});
+
+test('external snapshots cannot drop a running loop or roll it back to an earlier iteration', async () => {
+  const owner = { ...node('loop'), kind: 'loop', loopMode: 'count', loopCount: 3 };
+  const image = node('image');
+  const f = fixture(doc([owner, image])), c = f.controller;
+  await c.load();
+  const loop = { nodeId: owner.id, bodyIds: [image.id], index: 1, completed: [{ outputs: {}, steps: {} }] };
+  const step = { status: 'running', jobId: 'second', turnKey: 'turn-two' };
+  const live = { id: 'loop-run', status: 'running', startId: owner.id, order: [owner.id, image.id], loop,
+    steps: { [owner.id]: { status: 'done' }, [image.id]: step } };
+  await c.saveRun(live, [owner, image]);
+  const card = node('chat-card');
+  f.external(doc([owner, image, card]));
+  await c.refreshExternalCards();
+  assert.deepEqual(plain(c.document.run), live);
+  await c.save();
+
+  const older = { ...live, loop: { ...loop, index: 0, completed: [] },
+    steps: { ...live.steps, [image.id]: { status: 'done', jobId: 'first', turnKey: 'turn-one' } } };
+  f.external({ ...doc([owner, image, card]), run: older, runs: [older] });
+  await c.refreshExternalCards();
+  assert.deepEqual(plain(c.document.run), live);
+  await c.save();
+
+  const newer = { ...live, loop: { ...loop, index: 2, completed: [...loop.completed, { outputs: {}, steps: {} }] },
+    steps: { ...live.steps, [image.id]: { status: 'pending' } } };
+  f.external({ ...doc([owner, image, card]), run: newer, runs: [newer] });
+  await c.refreshExternalCards();
+  assert.deepEqual(plain(c.document.run), newer, 'an advancing cursor is a distinct attempt');
 });
 
 test('native object key ordering does not turn an unchanged card into a conflict', () => {
@@ -392,6 +534,7 @@ test('a refresh merge conflict keeps local progress and blocks subsequent overwr
 
 test('two live executor loops finish after chat creates and undoes unrelated cards', { timeout: 5000 }, async () => {
   const f = await activeFixture('trigger'), c = f.controller;
+  const { workflowLockedNodes } = f.load(resolve(lib, 'canvasWorkflow.ts'));
   const reached = Promise.withResolvers(), gate = Promise.withResolvers(), finishing = new Set();
   const finish = c.finish.bind(c);
   c.finish = async (id, ...args) => {
@@ -401,13 +544,13 @@ test('two live executor loops finish after chat creates and undoes unrelated car
   const first = c.continue('run-a'), second = c.continue('run-b');
   await reached.promise;
   assert.deepEqual([...finishing].sort(), ['run-a', 'run-b']);
-  assert.equal(c.isLocked('a'), true); assert.equal(c.isLocked('b'), true);
+  assert.deepEqual([...workflowLockedNodes(c.document)].sort(), ['a', 'b']);
   f.external({ ...f.saved().document, nodes: [...f.saved().document.nodes, node('chat-card')] });
   await c.refreshExternalCards();
   assert.equal(c.isLocked('chat-card'), false);
   f.external({ ...f.saved().document, nodes: f.saved().document.nodes.filter(n => n.id !== 'chat-card') });
   await c.refreshExternalCards();
-  assert.equal(c.isLocked('a'), true); assert.equal(c.isLocked('b'), true);
+  assert.deepEqual([...workflowLockedNodes(c.document)].sort(), ['a', 'b']);
   gate.resolve(); await Promise.all([first, second]);
   assert.equal(c.error, ''); assert.equal(c.issue, null);
   assert.deepEqual(f.saved().document.runs.map(r => [r.id, r.status, r.steps[r.startId].status]),

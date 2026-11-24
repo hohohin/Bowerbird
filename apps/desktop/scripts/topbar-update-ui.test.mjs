@@ -17,17 +17,25 @@ try {
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   const slot = page.locator('.topbar-update-slot');
   const button = slot.getByRole('button');
+  const screenshot = page.getByRole('button', { name: '截图工具', exact: true }).locator('svg');
   const credits = page.locator('.app-topbar-credits');
-  await slot.waitFor();
   await page.evaluate(() => window.store.setState({ cloudAuth: { logged_in: true, user_id: 'test-user', display_name: '测试用户' } }));
+  await credits.waitFor();
   await page.evaluate(async () => { window.updater = (await import('/src/lib/appUpdater.ts')).useAppUpdater; });
   for (const phase of ['idle', 'checking', 'current']) {
     await page.evaluate(phase => window.updater.setState({ phase, update: null, error: null }), phase);
-    assert.equal(await button.count(), 0, `${phase}: no false update notice`);
+    assert.equal(await slot.count(), 0, `${phase}: an absent update occupies no space`);
   }
   const before = await credits.boundingBox();
-  await page.evaluate(() => window.updater.setState({ phase: 'available', startupPrompt: false, update: { version: '99.1.1', currentVersion: '26.11.202', body: '更新测试' } }));
+  await page.evaluate(() => window.updater.setState({ phase: 'downloading', downloaded: 62, total: 100, update: { version: '99.1.1', currentVersion: '26.11.202', body: '更新测试' } }));
   await button.waitFor();
+  const ring = button.locator('.topbar-update-ring');
+  const arc = button.locator('.topbar-update-progress');
+  await button.locator('.lucide-download').waitFor();
+  assert.equal(await arc.getAttribute('stroke-dasharray'), '62 100');
+  assert.match(await button.getAttribute('aria-label'), /62%/);
+  await page.evaluate(() => window.updater.setState({ downloaded: 80 }));
+  assert.equal(await arc.getAttribute('stroke-dasharray'), '80 100');
   const after = await credits.boundingBox(), notice = await button.boundingBox();
   assert.equal(after.x, before.x, 'notice must not shift credits');
   assert.ok(notice.x + notice.width <= after.x, 'notice precedes Bcoin');
@@ -36,27 +44,84 @@ try {
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   await dialog.waitFor();
   assert.equal(await dialog.getByRole('button', { name: '系统设置', exact: true }).getAttribute('aria-current'), 'true');
-  await dialog.getByRole('button', { name: '下载更新', exact: true }).waitFor();
+  assert.equal(await dialog.getByRole('progressbar').getAttribute('value'), '80');
+  assert.equal(await dialog.getByRole('button', { name: '正在下载…', exact: true }).isDisabled(), true);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'hidden' });
   assert.equal(await button.evaluate(element => element === document.activeElement), true);
-  for (const [phase, label] of [['downloading', '正在下载更新'], ['ready', '更新已就绪'], ['installing', '正在安装更新'], ['installed', '重启完成更新']]) {
-    await page.evaluate(phase => window.updater.setState({ phase }), phase);
-    assert.match(await button.getAttribute('aria-label'), new RegExp(label));
-  }
+  await page.evaluate(() => window.updater.setState({ total: null }));
+  assert.doesNotMatch(await button.getAttribute('aria-label'), /%/);
+  assert.equal(await arc.getAttribute('stroke-dasharray'), '25 100');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await ring.evaluate(element => getComputedStyle(element).animationName), 'none');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  assert.equal(await ring.evaluate(element => getComputedStyle(element).animationName), 'spin');
+
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const background = canvasWorkflowController('background-project');
+    background.document = { schema_version: 1, nodes: [{ id: 'video', kind: 'comfy-video' }],
+      run: { id: 'run', startId: 'video', order: ['video'], status: 'running', steps: { video: { status: 'running', jobId: 'gpu-job' } } } };
+    window.finishLocalVideo = () => { background.document.run.status = 'done'; };
+    const update = { ...window.updater.getState().update, install: () => window.__TAURI_INTERNALS__.invoke('plugin:updater|install') };
+    window.updater.setState({ phase: 'ready', update });
+  });
+  await button.locator('.lucide-circle-arrow-up').waitFor();
+  assert.equal(await ring.count(), 0);
+  assert.equal(await dialog.count(), 0, 'verified download never opens the panel');
+  const confirm = page.getByRole('dialog', { name: '安装并重启', exact: true });
+  const installCalls = () => page.evaluate(() => window.calls.map(call => call.command).filter(name =>
+    name === 'plugin:updater|install' || name === 'plugin:process|restart'));
+  assert.match(await button.getAttribute('aria-label'), /安装并重启.*99\.1\.1/);
+  await button.focus(); await page.keyboard.press('Enter');
+  await confirm.waitFor();
+  await page.waitForFunction(() => document.activeElement?.textContent === '取消');
+  assert.equal(await dialog.count(), 0);
+  await page.keyboard.press('Escape');
+  await confirm.waitFor({ state: 'hidden' });
+  assert.equal(await button.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(await installCalls(), []);
+  await button.click();
+  await confirm.getByRole('button', { name: '安装并重启', exact: true }).click();
+  await page.waitForFunction(() => window.updater.getState().phase === 'installed');
+  assert.deepEqual(await installCalls(), ['plugin:updater|install', 'plugin:process|restart']);
+  await page.evaluate(() => { window.finishLocalVideo(); window.updater.setState({ phase: 'ready' }); });
+  await button.click();
+  await page.waitForFunction(() => window.updater.getState().phase === 'installed');
+  assert.equal(await confirm.count(), 0);
+  assert.equal(await dialog.count(), 0);
+  assert.deepEqual(await installCalls(), ['plugin:updater|install', 'plugin:process|restart', 'plugin:updater|install', 'plugin:process|restart']);
   await page.evaluate(() => window.updater.setState({ phase: 'available', error: '下载未完成，请重试。' }));
   assert.equal(await button.isVisible(), true, 'failed download retains the entry');
-  await mkdir('.tmp/topbar-update', { recursive: true });
+  await button.click();
+  await dialog.getByRole('button', { name: '重新下载', exact: true }).waitFor();
+  await page.evaluate(() => window.updater.setState({ phase: 'installing' }));
+  await page.keyboard.press('Escape');
+  assert.equal(await dialog.isVisible(), true);
+  assert.equal(await button.isDisabled(), true);
+  await page.evaluate(() => window.updater.setState({ phase: 'installed' }));
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'hidden' });
+  await button.blur();
+  await mkdir('.tmp/app-updater-background', { recursive: true });
   for (const theme of ['light', 'dark']) for (const width of [1280, 900]) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await page.setViewportSize({ width, height: 840 });
-    await page.waitForTimeout(220);
+    const icon = await screenshot.boundingBox();
+    assert.deepEqual([icon.width, icon.height], [20, 20], 'the screenshot icon keeps its full size');
+    await page.evaluate(() => window.updater.setState({ phase: 'downloading', downloaded: 62, total: 100, error: null }));
+    await ring.waitFor();
+    const blue = await arc.evaluate(element => getComputedStyle(element).stroke);
     const bounds = await button.boundingBox(), balance = await credits.boundingBox();
     assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= balance.x && balance.x + balance.width <= width);
-    await page.screenshot({ path: `.tmp/topbar-update/${theme}-${width}.png` });
+    await page.screenshot({ path: `.tmp/app-updater-background/${theme}-${width}-downloading.png` });
+    await page.evaluate(() => window.updater.setState({ phase: 'ready' }));
+    await button.locator('.lucide-circle-arrow-up').waitFor();
+    await page.waitForFunction(color => getComputedStyle(document.querySelector('.topbar-update-button')).color === color, blue);
+    await page.screenshot({ path: `.tmp/app-updater-background/${theme}-${width}-ready.png` });
   }
   await page.evaluate(() => window.updater.setState({ phase: 'current', update: null }));
-  assert.equal(await button.count(), 0);
+  assert.equal(await slot.count(), 0);
   assert.deepEqual(errors, []);
-  console.log('PASS topbar update: reserved space, detected-only notice, keyboard/system/focus, progress/retry, light/dark narrow layouts');
+  console.log('PASS topbar update: download details, cross-project local generation confirmation, direct install and restart, cancellation focus, no empty slot, screenshot sizing and theme layouts');
 } catch (error) { console.error(error, errors); throw error; } finally { await browser.close(); await server.close(); }

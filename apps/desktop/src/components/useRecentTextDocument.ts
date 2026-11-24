@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import type { DocumentValue, TextWorkspaceDocument } from '../lib/documentTypes';
-import { parseMarkdown, serializeMarkdown } from '../lib/documentCodec';
+import { parseMarkdown, parseMarkdownWithState, serializeMarkdown } from '../lib/documentCodec';
+import { serializeMarkdownInWorker } from '../lib/documentSerialization';
+import type { DocumentStateMismatch } from '../lib/documentState';
+import { recoverTextDocumentState } from '../lib/recoverTextDocumentState';
 import { openTextDocument, visitRecentTextDocument, saveRecentTextDocument, textDocumentVersion, type RecentTextDocument, type TextDocumentOrigin } from '../lib/recentTextDocuments';
 import { TextDocumentAutosave, type AutosaveStatus } from '../lib/textDocumentAutosave';
 import { userErrorMessage } from '../lib/userError';
@@ -75,18 +78,43 @@ async function copyDraft(writer: WriterRef, bound: MutableRefObject<{ id: string
 export function useRecentTextDocument(initial: TextWorkspaceDocument, origin: TextDocumentOrigin | undefined, onChange?: (document: TextWorkspaceDocument, context: { isSourceDocument: boolean }) => void, onPendingInput?: (capture: () => void) => void) {
   const [draft, setDraft] = useState(() => initialEntry(initial, origin));
   const [value, setValue] = useState<DocumentValue>([]), [ready, setReady] = useState(false);
+  const [stateChoice, setStateChoice] = useState<{ entry: RecentTextDocument; mismatch: DocumentStateMismatch }>();
+  const [recovering, setRecovering] = useState(false);
   const current = useRef<TextWorkspaceDocument>(initial), bound = useRef({ id: draft.id, document: initial });
   const writer = useRef<TextDocumentAutosave>();
   const live = useAutosaveExit(writer), { status, error, report } = useAutosaveFeedback(live);
   const changed = useRef(onChange); changed.current = onChange;
   function attach(entry: RecentTextDocument) {
     writer.current = new TextDocumentAutosave(entry, saveRecentTextDocument, report);
-    current.current = entry; setDraft(entry); setValue(parseMarkdown(entry.markdown));
+    current.current = entry; setDraft(entry);
+    const { value, mismatch } = parseMarkdownWithState(entry.markdown);
+    setValue(value); setReady(!mismatch);
+    setStateChoice(mismatch && { entry, mismatch });
+    return !mismatch;
   }
   const reopen = useDocumentOpening(initial, origin, entry => {
     bound.current = { id: entry.id, document: entry };
-    attach(entry); report('saved'); update(entry); setReady(true);
+    const editable = attach(entry); report('saved');
+    if (editable) update(entry);
   }, reason => report('error', reason));
+  function openLatest() {
+    if (!stateChoice) return;
+    setStateChoice(undefined); setReady(true); report('saved');
+    if (stateChoice.entry.id === bound.current.id) update(stateChoice.entry);
+  }
+  async function keepRichDraft() {
+    if (!stateChoice || recovering) return false;
+    setRecovering(true); report('saved');
+    try {
+      await recoverTextDocumentState(stateChoice.entry.title, stateChoice.mismatch);
+      if (!live.current) return false;
+      openLatest();
+      return true;
+    } catch (reason) {
+      if (live.current) report('error', new Error(userErrorMessage(reason, '富状态草稿暂时无法另存，请重试。')));
+      return false;
+    } finally { if (live.current) setRecovering(false); }
+  }
   function update(next: TextWorkspaceDocument) {
     const save = writer.current;
     if (!save) return;
@@ -100,21 +128,26 @@ export function useRecentTextDocument(initial: TextWorkspaceDocument, origin: Te
     changed.current?.(entry, { isSourceDocument: entry.id === bound.current.id });
   }
   function changeValue(next: DocumentValue) {
-    const materialize = () => {
+    const materialize = (markdown: string) => {
       setValue(next);
-      update({ ...current.current, markdown: serializeMarkdown(next) });
+      update({ ...current.current, markdown });
     };
+    const capture = () => materialize(serializeMarkdown(next));
     if (writer.current) {
-      writer.current.stage(materialize);
+      writer.current.stage(capture, async () => {
+        const markdown = await serializeMarkdownInWorker(next);
+        return () => materialize(markdown);
+      });
       onPendingInput?.(writer.current.capture);
-    } else materialize();
+    } else capture();
   }
   async function flush() { if (writer.current) await writer.current.flush(); else await reopen(); }
   const choose = useRecentSelection(writer, live, attach, report);
   const capture = () => writer.current?.capture();
   const rename = (title: string) => { capture(); update({ ...current.current, title }); };
   return { draft, value, current, bound, ready, status, error, rename, capture, changeValue, flush, choose,
-    retry: flush,
+    stateChoice, recovering, openLatest, keepRichDraft,
+    retry: async () => { capture(); await flush(); },
     copy: () => {
       report('saving');
       return copyDraft(writer, bound, live, (saved, latest) => { attach(saved); setValue(parseMarkdown(latest.markdown)); report('saved'); update(latest); })

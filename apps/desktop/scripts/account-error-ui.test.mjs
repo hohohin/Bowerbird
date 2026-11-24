@@ -33,7 +33,8 @@ try {
       stepStartedAt:Date.now(),ready:true,baselineText:'',collectionId:null,profileId:null,analysisAssetId:null,annotationAssetId:null,tasks:{}
     }}});
     window.store.setState({cloudError:null,startCloudWechatLogin:async()=>{throw raw;}});
-    lesson.show('lesson');
+    // Exercise the legacy completion component with the public onboarding switch off.
+    window.lesson.setState({ panel: 'lesson' });
   }, raw);
   const login = page.getByRole('button', {name:'使用微信扫码登录',exact:true});
   await login.click();

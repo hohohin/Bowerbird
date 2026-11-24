@@ -49,7 +49,7 @@ fn preview_completed(app: AppHandle, db: Arc<Database>, asset: Asset, version: S
     };
     if !first { return; }
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(125)).await;
         let pending = std::mem::take(&mut *PENDING.lock().unwrap());
         let current = tokio::task::spawn_blocking(move || db.current_preview_changes(pending.into_values().collect())).await;
         let Ok(Ok(current)) = current else {
@@ -79,6 +79,7 @@ impl CompletionQueue {
     }
 }
 static COMPLETIONS: LazyLock<Mutex<CompletionQueue>> = LazyLock::new(|| Mutex::new(CompletionQueue::default()));
+static VIDEO_COMPLETIONS: LazyLock<Mutex<CompletionQueue>> = LazyLock::new(|| Mutex::new(CompletionQueue::default()));
 
 #[cfg(test)]
 mod completion_tests {
@@ -98,7 +99,9 @@ mod completion_tests {
 }
 
 fn queue_preview_completion(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>, source: PathBuf, preview: String) {
-    let mut queue = COMPLETIONS.lock().unwrap();
+    let video = external_files::video_path(&source);
+    let pending = if video { &VIDEO_COMPLETIONS } else { &COMPLETIONS };
+    let mut queue = pending.lock().unwrap();
     // The persisted null/stale thumb_path remains the recovery marker. A cache
     // hit on a later visit retries work rejected here or interrupted by exit.
     if !queue.reserve(&preview) { return; }
@@ -108,11 +111,10 @@ fn queue_preview_completion(app: AppHandle, db: Arc<Database>, paths: Arc<Librar
     drop(queue);
     tauri::async_runtime::spawn(async move {
         loop {
-            // One low-priority completion worker yields between items; the four
-            // foreground render slots never wait for hashing/color extraction.
-            tokio::time::sleep(Duration::from_millis(40)).await;
+            // Color extraction keeps its low-priority pace without delaying video metadata.
+            if !video { tokio::time::sleep(Duration::from_millis(40)).await; }
             let job = {
-                let mut queue = COMPLETIONS.lock().unwrap();
+                let mut queue = pending.lock().unwrap();
                 match queue.jobs.pop_front() {
                     Some(job) => job,
                     None => { queue.running = false; return; }
@@ -131,13 +133,13 @@ fn queue_preview_completion(app: AppHandle, db: Arc<Database>, paths: Arc<Librar
                 Ok((mut job, Err(_))) if job.attempt < 2 => {
                     job.attempt += 1;
                     job.queued_at = Instant::now();
-                    COMPLETIONS.lock().unwrap().jobs.push_back(job);
+                    pending.lock().unwrap().jobs.push_back(job);
                     continue;
                 }
                 Ok((_, Err(_))) | Err(_) => tracing::warn!(stage="preview_completion", "preview metadata remains pending for next visit"),
                 _ => {},
             }
-            COMPLETIONS.lock().unwrap().keys.remove(&key);
+            pending.lock().unwrap().keys.remove(&key);
         }
     });
 }

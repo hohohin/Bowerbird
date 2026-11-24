@@ -32,7 +32,7 @@ try {
   }, options);
   const card = page.locator(`[data-workflow-card="${initial.nodeId}"]`);
   const fresh = card.getByRole('button', { name: '新建对话', exact: true });
-  const run = card.getByRole('button', { name: '运行此卡片', exact: true });
+  const run = card.getByRole('button', { name: /^(运行此卡片|按当前输入重跑)$/ });
   const providerButton = card.getByRole('button', { name: /选择对话模型/ });
   const panel = page.locator('[data-project-inspector="chat"]');
   async function expectFreshNotice() {
@@ -66,21 +66,15 @@ try {
   assert.equal(await fresh.getAttribute('title'), label);
   assert.equal(await fresh.locator('svg.lucide-message-circle-plus').count(), 1);
   assert.equal(await fresh.isDisabled(), true);
-  assert.equal(await run.isDisabled(), true);
+  assert.equal(await run.count(), 0);
   assert.equal(await card.getByRole('button', { name: /^停止/ }).isEnabled(), true);
   assert.equal(await fresh.evaluate(button => {
     const row = button.closest('.workflow-agent-provider-row');
     const provider = row.querySelector('button');
-    button.style.transition = 'none';
     const box = button.getBoundingClientRect(), menu = provider.getBoundingClientRect();
-    const label = button.querySelector('span'), textWidth = label.getBoundingClientRect().width;
-    button.style.transform = label.style.transform = 'none';
-    const original = button.getBoundingClientRect(), originalText = label.getBoundingClientRect().width;
-    button.style.removeProperty('transform'); label.style.removeProperty('transform'); button.style.removeProperty('transition');
-    return Math.abs(box.width / original.width - .9) < .01 && Math.abs(box.height / original.height - .9) < .01
-      && Math.abs(textWidth / originalText - .7) < .01 && button.textContent === '新建对话' && box.left >= menu.right && box.top < menu.bottom
+    return button.textContent.trim() === '' && box.left >= menu.right && box.top < menu.bottom
       && Math.abs(box.right - row.getBoundingClientRect().right) < 2;
-  }), true, 'the labeled action sits at the right edge of the provider row');
+  }), true, 'the new chat icon sits at the right edge of the provider row');
   if (!await providerButton.isDisabled()) {
     await providerButton.click();
     const busyMenu = page.getByRole('dialog', { name: '对话模型', exact: true });
@@ -94,14 +88,15 @@ try {
     await c.refreshExternalCards();
     await c.edit(c.document.nodes.map(n => n.id === id ? { ...n, prompt, inputs: { image: [{ assetId: 'ref-lotus' }] } } : n));
   }, {id: initial.nodeId, prompt});
-  await card.getByRole('textbox', { name: 'Agent 要求' }).getByText(prompt, {exact: true}).waitFor();
+  assert.equal(await card.getByRole('button', { name: '任务要求', exact: true }).count(), 0);
 
-  await run.evaluate(button => { button.click(); button.click(); });
+  await card.getByRole('textbox', { name: '续聊消息', exact: true }).fill('从卡片补充这轮的要求');
+  await card.getByRole('button', { name: '发送续聊消息', exact: true }).evaluate(button => { button.click(); button.click(); });
   await sent(1);
   let result = await state();
-  assert.equal(sends(result).length, 1, 'repeated run during the same event loop submits only once');
+  assert.equal(sends(result).length, 1, 'repeated send during the same event loop submits only once');
   assert.equal(sends(result)[0].conversationId, initial.id);
-  assert.equal(sends(result)[0].manualCardRun, true);
+  assert.equal(sends(result)[0].text, '从卡片补充这轮的要求');
   assert.equal(rebinds(result).length, 0);
   assert.equal(await panel.count(), 0);
   assert.equal(await fresh.isDisabled(), true);
@@ -122,7 +117,7 @@ try {
   await page.waitForFunction(() => !!window.releaseRebind);
   assert.equal(rebinds(await state()).length, 1);
   assert.equal(sends(await state()).length, 2);
-  assert.equal(await run.isDisabled(), true);
+  assert.equal(await run.isDisabled(), true, 'the reply rerun action stays disabled while the card is switching conversations');
   await page.evaluate(() => { window.holdRebind = false; window.releaseRebind(); });
   await expectFreshNotice();
   result = await state();

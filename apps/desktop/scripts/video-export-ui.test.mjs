@@ -23,7 +23,8 @@ window.addEventListener('bowerbird:save-collected-video-to-canvas',(e:any)=>{ w.
 createRoot(document.getElementById('root')!).render(<Lightbox images={['/${dir}/source.mp4']} index={0} onIndexChange={()=>{}} onClose={()=>w.closeCount++} videoFrameTarget="library" onAddVideoFrame={async f=>w.capturedFrame=f} onAddFrameToCanvas={async f=>w.canvasFrame=f}/>);
 w.changeProject=(id='new-project')=>useStore.setState({activeProjectId:id});
 `);
-const server = await createServer({configFile:false, root:process.cwd(), resolve:{alias:{'@':resolve('src')}}, cacheDir:`${dir}/vite`, server:{host:'127.0.0.1',port:1746,strictPort:true,hmr:false,watch:null}});
+const server = await createServer({configFile:false, root:process.cwd(), resolve:{alias:{'@':resolve('src')}}, cacheDir:`${dir}/vite`,
+  optimizeDeps:{entries:[`${dir}/index.html`]}, server:{host:'127.0.0.1',port:1746,strictPort:true,hmr:false,watch:null}});
 await server.listen(); const browser=await chromium.launch({channel:'chrome',headless:true});
 const page=await browser.newPage({viewport:{width:1100,height:900}}); page.setDefaultTimeout(15000);
 const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -50,7 +51,10 @@ try {
   await audio.click(); await page.getByRole('menuitem',{name:'保存到素材库',exact:true}).click();
   await page.getByRole('status').filter({hasText:'音轨已保存到素材库'}).waitFor();
   await page.getByRole('button',{name:'全屏',exact:true}).click(); await frame.click();
-  assert.equal(await page.getByRole('menu',{name:'导出帧',exact:true}).evaluate(e=>document.fullscreenElement.contains(e)),true);
+  const frameMenu=page.getByRole('menu',{name:'导出帧',exact:true});
+  assert.equal(await frameMenu.evaluate(e=>document.fullscreenElement.contains(e)),true);
+  const frameButtonBounds=await frame.boundingBox(), frameMenuBounds=await frameMenu.boundingBox();
+  assert.ok(Math.abs(frameButtonBounds.y-frameMenuBounds.y-frameMenuBounds.height-4)<=1, 'fullscreen menu opens above the bottom controls');
   await page.keyboard.press('Escape'); assert.equal(await page.evaluate(()=>window.closeCount),0);
   await page.getByRole('button',{name:'退出全屏',exact:true}).click();
   for(const theme of ['dark','light']) {
