@@ -32,7 +32,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 | 范围 | 当前状态与证据 |
 |---|---|
 | Windows | 公开版 **26.11.2403**，发布源码 8aca9a8c2 含 SQLite **0062**。11 月 24 日北京时间 18:02 公网复核通过，Tauri 更新签名有效，按用户授权跳过 Authenticode。[发布与回滚](dev-doc/DESKTOP-UPDATES.md#windows-26112403-已公开发布2026-11-24) |
-| macOS | 公开通道为 Apple Silicon **26.10.801**、Intel **26.10.1501**。Apple Silicon 26.11.2403 本地签名测试包已交付 R2 独立目录。统一 dev 收口候选通过 ARM 构建、Rust 全量和隔离 WKWebView 烟测，专用账号登录与线上 DSH · Cloud v2 待验。[桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 正式验收](macOS/RELEASE-READINESS.md) · [源码收口验证](macOS/DEV-CONVERGENCE-2026-11-24.md) |
+| macOS | 公开通道为 Apple Silicon **26.10.801**、Intel **26.10.1501**。Apple Silicon 26.11.2403 本地签名测试包已交付 R2 独立目录。Mac 源码统一至 `dev` 26.11.2403／SQLite 0062。ARM 构建、Rust 全量和隔离 WKWebView 烟测通过，负责人已确认真实登录及线上 DSH · Cloud v2 验收通过。[桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 正式验收](macOS/RELEASE-READINESS.md) · [源码收口验证](macOS/DEV-CONVERGENCE-2026-11-24.md) |
 | 浏览器扩展 | **0.5.2**，显示当前项目，采集图片可直入画板。更新后须在浏览器重新加载。[版本与验收](apps/extension/README.md) |
 | Cloud 与官网 | Cloud 网关、原请求恢复和 VPS 定时巡检已上线。微信 Native v3 已开放公开购买，注册及 Pro 月度赠币已启用。Seedance 2.5 已开三档，分层已部署。GPT／Flash 未启价，Studio 未新增销售。[部署](apps/cloud/DEPLOY.md) · [微信支付](apps/cloud/WECHATPAY.md) · [现行定价](dev-doc/Bowerbird定价方案v2-订阅积分制.md) |
 | 对话 | 桌面对话与 Agent 卡片共用本机 Codex、本机 DSH 0.2 和 DSH · Cloud v2。Cloud 仅对标记账号开放 0 Bcoin 试用，0094／0095 已上线，0096 付费版是默认关闭的隔离候选。[桌面契约](dev-doc/CHAT-PROVIDERS.md) · [云端契约](apps/cloud/CHAT.md) |
@@ -53,7 +53,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 ### 近期里程碑
 
-- **2026-11-24｜macOS 收口至 dev 候选通过本机验证。** 保留 Mac 原生桥接及更新公钥，完成 ARM 构建、Rust 全量与隔离 WKWebView 烟测。独立 Gemini 隧道通过本机双域及热刷新验证，真实账号验收和 Mac 端点上线待完成。[收口与验收](macOS/DEV-CONVERGENCE-2026-11-24.md)
+- **2026-11-24｜macOS 源码收口至 dev。** 保留 Mac 原生桥接及更新公钥，完成 ARM 构建、Rust 全量与隔离 WKWebView 烟测。负责人确认 Mac 真实登录、DSH · Cloud v2 对话、恢复及原单查询通过。独立 Gemini 隧道通过本机双域及热刷新验证，Mac 公网端点待部署。[收口与验收](macOS/DEV-CONVERGENCE-2026-11-24.md)
 
 - **2026-11-24｜Windows 26.11.2403 已公开发布。** 折叠生成卡直接接线并支持撤销，音频裁剪保留受支持的 WAV 编码与位深，覆盖后刷新画板波形与时长。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112403-已公开发布2026-11-24)
 
@@ -100,7 +100,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 ### 界面、平台与交付
 
 - **本机 Codex 生图和诊断（2026-11-03 保留）。** 生图首轮／续轮默认 `gpt-5.6-luna / low`，显式模型覆盖仍有效；依据此前 CLI 账号目录修正，不能用桌面可选型号推断 CLI 可用性，真实出图仍需实机验收。Mac 复制会话诊断在点击时开启剪贴板写入，异步等待冻结会话的完整报告，查询失败或拒绝写入不报成功。该两项未提交修复已随本轮保全。
-- **Mac 源码分支。** 通过收口 PR 合入后，Mac 与 Windows 统一在 `dev` 开发，`mac@13fdfdb2` 保留为历史归档，停止新增业务提交。历史 `mac` 存档需列出相对远端基线的完整内容和跨端说明，经用户明确确认后再推送；范围变化须重新确认。[收口与验收](macOS/DEV-CONVERGENCE-2026-11-24.md)
+- **Mac 源码分支。** Mac 与 Windows 统一在 `dev` 开发，`mac@13fdfdb2` 保留为历史归档，停止新增业务提交。历史 `mac` 存档需列出相对远端基线的完整内容和跨端说明，经用户明确确认后再推送；范围变化须重新确认。[收口与验收](macOS/DEV-CONVERGENCE-2026-11-24.md)
 
 - **界面改版先网页确认。** 先提供独立网页示意，经用户确认后接正式组件。沿用工业制图主题和共用素材卡、菜单、焦点及悬浮反馈，保留媒体几何和交互。[设计规范](dev-doc/UI-DESIGN-SPEC.md) · [UI 复用](dev-doc/reuse/UI.md)
 - **素材与编辑。** 素材库、详情和画板复用媒体预览及播放。首页、画板和文本工作区共用左侧栏，按分栏和项目上下文记忆模式、层级目标和收起状态。层级模式支持全部素材、项目及文件夹，标签模式使用全局标签。截图、标注、文本、视频采集及多选遵循各专项的输入、取消与恢复规则。[桌面复用](dev-doc/reuse/DESKTOP.md) · [素材库设计](dev-doc/UI-DESIGN-SPEC.md#71-素材库) · [媒体](dev-doc/VIDEO-MEDIA.md) · [文本](dev-doc/TEXT-LIBRARY.md)
