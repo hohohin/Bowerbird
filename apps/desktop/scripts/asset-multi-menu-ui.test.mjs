@@ -72,7 +72,8 @@ try {
   await deletion().waitFor(); await page.keyboard.press('Escape');
   assert.equal(await deletion().count(), 0); assert.equal(await root().count(), 1); assert.equal(await focused(), '删除');
   await page.keyboard.press('Escape'); assert.equal(await page.locator('#trigger').evaluate(el => el === document.activeElement), true);
-  await page.locator('#trigger').click(); await page.keyboard.press('Tab');
+  await page.locator('#trigger').click();
+  await page.waitForFunction(() => document.activeElement?.textContent.trim() === '打开图片详情'); await page.keyboard.press('Tab');
   await root().waitFor({ state: 'hidden' }); assert.equal(await page.locator('#after').evaluate(el => el === document.activeElement), true);
   // True batch scope, independently of unrelated library selection.
   for (const kind of ['multi', 'canvas']) {

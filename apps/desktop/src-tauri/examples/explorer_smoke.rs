@@ -16,6 +16,10 @@ pub(crate) mod probe;
 #[path = "../src/media/audio.rs"]
 mod audio;
 mod media { pub(crate) use crate::{tools, probe}; }
+#[cfg(target_os = "macos")]
+#[link(name = "AVFoundation", kind = "framework")]
+#[link(name = "CoreMedia", kind = "framework")]
+extern "C" {}
 use tauri::Manager;
 #[derive(Default)]
 struct DragNotices(std::sync::Mutex<Vec<serde_json::Value>>);

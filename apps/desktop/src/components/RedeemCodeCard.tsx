@@ -41,7 +41,7 @@ export function RedeemCodeCard() {
   }
 
   return (
-    <form className="settings-card px-3 py-2.5" onSubmit={(event) => void submit(event)}>
+    <form className="settings-card p-4" onSubmit={(event) => void submit(event)}>
       <label htmlFor="pro-redemption-code" className="text-ink">兑换 Pro</label>
       <div className="mt-2 flex gap-2">
         <input
@@ -58,7 +58,7 @@ export function RedeemCodeCard() {
           className="min-w-0 flex-1 rounded-md border border-edge bg-canvas px-2 py-1.5 text-xs text-ink outline-none focus:border-accent disabled:opacity-50"
         />
         <button type="submit" disabled={busy || cloudBusy || !code.trim()}
-          className="shrink-0 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50">
+          className="account-action shrink-0">
           {busy ? "兑换中…" : "兑换"}
         </button>
       </div>

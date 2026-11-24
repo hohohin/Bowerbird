@@ -25,6 +25,35 @@ OAuth 支持 Google 官方回调域名内的动态客户端注册及本机预注
 
 2026-11-20 起，Gemini 启动器在本机私有目录 `.local/gemini/oauth/` 原子保存动态客户端注册、访问／刷新令牌的校验摘要和到期时间，HTTP 子进程保持只读。服务启动时校验并恢复有效记录。原始令牌、授权码和授权页面的临时会话不落盘。升级前签发的令牌只存在旧进程内存中，升级后需完成一次 Gemini 授权。之后用相同的本机配置重启服务或电脑可继续使用有效授权。修改本机授权密码或已配置的客户端凭据／回调会使原授权状态失效。
 
+### Apple Silicon／Intel Mac 独立 Gemini 隧道
+
+Windows 的 `@bbmcp` 使用 `https://mcp.bowerbird.cn/mcp` 和 VPS 回环 `48732`。Mac 的 `@bbmcp-mac` 使用 `https://mcp-mac.bowerbird.cn/mcp`、VPS 回环 `48734` 和专用账号 `bowerbird-mcp-mac`。每台机器在自己的 checkout 生成快照，OAuth 状态与本机配置存放在各自的 `.local/gemini/`。Windows 原配置缺少 `remotePort`、`sshUser` 字段时继续采用 `48732`、`bowerbird-mcp`，OAuth 状态继续使用原签发方。
+
+在 Mac 项目根目录使用 Node.js 24.10+。首次准备需要已有可信的 VPS SSH 主机记录。
+
+```bash
+node apps/code-reader-mcp/setup-gemini.mjs --origin https://mcp-mac.bowerbird.cn --remote-port 48734 --ssh-user bowerbird-mcp-mac
+node apps/code-reader-mcp/prepare-gemini-deploy.mjs
+```
+
+Mac 的 `config.json`、SSH 私钥及 `known_hosts` 归当前用户独占读写。部署包位于 `.local/gemini/deployment-mac/`，只包含脚本、配置、转发**公钥**与校验和。已有其他签发方或旧回环配置时，从另一工作树独立初始化，避免破坏原授权。
+
+**部署门禁**。负责人批准后，在火山引擎 DNS 添加 `mcp-mac.bowerbird.cn` 的 A 记录 `106.55.44.143`。核对 DNS、现役 MCP 和官网健康、管理凭据以及远端回环端口可用性。上传并校验 Mac 部署包，在 VPS 执行其中的 `sudo bash activate.sh`。包从现有模板生成独立 `bowerbird-mcp-mac` SSH Match、Nginx 站点、认证限制区及代理 snippet，证书由 Certbot 通过专用 webroot 签发。SSH 仅允许 `127.0.0.1:48734` 远程 TCP 监听，禁止 shell／SFTP、TTY、代理及本地转发。用同一包的 `sudo bash rollback.sh` 关闭 Mac 站点和专用账号，证书及证据留存，DNS 单独回退。核对官网 4173 和 Windows MCP 在上线及回滚前后的健康。
+
+上线后从 Mac 导出并启动，后续运行同一命令热刷新。
+
+```bash
+bash apps/code-reader-mcp/update-gemini-mcp.sh
+```
+
+该入口先导出本机工作树和未推送改动，成功后复用已经运行的实例。新实例后台启动，PID 与两份启动日志保存在 `.local/gemini/`。回环就绪后，SSH 断开每 5 秒重连。授权成功后，下一次工具调用读取经过校验的快照并保留 OAuth 状态。公网验收时确认匿名 `/mcp` 返回 401，发现文档的 issuer 和 resource 均为 Mac 域名，并在 Gemini 单独新增 `@bbmcp-mac`，授权后调用 `project_overview`，比对快照提交、导出时间及一处未推送文件的 SHA-256。
+
+若 Gemini 要求手动注册，在 Mac 执行 `node apps/code-reader-mcp/setup-gemini.mjs --redirect-uri 'Gemini 复制的精确回调 URL'`。从 Mac 的 `config.json` 取 `oauthClient` 的 ID／secret，重启 Mac 实例加载配置。授权页面单独使用 `adminPassword`。
+
+### 既有 Mac 回环配置
+
+现有 Mac 回环配置使用 `clients` 数组、独立的 origin 和可选的 SSH 参数。保留原来的配置、注册客户端及 `node run-gemini.mjs` 启动方式。首次建立独立配置可用 `node setup-gemini.mjs --origin http://127.0.0.1:48731`。启动器默认只监听回环，显式使用 `--ssh` 时才按该配置启动转发。该模式的授权保存在进程内存中。下文的固定域名与授权持久化流程使用正式服务配置。
+
 ### 本机准备
 
 ```powershell

@@ -24,6 +24,7 @@ pub mod material_catalog;
 pub(crate) mod semantic_search;
 pub mod asset_archive;
 pub mod layers;
+pub mod drafts;
 pub mod layer_text;
 pub mod layer_export;
 pub mod local_classification;

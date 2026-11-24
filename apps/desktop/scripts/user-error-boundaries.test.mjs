@@ -18,6 +18,7 @@ const safeCalls = new Set(['userErrorMessage', 'generationErrorMessage', 'accoun
 // Reviewed sources: these values contain local validation / already sanitized text.
 // Keep exemptions at the exact field + component, not at a directory or filename pattern.
 const reviewed = new Set([
+  'components/LocalChatPanel.tsx:error', // CardAction sanitizes every failure on assignment; history sanitizes at render.
   'components/CanvasAssetDeleteDialog.tsx:error', // Each per-file failure is sanitized before joining.
   'components/ConnectedCollections.tsx:error', // Both state producers sanitize errors before assignment.
   'components/LocalChatPanel.tsx:error', // Card action errors are sanitized before assignment.

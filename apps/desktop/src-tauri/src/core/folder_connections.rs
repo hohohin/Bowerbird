@@ -28,7 +28,7 @@ pub(crate) fn registered_path_spelling(path: &Path) -> PathBuf {
         if let Some(unc) = raw.strip_prefix(r"\\") { return PathBuf::from(format!(r"\\?\UNC\{unc}")); }
         if path.is_absolute() { return PathBuf::from(format!(r"\\?\{raw}")); }
     }
-    path.to_owned()
+    super::paths::expand_macos_system_alias(path)
 }
 // Only the registered absolute location is probed. A recreated junction or a
 // different directory with the same basename is never a reconnect target.

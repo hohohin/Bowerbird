@@ -16,7 +16,7 @@ export async function checkContextRangeSelection(page, card, cancel) {
   }
   await cancel.click();
 
-  await card(0).click({ modifiers: ['Control'] });
+  await card(0).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await selectFromMenu(5);
   await card(9).click({ modifiers: ['Shift'] });
   await page.waitForFunction(el => el.getAttribute('aria-pressed') === 'true', await card(9).elementHandle());

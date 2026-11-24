@@ -1,5 +1,10 @@
 //! Real collection WS/SQLite acceptance with a disposable library and no production setup.
 #![allow(dead_code, unused_imports)]
+// This example compiles the media modules directly, outside the desktop library.
+#[cfg(target_os = "macos")]
+#[link(name = "bowerbird_heic_preview", kind = "static")]
+#[link(name = "CoreImage", kind = "framework")]
+extern "C" {}
 #[path = "../src/agent_generation_wait.rs"] mod agent_generation_wait;
 #[path = "../src/cli_credentials.rs"] mod cli_credentials;
 #[path = "../src/cloud/mod.rs"] mod cloud;

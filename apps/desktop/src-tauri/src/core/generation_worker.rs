@@ -1136,6 +1136,7 @@ mod tests {
             .unwrap();
         }
         let payload = serde_json::to_string(&AssetNodePayloadV1 {
+            draft_document_id: None,
             workflow_source: None,
             workflow_generation_group: None,
             schema_version: 1,

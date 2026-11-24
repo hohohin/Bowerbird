@@ -1860,6 +1860,38 @@ html .generation-mode-button:focus-visible {
   color: var(--bb-ink);
 }
 
+/* Account controls use the same theme tokens as the settings shell. */
+.account-settings .account-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--bb-line);
+  border-radius: 6px;
+  color: var(--bb-ink);
+  background: var(--bb-surface-card);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 150ms ease, opacity 150ms ease;
+}
+.account-settings .account-action:hover:not(:disabled) { background: var(--bb-surface-hover); }
+.account-settings .account-action-primary {
+  min-height: 44px;
+  background: var(--bb-ink);
+  color: var(--bb-surface-card);
+  border-color: var(--bb-ink);
+}
+.account-settings .account-action-primary:hover:not(:disabled) { background: var(--bb-ink); opacity: .85; }
+.account-settings .account-action:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
+.account-settings .account-action:disabled { cursor: not-allowed; opacity: .5; }
+.account-settings .account-action svg { flex-shrink: 0; }
+.account-settings .account-membership { border-radius: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .account-settings .account-action { transition: none; }
+}
+
 .settings-nav {
   padding: 0 12px 0 0;
   border-right: 1px solid var(--bb-line);
@@ -4509,7 +4541,7 @@ html[data-theme="light"] .app-form-input:focus {
 .library-browser-heading { --library-floating-height:28px; position:absolute; top:12px; left:12px; right:12px; height:var(--library-floating-height); display:flex; justify-content:center; align-items:center; z-index:5; pointer-events:none; }
 .library-browser-heading > * { pointer-events:auto; }
 :root {
-  --library-glass-fill:rgb(30 35 44 / 58%);
+  --library-glass-fill:rgb(30 35 44 / 32%);
   --library-glass-hover:rgb(42 48 58 / 68%);
   --library-glass-edge:rgb(255 255 255 / 28%);
   --library-glass-shine:rgb(255 255 255 / 38%);
@@ -4518,28 +4550,55 @@ html[data-theme="light"] .app-form-input:focus {
   --library-glass-selected-shadow:inset 0 1px 1px rgb(255 255 255 / 44%), 0 1px 5px rgb(0 0 0 / 16%);
 }
 :root:not([data-theme]), html[data-theme="light"] {
-  --library-glass-fill:rgb(255 255 255 / 48%);
+  --library-glass-fill:rgb(255 255 255 / 22%);
   --library-glass-hover:rgb(255 255 255 / 64%);
   --library-glass-edge:rgb(255 255 255 / 60%);
   --library-glass-shine:rgb(255 255 255 / 92%);
   --library-glass-glint:rgb(255 255 255 / 26%);
-  --library-glass-selected:rgb(255 255 255 / 62%);
+  --library-glass-selected:rgb(255 255 255 / 34%);
   --library-glass-selected-shadow:inset 0 1px 1px rgb(255 255 255 / 92%), 0 1px 5px rgb(0 0 0 / 9%);
 }
-/* Small navigation surfaces only: static refraction, translucent tint and a lit rim. */
+/* Small navigation surfaces: translucent tint and a lit rim. */
 .library-floating-surface, .library-filter-trigger {
   border:1px solid var(--library-glass-edge);
   background:linear-gradient(135deg, var(--library-glass-glint), transparent 35%, transparent 63%, var(--library-glass-glint)), var(--library-glass-fill);
   -webkit-backdrop-filter:blur(5px) saturate(1.6);
-  backdrop-filter:var(--library-glass-filter, blur(0px)) blur(5px) saturate(1.6);
+  backdrop-filter:blur(5px) saturate(1.6);
   box-shadow:inset 0 1.3px 1px var(--library-glass-shine), inset 0 -1px 1.5px var(--library-glass-edge), inset 1px 0 2px var(--library-glass-edge), inset -1px 0 2px rgb(94 114 142 / 13%), 0 5px 14px -5px rgb(var(--bb-shadow-rgb) / 22%), 0 1px 2px rgb(var(--bb-shadow-rgb) / 8%);
 }
 .library-floating-surface { height:var(--library-floating-height, 28px); border-radius:999px; }
+/* Like rdev/liquid-glass-react, warp a separate backdrop plane, never the text.
+   Keep blur BEFORE refraction so the lens edge remains visible. The plain
+   backdrop remains usable in WKWebView, which lacks backdrop SVG displacement. */
+.library-view-switch.library-floating-surface,
+.composer-mode-picker.library-floating-surface,
+.creation-dock.composer-glass {
+  background:radial-gradient(ellipse at var(--glass-light-x, 18%) var(--glass-light-y, 0%), var(--library-glass-glint), transparent 65%), linear-gradient(155deg, var(--library-glass-glint), transparent 30%, transparent 72%, var(--library-glass-glint)), var(--composer-fill, var(--library-glass-fill));
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+  isolation:isolate;
+}
+:is(.library-view-switch, .composer-mode-picker, .creation-dock.composer-glass)::before {
+  content:""; position:absolute; inset:0; z-index:-1; border-radius:inherit; pointer-events:none;
+  -webkit-backdrop-filter:blur(3px) saturate(1.8);
+  backdrop-filter:blur(3px) saturate(1.8);
+  filter:var(--library-glass-filter, none);
+  box-shadow:inset 0 2px 2px -1px var(--library-glass-shine), inset 2px 0 3px -2px var(--library-glass-shine), inset 0 -2px 2px -1px var(--library-glass-edge);
+}
+.creation-dock.composer-glass::before {
+  -webkit-backdrop-filter:blur(6px) saturate(1.65);
+  backdrop-filter:blur(6px) saturate(1.65);
+}
+@media (prefers-reduced-transparency:reduce), (forced-colors:active) {
+  .library-view-switch.library-floating-surface, .composer-mode-picker.library-floating-surface, .creation-dock.composer-glass { background:var(--bb-surface); }
+  :is(.library-view-switch, .composer-mode-picker, .creation-dock.composer-glass)::before { content:none; }
+}
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
-  .library-floating-surface, .library-filter-trigger { background:var(--bb-surface); }
+  .library-floating-surface, .library-filter-trigger, .library-view-switch.library-floating-surface, .composer-mode-picker.library-floating-surface, .creation-dock.composer-glass { background:var(--bb-surface); }
+  :is(.library-view-switch, .composer-mode-picker, .creation-dock.composer-glass)::before { content:none; }
 }
 .library-view-switch { --switch-count:2; position:relative; display:grid; grid-template-columns:repeat(var(--switch-count),minmax(0,1fr)); padding:2px; width:calc(var(--switch-count) * 89.6px); }
-.library-view-switch-thumb { position:absolute; top:2px; bottom:2px; left:2px; width:calc((100% - 4px) / var(--switch-count)); border-radius:999px; background:var(--library-glass-selected); box-shadow:var(--library-glass-selected-shadow); transform:translateX(calc(var(--switch-index) * 100%)); transition:transform 320ms cubic-bezier(.2,.85,.2,1); pointer-events:none; }
+.library-view-switch-thumb { position:absolute; top:2px; bottom:2px; left:2px; width:calc((100% - 4px) / var(--switch-count)); border-radius:999px; background:var(--library-glass-selected); box-shadow:var(--library-glass-selected-shadow); transform:translateX(calc(var(--switch-index) * 100%)); transition:transform 420ms cubic-bezier(.2,1.25,.3,1); pointer-events:none; }
 .library-view-switch button { position:relative; z-index:1; border-radius:999px; font-size:11px; line-height:1; color:var(--bb-ink-soft); white-space:nowrap; }
 .library-view-switch button[aria-selected=true] { color:var(--bb-ink); font-weight:600; }
 .library-source-key-hint { position:absolute; left:2px; top:50%; z-index:2; transform:translateY(-50%); color:var(--bb-muted); opacity:0; pointer-events:none; transition:opacity 120ms ease; }

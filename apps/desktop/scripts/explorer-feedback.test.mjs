@@ -26,18 +26,16 @@ try {
   await drop();
   await bubble.getByText("已采集", { exact: true }).waitFor();
   assert.equal(await page.locator(".explore-capture-status").count(), 0);
-  await page.waitForTimeout(80);
-  const rects = await page.evaluate(() => ({
-    bubble: document.querySelector(".explorer-capture-feedback").getBoundingClientRect().toJSON(),
-    image: document.querySelector('[data-asset-id="captured"]').getBoundingClientRect().toJSON(),
-    panel: document.querySelector(".explore-main").getBoundingClientRect().toJSON(),
-    pointer: getComputedStyle(document.querySelector(".explorer-capture-feedback")).pointerEvents,
-    motion: getComputedStyle(document.querySelector(".explorer-capture-feedback")).animationName,
-  }));
-  assert.equal(rects.pointer, "none"); assert.equal(rects.motion, "none");
-  const expectedCenter = Math.max(rects.panel.left + 8 + rects.bubble.width / 2,
-    Math.min(rects.panel.right - 8 - rects.bubble.width / 2, rects.image.x + rects.image.width / 2));
-  assert.ok(Math.abs(rects.bubble.x + rects.bubble.width / 2 - expectedCenter) < 5, "acknowledgement follows captured image");
+  await page.waitForFunction(() => {
+    const bubble = document.querySelector(".explorer-capture-feedback")?.getBoundingClientRect();
+    const image = document.querySelector('[data-asset-id="captured"]')?.getBoundingClientRect();
+    const panel = document.querySelector(".explore-main")?.getBoundingClientRect();
+    if (!bubble || !image?.width || !panel) return false;
+    const expectedCenter = Math.max(panel.left + 8 + bubble.width / 2,
+      Math.min(panel.right - 8 - bubble.width / 2, image.x + image.width / 2));
+    return Math.abs(bubble.x + bubble.width / 2 - expectedCenter) < 5;
+  }, undefined, { timeout: 2000 });
+  assert.deepEqual(await bubble.evaluate(el => [getComputedStyle(el).pointerEvents, getComputedStyle(el).animationName]), ["none", "none"]);
   await mkdir(".tmp/explorer-feedback", { recursive: true });
   await page.screenshot({ path: ".tmp/explorer-feedback/light.png" });
   await page.waitForTimeout(1100);

@@ -83,15 +83,15 @@ try {
   assert.equal(await tab('全局素材').getAttribute('aria-selected'),'true');
   assert.equal(await page.locator('.local-file-workspace').count(),0,'Tab never enters file browser');
   await page.getByRole('button',{name:'我的项目',exact:true}).click();
-  const panel = page.getByRole('dialog',{name:'项目管理',exact:true});
+  const panel = page.getByRole('dialog',{name:/^项目管理/});
   await panel.waitFor();
   const sizesBefore = await page.evaluate(() => ({library:window.store.getState().libraryThumbnailWidth, canvas:window.store.getState().canvasThumbnailWidth, projects:window.store.getState().projectsThumbnailWidth}));
   await panel.locator('.project-manager-gallery').dispatchEvent('wheel',{ctrlKey:true,deltaY:-120,bubbles:true,cancelable:true});
   assert.equal(await page.evaluate(() => window.store.getState().libraryThumbnailWidth), sizesBefore.library, 'project wheel zoom must not resize the background gallery');
   assert.equal(await page.evaluate(() => window.store.getState().canvasThumbnailWidth), sizesBefore.canvas, 'project zoom must not resize canvas sources');
   assert.ok(await page.evaluate(before => window.store.getState().projectsThumbnailWidth > before, sizesBefore.projects));
-  const projectSize = panel.getByRole('spinbutton',{name:'项目卡片大小数值'});
-  await projectSize.fill('65'); await projectSize.press('Enter');
+  const projectSize = panel.getByRole('slider',{name:'项目卡片大小',exact:true});
+  await projectSize.fill('65');
   assert.equal(await page.evaluate(() => window.store.getState().libraryThumbnailWidth), sizesBefore.library, 'project slider has independent storage too');
   assert.equal(await page.evaluate(() => window.createdProjects || 0),0,'toolbar opens manager without creating a project');
   await panel.getByRole('button',{name:'打开项目 目标项目'}).waitFor();
@@ -116,7 +116,7 @@ try {
   await panel.waitFor({state:'hidden'});
   await page.evaluate(() => window.store.setState({enterProject:async id => {window.openedProject=id;}}));
   await page.getByRole('button',{name:'我的项目',exact:true}).click();
-  assert.equal(await panel.getByRole('spinbutton',{name:'项目卡片大小数值'}).inputValue(),'65','project size survives closing and reopening the panel');
+  assert.equal(await panel.getByRole('slider',{name:'项目卡片大小',exact:true}).inputValue(),'65','project size survives closing and reopening the panel');
   await panel.getByRole('button',{name:'打开项目 目标项目'}).click();
   await panel.waitFor({state:'hidden'});
   assert.equal(await page.evaluate(() => window.openedProject),'p');

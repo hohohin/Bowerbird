@@ -45,12 +45,13 @@ import "./CategorizedLibrary.css";
 
 const browsePositions = new Map<string, LibraryBrowsePosition>();
 
-export function CategorizedLibrary({ kind, media = "images", projectId = null, browseProjectId = projectId, projectScope = false, overviewProjects, sidebarBody, onClose, onNavigate, onCreateProject, onAssetsChange, onInsertAsset, onOpenAsset, onAssetContextMenu, positionId = "default", toolbarActions, dropPreview = false, semanticSearchEnabled = false }: {
+export function CategorizedLibrary({ kind, media = "images", projectId = null, browseProjectId = projectId, projectScope = false, overviewProjects, sidebarBody, onClose, onNavigate, onCreateProject, onAssetsChange, onPickImages, onInsertAsset, onOpenAsset, onAssetContextMenu, positionId = "default", toolbarActions, dropPreview = false, semanticSearchEnabled = false }: {
   kind: Exclude<CatalogKind, "collections">; projectId?: string | null; browseProjectId?: string | null; projectScope?: boolean; onClose: () => void; onNavigate?: () => void; onCreateProject?: (ids?: string[]) => Promise<unknown>;
   overviewProjects?: Project[]; sidebarBody?: HTMLElement | null;
   media?: LibraryMedia; positionId?: string;
   toolbarActions?: ReactNode; dropPreview?: boolean; semanticSearchEnabled?: boolean;
   onAssetsChange?: (assets: Asset[]) => void;
+  onPickImages?: (assets: Asset[]) => Promise<void>;
   onInsertAsset?: (asset: Asset) => void; onOpenAsset?: (asset: Pick<Asset, "id">) => void;
   onAssetContextMenu?: ReturnType<typeof useStore.getState>["openContextMenu"];
 }) {
@@ -300,6 +301,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   }
   function openDetail(asset: Pick<Asset, "id">) {
     if (working) return;
+    if (onPickImages) { void run(async () => onPickImages(await resolveSelection([asset.id]))); return; }
     previewVersion.current++;
     setPreview(null);
     if (onOpenAsset) onOpenAsset(asset); else useStore.getState().openDetail(asset.id);
@@ -330,6 +332,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     } catch (error) { if (isCurrent()) notifyError(error, "无法预览素材"); }
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
+    if (onPickImages) return;
     const ids = selected.has(asset.id) ? [...selected] : [asset.id];
     openCatalogMenu({
       ids, hit: asset, cached: loadedMenuAssets.current?.key === galleryKey ? loadedMenuAssets.current.assets : undefined, keyOf: target => target.id,
@@ -383,7 +386,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
         if (alive.current) invalidateCatalog();
         notifySuccess("已添加手动分类");
       });
-    }} data-creation-pick-disabled={multiple || working} data-drop-target={dropTarget ?? undefined} data-file-import-project-id={projectScope ? browseProjectId ?? "" : ""}
+    }} data-creation-pick-disabled={!!onPickImages || multiple || working} data-drop-target={dropTarget ?? undefined} data-file-import-project-id={projectScope ? browseProjectId ?? "" : ""}
       data-catalog-searching={searching || undefined}
       className={`categorized-library library-tactical${!flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : "按标签浏览素材"}
     style={glass.style as CSSProperties}>
@@ -391,12 +394,17 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     {glass.definition}
     <LibraryMotion />
     <div className="file-view-heading">
-      {selected.size > 0 || multiple ? <CatalogSelectionBar count={selected.size} busy={working} projectId={projectId} onFinish={finishSelection}
+      {selected.size > 0 || multiple ? <CatalogSelectionBar onPickImages={onPickImages && (() => void run(async () => {
+        const assets = await resolveSelection();
+        if (!canShowOverlay() || galleryKeyRef.current !== galleryKey) return;
+        await onPickImages(assets);
+        finishSelection();
+      }))} count={selected.size} busy={working} projectId={projectId} onFinish={finishSelection}
         onSelectAll={() => void selectAll()} onAssign={() => setAssign([...selected])} onMove={() => setMoveIds([...selected])}
         onAdd={media !== "audios" ? () => void run(async () => { const key = galleryKey; const assets = await resolveSelection(); if (!alive.current || galleryKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onNavigate ?? onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); }) : undefined}/>
       :
       <div className="video-collection-controls">
-      <LibraryCatalogControls filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared} onSearchStart={() => {
+      <LibraryCatalogControls fixedMedia={!!onPickImages} filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared} onSearchStart={() => {
         if (galleryReady) searchReturn.current = { ...position.current, top: scroll.current?.scrollTop ?? 0 };
       }} onStartSelection={() => { setMultiple(true); requestAnimationFrame(() => root.current?.querySelector<HTMLButtonElement>(".catalog-selection button")?.focus()); }}>{toolbarActions}
         {flow && media === "videos" && (!projectScope || browseProjectId) && <>
@@ -421,7 +429,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
           {(session || galleryReady) && <VirtualCatalog key={galleryKey} filter={filter} sections={sections} headings={projectOverview || !flat} width={width} revision={revision} scroll={scroll}
             selected={selected} jump={flat ? null : jump} pageScope={projectOverview ? "projects" : sessionId} emptySection={projectOverview || !flat ? () => null : undefined} readPage={session ? (_section, offset, limit) => semantic.readPage(session, offset, limit) : undefined}
             initialTop={session ? 0 : browseBeforeSearch.current?.key === filterKey ? browseBeforeSearch.current.top : returnPosition?.query === query && returnPosition?.color === color && returnPosition?.generatedFilter === generatedFilter ? returnPosition.top : 0}
-            onActive={onActive} onAssetsChange={catalogAssetsChanged} onBrowseGroup={onBrowseGroup} onSelect={select} onActivate={multiple || working ? undefined : activate} onOpen={openAsset} onContextMenu={context}/>}
+            onActive={onActive} onAssetsChange={catalogAssetsChanged} onBrowseGroup={onBrowseGroup} onSelect={select} onActivate={onPickImages || multiple || working ? undefined : activate} onOpen={openAsset} onContextMenu={context}/>}
         </OverlayScrollArea>
         <ThumbnailSizeSlider scope="library"/>
       </div>

@@ -16,7 +16,7 @@ const card = id => library.locator(`[data-asset-id="${id}"]`);
 const selection = library.getByRole('group', { name: '分类素材所选操作' });
 const dialog = () => page.getByRole('dialog');
 async function selectPair() {
-  await card('existing').click({ modifiers: ['Control'] });
+  await card('existing').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await card('a').click();
   assert.equal(await library.locator('.folder-media-card[aria-pressed="true"]').count(), 2);
 }
@@ -117,7 +117,7 @@ try {
   await library.getByRole('status').waitFor({ state: 'detached' });
   await verifyBrowseMode();
   assert.deepEqual(await page.evaluate(() => window.deletions), ['existing', 'a', 'a'], 'retry does not delete successful items twice');
-  await card('b').click({ modifiers: ['Control'] });
+  await card('b').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await card('b').click({ button: 'right' });
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole('menuitem', { name: '物理删除', exact: true }).click();
@@ -130,11 +130,11 @@ try {
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await page.getByRole('button', { name: '文件浏览器', exact: true }).click();
   const original = page.locator('.folder-media-card[aria-label="原图.png"]');
-  await original.click({ modifiers: ['Control'] });
+  await original.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await page.locator('.folder-media-card[aria-label="另一张.png"]').click();
   await page.getByRole('button', { name: '复制到收集箱', exact: true }).click();
   await page.getByRole('button', { name: '取消文件选择', exact: true }).waitFor({ state: 'detached' });
-  await original.click({ modifiers: ['Control'] });
+  await original.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await page.locator('.folder-media-card[aria-label="另一张.png"]').click();
   await original.click({ button: 'right' });
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
@@ -144,7 +144,7 @@ try {
   assert.equal(await page.getByRole('button', { name: '取消文件选择', exact: true }).count(), 0, 'empty file selection does not leave multi-select mode active');
   assert.deepEqual(errors, []);
   console.log('PASS selection completion: cancel/failure retention, assignment via menu/bar, partial deletion retry, local file deletion');
-} finally {
+} catch (error) { console.error({ errors, state: await page.evaluate(() => ({ project: window.store?.getState().activeProjectId, projects: window.store?.getState().projects, body: document.body.innerText.slice(0,1000) })) }); throw error; } finally {
   await browser.close();
   await server.close();
 }

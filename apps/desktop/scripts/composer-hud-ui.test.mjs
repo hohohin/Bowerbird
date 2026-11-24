@@ -154,6 +154,11 @@ try {
   const home = page.locator('.library-composer .creation-dock');
   await home.waitFor(); await settle();
   assert.ok(Math.abs(await bottomGap(home)) < 1, 'inactive home composer touches the window bottom');
+  await home.getByRole('combobox', { name: '选择项目', exact: true }).click();
+  await page.getByRole('listbox', { name: '选择项目', exact: true }).waitFor();
+  assert.ok(await home.evaluate(element => element.classList.contains('is-collapsed')), 'selecting a project keeps the resting header stationary');
+  await page.keyboard.press('Escape');
+  await page.getByRole('listbox', { name: '选择项目', exact: true }).waitFor({ state: 'detached' });
   await home.getByRole('button', { name: '展开创作描述', exact: true }).click();
   await settle(); await bottomCoverage(home);
   await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。\n第二行内容仍保留在草稿中。');
@@ -240,6 +245,7 @@ try {
     await home.locator('.model-select-trigger').click();
     const menu = page.getByRole('dialog', { name: '视频模型', exact: true });
     await menu.waitFor();
+    assert.equal(await menu.getByText('H3', { exact: true }).count(), 0, 'deferred H3 entry is absent from the home composer');
     assert.ok(await menu.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.top >= 0 && rect.right <= innerWidth; }));
     await page.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
     assert.equal(await home.locator('.model-select-trigger').evaluate(element => element === document.activeElement), true);

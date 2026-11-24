@@ -145,11 +145,14 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, de
     } else {
         let p = paths.thumb_path(&id);
         if meta.width > 0 && meta.height > 0 {
-            if let Some(ref img) = decoded {
-                if let Err(e) = media::thumb::generate_from_image(img, &p, 480) {
-                    tracing::warn!("thumb failed for {}: {e}", source.display());
-                }
-            } else if let Err(e) = media::thumb::generate(&store_path, &p, 480) {
+            let result = if cfg!(target_os = "macos") && normalized.is_some() {
+                media::heic::thumbnail(input, &p, 480)
+            } else if let Some(ref img) = decoded {
+                media::thumb::generate_from_image(img, &p, 480)
+            } else {
+                media::thumb::generate(&store_path, &p, 480)
+            };
+            if let Err(e) = result {
                 tracing::warn!("thumb failed for {}: {e}", source.display());
             }
         }

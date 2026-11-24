@@ -59,7 +59,7 @@ try {
   await mode('图片').click(); assert.equal(await editor.innerText(), '图片模式的独立草稿');
   await mode('视频').click(); assert.equal(await editor.innerText(), '视频模式的独立草稿');
   await mode('对话').click(); assert.equal(await editor.innerText(), '给荷月礼盒三个视觉方向');
-  await editor.click(); await editor.press('Control+End');
+  await editor.click(); await editor.press(process.platform === 'darwin' ? 'Control+e' : 'Control+End');
   // Native selectionchange follows the key event; let the editor observe the
   // restored draft's caret before the next key splits its paragraph.
   await page.waitForFunction(() => {
@@ -76,7 +76,7 @@ try {
   assert.equal(await panel.count(), 0, 'typing a new line never opens a conversation');
   await editor.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 229, ctrlKey: true, isComposing: true, bubbles: true, cancelable: true });
   assert.equal(await card.count(), 0, 'IME confirmation cannot send the opening message');
-  await editor.press('Control+Enter');
+  await editor.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter');
   await panel.waitFor(); await card.waitFor();
   assert.equal(await card.count(), 1);
   const agentTitle = card.locator(':scope > header').getByRole('button', { name: '查看 Agent 详情', exact: true });
@@ -327,7 +327,7 @@ try {
 
   const reply = panel.getByRole('textbox', { name: '继续对话', exact: true });
   await reply.fill('把第一个方向整理为一段提示词');
-  await reply.press('End'); await reply.press('Enter'); await page.keyboard.insertText('使用中文');
+  await reply.press(process.platform === 'darwin' ? 'Control+e' : 'End'); await reply.press('Enter'); await page.keyboard.insertText('使用中文');
   await reply.press('Shift+Enter'); await page.keyboard.insertText('保留参考图配色');
   const replyText = '把第一个方向整理为一段提示词\n使用中文\n保留参考图配色';
   assert.equal(await reply.inputValue(), replyText);
@@ -437,7 +437,7 @@ try {
 
   // History is reachable while composing the first message, without discarding that draft.
   await close(); await expandComposer();
-  await editor.fill('尚未发送的创作框草稿'); await editor.press('End'); await editor.press('Enter'); await page.keyboard.insertText('第二行仍要保留');
+  await editor.fill('尚未发送的创作框草稿'); await editor.press(process.platform === 'darwin' ? 'Control+e' : 'End'); await editor.press('Enter'); await page.keyboard.insertText('第二行仍要保留');
   const unsentParagraphs = ['尚未发送的创作框草稿', '第二行仍要保留'];
   await page.locator('.creation-dock').getByRole('button', { name: '打开对话记录', exact: true }).click();
   const composerHistory = page.locator('.canvas-chat-history');

@@ -41,7 +41,7 @@ try {
  assert.match(await page.evaluate(()=>window.calls.filter(c=>c.command==='agent_ds_workflow_start')[1].args.source),/帮我写一个雨夜开场/);
  await bubble.getByRole('button',{name:'关闭 Agent'}).click();
  await block().locator('[data-slate-leaf]').click();
- await page.keyboard.press('Control+z');
+ await page.keyboard.press('ControlOrMeta+z');
  await page.waitForFunction(()=>window.draft.markdown.split('雨落').length===2);
  console.log('PASS caret entry, isolated Codex requests, conversation context, anchored Markdown write-back and undo');
  await open();
