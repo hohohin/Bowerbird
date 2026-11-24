@@ -1,0 +1,14 @@
+.draft-editor .draft-library { position: absolute; z-index: 4; top: 54px; left: 52px; width: min(680px, calc(100% - 72px)); height: min(640px, calc(100% - 76px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--bb-line-hover); border-radius: 12px; background: var(--bb-surface); box-shadow: 0 12px 40px #0003; opacity: 0; pointer-events: none; transform: translateX(-12px); }
+.draft-editor .draft-library.is-open { opacity: 1; pointer-events: auto; transform: none; }
+.draft-library:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 2px; }
+.draft-library-heading { display: flex; align-items: center; gap: 12px; padding: 10px 12px; font-size: 12px; }
+.draft-library-heading strong { font-weight: 600; }
+.draft-library-heading span { flex: 1; color: var(--bb-ink-soft); font-size: 11px; }
+.draft-library-heading button { width: 28px; height: 28px; border-radius: 5px; }
+.draft-library-heading button:hover { background: var(--bb-surface-muted); }
+.draft-library-content { position: relative; flex: 1; min-height: 0; }
+.draft-library .categorized-library { --catalog-sidebar-default: 150px; }
+.draft-library .folder-media-card { display: block; }
+.draft-library .catalog-row { justify-content: flex-start; }
+.draft-library-hint { margin: 0; padding: 8px 12px; font-size: 10px; color: var(--bb-ink-soft); border-top: 1px solid var(--bb-line); }
+@media (max-width: 700px) { .draft-editor .draft-library { left: 8px; top: 50px; width: calc(100% - 16px); height: calc(100% - 66px); } .draft-library-heading span { font-size: 10px; } }

@@ -15,7 +15,7 @@ test('Gemini preserves grants across SSH drops and launcher restarts, including 
     assert.equal(path.dirname(dir), os.tmpdir());
     await rm(dir, { recursive: true, force: true });
   });
-  for (const file of ['run-gemini.mjs', 'oauth-state-file.mjs', 'http-server.mjs', 'http-app.mjs', 'snapshot-store.mjs', 'core.mjs', 'package.json']) {
+  for (const file of ['run-gemini.mjs', 'gemini-config-mode.mjs', 'oauth-state-file.mjs', 'http-server.mjs', 'http-app.mjs', 'snapshot-store.mjs', 'core.mjs', 'package.json']) {
     await copyFile(new URL('../' + file, import.meta.url), path.join(dir, file));
   }
   await mkdir(path.join(dir, '.local/gemini'), { recursive: true });

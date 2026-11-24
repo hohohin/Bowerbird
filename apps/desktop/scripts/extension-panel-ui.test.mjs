@@ -16,7 +16,7 @@ await page.route("**/*", route => new URL(route.request().url()).hostname === "1
 const button = name => page.getByRole("button", { name, exact: true });
 const dialog = () => page.getByRole("dialog", { name: "浏览器插件", exact: true });
 const calls = command => page.evaluate(command => window.calls.filter(call => call.command === command), command);
-const lastVisible = visible => page.waitForFunction(visible => window.calls.filter(call => call.command === "resize_source_browser").at(-1)?.args.visible === visible, visible);
+const lastVisible = visible => page.waitForFunction(visible => window.calls?.filter(call => call.command === "resize_source_browser").at(-1)?.args.visible === visible, visible);
 const fixtureUrl = query => `http://127.0.0.1:${port}/scripts/fixtures/extension/preview.html${query ? `?${query}` : ""}`;
 
 async function load(query = "") {

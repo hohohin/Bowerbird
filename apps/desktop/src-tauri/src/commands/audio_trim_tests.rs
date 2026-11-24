@@ -132,6 +132,18 @@ fn commit_failure_restores_original_bytes_mtime_fingerprint_and_transcript() {
     assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
 }
 
+fn marker_onset(binary: &Path, audio: &str) -> f64 {
+    const RATE: usize = 8000;
+    let decoded = tools::command(binary)
+        .args(["-nostdin", "-v", "error", "-i", audio, "-map", "0:a:0", "-ac", "1", "-ar", "8000", "-f", "s16le", "-"])
+        .output().unwrap();
+    assert!(decoded.status.success(), "{}", String::from_utf8_lossy(&decoded.stderr));
+    let sample = decoded.stdout.chunks_exact(2)
+        .position(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]).unsigned_abs() > 8192)
+        .expect("decoded clip must contain the timing marker");
+    sample as f64 / RATE as f64
+}
+
 #[test]
 #[ignore = "requires local FFmpeg; run with --include-ignored for clip encoding verification"]
 fn formats_keep_extensions_and_project_membership() {
@@ -141,9 +153,11 @@ fn formats_keep_extensions_and_project_membership() {
     let binary = tools::resolve(Tool::Ffmpeg).unwrap();
     for (ext, encoder) in [("wav", "pcm_s16le"), ("mp3", "libmp3lame"), ("flac", "flac"), ("m4a", "aac"), ("ogg", "libvorbis")] {
         let source = fixture.folder.path().join(format!("recording.{ext}"));
-        let result = tools::command(binary).args(["-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", encoder])
+        let result = tools::command(binary).args(["-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0.7*sin(2*PI*440*t)*between(t\\,0.54\\,0.62):d=3", "-c:a", encoder])
             .arg(&source).output().unwrap();
         assert!(result.status.success(), "{ext}: {}", String::from_utf8_lossy(&result.stderr));
+        let input_onset = marker_onset(binary, source.to_str().unwrap());
+        assert!((input_onset - 0.54).abs() < 0.010, "{ext}: input marker at {input_onset}");
         let contents = fs::read(&source).unwrap();
         let external = db.index_connected_file(&fixture.paths, &source, None).unwrap();
         let stored = external.store_path.as_deref().unwrap();
@@ -157,7 +171,12 @@ fn formats_keep_extensions_and_project_membership() {
         assert_eq!(fs::read(&source).unwrap(), contents);
         let in_project: bool = db.conn.lock().unwrap().query_row("SELECT EXISTS(SELECT 1 FROM project_assets WHERE asset_id=?1 AND project_id='p')", [&asset.id], |row| row.get(0)).unwrap();
         assert!(in_project);
-        let replacement = trim(db, &fixture.paths, asset.store_path.as_deref().unwrap(), 0.1, 0.6, true, None).unwrap_or_else(|error| panic!("{ext}: {error}"));
+        let clipped_path = asset.store_path.as_deref().unwrap();
+        let copy_onset = marker_onset(binary, clipped_path);
+        assert!((input_onset - 0.2 - copy_onset).abs() < 0.010, "{ext}: copy marker at {copy_onset}");
+        let replacement = trim(db, &fixture.paths, clipped_path, 0.1, 0.6, true, None).unwrap_or_else(|error| panic!("{ext}: {error}"));
+        let replaced_onset = marker_onset(binary, clipped_path);
+        assert!((copy_onset - 0.1 - replaced_onset).abs() < 0.010, "{ext}: overwrite marker at {replaced_onset}");
         assert_eq!(asset.id, replacement.id);
         assert!((replacement.duration.unwrap() - 0.5).abs() < 0.12, "{ext}: {:?}", replacement.duration);
     }

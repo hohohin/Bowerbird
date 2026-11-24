@@ -6,11 +6,11 @@
 @interface BBSourceBrowserOverlay : NSView
 @property(nonatomic, weak) WKWebView *browser;
 @property(nonatomic, strong) NSBezierPath *hole;
-@property(nonatomic) BOOL flipped;
+@property(nonatomic) BOOL parentFlipped;
 @end
 
 @implementation BBSourceBrowserOverlay
-- (BOOL)isFlipped { return self.flipped; }
+- (BOOL)isFlipped { return self.parentFlipped; }
 - (NSView *)hitTest:(NSPoint)point {
     NSPoint browserPoint = [self.browser convertPoint:point fromView:self.superview];
     if ([self.hole containsPoint:browserPoint]) return nil;
@@ -27,7 +27,7 @@ bool bb_browser_overlay(void *raw, double x, double y, double width, double heig
     else {
         NSView *parent = browser.superview;
         host = [[BBSourceBrowserOverlay alloc] initWithFrame:parent.bounds];
-        host.flipped = parent.isFlipped;
+        host.parentFlipped = parent.isFlipped;
         host.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         NSRect frame = browser.frame;
         [browser removeFromSuperview];

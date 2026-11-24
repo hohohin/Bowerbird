@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { request as httpRequest } from 'node:http';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, copyFile, writeFile, rename, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, copyFile, writeFile, rename, rm, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createMcpHttpServer, googleRedirect } from '../http-app.mjs';
@@ -310,9 +310,10 @@ test('DCR accepts all six official callback families and reports safe rejection 
 });
 
 test('HTTP entrypoint rejects unrestricted execution and starts with read-only permissions', async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'bb-mcp-http-'));
+  const temporaryRoot = await realpath(os.tmpdir());
+  const dir = await mkdtemp(path.join(temporaryRoot, 'bb-mcp-http-'));
   t.after(async () => {
-    assert.equal(path.dirname(dir), os.tmpdir());
+    assert.equal(path.dirname(dir), temporaryRoot);
     await rm(dir, { recursive: true, force: true });
   });
   for (const file of ['http-server.mjs', 'http-app.mjs', 'snapshot-store.mjs', 'core.mjs', 'package.json']) await copyFile(new URL('../' + file, import.meta.url), path.join(dir, file));

@@ -17,6 +17,7 @@ import { AssetContextMenu } from "./components/AssetContextMenu";
 import { ProjectContextMenu } from "./components/ProjectContextMenu";
 import { VisualProfileDialog } from "./components/VisualProfileDialog";
 import { ImageAnnotator } from "./components/ImageAnnotator";
+import { DraftEditor } from "./components/DraftEditor";
 import { LayerEditor } from "./components/LayerEditor";
 import { CaptionRing } from "./components/creation/CaptionRing";
 import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
@@ -950,6 +951,7 @@ function App() {
       <VisualProfileDialog />
       {/* 图片标注面板（全局单实例，store.annotator 驱动，全屏遮罩） */}
       <ImageAnnotator />
+      <DraftEditor />
       <LayerEditor />
       {/* 反推引擎选择浮层（全局单实例，store.describePicker 驱动） */}
       <DescribeProviderPicker />

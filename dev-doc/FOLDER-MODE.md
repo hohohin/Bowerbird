@@ -118,6 +118,12 @@ Windows 隔离 WebView2 使用正式组件、真实 Tauri 文件命令和临时 
 
 **2026-10-24 发布状态：** 本轮相关桌面源码已随 Windows **26.10.2401** 发布，分类 Cloud **0075／jev-proxy v10** 已先行上线，图谱保持隐藏；此前专项中的「未发布」为开发时记录。完整验证范围、现役与回滚见 [桌面自动更新](DESKTOP-UPDATES.md)。
 
+## 2026-11-24 Mac 候选的 HEIC 颜色预览
+
+Apple Silicon 26.11.2403 候选保留全尺寸 8-bit 兼容 PNG。Mac 对附带 ICC、P3／BT.2020 色域或 PQ／HLG 描述的 HEIC，在现有严格解码和容量检查后用 Core Image 做颜色管理。P3/SDR 全图携带输出颜色描述，HDR 输入在 macOS 11 及以上按系统 SDR 转换生成兼容预览。JPEG 缩略图转换到 sRGB。Mac 重新计算外部 HEIC 的预览缓存键，避免复用旧版未做颜色管理的缓存。
+
+在 ARM Mac 上实测 8-bit Display P3 与 10-bit BT.2100 PQ 两幅合成 HEIC。两张全尺寸 PNG 的六组色块均与独立的系统 P3/SDR 参考一致，192px JPEG 与系统 sRGB 参考的线性 BT.2020 单通道最大绝对偏差分别小于 0.005 和 0.008。真实相机照片、HDR 显示器观看效果与带辅助增益图的照片仍待实测。专项用例为 `core::ingest::heic_tests::heic_color_managed_p3_and_pq_produce_sdr_previews`。
+
 ## 2026-10-28 HEIC 素材导入（源码未发布）
 
 产品约定见 PROJECT.md「HEIC 素材导入」。

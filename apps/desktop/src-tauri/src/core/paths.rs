@@ -11,6 +11,22 @@ use std::sync::Arc;
 
 use chrono::Utc;
 
+/// Expand only macOS's fixed system aliases; user-created links remain visible
+/// to callers that reject symlinks before migrating or deleting files.
+pub(super) fn expand_macos_system_alias(path: &std::path::Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    for name in ["var", "tmp", "etc"] {
+        let alias = PathBuf::from("/").join(name);
+        if let Ok(suffix) = path.strip_prefix(&alias) {
+            let target = PathBuf::from("/private").join(name);
+            if fs::read_link(&alias).is_ok_and(|link| alias.parent().unwrap().join(link) == target) {
+                return target.join(suffix);
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
 use crate::error::AppResult;
 
 #[derive(Clone)]

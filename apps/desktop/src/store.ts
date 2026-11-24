@@ -8,6 +8,7 @@ import { filterAssetsByMediaType, type MediaFilter } from "./lib/mediaFilter";
 import { readThumbnailWidth, saveThumbnailWidth, type ThumbnailScope } from "./lib/thumbnailSize";
 import { beginOnboardingOperation } from "./lib/onboardingStore";
 import type { ProjectMembership } from "./lib/libraryView";
+import type { DraftDocument } from "./lib/draftDocument";
 import { resolveVideoOptions, videoInputError, videoRatio, type GenerationSettings } from "./lib/videoGeneration";
 import { api } from "./lib/api";
 import { loadProjectOrder, reconcileProjectOrder, saveProjectOrder } from "./lib/projectOrder";
@@ -100,6 +101,14 @@ let paletteReadRequestId = 0;
 let promptedAssetsReadRequestId = 0;
 let generationHistoryReadRequestId = 0;
 let visualProfilesReadRequestId = 0;
+
+export type DraftCanvasSaver = (document: DraftDocument, dataUrl: string, saveId: string) => Promise<Asset>;
+export interface DraftEditorRequest {
+  assetId: string | null;
+  projectId: string | null;
+  canvasNodeId?: string;
+  saveToCanvas?: DraftCanvasSaver;
+}
 // Local CLI commands resolve at completion; the started event releases only the startup wait.
 const generationStartupWaiters = new Map<string, () => void>();
 
@@ -185,6 +194,7 @@ export type DescribeTask =
 
 type CanvasDeletionTarget = { assetIds: string[]; removeFromCanvas: () => void };
 type CanvasMenuSelection = {
+  primaryNodeId?: string;
   projectId: string;
   nodeIds: string[];
   assetIds?: string[];
@@ -516,6 +526,10 @@ interface State {
   openAnnotator: (assetId: string) => void;
   openDraftAnnotator: (saveDraft: (dataUrl: string, meta: AnnotationMeta) => Promise<void>) => void;
   closeAnnotator: () => void;
+  prepareCanvasDraft: ((request: DraftEditorRequest) => DraftCanvasSaver | null) | null;
+  draftEditor: DraftEditorRequest | null;
+  openDraftEditor: (request: DraftEditorRequest) => void;
+  closeDraftEditor: () => void;
   layerEditor: { assetId: string; projectId: string | null } | null;
   openLayerEditor: (assetId: string) => void;
   closeLayerEditor: () => void;
@@ -2593,6 +2607,17 @@ export const useStore = create<State>((set, get) => {
   openAnnotator: (assetId) => set({ annotator: { assetId, saveToCanvas: get().prepareCanvasAnnotation?.() ?? undefined } }),
   openDraftAnnotator: (saveDraft) => set({ annotator: { assetId: null, saveDraft }, contextMenu: null }),
   closeAnnotator: () => set({ annotator: null }),
+  prepareCanvasDraft: null,
+  draftEditor: null,
+  openDraftEditor: (request) => set({
+    draftEditor: {
+      ...request,
+      saveToCanvas: request.saveToCanvas ?? (request.projectId !== null && request.projectId === get().activeProjectId
+        ? get().prepareCanvasDraft?.(request) ?? undefined : undefined),
+    },
+    contextMenu: null,
+  }),
+  closeDraftEditor: () => set({ draftEditor: null }),
   layerEditor: null,
   openLayerEditor: (assetId) => set({ layerEditor: { assetId, projectId: get().activeProjectId }, contextMenu: null }),
   closeLayerEditor: () => set({ layerEditor: null }),

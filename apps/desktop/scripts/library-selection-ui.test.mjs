@@ -177,7 +177,7 @@ try {
       await verifyUnselected(media(0), `${scene} dismissed ${input}`);
     }
     assert.equal(await page.evaluate(() => window.selectionEntries.length), initialAnimations, 'mouse and keyboard menus never start selection animations');
-    await media(0).click({ modifiers: ['Control'] });
+    await media(0).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
     await verifySelectionAnimation(media(0), scene);
     await media(2).click({ modifiers: ['Shift'] });
     await page.mouse.move(0, 0); await page.waitForTimeout(360);
@@ -233,7 +233,7 @@ try {
     }), 'deselecting restores the full-size media');
 
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await media(0).click({ modifiers: ['Control'] }); await page.mouse.move(0, 0);
+    await media(0).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] }); await page.mouse.move(0, 0);
     await verifySelected(media(0), `${scene} reduced motion`);
     assert.equal(await media(0).locator('.library-selection-mark').evaluate(element => element.getAnimations({ subtree: true }).length), 0, 'reduced motion starts directly at the selected terminal state');
     await clearSelection();
@@ -242,7 +242,7 @@ try {
     if (scene === 'home') {
       for (const interruption of ['hidden', 'drag']) {
         const previousStarts = await page.evaluate(() => window.selectionEntries.filter(entry => entry.id === 'selection-0' && entry.name === 'library-select-center').length);
-        await media(0).click({ modifiers: ['Control'] });
+        await media(0).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
         await page.waitForFunction(previous => window.selectionEntries.filter(entry => entry.id === 'selection-0' && entry.name === 'library-select-center').length > previous, previousStarts);
         assert.equal(await media(0).locator('.library-selection-mark.is-entering').count(), 1, 'test interrupts an active selection entrance');
         const starts = await page.evaluate(() => window.selectionEntries.filter(entry => entry.id === 'selection-0' && entry.name === 'library-select-center').length);
@@ -269,7 +269,7 @@ try {
       await page.waitForTimeout(400);
       const minimumWidth = await media(0).evaluate(element => element.getBoundingClientRect().width);
       assert.ok(Math.abs(minimumWidth - 96) < .1, `fixture exercises an actual 96px card, received ${minimumWidth}px`);
-      await media(0).click({ modifiers: ['Control'] }); await page.mouse.move(0, 0); await page.waitForTimeout(350);
+      await media(0).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] }); await page.mouse.move(0, 0); await page.waitForTimeout(350);
       await verifySelected(media(0), 'minimum 96px media card including bracket strokes');
       await page.screenshot({ path: `${output}/minimum-96.png` });
       await clearSelection();
@@ -284,14 +284,14 @@ try {
         await page.getByRole('tab', { name, exact: true }).click();
         if (kind === 'collections') await library().getByRole('treeitem', { name: '示例集合', exact: true }).click();
         await waitForMedia();
-        await media(0).click({ modifiers: ['Control'] }); await page.mouse.move(0, 0); await page.waitForTimeout(350);
+        await media(0).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] }); await page.mouse.move(0, 0); await page.waitForTimeout(350);
         await verifySelected(media(0), `${scene} ${kind} uses the same selected card`);
         await clearSelection();
       }
     } else {
       await page.getByRole('tab', { name: '项目素材', exact: true }).click();
       await waitForMedia();
-      await media(0).click({ modifiers: ['Control'] }); await page.mouse.move(0, 0); await page.waitForTimeout(350);
+      await media(0).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] }); await page.mouse.move(0, 0); await page.waitForTimeout(350);
       await verifySelected(media(0), 'project source uses the same selected card');
       await clearSelection();
     }
@@ -315,13 +315,13 @@ try {
       await verifyUnselected(fileImage, `${scene} file dismissed ${input}`);
     }
     assert.equal(await page.evaluate(() => window.selectionEntries.length), fileAnimations, 'file menus never start selection animations');
-    await directory.click({ modifiers: ['Control'] });
+    await directory.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
     assert.equal(await directory.getAttribute('aria-pressed'), 'true');
     assert.equal(await directory.locator('.library-selection-mark').count(), 0, 'directory tiles retain their existing selection outline');
     assert.ok(await directory.evaluate(element => { const style = getComputedStyle(element.querySelector('.folder-media-preview')); return style.transform === 'none' && ['none', '1'].includes(style.scale); }), 'directory preview is never inset');
-    await fileImage.click({ modifiers: ['Control'] });
+    await fileImage.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
     const fileVideo = files.getByRole('button', { name: '片段.mp4', exact: true });
-    await fileVideo.click({ modifiers: ['Control'] }); await page.mouse.move(0, 0); await page.waitForTimeout(350);
+    await fileVideo.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] }); await page.mouse.move(0, 0); await page.waitForTimeout(350);
     await verifySelected(fileImage, `${scene} file image`); await verifySelected(fileVideo, `${scene} file video`);
     assert.deepEqual(await slots(files), fileSlots, 'local file selection leaves layout intact');
     await page.screenshot({ path: `${output}/${scene}-files.png` });

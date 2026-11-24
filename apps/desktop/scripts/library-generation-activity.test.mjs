@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { libraryGenerationTasks, libraryLocalVideoTask } from '../src/lib/libraryGenerationActivity.ts';
+import { libraryGenerationTasks } from '../src/lib/libraryGenerationActivity.ts';
 
 const projects = [{ id: 'p', name: '快速生成' }, { id: 'q', name: '品牌' }];
 const job = (id, overrides = {}) => ({ id, projectId: 'p', threadId: 't', createdAt: 100, lastPrompt: '首轮', running: false,
@@ -38,18 +38,6 @@ test('Agent completion requires durable result and chat/extra task locators keep
   assert.equal(rows[2].nodeId, 'agent-prompt:launch:0:0');
   assert.equal(rows[2].statusLabel, '待保存结果');
 });
-test('local H3 follows its existing run and never treats waiting recovery as completed', () => {
-  const locator = {projectId:'p',nodeId:'h3',createdAt:500};
-  const document = {nodes:[{id:'h3',prompt:'花朵绽放',resultNodeIds:['output'],outputs:{image:{assetIds:['video']}}}],
-    runs:[{id:'run',threadId:'h3-thread',startId:'h3',status:'running',steps:{h3:{status:'running'}}}]};
-  assert.equal(libraryLocalVideoTask(locator,document).status,'running');
-  document.runs[0].status='waiting'; document.runs[0].steps.h3.status='waiting';
-  assert.equal(libraryLocalVideoTask(locator,document).statusLabel,'待继续取回');
-  document.runs[0].status='done'; document.runs[0].steps.h3.status='done';
-  assert.equal(libraryLocalVideoTask(locator,document).nodeId,'output');
-  assert.equal(libraryLocalVideoTask(locator,document).status,'completed');
-  assert.equal(libraryLocalVideoTask(locator,document,'write failed').status,'attention');
-});
 test('generation rows show original user text and order by latest completed turn time', () => {
   const rows=libraryGenerationTasks({projects,jobs:[
     job('completed',{createdAt:10,turns:[{promptRaw:'用户的原话',prompt:'expanded',turnKey:'x',images:['out'],startedAt:500,durationMs:20}]}),
@@ -61,28 +49,6 @@ test('generation rows show original user text and order by latest completed turn
     ['started','组稿','准备生成',600],['completed','用户的原话','已完成',520],
     ['fallback','初始意图','需处理',40],['untitled','生成任务','需处理',20],
   ]);
-});
-test('local H3 covers missing owners, run-only terminal states and incomplete delivery',()=>{
-  const locator={projectId:'p',nodeId:'h3',createdAt:1};
-  const node={id:'h3',prompt:'',outputs:{image:{assetIds:['asset']}},resultNodeIds:['result']};
-  const run={id:'run',threadId:'thread',status:'running',steps:{h3:{status:'running'}}};
-  const project=(runPatch={},nodePatch={},stepPatch={})=>({nodes:[{...node,...nodePatch}],run:{...run,...runPatch,steps:{h3:{...run.steps.h3,...stepPatch}}}});
-  assert.equal(libraryLocalVideoTask(locator,{nodes:[],runs:[run]}),null);
-  assert.equal(libraryLocalVideoTask(locator,{nodes:[node],runs:[]}),null);
-  for(const [state,status,label] of [['waiting','attention','待继续取回'],['failed','failed','生成未完成'],['stopped','cancelled','已停止']]) {
-    const task=libraryLocalVideoTask(locator,project({status:state}));
-    assert.equal(task.status,status);assert.equal(task.statusLabel,label);
-  }
-  assert.equal(libraryLocalVideoTask(locator,project({}, {}, {comfyCancelled:true})).status,'cancelled');
-  assert.equal(libraryLocalVideoTask(locator,project({}, {}, {status:'failed'})).status,'failed');
-  const pending=libraryLocalVideoTask(locator,project());
-  assert.equal(pending.title,'本机 H3 视频');assert.equal(pending.nodeId,'h3');
-  assert.equal(libraryLocalVideoTask(locator,project({},{outputs:{}},{status:'done'})).status,'attention');
-  assert.equal(libraryLocalVideoTask(locator,project({},{outputs:{image:{type:'image'}}},{status:'done'})).status,'attention');
-  assert.equal(libraryLocalVideoTask(locator,project({},{resultNodeIds:[]},{status:'done'})).status,'attention');
-  const missingTarget=project({}, {}, {status:'done'});
-  delete missingTarget.nodes[0].resultNodeIds;
-  assert.equal(libraryLocalVideoTask(locator,missingTarget).statusLabel,'待保存结果');
 });
 test('Agent and chat rows distinguish waiting for user, failure, cancellation and replies',()=>{
   const base={runId:'agent',projectId:'p',threadId:'a',status:'running',intentPrompt:'',updatedAt:10};

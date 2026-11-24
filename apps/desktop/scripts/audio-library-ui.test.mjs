@@ -132,7 +132,7 @@ async function selection() {
   await wave('wav').locator('.audio-waveform-play').click(); await progressBeyond(.2);
   const before = await playerState();
   const plays = await page.evaluate(() => window.audioEvents.filter(event => event.type === 'playing').length);
-  await card.locator('.audio-file-meta').click({ modifiers: ['Control'] });
+  await card.locator('.audio-file-meta').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await page.waitForTimeout(120);
   assert.deepEqual(errors, [], 'audio selection must render the real selection mark without a missing preview element');
   assert.equal(await card.evaluate(element => element.classList.contains('is-selected')), true);
@@ -141,7 +141,7 @@ async function selection() {
   assert.equal(await page.evaluate(() => window.audioEvents.filter(event => event.type === 'playing').length), plays, 'selecting never restarts playback');
   assert.equal(await wave('wav').locator('.audio-waveform-play').isEnabled(), true, 'selected active audio must remain pausable');
   await wave('wav').locator('.audio-waveform-play').click(); await stopped();
-  await card.locator('.audio-file-meta').click({ modifiers: ['Control'] });
+  await card.locator('.audio-file-meta').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   assert.equal(await card.evaluate(element => element.classList.contains('is-selected')), false);
   assert.equal(await page.evaluate(() => window.audioEvents.filter(event => event.type === 'playing').length), plays, 'selection changes never restart playback');
   await page.getByRole('button', { name: '取消选择', exact: true }).click();

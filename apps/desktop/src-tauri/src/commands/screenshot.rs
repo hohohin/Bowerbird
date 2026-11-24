@@ -22,6 +22,13 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindo
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
+#[cfg(target_os = "macos")]
+#[link(name = "bowerbird_screenshot_focus", kind = "static")]
+extern "C" {
+    fn bb_screenshot_show(window: *mut std::ffi::c_void, capture: bool);
+    fn bb_screenshot_finish();
+}
+
 #[path = "screenshot_history.rs"]
 mod history;
 pub use history::HistoryEntry;
@@ -486,6 +493,10 @@ fn close_capture_windows(app: &AppHandle) {
         .lock()
         .unwrap()
         .retain(|key, _| !key.starts_with("snip-"));
+    // Hand focus back before hiding the last key window, otherwise AppKit may
+    // select the workspace window and bring it to the front.
+    #[cfg(target_os = "macos")]
+    let _ = app.run_on_main_thread(|| unsafe { bb_screenshot_finish() });
     let keep_warm = app.get_webview_window("main").is_some();
     for (label, window) in app.webview_windows() {
         if label.starts_with("snip-") {
@@ -568,12 +579,43 @@ pub fn screenshot_show(
     {
         return Ok(()); // A cancelled/replaced decode must never resurrect the overlay.
     }
-    window.show().map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())?;
-    if let Some(webview) = app.get_webview(window.label()) {
-        webview.set_focus().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        drop(images);
+        let focus_app = app.clone();
+        let target = window.clone();
+        let capture = window.label().starts_with("snip-");
+        window
+            .run_on_main_thread(move || unsafe {
+                // A background caller may queue this behind a cancellation.
+                let state = focus_app.state::<ScreenshotState>();
+                let images = state.images.lock().unwrap();
+                if !images
+                    .get(target.label())
+                    .is_some_and(|frame| frame.session == session)
+                {
+                    return;
+                }
+                if let Ok(native_window) = target.ns_window() {
+                    bb_screenshot_show(native_window, capture);
+                    if capture {
+                        if let Some(webview) = focus_app.get_webview(target.label()) {
+                            let _ = webview.set_focus();
+                        }
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())
     }
-    Ok(())
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+        if let Some(webview) = app.get_webview(window.label()) {
+            webview.set_focus().map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
 }
 #[tauri::command]
 pub async fn screenshot_cancel(
@@ -616,6 +658,7 @@ fn pin(app: &AppHandle, png: Vec<u8>, width: u32, height: u32, shapes: Vec<Value
     .min_inner_size(1.0, 1.0)
     .inner_size(width as f64 * scale, height as f64 * scale)
     .center()
+    .focused(false)
     .visible(false);
     // macOS transparency requires a private API feature; do not add that dependency here.
     #[cfg(not(target_os = "macos"))]

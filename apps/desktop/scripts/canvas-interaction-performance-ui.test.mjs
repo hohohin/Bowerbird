@@ -159,11 +159,11 @@ async function checkGeometry() {
   assert.ok(Math.abs(zoomAnchor.x - afterAnchor.x) < .02 && Math.abs(zoomAnchor.y - afterAnchor.y) < .02, 'Zoom holds the pointer anchor');
   await burstWheel(true, 1); await page.waitForFunction(() => Math.abs(window.snapshot().view.zoom - 1) < .001);
   // Multi-select three different card types using real modifier clicks.
-  await page.keyboard.down('Control');
+  await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
   for (const locator of [material, content, workflow]) {
     const box = await locator.boundingBox(); await page.mouse.click(box.x + 4, box.y + 12);
   }
-  await page.keyboard.up('Control');
+  await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
   assert.equal(await page.locator('.canvas-plane [data-canvas-node].is-selected').count(), 3);
   const beforeWire = await page.locator('[data-workflow-target="workflow-0"]').first().getAttribute('d');
   await dragBurst(material, 70, 35);

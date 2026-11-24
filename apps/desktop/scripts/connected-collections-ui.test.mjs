@@ -94,7 +94,7 @@ try {
   await navigate('child');
   await page.locator('.catalog-scroller').evaluate(el => { el.scrollTop += 40; });
   await page.waitForFunction(() => document.querySelector('.catalog-section-heading.is-pinned .catalog-section-title')?.textContent === '风景');
-  await card('ref-one').click({ modifiers: ['Control'] }); await card('ref-two').click({ modifiers: ['Control'] });
+  await card('ref-one').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] }); await card('ref-two').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   assert.equal(await card('ref-one').getAttribute('aria-pressed'), 'true'); assert.equal(await card('ref-two').getAttribute('aria-pressed'), 'true');
   assert.equal(await card('child-0').getAttribute('aria-pressed'), 'false');
   await page.locator('.catalog-selection').getByRole('button', { name: '添加到文件夹', exact: true }).click();

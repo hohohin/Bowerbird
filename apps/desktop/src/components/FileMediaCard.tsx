@@ -70,7 +70,8 @@ export function FileMediaCard(props: FileMediaCardProps) {
       event.dataTransfer.setData("text/plain", ids.join(","));
     } else props.onDragStart?.(event);
     const ids = getDragAssets();
-    if (event.defaultPrevented || !isTauri() || props.entry.directory || !props.assetId || !ids?.length) return;
+    // Draft layers use the existing in-window drag payload and must not enter OS file drag.
+    if (event.defaultPrevented || event.currentTarget.closest("[data-draft-library]") || !isTauri() || props.entry.directory || !props.assetId || !ids?.length) return;
     event.preventDefault();
     void startExternalDrag(ids, "hold", {
       sourceRect: (event.currentTarget.querySelector("img, video") ?? event.currentTarget).getBoundingClientRect(),

@@ -60,9 +60,27 @@ export function GenerationSessionSurface({ jobId, className, children }: {
           setMenu(null);
           surfaceRef.current?.focus({ preventScroll: true });
           try {
-            const report = await api.generationDiagnostics(jobId);
-            if (!report.attempts.length && !report.task && !memory) throw new Error("此旧会话没有保存诊断记录");
-            await navigator.clipboard.writeText(JSON.stringify({ ...report, memorySnapshot: memory ?? null }, null, 2));
+            const readText = async () => {
+              const report = await api.generationDiagnostics(jobId);
+              if (!report.attempts.length && !report.task && !memory) throw new Error("此旧会话没有保存诊断记录");
+              return JSON.stringify({ ...report, memorySnapshot: memory ?? null }, null, 2);
+            };
+            // WebKit requires the clipboard write to start in the click gesture;
+            // awaiting diagnostic IPC first loses that permission.
+            if (navigator.clipboard.write && typeof ClipboardItem !== "undefined") {
+              const item = new ClipboardItem({
+                "text/plain": readText().then(text => new Blob([text], { type: "text/plain" })),
+              });
+              try {
+                await navigator.clipboard.write([item]);
+              } catch (error) {
+                // A denied write may stop consuming the pending diagnostic data.
+                void item.getType("text/plain").catch(() => {});
+                throw error;
+              }
+            } else {
+              await navigator.clipboard.writeText(await readText());
+            }
             notifySuccess("已复制本次会话诊断信息");
           } catch (error) {
             notifyError(error, "复制会话诊断信息失败");

@@ -107,6 +107,8 @@ pub struct AssetNodePayloadV1 {
     pub workflow_generation_group: Option<String>,
     #[serde(default)]
     pub execution: Option<AssetExecutionRefV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_document_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

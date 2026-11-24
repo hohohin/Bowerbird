@@ -24,6 +24,8 @@ w.__TAURI_INTERNALS__ = {
     w.calls.push({ command, args });
     if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, url: null, transfers: [] };
     if (command === "plugin:event|listen") return w.calls.length;
+    if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, url: null, transfers: [] };
+    if (command === "quick_transfer_addresses") return [];
     if (command === "claim_source_browser_analysis") {
       if (w.holdClaim) await new Promise(resolve => { w.claimResolvers[args.dragId] = resolve; });
       if (w.claimError) throw w.claimError;
@@ -57,7 +59,7 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 useStore.setState({ assets: [], total: 0, projects: withSidebar ? [{ id: "p", name: "探索侧栏测试", kind: "blank" } as any] : [], activeProjectId: withSidebar ? "p" : null, projectRoutePending: false,
-  projectRouteRevision: 0, settings: {}, mode: "browse", boardOpen: false, projectCanvasFlush: async () => {} });
+  projectRouteRevision: 0, libraryHomeView: "library", settings: {}, mode: "browse", boardOpen: false, projectCanvasFlush: async () => {} });
 function Fixture() {
   const [opened, setOpened] = useState(false);
   const [dialog, setDialog] = useState(false);

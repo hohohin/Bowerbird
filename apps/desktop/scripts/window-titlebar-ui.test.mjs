@@ -37,10 +37,10 @@ try {
   assert.equal(calls.filter(command => command === "plugin:window|toggle_maximize").length, 3);
   assert.equal(await page.getByText("生成图", { exact: true }).count(), 0);
   assert.equal(await page.getByText("项目素材", { exact: true }).count(), 0);
-  await page.getByRole("button", { name: "只看", exact: true }).click();
+  await page.getByRole("button", { name: "只看生成图", exact: true }).click();
   assert.equal(await page.evaluate(() => window.store.getState().smartFilter), "source:generated");
-  await page.getByRole("button", { name: "展开", exact: true }).click();
-  assert.equal(await page.evaluate(() => window.store.getState().projectAssetsCollapsed), false);
+  await page.getByRole("button", { name: "不看生成图", exact: true }).click();
+  assert.equal(await page.evaluate(() => window.store.getState().smartFilter), "source:!generated");
   await mkdir(".tmp/window-titlebar", { recursive: true });
   const colors = [];
   for (const theme of ["light", "dark"]) {

@@ -32,7 +32,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 | 范围 | 当前状态与证据 |
 |---|---|
 | Windows | 公开版 **26.11.2402**，发布源码 7ce371ee0 含 SQLite **0062**。11 月 24 日北京时间 10:25 公网复核通过，Tauri 更新签名有效，按用户授权跳过 Authenticode。[发布与回滚](dev-doc/DESKTOP-UPDATES.md#windows-26112402-已公开发布2026-11-24) |
-| macOS | 公开通道为 Apple Silicon **26.10.801**、Intel **26.10.1501**，ARM 1502 未切通道。[桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 正式验收](macOS/RELEASE-READINESS.md) |
+| macOS | 公开通道为 Apple Silicon **26.10.801**、Intel **26.10.1501**，Apple Silicon 26.11.2403 本地签名测试包已交付 R2 独立目录，源码已合入本地 `mac`。[桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 正式验收](macOS/RELEASE-READINESS.md) · [跨端存档](macOS/CROSS-PLATFORM-SYNC-2026-11-24.md) |
 | 浏览器扩展 | **0.5.2**，显示当前项目，采集图片可直入画板。更新后须在浏览器重新加载。[版本与验收](apps/extension/README.md) |
 | Cloud 与官网 | Cloud 网关、原请求恢复和 VPS 定时巡检已上线。微信 Native v3 已开放公开购买，注册及 Pro 月度赠币已启用。Seedance 2.5 已开三档，分层已部署。GPT／Flash 未启价，Studio 未新增销售。[部署](apps/cloud/DEPLOY.md) · [微信支付](apps/cloud/WECHATPAY.md) · [现行定价](dev-doc/Bowerbird定价方案v2-订阅积分制.md) |
 | 对话 | 桌面对话与 Agent 卡片共用本机 Codex、本机 DSH 0.2 和 DSH · Cloud v2。Cloud 仅对标记账号开放 0 Bcoin 试用，0094／0095 已上线，0096 付费版是默认关闭的隔离候选。[桌面契约](dev-doc/CHAT-PROVIDERS.md) · [云端契约](apps/cloud/CHAT.md) |
@@ -53,12 +53,11 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 ### 近期里程碑
 
+- **2026-11-24｜Apple Silicon 26.11.2403 源码存档及 R2 测试包交接。** 合入 `dev@0d044e83`，SQLite 升至 0062，修复语义索引路径别名与 HEIC 预览色彩。ARM 本地签名候选完成隔离迁移及 R2 回读验签。[跨端存档](macOS/CROSS-PLATFORM-SYNC-2026-11-24.md) · [候选验收](macOS/RELEASE-READINESS.md)
+
 - **2026-11-24｜Windows 26.11.2402 已公开发布。** 改进 H3 提示词优化与写作 Agent 的错误提示，客户端接收实际参考槽数量。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112402-已公开发布2026-11-24)
 
 - **2026-11-24｜Windows 26.11.2401 已公开发布。** 写作工具栏、富文本草稿恢复、分页 PDF 导出，以及画板 H3 提示词和视频工作流。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112401-已公开发布2026-11-24)
-
-- **2026-11-23｜Windows 26.11.2304 已公开发布。** 音频详情与裁剪、连接目录增量扫描与预览优化、画板生成结果缩放及视频信息入口。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112304-已公开发布2026-11-23) · [目录验证](project_logs/2026-11-23-folder-library-performance.md)
-
 
 ## 关键约定
 
@@ -100,6 +99,9 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 ### 界面、平台与交付
 
+- **本机 Codex 生图和诊断（2026-11-03 保留）。** 生图首轮／续轮默认 `gpt-5.6-luna / low`，显式模型覆盖仍有效；依据此前 CLI 账号目录修正，不能用桌面可选型号推断 CLI 可用性，真实出图仍需实机验收。Mac 复制会话诊断在点击时开启剪贴板写入，异步等待冻结会话的完整报告，查询失败或拒绝写入不报成功。该两项未提交修复已随本轮保全。
+- **Mac 存档并推送流程。** 本次同步不含推送。用户说【存档并推送】时先本地存档、列出相对远端 mac 上次基线的完整内容和跨端说明，明确确认后才推送展示范围；新改动或远端范围变化须重新确认。默认不包含打包／上传安装包／部署。
+
 - **界面改版先网页确认。** 先提供独立网页示意，经用户确认后接正式组件。沿用工业制图主题和共用素材卡、菜单、焦点及悬浮反馈，保留媒体几何和交互。[设计规范](dev-doc/UI-DESIGN-SPEC.md) · [UI 复用](dev-doc/reuse/UI.md)
 - **素材与编辑。** 素材库、详情和画板复用媒体预览及播放。首页、画板和文本工作区共用左侧栏，按分栏和项目上下文记忆模式、层级目标和收起状态。层级模式支持全部素材、项目及文件夹，标签模式使用全局标签。截图、标注、文本、视频采集及多选遵循各专项的输入、取消与恢复规则。[桌面复用](dev-doc/reuse/DESKTOP.md) · [素材库设计](dev-doc/UI-DESIGN-SPEC.md#71-素材库) · [媒体](dev-doc/VIDEO-MEDIA.md) · [文本](dev-doc/TEXT-LIBRARY.md)
 - **文本编辑器工具栏。** 固定栏保留写作常用格式、插入素材、Agent 和导出。表格、代码和其他块操作从 `/` 进入。选区浮动栏可自选并排序最多 8 个富格式，本机记忆顺序，素材详情与放大工作区共用。「更多」保留本机评论与修订。窄窗按编辑区宽度收纳操作。[文本工具栏](dev-doc/TEXT-LIBRARY.md#文本工具栏)
@@ -113,6 +115,8 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 ## 踩坑记录
 
+- **Mac 语义索引漏刷。** 同一原件的系统路径别名导致通知无法命中登记记录，统一通过既有 Mac 路径别名函数匹配。相同大小和修改时间的换图已通过原生回归，真实外盘重接待实机验收。[ARM 验收](macOS/RELEASE-READINESS.md#候选回执)
+- **Mac HEIC 预览偏色。** 带 P3／PQ 色彩描述的输入使用 Core Image 生成带颜色描述的 SDR 预览，JPEG 缩略图转换到 sRGB。合成色条已与系统参考对照，真实 HDR 屏幕效果待验。[HEIC 实现](dev-doc/FOLDER-MODE.md) · [ARM 验收](macOS/RELEASE-READINESS.md#候选回执)
 - **折叠生成卡预览被素材盖住或拖动时脱离锚点。** 预览层级改为高于当前画板的可见卡片和拖动抬升层，拖动时随锚点同步绘制，原卡保存位置和结果绑定各自保留。[画板契约与回归](dev-doc/CANVAS-WORKFLOW.md#折叠生成卡的悬停预览)
 - **H3 录音引用阻断其他画板编辑。** 旧原生校验拒绝新版已保存的 reference-audio，整张画板无法保存。兼容有效绑定，恢复连线时核对上游和环路。[H3](dev-doc/COMFYUI-LOCAL-VIDEO.md)
 - **DSH Cloud 续聊误报输入丢失。** 固定版本 AgentHandle 缺额外的模型切换接口。恢复沿原生 agents.resume 参数，区分启动和恢复失败。[诊断和修复](project_logs/2026-11-18-dsh-chat-resume.md)

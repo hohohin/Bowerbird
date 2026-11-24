@@ -41,13 +41,14 @@
 | 提示词复用、常用库、偏好与记忆 | [创作记忆](dev-doc/CREATIVE-MEMORY-PLAN.md) |
 | Windows 或 macOS 本地运行、构建、打包和排障 | [Windows](Windows/README.md) · [Windows 平台适配](Windows/Windows-edited.md) · [macOS](macOS/README.md) |
 | 双端更新、签名、通道、回滚与正式验收 | [桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 发布验收](macOS/RELEASE-READINESS.md) |
+| Mac 草稿工程与画笔编辑 | [草稿编辑器](dev-doc/DRAFT-EDITOR.md) · [源码调研](dev-doc/PHOTOSUITE-DRAFT-RESEARCH.md) |
 
 ### 历史归档
 
 | 追溯目标 | 入口 |
 |---|---|
 | 项目变更、复审流水、被替代的约定与验收 | [项目日期日志](project_logs/README.md) · [里程碑归档](dev-doc/进展归档.md) |
-| 跨端同步和旧版本交接 | [Windows 历史交接](Windows/) · [Mac 历史交接](macOS/) · [发布证据](dev-doc/DESKTOP-UPDATES.md) |
+| 跨端同步和旧版本交接 | [Windows 历史交接](Windows/) · [Mac 11 月 24 日累计存档](macOS/CROSS-PLATFORM-SYNC-2026-11-24.md) · [Mac 历史交接](macOS/) · [发布证据](dev-doc/DESKTOP-UPDATES.md) |
 | 视觉确认稿、早期调研与视频原始增量 | [UI 研究与恢复点](dev-doc/ui-studies/) · [素材分类草稿](reference/theory.md) · [早期桌面稿](dev-doc/桌面端UI设计.html) · [竞品调研](dev-doc/Eagle类创意收集工具调查报告.html) · [视频 provenance](dev-doc/VIDEO-API-PROVENANCE.json) · [历史 0058 集成](dev-doc/VIDEO-API-INTEGRATION-V3.md) · [阶段哈希](dev-doc/VIDEO-API-INTEGRATION-V3.json) |
 
 ## 常用验证命令速查
@@ -77,6 +78,8 @@
 1. 更新 PROJECT.md 对应章节。新里程碑插入顶部，仅保留最近 3 条，被挤出的整条原样移入 [进展归档](dev-doc/进展归档.md#归档条目) 顶部。已定位故障写根因、处理和剩余缺口。
 2. 新增、删除、改名或移动重要文档时同步索引。
 3. 核对本次测试和最终 diff 后，把相关代码和文档放进同一个 Git commit。
+
+用户说【存档并推送】时，先完成上述本地存档和提交，并核对远端 `mac` 上次推送基线；在 `macOS/` 附上自该基线以来的完整更新说明、平台差异和验证结果，再向用户展示本次待推送内容。**必须等用户明确确认后才推送 `mac`，不得把调用该简称本身视作推送确认。** 确认后只推送已展示范围；若出现新改动或远端新增导致范围变化，先说明差异并重新确认。默认不包含打包、安装包上传或服务部署。
 
 ## Working principles
 

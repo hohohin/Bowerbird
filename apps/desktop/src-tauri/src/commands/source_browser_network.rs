@@ -176,7 +176,7 @@ async fn capture_mac_resource(webview: &Webview, url: &str, maximum: usize, cont
     let url = CString::new(url).map_err(|_| AppError::Other("媒体地址无效。".into()))?;
     let id = CString::new(uuid::Uuid::new_v4().to_string()).unwrap();
     let native_id = id.clone();
-    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let (sender, receiver) = tokio::sync::oneshot::channel::<AppResult<CaptureResource>>();
     webview.with_webview(move |view| unsafe {
         bb_browser_capture_resource(view.inner(), url.as_ptr(), maximum, native_id.as_ptr(), Box::into_raw(Box::new((sender,maximum))).cast(), complete);
     }).map_err(|_| AppError::Other("浏览器读取初始化失败。".into()))?;

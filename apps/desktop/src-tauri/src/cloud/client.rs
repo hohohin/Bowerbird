@@ -75,13 +75,14 @@ mod tests {
 
     #[tokio::test]
     async fn connection_error_preserves_cause_without_login_url() {
-        // Reserve a local TCP port without listening; connection must be refused.
+        // Release the reserved port: a bound, non-listening socket can time out on macOS.
         let socket = tokio::net::TcpSocket::new_v4().unwrap();
         socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
         let url = format!(
             "http://{}/wechat-login?state=dt_private&code=private_code",
             socket.local_addr().unwrap()
         );
+        drop(socket);
         let error = reqwest::Client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(3))

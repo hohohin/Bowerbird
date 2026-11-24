@@ -8,6 +8,7 @@
     "snapshot": "node export.mjs",
     "start": "node run.mjs",
     "test": "node --test test/*.test.mjs",
+    "start:gemini": "node run-gemini.mjs",
     "test:browser": "node --test test/consent.browser.mjs"
   }
 }

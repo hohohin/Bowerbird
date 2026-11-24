@@ -140,7 +140,7 @@ test('export rejects junction traversal, hardlinks, binary and oversize files', 
 
 async function fixtureServer(t) {
   const dir = await temporary(t);
-  for (const name of ['run.mjs', 'server.mjs', 'core.mjs', 'package.json']) await copyFile(path.join(here, name), path.join(dir, name));
+  for (const name of ['run.mjs', 'server.mjs', 'core.mjs', 'protocol.mjs', 'package.json']) await copyFile(path.join(here, name), path.join(dir, name));
   await mkdir(path.join(dir, '.local'));
   await writeFile(path.join(dir, '.local', 'snapshot.json'), JSON.stringify(sample()));
   return dir;
