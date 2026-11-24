@@ -184,7 +184,7 @@ VPS 的 Agent、生成、理解和视觉提炼消费循环复用 [ControlTranspo
 ## 在 Agent 卡片发送、取回或新建会话
 
 - **用途／关键词**：Agent 卡片、统一对话、原轮恢复、同卡新会话、工作流结果。
-- **入口**：[localChatStore](../../apps/desktop/src/lib/localChatStore.ts) 和 [local_chat.rs](../../apps/desktop/src-tauri/src/commands/local_chat.rs) 提供发送及原请求查询。[workflowAgentChat](../../apps/desktop/src/lib/workflowAgentChat.ts) 与 `CanvasWorkflowController.chatResult` 负责适配工作流输入及轮次输出。
+- **入口**：[localChatStore](../../apps/desktop/src/lib/localChatStore.ts) 和 [local_chat.rs](../../apps/desktop/src-tauri/src/commands/local_chat.rs) 提供发送及原请求查询。[workflowAgentChat](../../apps/desktop/src/lib/workflowAgentChat.ts) 与 [工作流 Agent 执行器](../../apps/desktop/src/lib/workflowAgentExecutor.ts)的 `chatResult` 负责适配工作流输入及轮次输出。
 - **调用**：发送走 `local_chat_send`，以 SQLite 事务绑定同 `nodeId` 的会话及 Agent 投影，取回走 `local_chat_get_by_request`。`localChat.newOnCard` 走 `local_chat_new_on_card`，校验项目、卡片、原会话与运行锁，旧会话进入项目历史，新会话沿原连线运行。全文及表格交付复用 [workflowAgentResult](../../apps/desktop/src/lib/workflowAgentResult.ts) 和 [workflowAgentOutputs](../../apps/desktop/src/lib/workflowAgentOutputs.ts)。
 - **边界／状态**：`localDsRequestId`／`agentRunId` 仅恢复旧任务。统一对话及 Agent 卡片已随 Windows 26.11.1001 公开发布，Cloud 新轮走 v2 并按试用资格受理。各平台范围和后续增量按发布记录核对。[Windows 发布回执](../DESKTOP-UPDATES.md#windows-26111001-已发布2026-11-10) · [桌面对话](../CHAT-PROVIDERS.md) · [Cloud v2](../../apps/cloud/CHAT.md)。
 

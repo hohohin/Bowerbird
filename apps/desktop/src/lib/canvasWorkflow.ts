@@ -504,10 +504,12 @@ export function activePromptReferences(node: WorkflowNode) {
 /** A pipe number is the current position among the receiving card's inputs of that type. */
 export function normalizeWorkflowInputSlots(node: WorkflowNode): WorkflowNode {
   if (node.kind !== "generation" && node.kind !== "agent" && node.kind !== "planner") return node;
-  const inputs = { ...node.inputs };
+  let inputs = node.inputs;
   for (const type of ["text", "image"] as const) {
-    if (!inputs[type]) continue;
-    inputs[type] = inputs[type].map((input, index) => input.slot === index + 1 ? input : { ...input, slot: index + 1 });
+    const bindings = inputs[type];
+    if (!bindings?.some((input, index) => input.slot !== index + 1)) continue;
+    if (inputs === node.inputs) inputs = { ...inputs };
+    inputs[type] = bindings.map((input, index) => input.slot === index + 1 ? input : { ...input, slot: index + 1 });
   }
   const promptReferences = node.promptReferences?.map(ref => {
     if (ref.direction === "output") return ref;
@@ -520,10 +522,14 @@ export function normalizeWorkflowInputSlots(node: WorkflowNode): WorkflowNode {
       : (labelSlot ? Number(labelSlot) : undefined)
       ?? bindings.find(input => workflowReferenceMatchesInput(ref, input))?.slot
       ?? (bindings.length === 1 ? bindings[0].slot : undefined));
-    const input = bindings.find(input => input.slot === slot);
-    return { ...ref, slot, input: input ?? ref.input, assetId: undefined,
-      label: slot ? `${ref.type === "text" ? "文本" : "图片来源"} ${slot}` : ref.label };
+    const input = bindings.find(input => input.slot === slot) ?? ref.input;
+    const label = slot ? `${ref.type === "text" ? "文本" : "图片来源"} ${slot}` : ref.label;
+    // Normalized references have both own fields, even when IPC omitted their undefined values.
+    if ("slot" in ref && "assetId" in ref && ref.slot === slot && ref.input === input
+      && ref.assetId === undefined && ref.label === label) return ref;
+    return { ...ref, slot, input, assetId: undefined, label };
   });
+  if (inputs === node.inputs && !promptReferences?.some((ref, i) => ref !== node.promptReferences![i])) return node;
   return { ...node, inputs, ...(promptReferences ? { promptReferences } : {}) };
 }
 export function rebindGenerationReferences(node: WorkflowNode): WorkflowNode {

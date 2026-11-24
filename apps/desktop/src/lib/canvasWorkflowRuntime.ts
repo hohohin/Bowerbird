@@ -1,54 +1,48 @@
-import { resolveNewCardImageProvider } from "./newCardImageProvider";
 import { assignCanvasCardNames } from "./canvasCardNames";
-import { describeAssetWithNotice } from "./describeNotices";
 import { mergeWorkflowChanges } from "./workflowExternalChanges";
-import { cloudChatEndedMessage, cloudTextRunError } from "./userError";
+import { WorkflowTriggerScheduler } from "./workflowTriggerScheduler";
 import { activeTriggerSchedule, advanceTriggerSchedule, triggerScheduleOccurrence, workflowTriggerMode } from "./workflowTriggerSchedule";
-import { normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflowCompletionTriggers, h3CardDraft, h3DraftForResult, h3OriginalPrompt, h3PromptPatch, isH3ImageCard } from "./canvasWorkflow";
+import { normalizeWorkflowLocalVideo, workflowTitle, workflowCompletionTriggers, h3CardDraft, h3DraftForResult, h3OriginalPrompt, h3PromptPatch, isH3ImageCard } from "./canvasWorkflow";
 import { resolveDynamicVideoFrame, resolveVideoCardOutputs } from "./workflowVideoFrames";
 import { automaticInputMedia, planAutomaticConnection, contentCardAcceptsMedia, type AutomaticOutput } from "./workflowAutoConnect";
 import { isAudioPath } from "./audioMedia";
 import { voiceApi } from "./voice";
-import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey, type VoiceCardRequest } from "./voiceCard";
+import { defaultVoiceSample } from "./voiceCard";
 import { api } from "./api";
 import type { Asset, CanvasNode, GenJob, ProjectCanvasSnapshot } from "./types";
 import { firstWorkflowVideoOutputPoint, placeWorkflowOutput } from "./canvasOutputPlacement";
 import { assetPayloadJson, canvasAssetNodeSize, createCanvasAssetSnapshot } from "./creativeCanvas";
-import { DEFAULT_VIDEO_OPTIONS, isVideoPath, resolveVideoOptions, videoInputError } from "./videoGeneration";
-import { profileExtractionIssue, profileInputKey, workflowGenerationProvider, workflowProviderIssue } from "./workflowProviderIssue";
-import { selectedChatOptions, chatProviderAccessIssue } from "./chatCapabilities";
-import { generationProviderIssue } from "./generationAvailability";
-import { autoRatioFromReferences } from "../components/creation/ratios";
+import { isVideoPath } from "./videoGeneration";
+import { workflowGenerationProvider, workflowProviderIssue } from "./workflowProviderIssue";
 import { workflowLoopScope, workflowLoopRows, workflowLoopOutputs, workflowLoopItems, validateLoopItems, validateLoopStart } from "./workflowLoop";
 import { WorkflowPlannerRuntime } from "./workflowPlannerRuntime";
 import { emit } from "@tauri-apps/api/event";
 import { useStore } from "../store";
-import { existingWorkflowCaption, workflowCaptionSections, workflowDescribeInstruction } from "./workflowDescribe";
-import { canStartAnotherAgentRun, canUseAgentRun, understandProvider } from "./entitlement";
-import { renderLayerDocument } from "./layerDocument";
-import { workflowLayerDecompose } from "./workflowLayerDecompose";
+import { canStartAnotherAgentRun, canUseAgentRun } from "./entitlement";
 import { readCanvasNote, emptyCanvasCell, canvasGridWeights, canvasTextMinSize } from "./canvasNotes";
 import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationCells, latestWorkflowSessionImage, completedCanvasSessions, canvasSessionCompleted, canvasSessionCompletionLookup, submittedTurnState, workflowGenerationActivity, workflowGenerationOrigins } from "./canvasSessionOutputs";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasContentInput, contentInputAxisIndex } from "./canvasContentInput";
-import { agentResultValue } from "./workflowAgentResult";
-import { agentChatOptions, localChat, localChatRunning, type ChatConversation, type ChatProvider } from "./localChat";
-import { ensureLocalChatEvents, useLocalChatStore } from "./localChatStore";
-import { createdChatTurnCards, terminalDshTurnFailure, workflowAgentMessage, workflowAgentProvider, workflowChatOutputs } from "./workflowAgentChat";
-import { contentTableRows } from "./contentTable";
-import { cloudAgentProfilePrompt } from "./workflowAgentProfile";
-
-import { agentOutputTargets, agentTextWriters, agentWriterValue, routeAgentOutputs } from "./workflowAgentOutputs";
+import { localChat, localChatRunning, type ChatProvider } from "./localChat";
+import { useLocalChatStore } from "./localChatStore";
+import { createdChatTurnCards, terminalDshTurnFailure } from "./workflowAgentChat";
+import { agentOutputTargets, agentWriterValue } from "./workflowAgentOutputs";
 import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots, workflowBindingKey, workflowDisconnectId, filterDisconnectedReferences, generationReferencePreviewOrder, h3RunReferences, workflowCompletionOutput, workflowCompletionTarget, workflowConnectionError } from "./canvasWorkflow";
 import { readDismissedNotices, dismissNotices } from "./dismissedNotices";
 import { ConfirmedDshTurnFailure, WorkflowInputError, WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
-import { describeBrandImage } from "./describeBrandImage";
-import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoElapsed, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, h3R2VInputError, type ComfyVideoInput, type ComfyVideoStatus } from "./comfyVideo";
+import { comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoMode, DEFAULT_COMFY_VIDEO, h3R2VInputError } from "./comfyVideo";
 import { H3_IMAGE, isCloudProvider } from "./genProviders";
-import { imageOptimizationText, restoreImageOptimization, restoreH3VideoAudioReference, restoreH3R2VReferences, h3R2VPromptReferences, cleanH3OptimizedPrompt, h3OptimizationInstruction, type H3R2VPromptReferences } from "./h3PromptOptimization";
-import { compileAgentPrompt, compileGenerationPrompt, renderGenerationDraft, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowExecutionInputs, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowNodeRun, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, H3_VIDEO_AUDIO_PORT, H3_R2V_INPUT_PORTS, WORKFLOW_SKILLS,
-  type CanvasWorkflow, type H3ImageGenerationInput, type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
+import { h3OptimizationInstruction, type H3R2VPromptReferences } from "./h3PromptOptimization";
+import { compileAgentPrompt, compileGenerationPrompt, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowExecutionInputs, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowNodeRun, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, H3_VIDEO_AUDIO_PORT, H3_R2V_INPUT_PORTS, WORKFLOW_SKILLS, type CanvasWorkflow, type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
+import type { WorkflowExecutionHost, CardStart } from "./workflowExecutionHost";
+import { executeAgent } from "./workflowAgentExecutor";
+import { runVoice } from "./workflowVoiceExecutor";
+import { runComfyPromptOptimization, runComfyAutoGeneration, runComfyVideo, executeComfy } from "./workflowComfyExecutor";
+import { runComfyAutoImage, recoverVideoResult, executeGeneration } from "./workflowGenerationExecutor";
+import { executeVisualProfile } from "./workflowVisualProfileExecutor";
+import { executeReuse, executeDescribe } from "./workflowDescribeExecutor";
+import { executeLayers } from "./workflowLayersExecutor";
 
 const controllers = new Map<string, CanvasWorkflowController>();
 const r2vPorts = Object.values(H3_R2V_INPUT_PORTS);
@@ -98,7 +92,17 @@ export async function filterAutomaticMediaValues(node: WorkflowNode, values: Rec
   }
 }
 const scheduleSessionStartedAt = Date.now();
-type CardStart = { kind: "run" | "optimize"; current: () => boolean; cancel: () => void; release: () => void };
+export function existingWorkflowController(projectId: string) { return controllers.get(projectId); }
+
+export function releaseInactiveWorkflowControllers() {
+  for (const controller of controllers.values()) controller.checkIdle();
+}
+
+export async function withProjectWorkflow<T>(projectId: string, action: (controller: CanvasWorkflowController) => Promise<T>): Promise<T> {
+  const controller = canvasWorkflowController(projectId);
+  return controller.whileInUse(action);
+}
+
 export function canvasWorkflowController(projectId: string) {
   let controller = controllers.get(projectId);
   if (!controller) { controller = new CanvasWorkflowController(projectId); controllers.set(projectId, controller); }
@@ -125,16 +129,53 @@ export function discardProjectWorkflow(projectId: string) {
 /** Lives outside React: changing projects never redirects or repeats a provider submission. */
 export class CanvasWorkflowController {
   private discarded = false;
+  private idleCheck?: ReturnType<typeof setTimeout>;
+  private pendingOperations = 0;
+
+  async whileInUse<T>(work: (controller: CanvasWorkflowController) => Promise<T>) {
+    this.pendingOperations++;
+    try { return await work(this); }
+    finally { this.pendingOperations--; this.checkIdle(); }
+  }
+
+  checkIdle() {
+    if (this.idleCheck !== undefined || this.discarded || this.listeners.size || this.pendingOperations
+      || controllers.get(this.projectId) !== this || useStore.getState().activeProjectId === this.projectId) return;
+    // A render or the next continuation of a completed save can immediately acquire a new owner.
+    this.idleCheck = setTimeout(() => {
+      this.idleCheck = undefined;
+      if (controllers.get(this.projectId) !== this || useStore.getState().activeProjectId === this.projectId
+        || this.listeners.size || this.pendingOperations || this.error && this.ready || this.pendingEditAuthorization
+        || this.executing.size || this.startingCards.size || this.stopping.size || this.retryingLoops.size
+        || this.resources.size || this.reservations.size || this.encapsulating || this.planner.busy || this.scheduler.active
+        || workflowRuns(this.document).some(run => run.status === "running")
+        || this.scheduler.triggerTimersEnabled && this.document.nodes.some(node => activeTriggerSchedule(node)?.status === "armed")) return;
+      controllers.delete(this.projectId);
+      this.discard();
+    }, 0);
+  }
   discard() {
     this.discarded = true;
+    clearTimeout(this.idleCheck);
     for (const run of workflowRuns(this.document)) this.stopped.add(run.id);
     for (const aborts of this.profileAbort.values()) for (const abort of aborts) abort.abort();
-    clearTimeout(this.triggerTimer); clearTimeout(this.sessionCompletionTimer);
+    this.scheduler.dispose();
     this.ready = false;
     this.emit();
   }
   readonly planner = new WorkflowPlannerRuntime(this);
-  document = emptyWorkflow();
+  private currentDocument = emptyWorkflow();
+  get document() { return this.currentDocument; }
+  set document(document: CanvasWorkflow) {
+    if (this.currentDocument.nodes !== document.nodes) {
+      this.measuredNodeIds = undefined;
+      if (this.measuredSizes.size) {
+        this.measuredNodeIds = new Set(document.nodes.map(node => node.id));
+        for (const id of this.measuredSizes.keys()) if (!this.measuredNodeIds.has(id)) this.measuredSizes.delete(id);
+      }
+    }
+    this.currentDocument = document;
+  }
   ready = false;
   error = "";
   issue: WorkflowDiagnostic | null = null;
@@ -208,8 +249,10 @@ export class CanvasWorkflowController {
     } } });
   }
   private measuredSizes = new Map<string, { width: number; height: number }>();
+  private measuredNodeIds?: Set<string>;
   measureCard(id: string, width: number, height: number) {
-    if (width > 0 && height > 0 && Number.isFinite(width + height)) this.measuredSizes.set(id, { width, height });
+    this.measuredNodeIds ??= new Set(this.document.nodes.map(node => node.id));
+    if (width > 0 && height > 0 && Number.isFinite(width + height) && this.measuredNodeIds.has(id)) this.measuredSizes.set(id, { width, height });
   }
   private layoutNodes() {
     return this.document.nodes.map(node => this.measuredSizes.has(node.id) ? { ...node, layoutSize: this.measuredSizes.get(node.id) } : node);
@@ -224,104 +267,17 @@ export class CanvasWorkflowController {
   private profileAbort = new Map<string, Set<AbortController>>();
   private executionDrains = new Map<string, Promise<void>>();
   private resources = new Map<string, Promise<unknown>>();
-  private sessionCompletionTimer: ReturnType<typeof setTimeout> | undefined;
-  private checkingSessionCompletions = false;
-  private dispatchingSessionCompletions = new Set<string>();
-  private sessionCompletionFailures = new Set<string>();
-  private historicalSessionCompletions = new Set<string>();
-  private triggerTimer: ReturnType<typeof setTimeout> | undefined;
-  private triggerTimersEnabled = true;
-  private dispatchingSchedule = false;
+  private readonly scheduler = new WorkflowTriggerScheduler(this, (...args) => this.startRun(...args),
+    () => this.encapsulating, () => this.checkIdle());
   setTriggerTimersEnabled(enabled: boolean) {
-    this.triggerTimersEnabled = enabled;
-    this.scheduleTriggers();
-  }
-  private scheduleTriggers() {
-    clearTimeout(this.triggerTimer);
-    this.triggerTimer = undefined;
-    if (this.discarded || !this.triggerTimersEnabled || !this.ready || this.error || this.dispatchingSchedule) return;
-    const pending = this.document.nodes.flatMap(node => { const schedule = activeTriggerSchedule(node); return schedule?.status === "armed" ? [schedule.at] : []; });
-    if (!pending.length) return;
-    // Short bounded waits tolerate system-clock changes and resume from sleep.
-    const remaining = Math.min(...pending) - Date.now();
-    this.triggerTimer = setTimeout(() => {
-      this.triggerTimer = undefined;
-      void this.checkScheduledTriggers();
-    }, remaining > 0 ? Math.min(1000, remaining) : 1000);
-  }
-  private async checkScheduledTriggers() {
-    if (!this.triggerTimersEnabled || !this.ready || this.error || this.dispatchingSchedule || this.encapsulating) { this.scheduleTriggers(); return; }
-    this.dispatchingSchedule = true;
-    try {
-      for (const node of this.document.nodes) {
-        const schedule = activeTriggerSchedule(node);
-        if (node.kind !== "trigger" || schedule?.status !== "armed" || schedule.at > Date.now()) continue;
-        try { await this.startRun(node.id, false, undefined, true, triggerScheduleOccurrence(schedule)); }
-        catch (error) {
-          this.showIssue(workflowDiagnostic(error, node, "validation"));
-          // Never retry the same occurrence after validation failure. Daily schedules keep tomorrow.
-          if (!this.error && this.document.nodes.find(current => current.id === node.id)?.triggerSchedule?.id === schedule.id) {
-            await this.save({ ...this.document, nodes: this.document.nodes.map(current => current.id === node.id && current.triggerSchedule?.status === "armed"
-              ? { ...current, triggerSchedule: schedule.dailyAt ? advanceTriggerSchedule(schedule) : { ...schedule, status: "failed" } } : current) });
-          }
-        }
-      }
-    } catch (error) { console.warn("保存定时触发状态失败", error); }
-    finally { this.dispatchingSchedule = false; this.scheduleTriggers(); }
-  }
-  private scheduleSessionCompletions() {
-    if (this.discarded || this.sessionCompletionTimer || !this.ready || this.error || !this.document.nodes.some(node =>
-      node.kind === "trigger" && workflowTriggerMode(node) === "completion" && (node.triggerCount ?? 0) > 0 && node.inputs.completion?.some(input => input.canvasNodeId || input.pendingCompletionSession && !node.completionSeen?.includes(input.pendingCompletionSession)))) return;
-    this.sessionCompletionTimer = setTimeout(() => {
-      this.sessionCompletionTimer = undefined;
-      void this.checkSessionCompletions();
-    }, 1500);
-  }
-  private async checkSessionCompletions() {
-    if (!this.ready || this.error || this.checkingSessionCompletions || this.encapsulating) return;
-    this.checkingSessionCompletions = true;
-    try {
-      if (!this.document.nodes.some(node => node.kind === "trigger" && workflowTriggerMode(node) === "completion" && node.inputs.completion?.some(input => input.canvasNodeId || input.pendingCompletionSession))) return;
-      const watchedTurns = this.document.nodes.flatMap(node => node.inputs.completion?.flatMap(input => input.pendingCompletionSession ?? []) ?? []);
-      const canvas = await api.projectCanvasGet(this.projectId);
-      const closed = new Set(watchedTurns.filter(id => this.historicalSessionCompletions.has(id) || submittedTurnState(id, canvas.nodes) === "closed"));
-      if (closed.size) await this.save({ ...this.document, nodes: this.document.nodes.map(node => {
-        if (!node.inputs.completion?.some(input => input.pendingCompletionSession && closed.has(input.pendingCompletionSession))) return node;
-        return { ...node, inputs: { ...node.inputs, completion: node.inputs.completion.map(input =>
-          input.pendingCompletionSession && closed.has(input.pendingCompletionSession) ? { ...input, pendingCompletionSession: undefined } : input) } };
-      }) });
-      for (const id of this.document.nodes.filter(node => node.kind === "trigger").map(node => node.id)) {
-        const node = this.document.nodes.find(node => node.id === id);
-        if (!node || workflowTriggerMode(node) !== "completion" || this.dispatchingSessionCompletions.has(id)) continue;
-        const completed = completedCanvasSessions(node.inputs.completion ?? [], canvas.nodes, useStore.getState().genJobs);
-        const unseen = completed.filter(id => !node.completionSeen?.includes(id) && !this.historicalSessionCompletions.has(id));
-        if (!unseen.length) continue;
-        if (!(node.triggerCount! > 0)) {
-          await this.save({ ...this.document, nodes: this.document.nodes.map(current => current.id === id
-            ? { ...current, completionSeen: [...(current.completionSeen ?? []), ...unseen] } : current) });
-          continue;
-        }
-        const sessionId = unseen[0], key = `${id}:${sessionId}`;
-        if (this.sessionCompletionFailures.has(key)) continue;
-        this.dispatchingSessionCompletions.add(id);
-        void this.startRun(id, false, sessionId).catch(error => {
-          this.sessionCompletionFailures.add(key);
-          this.showIssue(workflowDiagnostic(error, node, "validation"));
-        }).finally(() => { this.dispatchingSessionCompletions.delete(id); this.scheduleSessionCompletions(); });
-      }
-    } catch (error) {
-      // Canvas reads can fail transiently; a failed durable write already blocks execution.
-      console.warn("读取绘画会话完成状态失败", error);
-    } finally {
-      this.checkingSessionCompletions = false;
-      this.scheduleSessionCompletions();
-    }
+    this.scheduler.setTriggerTimersEnabled(enabled);
+    this.checkIdle();
   }
   private async withResource<T>(key: string, work: () => Promise<T>): Promise<T> {
     const task = (this.resources.get(key) ?? Promise.resolve()).catch(() => {}).then(work);
     this.resources.set(key, task);
     try { return await task; }
-    finally { if (this.resources.get(key) === task) this.resources.delete(key); }
+    finally { if (this.resources.get(key) === task) this.resources.delete(key); this.checkIdle(); }
   }
   isLocked(id: string) {
     return !this.document.nodes.some(node => node.id === id && node.kind === "trigger")
@@ -341,9 +297,38 @@ export class CanvasWorkflowController {
     const updated = runs.some(item => item.id === run.id) ? runs.map(item => item.id === run.id ? run : item) : [...runs, run];
     return this.save({ ...this.document, nodes, runs: updated, run: updated[updated.length - 1] ?? null });
   }
-  constructor(readonly projectId: string) {}
-  subscribe = (listener: (urgent?: boolean, promptEditor?: string) => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
-  private emit(urgent = false, promptEditor?: string) { for (const listener of this.listeners) listener(urgent, promptEditor); }
+  private readonly executionHost: WorkflowExecutionHost;
+
+  constructor(readonly projectId: string) {
+    const controller = this;
+    this.executionHost = {
+      projectId,
+      get document() { return controller.document; },
+      isStopped: id => this.stopped.has(id),
+      registerGenerationHandoff: (id, handoff) => this.generationHandoffs.set(id, handoff),
+      registerProfileAbort: (id, abort) => {
+        const aborts = this.profileAbort.get(id) ?? new Set<AbortController>();
+        aborts.add(abort);
+        this.profileAbort.set(id, aborts);
+      },
+      run: (...args) => this.run(...args),
+      stopBeforeDispatch: (...args) => this.stopBeforeDispatch(...args),
+      step: (...args) => this.step(...args),
+      progress: (...args) => this.progress(...args),
+      finish: (...args) => this.finish(...args),
+      save: (...args) => this.save(...args),
+      saveRun: (...args) => this.saveRun(...args),
+      subscribe: (...args) => this.subscribe(...args),
+      refreshExternalCards: (...args) => this.refreshExternalCards(...args),
+      layoutNodes: (...args) => this.layoutNodes(...args),
+      withResource: (...args) => this.withResource(...args),
+      writeContentInput: (...args) => this.writeContentInput(...args),
+      deliverMediaAsset: (...args) => this.deliverMediaAsset(...args),
+      deliverSubmittedSessions: (...args) => this.deliverSubmittedSessions(...args),
+    };
+  }
+  subscribe = (listener: (urgent?: boolean, promptEditor?: string) => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); this.checkIdle(); }; };
+  private emit(urgent = false, promptEditor?: string) { for (const listener of this.listeners) listener(urgent, promptEditor); this.checkIdle(); }
   load(provisional = false, canvasRead?: Promise<ProjectCanvasSnapshot>) {
     // Untouched canvases have no database row. Their first edit materializes
     // the project before saving this empty, revision-zero workflow.
@@ -359,7 +344,7 @@ export class CanvasWorkflowController {
     const attempt = ++this.loadAttempt;
     const stale = () => this.discarded || this.loadAttempt !== attempt;
     this.error = "";
-    this.loading = (async () => {
+    this.loading = this.whileInUse(async () => {
       try {
         const [snapshot, canvas] = await Promise.all([api.canvasWorkflowGet(this.projectId), canvasRead ?? api.projectCanvasGet(this.projectId)]);
         if (stale()) return;
@@ -414,7 +399,7 @@ export class CanvasWorkflowController {
           run.writeNodeIds = workflowWriteNodes(nodes, run.order);
         }
         // Conversation metadata may hydrate later; baseline all completed turns before grouping them.
-        this.historicalSessionCompletions = new Set(canvas.nodes.filter(node => node.kind === "prompt"
+        this.scheduler.historicalSessionCompletions = new Set(canvas.nodes.filter(node => node.kind === "prompt"
           && node.hiddenAt == null && canvasSessionCompleted(node, canvas.nodes)).map(node => node.id));
         const recovering = workflowLockedNodes({ ...this.document, runs });
         this.document = { ...this.document, nodes: reconcileCanvasWorkflowReferences(this.document.nodes, canvas.nodes).map(node => {
@@ -457,11 +442,11 @@ export class CanvasWorkflowController {
           // Persist skipped occurrences before the next daily claim is compared with SQLite.
           await this.save({ ...this.document, nodes: scheduledNodes });
         }
-        this.scheduleTriggers();
-        this.scheduleSessionCompletions();
+        this.scheduler.scheduleTriggers();
+        this.scheduler.scheduleSessionCompletions();
       } catch (error) { if (!stale()) this.error = String(error); }
       this.emit();
-    })();
+    });
     this.emit();
     return this.loading;
   }
@@ -487,6 +472,7 @@ export class CanvasWorkflowController {
     const draft = authorizeEdit && draftNodeId ? { nodeId: draftNodeId, document: initial } : undefined;
     this.queuedDraft = draft;
     let refreshBoard = !!this.error;
+    this.pendingOperations++;
     const write = this.writing.then(async () => {
       if (this.queuedDraft === draft) this.queuedDraft = undefined;
       const snapshot = draft?.document ?? initial;
@@ -521,7 +507,7 @@ export class CanvasWorkflowController {
       if (this.writing === write) this.pendingEditAuthorization = false;
     }
     catch (error) { this.error = `工作流未保存：${String(error)}`; throw error; }
-    finally { this.emit(false, refreshBoard || this.error ? undefined : promptEditor); this.scheduleSessionCompletions(); this.scheduleTriggers(); }
+    finally { this.pendingOperations--; this.emit(false, refreshBoard || this.error ? undefined : promptEditor); this.scheduler.scheduleSessionCompletions(); this.scheduler.scheduleTriggers(); }
   }
   async flush() {
     await this.load();
@@ -534,6 +520,7 @@ export class CanvasWorkflowController {
     let readFailure: { error: unknown } | undefined;
     // A refresh must not replace the merge base of an in-flight save/CAS retry.
     this.queuedDraft = undefined;
+    this.pendingOperations++;
     const refresh = this.writing.then(async () => {
       const latest = await api.canvasWorkflowGet(this.projectId).catch(error => { readFailure = { error }; return null; });
       if (!latest || latest.revision <= this.revision) return;
@@ -548,7 +535,7 @@ export class CanvasWorkflowController {
     this.writing = refresh;
     try { await refresh; }
     catch (error) { this.error = `工作流未保存：${String(error)}`; throw error; }
-    finally { this.emit(); this.scheduleTriggers(); }
+    finally { this.pendingOperations--; this.emit(); this.scheduler.scheduleTriggers(); }
     // A transient read failure is reported without blocking unrelated run checkpoints.
     if (readFailure) throw readFailure.error;
   }
@@ -620,7 +607,7 @@ export class CanvasWorkflowController {
       throw new Error("此卡片关联的工作流正在运行，请先停止对应流程");
     }
     const currentRuns = workflowRuns(this.document);
-    this.sessionCompletionFailures.clear();
+    this.scheduler.sessionCompletionFailures.clear();
     // Undoing a configuration edit must not replay an already consumed session.
     nodes = nodes.map(node => {
       const previous = this.document.nodes.find(previous => previous.id === node.id);
@@ -635,7 +622,7 @@ export class CanvasWorkflowController {
           node = { ...node, triggerSchedule: node.triggerSchedule.dailyAt ? advanceTriggerSchedule(node.triggerSchedule) : { ...node.triggerSchedule, status: "missed" } };
         }
       }
-      return node.kind === "trigger" && (node.completionSeen || seen) ? { ...node,
+      return node.kind === "trigger" && seen?.some(id => !node.completionSeen?.includes(id)) ? { ...node,
         completionSeen: [...new Set([...(seen ?? []), ...(node.completionSeen ?? [])])] } : node;
     });
     // Undoing deletion restores its terminal history, retaining newer run states.
@@ -675,7 +662,7 @@ export class CanvasWorkflowController {
       this.queuedDocument = structuredClone(result.document);
       await emit("creative://changed", { projectId: this.projectId }).catch(() => {});
       return result;
-    } finally { this.encapsulating = false; }
+    } finally { this.encapsulating = false; this.checkIdle(); }
   }
   async syncCanvasReferences(canvas: Parameters<typeof reconcileCanvasWorkflowReferences>[1]) {
     if (this.generationHandoffs.size) for (const [id, handoff] of this.generationHandoffs) {
@@ -688,7 +675,7 @@ export class CanvasWorkflowController {
     if (!this.ready) return;
     const nodes = reconcileCanvasWorkflowReferences(this.document.nodes, canvas).map(node => this.isLocked(node.id) ? this.document.nodes.find(current => current.id === node.id)! : node);
     if (JSON.stringify(nodes) !== JSON.stringify(this.document.nodes)) await this.edit(nodes);
-    void this.checkSessionCompletions();
+    void this.scheduler.checkSessionCompletions();
     if (!canvas.some(node => node.kind === "note" && node.hiddenAt == null && readCanvasNote(node).cells.flat().some(cell => cell.generation_ref))) return;
     await this.withResource("canvas", async () => {
       const snapshot = await api.projectCanvasGet(this.projectId);
@@ -1290,7 +1277,7 @@ export class CanvasWorkflowController {
     if (scheduleId) {
       const owner = this.document.nodes.find(node => node.id === startId);
       const schedule = owner && activeTriggerSchedule(owner);
-      if (!this.triggerTimersEnabled || !schedule || triggerScheduleOccurrence(schedule) !== scheduleId || schedule.status !== "armed" || schedule.at > Date.now()) return;
+      if (!this.scheduler.triggerTimersEnabled || !schedule || triggerScheduleOccurrence(schedule) !== scheduleId || schedule.status !== "armed" || schedule.at > Date.now()) return;
     }
     if (completionSessionId) {
       const trigger = this.document.nodes.find(node => node.id === startId)!;
@@ -1587,249 +1574,6 @@ export class CanvasWorkflowController {
     return false;
   }
 
-  private async waitForChatTurn(initial: ChatConversation, turnId: string, halted: () => boolean): Promise<ChatConversation | null> {
-    await ensureLocalChatEvents();
-    // Reconcile once after five quiet seconds. This covers a lost final event.
-    // While revisions are arriving, no database polling is needed.
-    let latest = initial;
-    let timer: ReturnType<typeof setTimeout>;
-    let finished = false, checking = false;
-    let unsubscribeChat = () => {}, unsubscribeRun = () => {};
-    try {
-      return await new Promise<ChatConversation | null>((resolve, reject) => {
-        function observe() {
-          if (finished) return;
-          if (halted()) { finished = true; resolve(null); return; }
-          const cached = useLocalChatStore.getState().conversations[initial.id];
-          if (cached && cached.revision > latest.revision) latest = cached;
-          if (!localChatRunning(latest) || latest.messages[latest.messages.length - 1]?.turnId !== turnId) {
-            finished = true; resolve(latest);
-          }
-        }
-        function schedule() { clearTimeout(timer); timer = setTimeout(reconcile, 5000); }
-        async function reconcile() {
-          if (finished) return;
-          checking = true;
-          try {
-            const revision = await localChat.revision(initial.id);
-            if (finished) return;
-            if (revision == null) throw new Error("原对话已不存在");
-            if (revision > latest.revision) {
-              const snapshot = await useLocalChatStore.getState().loadConversation(initial.id);
-              if (!snapshot) throw new Error("原对话已不存在");
-              if (snapshot.revision > latest.revision) latest = snapshot;
-            }
-            observe();
-            if (!finished) schedule();
-          } catch (error) { finished = true; reject(error); }
-          finally { checking = false; }
-        }
-        unsubscribeChat = useLocalChatStore.subscribe((state, previous) => {
-          if (state.conversations[initial.id] === previous.conversations[initial.id]) return;
-          observe();
-          if (!finished && !checking) schedule();
-        });
-        unsubscribeRun = this.subscribe(observe);
-        observe();
-        if (!finished) schedule();
-      });
-    } finally {
-      finished = true; clearTimeout(timer!);
-      unsubscribeChat(); unsubscribeRun();
-    }
-  }
-
-  private async chatResult(runId: string, node: WorkflowNode, step: WorkflowStep, assets: Asset[], halted: () => boolean): Promise<Record<string, WorkflowValue> | null> {
-    const store = useLocalChatStore.getState();
-    let input = step.chatInput;
-    if (!input) {
-      if (step.status !== "pending") throw new Error("原 Agent 提交状态未知，请先核对原任务，不能重新提交");
-      await store.loadProject(this.projectId);
-      const summaries = useLocalChatStore.getState().summaries;
-      const existing = node.chatConversationId ? summaries[node.chatConversationId]
-        : Object.values(summaries).find(chat => chat.projectId === this.projectId && chat.nodeId === node.id);
-      const provider = existing?.provider ?? workflowAgentProvider(node);
-      const issue = chatProviderAccessIssue(provider, useStore.getState());
-      if (issue) throw new WorkflowNodeError(issue.message, node);
-      const run = this.run(runId), snapshot = run.steps[node.id].agentInput!;
-      input = { requestId: crypto.randomUUID(), projectId: this.projectId, agentNodeId: node.id,
-        ...(run.manualCardRun && run.startId === node.id ? { manualCardRun: true } : {}),
-        conversationId: existing?.id ?? node.chatConversationId, provider,
-        codexOptions: selectedChatOptions(provider, agentChatOptions(provider, existing ? useLocalChatStore.getState().drafts[existing.id]?.codexOptions ?? existing.codexOptions ?? node.chatCodexOptions : node.chatCodexOptions)),
-        text: workflowAgentMessage(cloudAgentProfilePrompt(snapshot.prompt, snapshot.visualProfile), snapshot.source, provider, assets.map(asset => isVideoPath(asset.store_path!) ? "视频" : "图片")),
-        referenceAssetIds: snapshot.assetIds,
-        cardDefaults: { provider: resolveNewCardImageProvider(useStore.getState()), videoChannel: "jimeng", videoOptions: { ...DEFAULT_VIDEO_OPTIONS } },
-        placement: { x: node.x, y: node.y, width: workflowCardWidth(node), height: node.layoutSize?.height ?? 330, zIndex: Date.now() % 1000000 } };
-      await this.step(runId, node.id, { status: "running", chatInput: input, detail: "正在发送" });
-    }
-    let chat: ChatConversation | null;
-    try {
-      chat = await localChat.getByRequest(input.requestId);
-      if (halted()) return null;
-      // Only a recorded turn identifies a prior submission. Older retry snapshots also
-      // stored the conversation ID before their new request was ever sent.
-      if (!chat && step.chatTurnId) throw new Error("原 Agent 轮次记录已不存在，无法取回");
-      if (!chat) chat = await store.send(input); // The persisted native request key makes an uncertain IPC replay safe.
-    } catch (error) {
-      if (!halted()) await this.step(runId, node.id, { status: "waiting", error: String(error), detail: "等待核对原回复" });
-      return null;
-    }
-    if (chat.projectId !== this.projectId || chat.nodeId !== node.id || !chat.submittedTurnId || (input.conversationId && chat.id !== input.conversationId)
-      || (step.chatTurnId && step.chatTurnId !== chat.submittedTurnId) || (step.chatConversationId && step.chatConversationId !== chat.id)) throw new Error("Agent 回复与原卡片或轮次不匹配");
-    const turnId = chat.submittedTurnId;
-    if (halted()) { if (localChatRunning(chat)) await store.stop(chat.id, turnId); return null; }
-    await this.refreshExternalCards();
-    await this.step(runId, node.id, { status: "running", chatConversationId: chat.id, chatTurnId: turnId, detail: "正在回复" });
-    if (halted()) return null;
-    store.applyConversation(chat);
-    if (localChatRunning(chat) && chat.messages[chat.messages.length - 1]?.turnId === turnId) {
-      try { chat = await this.waitForChatTurn(chat, turnId, halted); }
-      catch (error) {
-        if (!halted()) await this.step(runId, node.id, { status: "waiting", error: String(error), detail: "等待取回原回复" });
-        return null;
-      }
-      if (!chat || halted()) return null;
-    }
-    const messages = chat.messages.filter(message => message.turnId === turnId && message.role === "assistant");
-    if (messages.some(message => ["failed", "interrupted", "stopped"].includes(message.status))) {
-      if (chat.messages[chat.messages.length - 1]?.turnId === turnId && cloudChatEndedMessage(chat.error)) throw new Error(chat.error!);
-      // A host-confirmed failure is terminal: waiting and re-querying the same turn would keep
-      // showing "take back the original reply" for a reply that can never exist.
-      const terminal = terminalDshTurnFailure(chat, turnId, step.confirmedFailedChatTurnId);
-      if (terminal) throw new ConfirmedDshTurnFailure(terminal.message, node, terminal.code);
-      await this.step(runId, node.id, { status: "waiting", error: (chat.messages[chat.messages.length - 1]?.turnId === turnId && chat.error) || "回复未完成，请打开对话详情取回原回复后继续" });
-      return null;
-    }
-    return workflowChatOutputs(chat, turnId);
-  }
-
-  private async localDsResult(runId: string, node: WorkflowNode, step: WorkflowStep, images: string[], halted: () => boolean): Promise<Record<string, WorkflowValue> | null> {
-    const requestId = step.localDsRequestId!;
-    const transport = step.localAgentTransport ?? "local-ds";
-    const agentName = transport === "codex-cli" ? "Codex CLI" : "Agent DS";
-    const videoTask = step.localAgentSkill === "hyperframes";
-    while (!halted()) {
-      if (!await this.localDsGenerate(runId, node, requestId, images, halted)) return null;
-      if (!await this.deliverSubmittedSessions(runId, node, halted)) return null;
-      const result = await api.agentDsWorkflowResult(requestId);
-      if (halted()) return null;
-      if (result) {
-        if (result.schemaVersion !== 1 || result.requestId !== requestId) throw new Error(`${agentName} 返回了其他请求的结果`);
-        if (result.error) throw new Error(`${agentName} 处理失败：${result.error}（请求 ${requestId}）`);
-        const outputs: Record<string, WorkflowValue> = {};
-        const sessions = Object.values(this.run(runId).steps[node.id].localDsGenerations ?? {}).flatMap(call => call.response?.submitted ? [call.response.submitted.sessionNodeId] : []);
-        if (sessions.length) outputs.image = { type: "image", nodeIds: sessions };
-        if (result.text !== undefined) outputs.text = agentResultValue(result.text);
-        if (result.images !== undefined && (!Array.isArray(result.images) || !result.images.length || result.images.some(path => typeof path !== "string" || !path.trim()))) throw new Error(`${agentName} 返回图片格式无效`);
-        const media = result.videos ?? result.images;
-        if (result.videos && (!videoTask || transport !== "codex-cli" || result.videos.length !== 1)) throw new Error("视频交付与当前任务不匹配，请检查原请求");
-        if (media?.length) {
-          const assets = await api.agentDsWorkflowIngestImages(requestId);
-          if (halted()) return null;
-          if (assets.length !== media.length) throw new Error(`${agentName} 素材未完整入库，请继续取回原请求`);
-          const imageIds = assets.map(asset => asset.id);
-          await this.step(runId, node.id, { generatedAssetIds: [...new Set(imageIds)] });
-          if (halted()) return null;
-          if (result.videos) {
-            await this.step(runId, node.id, { videoProjectPath: result.projectPath });
-            await this.deliverMediaAsset(this.run(runId), node, assets[0], halted, `workflow-video:${requestId}`);
-            if (halted()) return null;
-          }
-          // Directed results index the outer images array, including duplicate bytes.
-          outputs.image = { ...outputs.image, type: "image", assetIds: this.run(runId).steps[node.id].agentOutputTargets?.length ? imageIds : [...new Set(imageIds)] };
-        }
-        if (!Object.keys(outputs).length) throw new Error(`${agentName} 未返回文字或图片`);
-        return outputs;
-      }
-      // After a reload or failed delivery, Continue only checks the existing request.
-      if (step.status === "waiting") {
-        await this.step(runId, node.id, { status: "waiting", error: transport === "codex-cli" ? "Codex CLI 尚在处理，请稍后继续取回" : "Agent DS 尚未写回结果；请在 DSH 会话处理队列后继续", detail: `等待本机请求 ${requestId}` });
-        return null;
-      }
-      await new Promise(resolve => setTimeout(resolve, 1500));
-    }
-    return null;
-  }
-
-  private async localDsGenerate(runId: string, node: WorkflowNode, requestId: string, inputImages: string[], halted: () => boolean): Promise<boolean> {
-    const request = await api.agentDsWorkflowGenerationRequest(requestId);
-    if (halted()) return false;
-    if (!request) return true;
-    const step = this.run(runId).steps[node.id];
-    if (!step.localDsImageProvider) throw new Error("此旧 Agent 请求没有默认生图配置，请停止后重新运行卡片");
-    let call = step.localDsGenerations?.[request.id];
-    if (call && JSON.stringify(call.request) !== JSON.stringify(request)) throw new Error("Agent 生图请求使用相同 id 修改了参数");
-    if (!call) {
-      const issue = generationProviderIssue(step.localDsImageProvider, useStore.getState());
-      if (issue) {
-        await api.agentDsWorkflowGenerationResponse(requestId, request, { error: issue.message });
-        return true;
-      }
-      const allowed = new Set([...inputImages, ...Object.values(step.localDsGenerations ?? {}).flatMap(call => call.response?.images ?? [])]);
-      if (request.images.some(path => !allowed.has(path))) throw new Error("Agent 生图只能引用本卡片输入或本次已生成的图片");
-      const ids = await Promise.all(request.images.map(path => api.localAgentFindAssetId(path)));
-      if (ids.some(id => !id)) throw new Error("Agent 生图参考图片已失效");
-      const assets = await api.getAssetsByIds(ids as string[]);
-      const references = ids.map(id => assets.find(asset => asset.id === id));
-      if (references.some(asset => !asset?.store_path)) throw new Error("Agent 生图参考图片已失效");
-      if (halted()) return false;
-      call = { request, jobId: crypto.randomUUID(), turnKey: crypto.randomUUID() };
-      await this.step(runId, node.id, { localDsGenerations: { ...step.localDsGenerations, [request.id]: call }, detail: `Agent 正在使用默认生图引擎 ${step.localDsImageProvider}` });
-      // Persist identity before submission. Recovery only queries this job, never submits again.
-      const sessionNodeId = `gen-prompt:${call.jobId}:${call.turnKey}:0`;
-      if (step.localDsGenerationMode === "session") {
-        await this.save({ ...this.document, nodes: this.document.nodes.map(candidate => candidate.id === node.id
-          ? { ...candidate, activeSessionNodeId: sessionNodeId, sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate) });
-      }
-      try {
-        if (step.localDsGenerationMode === "session") {
-          const result = await useStore.getState().startGeneration(request.prompt, references as NonNullable<typeof references[number]>[], request.ratio,
-            step.localDsImageProvider, request.prompt, undefined, undefined, undefined, step.agentInput?.visualProfile?.id ?? null,
-            { projectId: this.projectId, threadId: this.run(runId).threadId }, true, undefined, { jobId: call.jobId, turnKey: call.turnKey });
-          if (!result.accepted) throw new Error(result.error || "生成任务未提交");
-          call = { ...call, response: { submitted: { jobId: call.jobId, turnKey: call.turnKey, sessionNodeId } } };
-        } else {
-          await api.codexCreateImage({
-            jobId: call.jobId, turnKey: call.turnKey, internalAgent: true,
-            prompt: request.prompt, promptRaw: request.prompt, referenceImages: request.images, visualProfileId: step.agentInput?.visualProfile?.id ?? null,
-            ratio: request.ratio ?? autoRatioFromReferences(references as NonNullable<typeof references[number]>[]), provider: step.localDsImageProvider,
-            projectId: this.projectId, threadId: this.run(runId).threadId,
-          });
-        }
-      } catch (error) {
-        call = { ...call, response: { error: String(error) } };
-      }
-    }
-    if (halted()) return false;
-    if (!call.response) {
-      const previous = await api.agentDsWorkflowGenerationJob(call.jobId, call.turnKey);
-      if (halted()) return false;
-      if (previous && ["failed", "cancelled", "cancelled_local"].includes(previous.status)) call = { ...call, response: { error: previous.error || "默认引擎生图失败" } };
-      else if (previous && step.localDsGenerationMode === "session") {
-        call = { ...call, response: { submitted: { jobId: call.jobId, turnKey: call.turnKey, sessionNodeId: `gen-prompt:${call.jobId}:${call.turnKey}:0` } } };
-      } else if (previous?.status === "done") {
-        const images = previous.images;
-        if (images.length) call = { ...call, response: { images } };
-      }
-    }
-    if (!call.response) {
-      await this.step(runId, node.id, { status: "waiting", error: step.localDsGenerationMode === "session" ? "无法确认原生成任务是否已提交，请检查任务中心后继续；不会重复提交" : "Agent 的原生图任务尚未完成，请稍后继续取回；不会重复提交" });
-      return false;
-    }
-    await this.step(runId, node.id, { localDsGenerations: { ...this.run(runId).steps[node.id].localDsGenerations, [request.id]: call } });
-    if (halted()) return false;
-    if (!await this.deliverSubmittedSessions(runId, node, halted)) return false;
-    try {
-      await api.agentDsWorkflowGenerationResponse(requestId, request, call.response);
-    } catch (error) {
-      if (halted()) return false;
-      await this.step(runId, node.id, { status: "waiting", error: `生图结果回传未完成，请继续重试回传：${String(error)}` });
-      return false;
-    }
-    if (!halted()) await this.step(runId, node.id, { detail: call.response.error ? "生图失败，Agent 正在处理反馈" : call.response.submitted ? "生成任务已提交，会话卡片正在生图" : "生图完成，Agent 正在检查和整理结果" });
-    return !halted();
-  }
-
   /** Deliver submitted sessions before Agent replies or completion-trigger waits. */
   private async deliverSubmittedSessions(runId: string, node: WorkflowNode, halted: () => boolean): Promise<boolean> {
     const run = this.run(runId), step = run.steps[node.id];
@@ -1857,54 +1601,6 @@ export class CanvasWorkflowController {
     return !halted();
   }
 
-  private async writeAgentResult(runId: string, node: WorkflowNode, value: WorkflowValue, hasWriters: boolean, halted: () => boolean) {
-    if (!node.resultNodeIds?.length && (hasWriters || !value.table)) return;
-    await this.withResource("canvas", async () => {
-      if (halted()) return;
-      const canvas = await api.projectCanvasGet(this.projectId);
-      const table = canvas.nodes.find(item => node.resultNodeIds?.includes(item.id) && item.kind === "note" && item.hiddenAt == null);
-      if (!table && (hasWriters || !value.table)) return;
-      const id = table?.id ?? `workflow-agent:${runId}:${node.id}`;
-      // Persist a stable destination before creating it; recovery can find the same node.
-      if (!table) await this.save({ ...this.document, nodes: this.document.nodes.map(item => item.id === node.id ? { ...item, resultNodeIds: [id] } : item) });
-      if (halted()) return;
-      const previous = table ? readCanvasNote(table) : null;
-      const data = value.table ? contentTableRows(value.table) : [[value.text ?? ""]];
-      const width = Math.max(data[0].length, previous?.cells[0]?.length ?? 0);
-      const height = Math.max(data.length, previous?.cells.length ?? 0);
-      const cells = Array.from({ length: height }, (_, r) => Array.from({ length: width }, (_, c) => ({
-        ...emptyCanvasCell(), ...previous?.cells[r]?.[c], id: previous?.cells[r]?.[c]?.id ?? crypto.randomUUID(),
-        content_type: "text" as const, text: data[r]?.[c] ?? "", image_refs: [], bold: !!value.table?.columns && r === 0,
-      })));
-      const payload = { ...previous, schema_version: 1, note_type: "text", member_ids: [], title: value.table?.title || "Agent 结果",
-        cells, text: cells.map(row => row.map(cell => cell.text).join("\t")).join("\n"),
-        column_widths: canvasGridWeights(previous?.column_widths, width), row_heights: canvasGridWeights(previous?.row_heights, height) };
-      const minimum = canvasTextMinSize(cells);
-      if (table) {
-        await api.projectCanvasNoteUpdate(table.id, JSON.stringify(payload));
-        if (table.width < minimum.width || table.height < minimum.height) await api.projectCanvasNodeUpdate(table.id, {
-          x: table.x, y: table.y, width: Math.max(table.width, minimum.width), height: Math.max(table.height, minimum.height), zIndex: table.zIndex, positionLocked: table.positionLocked,
-        });
-      } else {
-        const { x, y } = placeWorkflowOutput(canvas, this.layoutNodes(), node, minimum);
-        await api.projectCanvasNodeCreate({ id, projectId: this.projectId, threadId: this.run(runId).threadId, kind: "note", assetId: null, role: null,
-          payloadJson: JSON.stringify(payload), x, y, ...minimum, zIndex: Math.max(0, ...canvas.nodes.map(item => item.zIndex)) + 1, positionLocked: true });
-      }
-      await emit("creative://changed", { projectId: this.projectId });
-    });
-  }
-
-  /** Deliver an Agent's text into the content cards it is wired to; the writer's own run then
-   * rewrites the same slots, so this only moves the landing earlier (idempotent either way). */
-  private async writeAgentText(runId: string, node: WorkflowNode, value: WorkflowValue, writers: WorkflowNode[], halted: () => boolean) {
-    if (!value.table && !value.text?.trim()) return;
-    for (const writer of writers) {
-      if (halted()) return;
-      await this.writeContentInput(runId, writer, value, halted);
-    }
-    if (!halted() && writers.length > 1) this.progress(runId, node.id, `已写入 ${writers.length} 张连接的内容卡`);
-  }
-
   private async deliverMediaAsset(run: WorkflowRun, node: WorkflowNode, asset: Asset, halted: () => boolean, resultId = `workflow-comfy:${run.steps[node.id].jobId}`) {
     await this.withResource("canvas", async () => {
       if (halted()) return;
@@ -1927,91 +1623,6 @@ export class CanvasWorkflowController {
         ? { ...item, ...(node.kind === "comfy-video" ? { activeSessionNodeId: null } : {}), resultNodeIds: [resultId] } : item) });
       await emit("creative://changed", { projectId: this.projectId });
     });
-  }
-
-  private async runVoice(runId: string, node: WorkflowNode, halted: () => boolean, values?: Record<string, WorkflowValue[]>) {
-    const run = this.run(runId);
-    const voice = node.voice ?? {};
-    let request: VoiceCardRequest | undefined = run.steps[node.id].voiceRequest;
-    const recovering = !!request;
-    if (!request) {
-      const environment = await voiceApi.environment();
-      if (environment.phase !== "ready") throw new Error(environment.message);
-      const key = crypto.randomUUID();
-      let text = [...(values?.text ?? []).map(value => value.text), node.prompt].filter(Boolean).join("\n").trim();
-      let preview: Parameters<typeof voiceApi.start>[3];
-      request = { key };
-      if (!voice.id) {
-        if (run.order.length !== 1) throw new Error("请先为角色声音卡片选择声音");
-        const ids = (values?.image ?? []).flatMap(value => value.assetIds ?? []);
-        if (ids.length !== 1) throw new Error("请选择一段参考录音");
-        const [asset] = await api.getAssetsByIds(ids);
-        if (!asset || !isAudioPath(asset.store_path)) throw new Error("请选择音频素材作为参考录音");
-        const clip = voiceCardClip(voice, asset);
-        text = (voice.sampleText ?? defaultVoiceSample).trim();
-        request.previewKey = voiceCardPreviewKey(voice, asset);
-        preview = { assetId: asset.id, start: clip.start, end: clip.end, transcript: clip.transcript, draftKey: request.previewKey };
-      }
-      if (!text) throw new Error(voice.id ? "请输入配音台词" : "请输入试听台词");
-      if (halted()) return;
-      await this.step(runId, node.id, { status: "running", voiceRequest: request, detail: voice.id ? "正在生成配音" : "正在生成试听" });
-      if (halted()) return;
-      let jobId: string;
-      try { jobId = await voiceApi.start(this.projectId, text, voice.id ?? null, preview, key); }
-      catch (error) {
-        const snapshot = await voiceApi.snapshot(this.projectId).catch(() => null);
-        if (!snapshot) {
-          if (!halted()) await this.step(runId, node.id, { status: "waiting", error: "提交状态待确认，点击继续以查询原任务" });
-          return;
-        }
-        const original = snapshot.jobs.find(item => item.request_key === key);
-        if (!original) throw error;
-        jobId = original.id;
-      }
-      if (halted()) { await voiceApi.cancel(jobId); return; }
-      request = { ...request, jobId };
-      await this.step(runId, node.id, { voiceRequest: request });
-    }
-    let retrySave = recovering;
-    while (!halted()) {
-      if (run.accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("请登录原账号后继续取回配音");
-      let snapshot: Awaited<ReturnType<typeof voiceApi.snapshot>>;
-      try { snapshot = await voiceApi.snapshot(this.projectId); }
-      catch (error) {
-        if (!halted()) await this.step(runId, node.id, { status: "waiting", error: `配音查询中断，可继续查询原任务。${String(error)}` });
-        return;
-      }
-      if (halted()) return;
-      const identity: VoiceCardRequest = request;
-      const job = snapshot.jobs.find(item => item.id === identity.jobId || item.request_key === identity.key);
-      if (!job) { await this.step(runId, node.id, { status: "waiting", error: "尚未找到原配音任务，可继续查询" }); return; }
-      if (!request.jobId) {
-        request = { ...request, jobId: job.id };
-        await this.step(runId, node.id, { voiceRequest: request });
-      }
-      if (job.status === "succeeded") {
-        const asset = snapshot.assets.find(item => item.id === job.asset_id);
-        if (!asset) throw new Error("配音素材已移除");
-        if (!request.previewKey) {
-          try { await this.deliverMediaAsset(this.run(runId), node, asset, halted, `workflow-voice:${job.id}`); }
-          catch (error) {
-            if (!halted()) await this.step(runId, node.id, { status: "waiting", error: `配音已保存，点击继续添加到画板。${String(error)}` });
-            return;
-          }
-        }
-        if (halted()) return;
-        await this.step(runId, node.id, { voiceRequest: { ...request, assetId: asset.id } });
-        await this.finish(runId, node, request.previewKey ? {} : { image: { type: "image", assetIds: [asset.id] } });
-        return;
-      }
-      if (job.recoverable) {
-        if (retrySave) { retrySave = false; await voiceApi.recover(job.id); continue; }
-        await this.step(runId, node.id, { status: "waiting", error: "音频已生成，点击继续以重试保存" });
-        return;
-      }
-      if (job.status !== "running") throw new Error(job.message);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
   }
 
   async restoreComfyPrompt(nodeId: string, runId: string, source: "original" | "result") {
@@ -2109,289 +1720,6 @@ export class CanvasWorkflowController {
     return runId;
   }
 
-  private async resolveComfyPromptOptimization(runId: string, node: WorkflowNode, halted: () => boolean, start?: CardStart) {
-    const id = node.id, originalStep = this.run(runId).steps[id];
-    const composedImage = !!originalStep.comfyAutoGeneration?.imageInput;
-    const assertAccount = () => {
-      const account = useStore.getState();
-      if (this.run(runId).accountId !== (account.cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
-      if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("本地 H3 需要有效的 Pro／Studio 权益或测试账号资格");
-      return account;
-    };
-    assertAccount();
-    let snapshot = originalStep.comfyOptimization;
-    if (!snapshot) throw new Error("缺少本次优化输入，请重新点击优化提示词");
-    if (!snapshot.result) {
-      let terminalFailure = false;
-      try {
-        let agentRunId = originalStep.agentRunId;
-        if (!agentRunId) {
-          if (snapshot.submissionStarted) throw new Error("提示词优化提交状态未知，请核对 Agent 任务记录；不会自动重复提交");
-          const account = assertAccount();
-          if (!account.cloudEntitlement?.is_test_account || !canUseAgentRun(account.cloudEntitlement, "bowerbird-unified-agent")) throw new Error("当前账号尚未开放 Cloud DSH，请使用已获授权的测试账号");
-          const active = Object.values(account.cloudAgentRuns).filter(run => !["succeeded", "failed", "cancelled"].includes(run.status)).length;
-          if (!canStartAnotherAgentRun(account.cloudEntitlement, active, "bowerbird-unified-agent")) throw new Error("Agent 并发已满，请等待当前任务结束");
-          const source = "referenceCount" in snapshot.input ? imageOptimizationText(snapshot.input.prompt, composedImage) : snapshot.input.prompt;
-          if (composedImage && source.length > 16000) throw new Error("包含引用标记的提示词超出自动优化的长度限制，请删减后重试");
-          snapshot = { ...snapshot, instruction: h3OptimizationInstruction(snapshot.input), submissionStarted: true };
-          await this.step(runId, id, { status: "running", comfyOptimization: snapshot, error: undefined, detail: "提交 H3 提示词优化" });
-          if (halted()) return;
-          if (start && !start.current()) { await this.stopBeforeDispatch(runId); return; }
-          start?.release();
-          const created = await api.cloudAgentStart({ intentPrompt: snapshot.instruction, textRewrite: { source }, references: [],
-            projectId: this.projectId, threadId: this.run(runId).threadId, imageProvider: "cloud", skillId: "bowerbird-unified-agent", agentRuntime: "dsh" });
-          if (this.stopped.has(runId)) { await api.cloudAgentCancel(created.runId); return; }
-          agentRunId = created.runId;
-          await this.step(runId, id, { agentRunId, detail: "Cloud DSH 正在优化提示词" });
-        }
-        while (!halted()) {
-          assertAccount();
-          const current = await api.cloudAgentGet(agentRunId);
-          if (halted()) return;
-          assertAccount();
-          useStore.getState().openCloudAgentRun(current, { navigate: false });
-          if (["failed", "cancelled"].includes(current.status)) { terminalFailure = true; throw cloudTextRunError(current.snapshot.run, "提示词优化未完成，请检查 Agent 任务记录"); }
-          if (current.status.startsWith("awaiting_")) { terminalFailure = true; throw new Error("云端未按文本优化模式执行，请检查 Cloud DSH 服务版本"); }
-          if (current.status === "succeeded") {
-            terminalFailure = true;
-            const payload = current.snapshot.events.find(event => event.type === "text.result")?.display_payload;
-            if (payload?.schemaVersion !== 1 || typeof payload.text !== "string" || !payload.text.trim() || payload.text.length > 16000) throw new Error("Cloud DSH 未返回有效的优化提示词，请检查任务结果");
-            const restored = "referenceCount" in snapshot.input ? restoreImageOptimization(snapshot.input.prompt, payload.text, composedImage) : null;
-            const cleaned = restored?.text ?? cleanH3OptimizedPrompt(payload.text);
-            const autoInput = originalStep.comfyAutoGeneration?.input;
-            const hasAudio = autoInput ? !!autoInput.audioAssetId : !!node.inputs[H3_VIDEO_AUDIO_PORT]?.length;
-            const prompt = "mode" in snapshot.input && snapshot.input.mode === "r2v"
-              ? restoreH3R2VReferences(snapshot.input.prompt, cleaned, snapshot.input)
-              : hasAudio && "mode" in snapshot.input && snapshot.input.mode === "reference"
-                ? restoreH3VideoAudioReference(snapshot.input.prompt, cleaned) : cleaned;
-            if (!prompt) throw new Error("Cloud DSH 未返回有效的优化提示词，请检查任务结果");
-            snapshot = { ...snapshot, result: prompt, keptOriginal: restored?.keptOriginal ?? (prompt !== cleaned ? true : undefined),
-              ...(payload.dshContinuation === true ? { dshContinuation: true } : {}) };
-            // Save the result before applying it so recovery never repeats the paid request.
-            await this.step(runId, id, { comfyOptimization: snapshot });
-            break;
-          }
-          this.progress(runId, id, current.status === "queued" ? "提示词优化排队中" : "Cloud DSH 正在优化提示词");
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-      } catch (error) {
-        if (halted()) return;
-        if (terminalFailure || !this.run(runId).steps[id].agentRunId) throw error;
-        await this.step(runId, id, { status: "waiting", error: `${String(error)}。可继续查询原优化任务，或停止此工作流。` });
-        return;
-      }
-    }
-    if (halted() || !snapshot.result) return;
-    assertAccount();
-    if ("referenceCount" in snapshot.input && snapshot.result.trim() === snapshot.input.prompt.trim()) {
-      const reason = snapshot.keptOriginal ? "优化结果未保留完整的素材引用，已保留原提示词。" : "本次优化返回了相同的提示词，已保留原文。";
-      throw new Error(reason + (composedImage ? "可重新运行，或关闭自动优化后使用原提示词生成。" : "可点击重试优化。"));
-    }
-    return { ...snapshot, result: snapshot.result };
-  }
-
-  private async runComfyPromptOptimization(runId: string, node: WorkflowNode, halted: () => boolean, start?: CardStart) {
-    const snapshot = await this.resolveComfyPromptOptimization(runId, node, halted, start);
-    if (!snapshot || halted()) return;
-    const id = node.id;
-    const run = this.run(runId);
-    await this.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "done", error: undefined, detail: snapshot.keptOriginal ? "优化结果的卡片引用不完整，已保留原提示词" : "提示词已替换" } } },
-      this.document.nodes.map(item => item.id === id ? { ...item, ...h3PromptPatch(h3DraftForResult(snapshot.input, snapshot.result, h3OriginalPrompt(item))) } : item));
-  }
-
-  private async applyAutoOptimizedDraft(runId: string, id: string, result: string) {
-    const run = this.run(runId);
-    const step = run.steps[id];
-    const snapshot = step.comfyOptimization;
-    if (!snapshot?.inputBindings) return;
-    const current = this.document.nodes.find(node => node.id === id);
-    if (!current) return;
-    const original = h3OriginalPrompt(current);
-    // A text port can provide the entire optimizer input. Keep the card's own source empty in that case.
-    const changes = h3PromptPatch(h3DraftForResult(original.trim() ? snapshot.input : { ...snapshot.input, prompt: original }, result, original));
-    const input = step.generationRunInput;
-    if (current.prompt === result && input?.prompt === result && JSON.stringify(current.h3Prompt) === JSON.stringify(changes.h3Prompt)) return;
-    await this.saveRun(input ? { ...run, steps: { ...run.steps, [id]: { ...step, generationRunInput: { ...input, prompt: result } } } } : run,
-      this.document.nodes.map(node => node.id === id ? { ...node, ...changes } : node));
-  }
-
-  private async runComfyAutoGeneration(runId: string, node: WorkflowNode, halted: () => boolean, video: ComfyVideoInput, start?: CardStart, linkedText = "", generationRunInput?: WorkflowStep["generationRunInput"]) {
-    if (!this.run(runId).steps[node.id].comfyOptimization) {
-      const mode = comfyVideoMode(video);
-      const draft = node.prompt.trim();
-      const input = { prompt: draft || linkedText || video.prompt, mode, seconds: video.seconds, ratio: video.ratio,
-        firstFrameCount: video.firstFrame ? 1 : 0, lastFrameCount: video.lastFrame ? 1 : 0,
-        ...(mode === "r2v" ? h3R2VPromptReferences(video) : { audioReference: video.audioAssetId ? true as const : undefined }) };
-      await this.step(runId, node.id, { generationRunInput, comfyAutoGeneration: { input: video, videoText: draft ? linkedText : "" },
-        comfyOptimization: { input, instruction: h3OptimizationInstruction(input), createdAt: Date.now(),
-          inputBindings: JSON.stringify([node.inputs, node.promptReferences]) } });
-    }
-    if (halted()) return;
-    const optimized = await this.resolveComfyPromptOptimization(runId, node, halted, start);
-    if (!optimized || halted()) return;
-    await this.applyAutoOptimizedDraft(runId, node.id, optimized.result);
-    if (halted()) return;
-    const text = this.run(runId).steps[node.id].comfyAutoGeneration?.videoText;
-    let prompt = text ? `${text}\n\n${optimized.result}` : optimized.result;
-    if (video.audioAssetId && comfyVideoMode(video) === "reference" && !prompt.includes("<Audio 1>")) prompt += "\n<Audio 1>";
-    await this.runComfyVideo(runId, node, halted, { ...video, prompt });
-  }
-
-  private async runComfyAutoImage(runId: string, node: WorkflowNode, halted: () => boolean, image: H3ImageGenerationInput, start?: CardStart) {
-    if (this.run(runId).steps[node.id].jobId) {
-      await this.runWorkflowImageSession(runId, node, halted);
-      return;
-    }
-    const optimized = await this.resolveComfyPromptOptimization(runId, node, halted, start);
-    if (!optimized || halted()) return;
-    await this.applyAutoOptimizedDraft(runId, node.id, optimized.result);
-    if (halted()) return;
-    const assets = image.assetIds.length ? await api.getAssetsByIds(image.assetIds) : [];
-    const references = image.assetIds.map(id => {
-      const asset = assets.find(asset => asset.id === id);
-      if (!asset?.store_path || asset.duration || isVideoPath(asset.store_path) || isAudioPath(asset.store_path)) {
-        throw new Error("参考图已缺失，请检查素材后重新运行");
-      }
-      return asset;
-    });
-    if (halted()) return;
-    await this.runWorkflowImageSession(runId, node, halted, {
-      ...image, references, prompt: image.promptParts ? renderGenerationDraft(optimized.result, image.promptParts) : optimized.result,
-      rawPrompt: image.promptParts ? renderGenerationDraft(optimized.input.prompt, image.promptParts) : optimized.input.prompt,
-    });
-  }
-
-  private async runWorkflowImageSession(runId: string, node: WorkflowNode, halted: () => boolean, input?: {
-    prompt: string; rawPrompt: string; references: Asset[]; ratio: string | null; visualProfileId: string | null; referenceNodeIds: (string | null)[];
-    generationRunInput?: WorkflowStep["generationRunInput"];
-  }) {
-    const id = node.id, step = this.run(runId).steps[id];
-    let { jobId, turnKey } = step;
-    if (!jobId) {
-      const optimizedForThisRun = !!(step.comfyAutoGeneration?.imageInput && step.comfyOptimization?.result);
-      if (!input || step.status !== "pending" && !optimizedForThisRun) throw new Error("无法确认上次提交状态，请检查任务中心");
-      jobId = crypto.randomUUID(); turnKey = crypto.randomUUID();
-      const sessionNodeId = `gen-prompt:${jobId}:${turnKey}:0`;
-      // Persist both recovery identity and ownership before calling the provider.
-      const run = this.run(runId);
-      await this.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "running", jobId, turnKey, generationSubmission: "pending",
-        generationRunInput: input.generationRunInput ?? run.steps[id].generationRunInput } } },
-        this.document.nodes.map(candidate => candidate.id === id ? { ...candidate, activeSessionNodeId: sessionNodeId,
-          sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate));
-      if (halted()) return;
-      if (optimizedForThisRun && run.accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) {
-        throw new Error("账号已切换，请登录原账号后重新运行");
-      }
-      const result = await useStore.getState().startGeneration(input.prompt, input.references, input.ratio, workflowGenerationProvider(node),
-        input.rawPrompt, undefined, undefined, undefined, input.visualProfileId,
-        { projectId: this.projectId, threadId: run.threadId, referenceNodeIds: input.referenceNodeIds }, true, undefined, { jobId, turnKey });
-      if (!result.accepted) throw new Error(result.error || "生成任务未提交");
-    } else if (step.generationSubmission !== "submitted") {
-      if (!turnKey || !await api.agentDsWorkflowGenerationJob(jobId, turnKey)) {
-        await this.step(runId, id, { status: "waiting", error: "无法确认原生成任务是否已提交，请检查任务中心后继续；不会重复提交" }); return;
-      }
-    }
-    if (halted()) return;
-    if (!turnKey) throw new Error("原生成任务缺少轮次身份，请检查原任务");
-    this.generationHandoffs.set(id, { runId, jobId, turnKey });
-    await this.step(runId, id, { generationSubmission: "submitted", detail: "生成任务已提交" });
-    if (!await this.deliverSubmittedSessions(runId, node, halted)) return;
-    await this.finish(runId, node, { image: { type: "image", nodeIds: [`gen-prompt:${jobId}:${turnKey}:0`] } });
-  }
-
-  private async runComfyVideo(runId: string, node: WorkflowNode, halted: () => boolean, input?: ComfyVideoInput, start?: CardStart, generationRunInput?: WorkflowStep["generationRunInput"]) {
-    const id = node.id, step = this.run(runId).steps[id], accountId = this.run(runId).accountId;
-    const optimizedForThisRun = !!(step.comfyAutoGeneration?.input && step.comfyOptimization?.result);
-    let jobId = step.jobId;
-    let result: ComfyVideoStatus;
-    let terminalFailure = false;
-    const prepare = async (endpoint: string, mode: import("./comfyVideo").ComfyVideoMode, recovery?: { installation?: string | null }) => {
-      let environment = await comfyEnvironment(recovery ? "recover" : "prepare", endpoint, undefined, recovery?.installation ?? undefined, mode);
-      while (!halted()) {
-        if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后重新运行");
-        if (environment.phase === "ready") return environment.endpoint;
-        if (environment.phase !== "starting" && environment.phase !== "installing") throw new Error(environment.message);
-        this.progress(runId, id, environment.message);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        if (halted()) break;
-        environment = await comfyEnvironment("status", endpoint, undefined, undefined, mode);
-      }
-      return null;
-    };
-    try {
-      if (!jobId) {
-        if (step.status !== "pending" && !optimizedForThisRun) {
-          throw new Error("上次提交状态未知，请核对本机 ComfyUI 队列");
-        }
-        if (!input) throw new Error("缺少本地视频输入");
-        this.progress(runId, id, "正在准备本机环境…");
-        const endpoint = await prepare(input.endpoint, comfyVideoMode(input));
-        if (!endpoint || halted()) return;
-        input = { ...input, endpoint };
-        jobId = crypto.randomUUID();
-        await this.step(runId, id, { status: "running", jobId, error: undefined, detail: "正在提交本机视频工作流",
-          generationRunInput: generationRunInput ?? step.generationRunInput });
-        if (halted()) return;
-        if (start && !start.current()) { await this.stopBeforeDispatch(runId); return; }
-        if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) {
-          await this.step(runId, id, { status: "pending", jobId: undefined, error: "账号已切换，请登录原账号后继续生成。" });
-          return;
-        }
-        start?.release();
-        result = await comfyVideo("start", this.projectId, jobId, input);
-      } else {
-        await this.step(runId, id, { status: "running", error: undefined });
-        result = await comfyVideo("status", this.projectId, jobId);
-      }
-      let restarted = false;
-      while (!halted()) {
-        if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) {
-          await this.step(runId, id, { status: "waiting", error: "请登录原账号后继续取回视频" }); return;
-        }
-        if (result.status === "offline") {
-          if (restarted || !result.originalService) throw new Error("本机视频服务仍无法连接，原任务记录已保留。");
-          restarted = true;
-          const [original, mode, installation] = result.originalService;
-          const endpoint = await prepare(original, mode, { installation });
-          if (!endpoint || halted()) return;
-          if (endpoint !== original) throw new Error("原任务使用的本机视频服务暂不可用。");
-          result = await comfyVideo("status", this.projectId, jobId);
-          if (result.status === "unknown") {
-            terminalFailure = true;
-            throw new Error("本机视频服务已恢复，未找到上次任务的结果。可以点击运行重新生成。");
-          }
-          continue;
-        }
-        if (result.status === "done" && result.asset) {
-          await this.deliverMediaAsset(this.run(runId), node, result.asset, halted);
-          if (halted()) return;
-          await this.step(runId, id, { detail: comfyVideoElapsed(result.elapsedMs) ? `视频已生成 · 用时 ${comfyVideoElapsed(result.elapsedMs)}` : "视频已生成", error: undefined, comfyProgress: undefined });
-          await this.finish(runId, node, { image: { type: "image", assetIds: [result.asset.id] } });
-          await emit("creative://changed", { projectId: this.projectId }); return;
-        }
-        if (result.status === "failed") { terminalFailure = true; throw new Error(result.message); }
-        if (result.status === "cancelled") {
-          await this.step(runId, id, { comfyCancelled: true, comfyProgress: undefined });
-          terminalFailure = true; throw new Error(result.message);
-        }
-        if (result.status === "unknown") { await this.step(runId, id, { status: "waiting", error: result.message }); return; }
-        this.progress(runId, id, result.message, result.progress ?? undefined);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        if (halted()) return;
-        result = await comfyVideo("status", this.projectId, jobId);
-      }
-    } catch (error) {
-      if (halted()) return;
-      if (!jobId && optimizedForThisRun) {
-        await this.step(runId, id, { status: "waiting", detail: "提示词已优化，等待本机生成", error: `${String(error)}。继续时会沿用本次优化结果。` });
-        return;
-      }
-      if (terminalFailure || !jobId) throw error;
-      // Preserve the durable identity on all transport errors. Continue never submits anew.
-      await this.step(runId, id, { status: "waiting", comfyProgress: undefined, error: `${String(error)}。可继续查询原任务，或点击停止取消本机生成。` });
-    }
-  }
-
   async recoverComfyVideo(runId: string, nodeId?: string) {
     if (this.run(runId)?.status !== "stopped" || this.stopping.has(runId)) return;
     // The card is stopped before the old poll returns. Preserve an immediate
@@ -2405,30 +1733,6 @@ export class CanvasWorkflowController {
       lockedNodeIds: [node.id], writeNodeIds: [node.id], triggerQueue: [], completionRecoveryOnly: true,
       steps: { ...run.steps, [node.id]: { ...run.steps[node.id], status: "waiting", error: undefined } } });
     await this.continue(runId);
-  }
-
-  private async recoverVideoResult(runId: string, node: WorkflowNode, halted: () => boolean) {
-    const step = this.run(runId).steps[node.id];
-    if (!step.jobId || !step.turnKey) throw new Error("原视频任务缺少恢复标识，无法自动取回；可删除此卡片，不会重新提交生成");
-    let result;
-    try {
-      // Query the durable job and turn directly. Recent-session lists omit active and older jobs.
-      result = await api.agentDsWorkflowGenerationJob(step.jobId, step.turnKey);
-    } catch (error) {
-      if (!halted()) await this.step(runId, node.id, { status: "waiting", error: `查询原视频任务失败，请稍后继续取回：${String(error)}` });
-      return;
-    }
-    if (halted()) return;
-    if (!result) throw new Error("未找到原视频任务记录，无法自动取回；可删除此卡片，不会重新提交生成");
-    if (["failed", "cancelled", "cancelled_local"].includes(result.status)) throw new Error(result.error || (result.status === "failed" ? "原视频任务已失败" : "原视频任务已停止"));
-    if (result.status !== "done") {
-      await this.step(runId, node.id, { status: "waiting", videoJobActive: true, error: "原视频仍在生成或恢复中，完成后可继续取回。" });
-      return;
-    }
-    const assetIds = await Promise.all(result.images.map(path => api.localAgentFindAssetId(path)));
-    if (halted()) return;
-    if (!assetIds.length || assetIds.some(id => !id)) throw new Error("原视频任务已结束，但本地结果已缺失；请检查素材库或任务中心，可删除此卡片");
-    await this.finish(runId, node, { image: { type: "image", assetIds: [...new Set(assetIds as string[])] } });
   }
 
   async continue(runId = this.document.run?.id, start?: CardStart) {
@@ -2459,18 +1763,18 @@ export class CanvasWorkflowController {
       const storedNode = step.comfyAutoGeneration ? { ...current, prompt: h3OriginalPrompt(current) } : current;
       const node = storedNode.kind === "trigger" ? { ...storedNode, inputs: {} } : storedNode.kind === "comfy-video" ? generationInputNode(storedNode) : storedNode;
       if (step.status === "done" || halted()) return;
-      if (node.kind === "voice" && step.voiceRequest) { await this.runVoice(runId, node, halted); return; }
+      if (node.kind === "voice" && step.voiceRequest) { await runVoice(this.executionHost, runId, node, halted); return; }
       this.progress(runId, id, node.kind === "generation" ? `生成${node.generation?.media === "video" ? "视频" : "图片"}，等待会话结果` : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
-      if (node.kind === "comfy-video" && step.jobId) { await this.runComfyVideo(runId, node, halted); return; }
+      if (node.kind === "comfy-video" && step.jobId) { await runComfyVideo(this.executionHost, runId, node, halted); return; }
       if (node.kind === "comfy-video" && step.comfyAutoGeneration?.input) {
-        await this.runComfyAutoGeneration(runId, node, halted, step.comfyAutoGeneration.input, start); return;
+        await runComfyAutoGeneration(this.executionHost, runId, node, halted, step.comfyAutoGeneration.input, start); return;
       }
       if (node.kind === "generation" && step.comfyAutoGeneration?.imageInput) {
-        await this.runComfyAutoImage(runId, node, halted, step.comfyAutoGeneration.imageInput, start); return;
+        await runComfyAutoImage(this.executionHost, runId, node, halted, step.comfyAutoGeneration.imageInput, start); return;
       }
-      if (step.comfyOptimization) { await this.runComfyPromptOptimization(runId, node, halted, start); return; }
+      if (step.comfyOptimization) { await runComfyPromptOptimization(this.executionHost, runId, node, halted, start); return; }
       if (node.kind === "generation" && node.generation?.media === "video" && step.jobId) {
-        await this.recoverVideoResult(runId, node, halted); return;
+        await recoverVideoResult(this.executionHost, runId, node, halted); return;
       }
       const frozenChat = node.kind === "agent" && step.chatInput ? step.agentInput : undefined;
       const hasCells = !frozenChat && Object.values(node.inputs).flat().some(input => input.canvasNodeId);
@@ -2562,7 +1866,7 @@ export class CanvasWorkflowController {
       if (localVideoMode === "r2v") generationRunInput = { prompt: node.prompt, references: h3RunReferences({ ...values,
         [r2vImagePort]: (values[r2vImagePort] ?? []).map((value, index) => value.assetIds?.length ? frameSources?.[index] ?? value : value),
       }, localVideoMode) };
-      if (node.kind === "voice") { await this.runVoice(runId, node, halted, values); return; }
+      if (node.kind === "voice") { await runVoice(this.executionHost, runId, node, halted, values); return; }
       if (node.kind === "instruction") {
         const count = (values.image ?? []).flatMap(value => value.assetIds ?? []).length;
         if (node.action === "describe" ? count < 1 : count !== 1) throw new Error("指令卡片的输入图片数量不符合要求");
@@ -2610,337 +1914,19 @@ export class CanvasWorkflowController {
         await this.finish(runId, node, { [value.type]: value });
         await emit("creative://changed", { projectId: this.projectId });
       } else if (node.kind === "visual-profile") {
-        const inputKey = profileInputKey(assetIds, prompt);
-        let profileId = node.profileId || step.profileId || (node.profileCache?.inputKey === inputKey ? node.profileCache.profileId : undefined);
-        if (!profileId) {
-          if (step.status !== "pending") throw new Error("上次提炼状态未知，请检查已有规范后选择版本，或停止后重新提炼");
-          const issue = profileExtractionIssue(useStore.getState());
-          if (issue) throw new WorkflowNodeError(issue.message, node);
-          if (prompt.length > 4000) throw new Error("视觉要求不能超过 4000 字");
-          const missing = await api.visualProfileInputPreview(assetIds, prompt);
-          if (this.stopped.has(runId)) return;
-          await this.step(runId, id, { status: "running" });
-          const abort = new AbortController();
-          const aborts = this.profileAbort.get(runId) ?? new Set<AbortController>();
-          aborts.add(abort); this.profileAbort.set(runId, aborts);
-          for (const assetId of missing) {
-            if (this.stopped.has(runId)) return;
-            if (this.run(runId).accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请停止后重试");
-            await describeBrandImage(assetId, abort.signal);
-          }
-          if (this.stopped.has(runId)) return;
-          if (this.run(runId).accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请停止后重试");
-          const profile = await api.visualProfileExtractInputs(`${this.projectId}:${node.id}`, node.profileName?.trim() || "画板视觉规范", assetIds, prompt);
-          if (this.stopped.has(runId)) return;
-          profileId = profile.id;
-          await this.save({ ...this.document, nodes: this.document.nodes.map(n => n.id === id ? { ...n, profileCache: { inputKey, profileId: profile.id } } : n) });
-          if (this.stopped.has(runId)) return;
-        }
-        const profile = await api.visualProfileGet(profileId);
-        if (profile.status === "archived") throw new Error("此视觉规范已删除，请停止后选择其他版本");
-        if (profile.status !== "confirmed") {
-          await this.step(runId, id, { status: "waiting", profileId, error: "请查看并保存规范，再继续下游" });
-          if (useStore.getState().activeProjectId === this.projectId) useStore.getState().openVisualProfile({ id: profile.folderId, name: profile.name, profileId });
-          return;
-        }
-        await this.finish(runId, node, { "visual-profile": { type: "visual-profile", profileId, version: profile.version, summary: profile.summary } });
+        await executeVisualProfile(this.executionHost, runId, node, step, assetIds, prompt);
       } else if (node.kind === "instruction" && node.action === "reuse") {
-        const history = await api.generationHistory(assetIds[0], null);
-        // Use the compiled prompt so dimension chips cannot leak unresolved tokens downstream.
-        const text = history.turns[0]?.prompt;
-        if (!text) throw new Error("这张图片没有可复用的生成提示词");
-        await this.finish(runId, node, { text: { type: "text", text }, image: { type: "image", assetIds: history.references.map(asset => asset.id) } });
+        await executeReuse(this.executionHost, runId, node, assetIds);
       } else if (node.kind === "instruction" && node.action === "describe") {
-        if (step.status !== "pending") throw new Error("上次反推的结果未知。请检查该图反推记录，停止流程后显式重试。");
-        const state = useStore.getState();
-        const instruction = workflowDescribeInstruction(node);
-        const cached = assetIds.map(assetId => node.overwriteDescribe ? [] : existingWorkflowCaption(node, assetId, instruction));
-        if (this.stopped.has(runId)) return;
-        const provider = state.defaultUnderstandProvider === "auto" ? understandProvider(state.cloudEntitlement) : state.defaultUnderstandProvider;
-        if (!provider && cached.some(parts => !parts.length)) throw new Error("当前没有可用的反推引擎");
-        const sections: Array<{ title: string; body: string }> = [];
-        const rows: Array<{ assetId: string; name: string; prompt: string }> = [];
-        const jobs = assetIds.map((_, index) => cached[index].length ? null : `workflow-describe-${crypto.randomUUID()}`);
-        const describeJobIds = jobs.filter((job): job is string => !!job);
-        const reused = cached.filter(parts => parts.length).length;
-        await this.step(runId, id, { status: "running", describeJobIds, detail: `复用 ${reused} 张 · 反推 ${describeJobIds.length} 张` });
-        let completed = 0, failed = false;
-        let firstError: unknown;
-        const pending = new Set(describeJobIds);
-        // Settle all started requests before unlocking the card; an error cancels only this batch.
-        const results = await Promise.allSettled(assetIds.map(async (assetId, index) => {
-          try {
-            if (cached[index].length) return cached[index];
-            const analysisId = await describeAssetWithNotice(assetId, orderedAssets[index].name, instruction, provider!, jobs[index]!);
-            const analysis = (await api.listAnalysesByAsset(assetId)).find(item => item.id === analysisId);
-            const parts = analysis ? workflowCaptionSections(analysis.payload) : [];
-            if (!parts?.length) throw new Error(`第 ${index + 1} 张图片反推未返回可用维度`);
-            completed++;
-            if (!failed) this.progress(runId, id, `复用 ${reused} 张 · 并行反推 ${describeJobIds.length} 张 · 已完成 ${completed}/${describeJobIds.length}`);
-            return parts;
-          } catch (error) {
-            if (!failed) {
-              failed = true; firstError = error;
-              this.progress(runId, id, `反推失败，正在停止本批次剩余任务`);
-              await Promise.allSettled([...pending].filter(jobId => jobId !== jobs[index]).map(jobId => api.cancelCodexDescribe(jobId)));
-            }
-            throw error;
-          } finally { if (jobs[index]) pending.delete(jobs[index]!); }
-        }));
-        if (this.stopped.has(runId)) return;
-        if (failed) throw firstError;
-        // Keep this card's successful batch independently of image history and transient outputs.
-        const describeCache = { instruction, results: assetIds.map((assetId, index) => {
-          const result = results[index];
-          if (result.status !== "fulfilled") throw result.reason;
-          return { assetId, sections: result.value };
-        }) };
-        await this.save({ ...this.document, nodes: this.document.nodes.map(candidate => candidate.id === id ? { ...candidate, describeCache } : candidate) });
-        if (halted()) return;
-        for (const [index, assetId] of assetIds.entries()) {
-          const result = results[index];
-          if (result.status !== "fulfilled") throw result.reason;
-          const parts = result.value;
-          rows.push({ assetId, name: orderedAssets[index].name, prompt: parts.map(part => `${part.title}：${part.body}`).join("\n\n") });
-          for (const part of parts) {
-            const body = assetIds.length > 1 ? `图片 ${index + 1}：${part.body}` : part.body;
-            const existing = sections.find(section => section.title === part.title);
-            if (existing) existing.body += `\n\n${body}`; else sections.push({ title: part.title, body });
-          }
-        }
-        const promptText = sections.map(section => `${section.title}：${section.body}`).join("\n\n");
-        await this.withResource("canvas", async () => {
-          if (halted()) return;
-          this.progress(runId, id, `已反推 ${rows.length} 张图片，正在生成素材 / 提示词表格`);
-          const tableId = `workflow-describe:${runId}:${id}`;
-          const cell = (text: string, key: string, bold = false) => ({ id: key, text, bold, italic: false, align: "left" });
-          const cells = [[cell("素材", "heading-asset", true), cell("提示词", "heading-prompt", true)],
-            ...rows.map(row => [{ ...cell("@图片1", `${row.assetId}-asset`), content_type: "image", image_refs: [{ asset_id: row.assetId, token: "@图片1" }] }, cell(row.prompt, `${row.assetId}-prompt`)])];
-          const canvas = await api.projectCanvasGet(this.projectId);
-          const writers = this.document.nodes.filter(candidate => candidate.textTarget && candidate.inputs.text?.some(input => input.nodeId === id && input.portId === "text"));
-          const width = 640, height = 40 + 100 * cells.length;
-          const { x, y } = placeWorkflowOutput(canvas, this.layoutNodes(), node, { width, height }, new Set([tableId]));
-          const previousTables = canvas.nodes.filter(item => node.resultNodeIds?.includes(item.id) && item.kind === "note" && item.hiddenAt == null);
-          const payload = { schema_version: 1, note_type: "text", title: `反推结果 · ${rows.length} 张素材`, cells, text: cells.map(row => row.map(item => item.text).join("\t")).join("\n"), member_ids: [], column_widths: [1, 3], row_heights: [0.45, ...rows.map(() => 1)] };
-          if (previousTables.length) {
-            for (const table of previousTables) {
-              const previous = readCanvasNote(table);
-              const updatedCells = cells.map((row, r) => row.map((cell, c) => ({ ...cell, id: previous.cells[r]?.[c]?.id ?? cell.id })));
-              await api.projectCanvasNoteUpdate(table.id, JSON.stringify({ ...payload, cells: updatedCells }));
-            }
-          } else if (!writers.length) {
-            await api.projectCanvasNodeCreate({ id: tableId, projectId: this.projectId, threadId: this.run(runId).threadId, kind: "note", assetId: null, role: null,
-              payloadJson: JSON.stringify(payload), x, y, width, height, zIndex: Math.max(0, ...canvas.nodes.map(item => item.zIndex)) + 1, positionLocked: true });
-            await this.save({ ...this.document, nodes: this.document.nodes.map(item => item.id === id ? { ...item, resultNodeIds: [tableId] } : item) });
-          }
-          await emit("creative://changed", { projectId: this.projectId, threadId: this.run(runId).threadId, jobId: runId, turnKey: tableId, status: "done" });
-        });
-        if (halted()) return;
-        await this.finish(runId, node, { text: { type: "text", text: promptText } }, []);
+        await executeDescribe(this.executionHost, runId, node, step, halted, assetIds, orderedAssets);
       } else if (node.kind === "instruction" && node.action === "layers") {
-        await this.withResource(`layer:${assetIds[0]}`, async () => {
-          if (halted()) return;
-          const key = step.layerRequestKey ?? `layers-${crypto.randomUUID()}`;
-          const create = step.status === "pending" && !step.layerRequestKey;
-          if (!create && !step.layerRequestKey) throw new Error("原分层步骤没有拆分任务，请重新运行卡片");
-          await this.step(runId, id, { status: "running", assetId: assetIds[0], layerRequestKey: key });
-          const document = await workflowLayerDecompose(assetIds[0], orderedAssets[0].store_path!, "", key, create, halted,
-            detail => this.progress(runId, id, detail));
-          if (halted()) return;
-          const productIds: string[] = [];
-          for (const [index, layer] of document.layers.entries()) {
-            if (this.stopped.has(runId)) return;
-            this.progress(runId, id, `导出第 ${index + 1}/${document.layers.length} 层：${layer.name}`);
-            const doc = { ...document, layers: document.layers.map(item => ({ ...item, visible: item.id === layer.id })) };
-            const image = await api.layerExport(assetIds[0], doc, await renderLayerDocument(doc), this.projectId, true);
-            productIds.push(image.id);
-          }
-          if (this.stopped.has(runId)) return;
-          const products = [...new Set(productIds)];
-          await this.withResource("canvas", async () => {
-            if (halted()) return;
-            const canvas = await api.projectCanvasGet(this.projectId);
-            const writers = this.document.nodes.filter(candidate => candidate.textTarget?.image && candidate.inputs.image?.some(input => input.nodeId === id && input.portId === "image"));
-            let resultId: string | undefined;
-            if (!writers.length) {
-              const previousTable = canvas.nodes.find(item => node.resultNodeIds?.includes(item.id) && item.kind === "note" && item.hiddenAt == null);
-              resultId = previousTable?.id ?? `workflow-layers:${runId}:${id}`;
-              const previous = previousTable && readCanvasNote(previousTable);
-              const cells = previous?.cells ?? [[{ ...emptyCanvasCell(), id: crypto.randomUUID() }]];
-              const slots = cells.flat().filter(cell => cell.content_type === "image").map(cell => cell.id!);
-              const payload = canvasContentInput({ ...previous, schema_version: 1, note_type: "text", title: previous?.title ?? "拆分产物", cells, text: "", member_ids: [] },
-                { nodeId: resultId, cellId: cells[0][0].id!, append: true, ...(slots.length > 1 ? { cellIds: slots } : {}) }, { type: "image", assetIds: products }).note;
-              const minimum = canvasTextMinSize(payload.cells);
-              if (this.stopped.has(runId)) return;
-              if (previousTable) {
-                await api.projectCanvasNoteUpdate(resultId, JSON.stringify(payload));
-                if (previousTable.width < minimum.width || previousTable.height < minimum.height) await api.projectCanvasNodeUpdate(resultId, {
-                  x: previousTable.x, y: previousTable.y, width: Math.max(previousTable.width, minimum.width), height: Math.max(previousTable.height, minimum.height), zIndex: previousTable.zIndex, positionLocked: previousTable.positionLocked,
-                });
-              }
-              else {
-                const width = Math.max(440, minimum.width), height = Math.max(260, minimum.height);
-                const { x, y } = placeWorkflowOutput(canvas, this.layoutNodes(), node, { width, height });
-                await api.projectCanvasNodeCreate({ id: resultId, projectId: this.projectId, threadId: this.run(runId).threadId, kind: "note", assetId: null, role: null,
-                  payloadJson: JSON.stringify(payload), x, y, width, height, zIndex: Math.max(0, ...canvas.nodes.map(item => item.zIndex)) + 1, positionLocked: true });
-              }
-            }
-            if (this.stopped.has(runId)) return;
-            await this.save({ ...this.document, nodes: this.document.nodes.map(item => item.id === id ? { ...item, resultNodeIds: resultId ? [resultId] : [], resultGroupId: undefined } : item) });
-            const reveal = !this.document.nodes.some(item => Object.values(item.inputs).flat().some(input => workflowInputProducers(this.document.nodes, input).includes(id)));
-            await emit("creative://changed", { projectId: this.projectId, threadId: this.run(runId).threadId, jobId: runId, turnKey: resultId ?? id, status: "done", ...(reveal && resultId ? { revealProductNodeId: resultId } : {}) });
-          });
-          if (halted()) return;
-          await this.finish(runId, node, { image: { type: "image", assetIds: products } }, []);
-        });
+        await executeLayers(this.executionHost, runId, node, step, halted, assetIds, orderedAssets);
       } else if (node.kind === "agent") {
-        const snapshot = step.agentInput ?? { ...agentInput!, visualProfile: agentVisualProfile };
-        if (!step.agentInput) await this.step(runId, id, { agentInput: snapshot });
-        if (!snapshot.prompt.trim()) throw new WorkflowNodeError("Agent 要求不能为空", node);
-        if (outputTargets.length && !step.agentOutputTargets) await this.step(runId, id, { agentOutputTargets: outputTargets });
-        let outputs: Record<string, WorkflowValue>;
-        if (!step.localDsRequestId && !step.agentRunId) {
-          const result = await this.chatResult(runId, node, step, orderedAssets, halted);
-          if (!result) return;
-          outputs = result;
-        } else if (step.localDsRequestId) {
-          const result = await this.localDsResult(runId, node, step, orderedAssets.map(asset => asset.store_path!), halted);
-          if (!result) return;
-          outputs = result;
-        } else {
-        const agentRunId = step.agentRunId!; // Legacy accepted Cloud runs are read only; new turns use localChat.
-        let result;
-        while (!this.stopped.has(runId)) {
-          const current = await api.cloudAgentGet(agentRunId);
-          useStore.getState().openCloudAgentRun(current, { navigate: false });
-          if (["failed", "cancelled"].includes(current.status)) {
-            const code = current.snapshot.run.error_code;
-            const message = code === "unified_agent_text_result_invalid" ? "模型没有返回有效的完整改写文本" : code === "unified_agent_input_invalid" ? "云端未识别文本改写输入，请检查 Worker 版本" : current.snapshot.run.safe_message || "文本改写未完成";
-            throw new Error(`${message}（Cloud DSH 任务 ${agentRunId}${code ? `，${code}` : ""}）`);
-          }
-          if (current.status === "succeeded") { result = current; break; }
-          if (current.status.startsWith("awaiting_")) throw new Error("云端未按文本改写模式执行，请检查 Cloud DSH 服务版本");
-          this.progress(runId, id, current.status === "queued" ? "Cloud DSH 文本改写排队中" : "Cloud DSH 正在修改文本");
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-        if (this.stopped.has(runId) || !result) return;
-        const payload = result.snapshot.events.find(event => event.type === "text.result")?.display_payload;
-        if (payload?.schemaVersion !== 1 || typeof payload.text !== "string" || !payload.text.trim()) throw new Error("Cloud DSH 未返回有效的改写文本，请检查任务结果或服务版本");
-        outputs = { text: agentResultValue(payload.text) };
-        }
-        outputs = routeAgentOutputs(outputs, outputTargets, orderedAssets.map(asset => asset.id));
-        const writers = agentTextWriters(node, this.document.nodes);
-        if (!outputTargets.length) {
-          // A wired content card is the result's home: write it now so an early stop still
-          // leaves the text on the board, and never add a second "Agent 结果" card beside it.
-          if (writers.length) await this.writeAgentText(runId, node, outputs.text ?? { type: "text", text: "" }, writers, halted);
-          else await this.writeAgentResult(runId, node, outputs.text ?? { type: "text", text: "" }, false, halted);
-        }
-        if (halted()) return;
-        await this.finish(runId, node, outputs);
-        await emit("creative://changed", { projectId: this.projectId });
+        await executeAgent(this.executionHost, runId, node, step, halted, { agentInput, agentVisualProfile, outputTargets, orderedAssets });
       } else if (node.kind === "comfy-video") {
-        const account = useStore.getState();
-        if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("本地 H3 视频需要有效的 Pro／Studio 权益或测试账号资格");
-        const first = (values["first-frame"] ?? []).flatMap(value => value.assetIds ?? []);
-        const last = (values["last-frame"] ?? []).flatMap(value => value.assetIds ?? []);
-        const audioBindings = localVideoMode === "r2v" ? [] : node.inputs[H3_VIDEO_AUDIO_PORT] ?? [];
-        const audio = (values[H3_VIDEO_AUDIO_PORT] ?? []).flatMap(value => value.assetIds ?? []);
-        if (audioBindings.length && (audioBindings.length !== 1 || audio.length !== 1)) {
-          throw new WorkflowInputError("请连接一段可用的本地录音", node, audioBindings[0]);
-        }
-        const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
-        const mode = comfyVideoMode(options);
-        const referenceVideos = mode === "r2v" ? (values[H3_R2V_INPUT_PORTS.video] ?? []).flatMap(value => value.assetIds ?? []) : undefined;
-        const referenceAudios = mode === "r2v" ? (values[H3_R2V_INPUT_PORTS.audio] ?? []).flatMap(value => value.assetIds ?? []) : undefined;
-        const referenceError = mode === "r2v" && h3R2VInputError(referenceImages?.length ?? 0, referenceVideos?.length ?? 0, referenceAudios?.length ?? 0);
-        if (referenceError) throw new WorkflowNodeError(referenceError, node);
-        if (mode === "frames" && (first.length !== 1 || last.length > 1)) throw new Error("请连接一张首帧，尾帧最多一张");
-        if (mode === "reference" && first.length !== 1) throw new Error("单图模式需要连接一张参考图");
-        const localPrompt = mode === "reference" && audio.length && !prompt.includes("<Audio 1>") ? `${prompt}\n<Audio 1>` : prompt;
-        if (!prompt || localPrompt.length > 16000) throw new Error("请填写 1–16000 字提示词");
-        if (!Number.isFinite(options.seconds) || options.seconds < 1 || options.seconds > 15) throw new Error("视频时长需为 1–15 秒");
-        const input: ComfyVideoInput = { ...options, firstFrame: mode === "text" || mode === "r2v" ? "" : first[0], lastFrame: mode === "frames" ? last[0] : undefined, prompt: localPrompt,
-          ...(mode === "r2v" ? { referenceImages, referenceVideos, referenceAudios } : audio.length ? { audioAssetId: audio[0] } : {}) };
-        if (step.comfyAutoGeneration) await this.runComfyAutoGeneration(runId, node, halted, input, start, linkedText, generationRunInput);
-        else await this.runComfyVideo(runId, node, halted, input, start, generationRunInput);
+        await executeComfy(this.executionHost, runId, node, step, halted, { values, localVideoMode, referenceImages, prompt, linkedText, generationRunInput, start });
       } else if (node.kind === "generation") {
-        const generation = video ? { ...node.generation, media: "video" as const, videoOptions: resolveVideoOptions(node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS, orderedAssets) } : undefined;
-        const provider = workflowGenerationProvider(node);
-        if (!step.jobId) {
-          const issue = workflowProviderIssue(node, useStore.getState());
-          if (issue) throw new WorkflowNodeError(issue.message, node);
-        }
-        const ratio = generation ? generation.ratio ?? "16:9" : node.ratio;
-        const sessionOutput = !video && (!step.jobId || !!step.generationSubmission);
-        if (sessionOutput) {
-          if (!step.jobId) {
-            if (step.status !== "pending") throw new Error("无法确认上次提交状态，请检查任务中心");
-            const origins = new Map<string, string>();
-            for (const [port, bindings] of Object.entries(connectedNode.inputs)) for (const [index, binding] of bindings.entries()) {
-              const sourceId = binding.assetNodeId ?? binding.canvasNodeId;
-              if (sourceId && values[port]?.[index]?.assetIds?.length) {
-                canvas ??= await api.projectCanvasGet(this.projectId);
-                if (halted()) return;
-                const source = canvas?.nodes.find(candidate => candidate.id === sourceId && candidate.kind === "asset" && candidate.hiddenAt == null);
-                if (source?.assetId && values[port][index].assetIds?.includes(source.assetId) && !origins.has(source.assetId)) {
-                  origins.set(source.assetId, source.id);
-                }
-              }
-            }
-            // Explicit null keeps a reference in the request and history without projecting a canvas node.
-            const referenceNodeIds = orderedAssets.map(asset => origins.get(asset.id) ?? null);
-            if (step.comfyAutoGeneration) {
-              if (prompt.length > 16000) throw new Error("自动优化支持 1–16000 字提示词");
-              const environment = await comfyEnvironment("detect", H3_IMAGE_ENDPOINT, undefined, undefined, orderedAssets.length ? "edit" : "image");
-              if (halted()) return;
-              if (!comfyEnvironmentReady(environment)) throw new WorkflowNodeError(environment.message || "本地 H3 图片环境尚未就绪。", node);
-              const imageInput = { assetIds, referenceNodeIds, ratio, visualProfileId, promptParts: generated?.promptParts };
-              const input = { prompt: node.prompt, referenceCount: orderedAssets.length, ratio: ratio?.trim() || "auto" };
-              await this.step(runId, id, { generationRunInput, comfyAutoGeneration: { imageInput },
-                comfyOptimization: { input, instruction: h3OptimizationInstruction(input), createdAt: Date.now(),
-                  inputBindings: JSON.stringify([node.inputs, node.promptReferences]) } });
-              if (!halted()) await this.runComfyAutoImage(runId, node, halted, imageInput, start);
-            } else {
-              await this.runWorkflowImageSession(runId, node, halted, { prompt, rawPrompt: prompt, references: orderedAssets, ratio, visualProfileId, referenceNodeIds, generationRunInput });
-            }
-          } else {
-            await this.runWorkflowImageSession(runId, node, halted);
-          }
-          return;
-        }
-        let paths: string[] = [];
-        if (step.jobId) {
-          const previous = (await api.recentGenSessions(500)).find(job => job.id === step.jobId);
-          if (!previous || previous.status !== "done") {
-            if (previous?.status === "failed") throw new Error(previous.error || "生成失败");
-            await this.step(runId, id, { status: "waiting", error: "原任务尚未完成，请稍后继续取回" }); return;
-          }
-          const turn = step.turnKey ? previous.turns.find(turn => turn.turn_key === step.turnKey) : previous.turns[0];
-          paths = turn?.images ?? [];
-        } else {
-          if (step.status !== "pending") throw new Error("无法确认上次提交状态，请检查任务中心");
-          if (generation) {
-            const error = videoInputError(generation.videoOptions, orderedAssets, ratio, provider);
-            if (error) throw new Error(error);
-          }
-          const identity = { jobId: crypto.randomUUID(), turnKey: crypto.randomUUID() };
-          const sessionNodeId = `gen-prompt:${identity.jobId}:${identity.turnKey}:0`;
-          await this.save({ ...this.document, nodes: this.document.nodes.map(candidate => candidate.id === id
-            ? { ...candidate, activeSessionNodeId: sessionNodeId, sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate) });
-          await this.step(runId, id, { status: "running", jobId: identity.jobId, turnKey: identity.turnKey, generationRunInput });
-          const result = await useStore.getState().startGeneration(prompt, orderedAssets, ratio, provider, prompt,
-            undefined, undefined, undefined, visualProfileId, { projectId: this.projectId, threadId: this.run(runId).threadId }, false, generation, identity);
-          if (!result.accepted) throw new Error(result.error || "生成未完成");
-          const turns = useStore.getState().genJobs[identity.jobId]?.turns ?? [];
-          paths = (turns.find(turn => turn.turnKey === identity.turnKey) ?? (turns.length === 1 && !turns[0].turnKey ? turns[0] : undefined))?.images ?? [];
-        }
-        if (this.stopped.has(runId)) return;
-        const outputAssetIds = await Promise.all(paths.map(path => api.localAgentFindAssetId(path)));
-        if (!outputAssetIds.length || outputAssetIds.some(id => !id)) {
-          await this.step(runId, id, { status: "waiting", error: "本次生成产物尚未入库，请稍后继续取回" }); return;
-        }
-        await this.finish(runId, node, { image: { type: "image", assetIds: [...new Set(outputAssetIds as string[])] } });
+        await executeGeneration(this.executionHost, runId, node, step, halted, { video, orderedAssets, connectedNode, values, canvas, prompt, assetIds, visualProfileId, generated, generationRunInput, start });
       } else {
         if (!step.agentRunId) {
           if (step.status !== "pending") throw new Error("技能提交状态未知，请先检查 Agent 任务记录");

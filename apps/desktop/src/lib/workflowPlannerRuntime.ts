@@ -8,6 +8,7 @@ interface Host {
   projectId: string;
   document: CanvasWorkflow;
   ready: boolean;
+  checkIdle?(): void;
   error: string;
   edit(nodes: WorkflowNode[]): Promise<void>;
   isLocked(id: string): boolean;
@@ -17,6 +18,7 @@ interface Host {
 export class WorkflowPlannerRuntime {
   private polling = new Set<string>();
   private starting = new Set<string>();
+  get busy() { return !!(this.starting.size || this.polling.size); }
   constructor(private host: Host) {}
   private node(id: string) {
     const node = this.host.document.nodes.find(node => node.id === id && node.kind === "planner");
@@ -108,7 +110,7 @@ export class WorkflowPlannerRuntime {
         // IPC can fail after durable delivery. Keep the same request for retrieval.
         if (this.node(id).planning?.requestId === planning.requestId && this.node(id).planning?.status === "waiting") await this.update(id, { ...this.node(id).planning!, error: `送达状态未知，可取回原请求：${String(error)}` });
       }
-    } finally { this.starting.delete(id); }
+    } finally { this.starting.delete(id); this.host.checkIdle?.(); }
   }
   async collect(id: string, wait = false) {
     let state = this.node(id).planning;
@@ -201,7 +203,7 @@ export class WorkflowPlannerRuntime {
     } catch (error) {
       if (!this.host.error && current()?.requestId === state.requestId && current()?.status === "waiting") await this.update(id, { ...current()!, status: terminal ? "failed" : "waiting", error: String(error) });
       throw error;
-    } finally { this.polling.delete(state.requestId); }
+    } finally { this.polling.delete(state.requestId); this.host.checkIdle?.(); }
   }
   async cancel(id: string) {
     const state = this.node(id).planning;

@@ -64,6 +64,7 @@ function fixture(example, initial = example.workflow) {
         calls.push(command); throw new Error(`unexpected native execution: ${command}`);
       } };
       if (specifier === '@tauri-apps/api/event') return { emit: async () => {} };
+      if (/^\.\/workflow(AgentExecutor|ComfyExecutor|GenerationExecutor|VoiceExecutor|DescribeExecutor|LayersExecutor|VisualProfileExecutor|TriggerScheduler)$/.test(specifier)) return load(resolve(lib, specifier + '.ts'));
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
       if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined };

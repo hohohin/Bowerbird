@@ -7,7 +7,7 @@ import { notifySuccess } from "../lib/notify";
 import { clearSentCreativeChatDraft, parseCreativeComposerState } from "../lib/creativeDraft";
 import { useLocalChatStore } from "../lib/localChatStore";
 import { DEFAULT_VIDEO_OPTIONS } from "../lib/videoGeneration";
-import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
+import { withProjectWorkflow } from "../lib/canvasWorkflowRuntime";
 import { optimizeComposerLocalVideo, startComposerLocalVideo } from "../lib/composerLocalVideo";
 import { prepareFileWorkspace } from "../lib/fileWorkspace";
 import type { ComposerLocalVideoRequest } from "../lib/comfyVideo";
@@ -75,12 +75,13 @@ async function startLibraryThread(prompt: string, target?: string) {
 
 async function startLibraryVideo(request: ComposerLocalVideoRequest, target?: string) {
   const projectId = requireProject(target);
-  const controller = canvasWorkflowController(projectId);
-  await controller.load();
-  if (controller.error) throw new Error(controller.error);
-  const point = await placement(projectId);
-  point.y = Math.max(point.y, ...controller.document.nodes.map(node => node.y + 440));
-  return startComposerLocalVideo(controller, request, point);
+  return withProjectWorkflow(projectId, async controller => {
+    await controller.load();
+    if (controller.error) throw new Error(controller.error);
+    const point = await placement(projectId);
+    point.y = Math.max(point.y, ...controller.document.nodes.map(node => node.y + 440));
+    return startComposerLocalVideo(controller, request, point);
+  });
 }
 
 async function startLibraryChat(request: ChatComposeRequest, draftJson: string, target?: string) {

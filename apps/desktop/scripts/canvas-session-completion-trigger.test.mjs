@@ -225,8 +225,12 @@ try {
             await api.projectCanvasNodeCreate({ ...base, id, x: 1500, y: 200, role: null, kind: 'prompt', assetId: null, payloadJson: JSON.stringify(payload) });
             window.publishImage = async status => {
               await api.projectCanvasNodeUpdate(id, { payloadJson: JSON.stringify({ ...payload, status }) });
-              await api.projectCanvasNodeCreate({ ...base, id: 'live-result', kind: 'asset', role: 'output', assetId: 'a',
-                payloadJson: JSON.stringify({ execution: { job_id: jobId, turn_key: turnKey } }) });
+              // Canvas delivery requires a displayable asset payload as well as the matching turn.
+              const [asset] = await api.getAssetsByIds(['a']);
+              const { assetPayloadJson, createCanvasAssetSnapshot } = await import('/src/lib/creativeCanvas.ts');
+              const result = JSON.parse(assetPayloadJson(createCanvasAssetSnapshot(asset, 'live-result')));
+              await api.projectCanvasNodeCreate({ ...base, id: 'live-result', kind: 'asset', role: 'output', assetId: asset.id,
+                payloadJson: JSON.stringify({ ...result, execution: { job_id: jobId, turn_key: turnKey } }) });
               window.save(); window.emitChange();
             };
             await new Promise(resolve => { window.acceptSubmission = resolve; });
@@ -258,6 +262,7 @@ try {
       const expected = Number(status === 'done');
       if (expected) {
         await live.waitForFunction(() => !!window.finishAction, null, { timeout: 10000 });
+        assert.equal(await live.evaluate(() => window.lockedSource()), direct, 'only data dependencies lock the source');
         const editor = drawCard.locator('.workflow-prompt-editor .ProseMirror');
         assert.equal(await editor.evaluate(el => el.isContentEditable), !direct, 'only a data dependency locks the upstream generator while the downstream executes');
         if (!direct) {
