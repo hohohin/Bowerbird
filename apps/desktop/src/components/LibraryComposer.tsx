@@ -1,3 +1,4 @@
+import { resolveNewCardImageProvider } from "../lib/newCardImageProvider";
 import { useEffect, useRef, useState } from "react";
 import { Folder } from "lucide-react";
 import { useStore } from "../store";
@@ -88,7 +89,7 @@ async function startLibraryChat(request: ChatComposeRequest, draftJson: string, 
   const video = parseCreativeComposerState(draftJson).drafts.video?.generation;
   await useLocalChatStore.getState().send({ projectId, text: request.prompt, provider: request.provider, codexOptions: request.codexOptions,
     referenceAssetIds: request.references.map(asset => asset.id),
-    cardDefaults: { provider: state.activeGenProvider || state.defaultProvider, videoChannel: video?.videoChannel ?? "jimeng", videoOptions: { ...(video?.videoOptions ?? DEFAULT_VIDEO_OPTIONS) } },
+    cardDefaults: { provider: resolveNewCardImageProvider(state), videoChannel: video?.videoChannel ?? "jimeng", videoOptions: { ...(video?.videoOptions ?? DEFAULT_VIDEO_OPTIONS) } },
     placement: { ...await placement(projectId), width: 320, height: 190, zIndex: Date.now() % 1000000 } }, true);
 }
 

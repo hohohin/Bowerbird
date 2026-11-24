@@ -79,8 +79,9 @@ import {
   type PendingCreativeReuseRequest,
 } from "./lib/creativeLaunch";
 
-// —— 默认出图 provider（localStorage，照 GEN_PROVIDERS 枚举校验；收藏星标写它）——
+// Older clients used the default key for both stars and pins.
 const DEFAULT_PROVIDER_KEY = "bowerbird.defaultProvider";
+const IMAGE_PIN_KEY = "bowerbird.pinnedImageProvider.v1";
 const VISUAL_PROFILE_KEY = "bowerbird.visualProfile.selected";
 const LIBRARY_HOME_VIEW_KEY = "bowerbird.libraryHomeView";
 
@@ -115,17 +116,21 @@ function enqueueProjectReload<T>(operation: () => Promise<T>): Promise<T> {
   return next;
 }
 
-function loadDefaultProvider(): string {
+function loadDefaultProvider(key = DEFAULT_PROVIDER_KEY): string | null {
   try {
-    const v = localStorage.getItem(DEFAULT_PROVIDER_KEY);
-    return v && isKnownGenProvider(v) ? canonicalProviderKey(v) : "codex";
+    const v = localStorage.getItem(key);
+    return v && isKnownGenProvider(v) ? canonicalProviderKey(v) : null;
   } catch {
-    return "codex";
+    return null;
   }
 }
-function saveDefaultProvider(v: string) {
+const savedImageProvider = loadDefaultProvider();
+function saveDefaultProvider(v: string | null) {
   try {
-    localStorage.setItem(DEFAULT_PROVIDER_KEY, v);
+    for (const key of [DEFAULT_PROVIDER_KEY, IMAGE_PIN_KEY]) {
+      if (v) localStorage.setItem(key, v);
+      else localStorage.removeItem(key);
+    }
   } catch {
     /* localStorage 不可用时忽略 */
   }
@@ -411,11 +416,13 @@ interface State {
   dreaminaHealth: DreaminaHealth | null;
   setDreaminaHealth: (h: DreaminaHealth | null) => void;
   defaultProvider: string; // 全局默认出图 provider（"codex"/"jimeng"，localStorage 持久化）
+  imageDefaultOrigin: "pin" | "legacy" | null;
+  sessionImageProvider: string | null;
   setDefaultProvider: (p: string) => void;
   // —— 默认反推引擎（设置「模型设置」可选并持久化）——
   defaultUnderstandProvider: UnderstandProviderPref;
   activeGenProvider: string; // 当前会话出图 provider（创作板切换条改它，初值=defaultProvider，不持久化）
-  setActiveGenProvider: (p: string) => void;
+  setActiveGenProvider: (p: string, rememberSelection?: boolean) => void;
   // —— dreamina 登录流程（OAuth Device Flow；dreamina://login 逐行透传 stdout）——
   dreaminaLoginLines: string[];
   dreaminaLoginActive: boolean;
@@ -1687,18 +1694,25 @@ export const useStore = create<State>((set, get) => {
   // —— 即梦 + provider（Phase 3）——
   dreaminaHealth: null,
   setDreaminaHealth: (dreaminaHealth) => set({ dreaminaHealth }),
-  defaultProvider: loadDefaultProvider(),
+  defaultProvider: savedImageProvider ?? "codex",
+  imageDefaultOrigin: savedImageProvider ? (savedImageProvider === loadDefaultProvider(IMAGE_PIN_KEY) ? "pin" : "legacy") : null,
+  sessionImageProvider: null,
   setDefaultProvider: (defaultProvider) => {
     if (!canUseGenerationProvider(get().cloudEntitlement, defaultProvider)) return;
+    if (get().imageDefaultOrigin === "pin" && get().defaultProvider === defaultProvider) {
+      saveDefaultProvider(null);
+      set({ defaultProvider: "codex", imageDefaultOrigin: null });
+      return;
+    }
     saveDefaultProvider(defaultProvider);
     // 改默认同步切当前选择（用户期望「默认」生效立即）。
-    set({ defaultProvider, activeGenProvider: defaultProvider });
+    set({ defaultProvider, imageDefaultOrigin: "pin", activeGenProvider: defaultProvider });
   },
   defaultUnderstandProvider: legacyUnderstandProvider ?? "auto",
-  activeGenProvider: loadDefaultProvider(),
-  setActiveGenProvider: (activeGenProvider) => {
+  activeGenProvider: savedImageProvider ?? "codex",
+  setActiveGenProvider: (activeGenProvider, rememberSelection = true) => {
     if (!canUseGenerationProvider(get().cloudEntitlement, activeGenProvider)) return;
-    set({ activeGenProvider });
+    set({ activeGenProvider, ...(rememberSelection ? { sessionImageProvider: activeGenProvider } : {}) });
   },
   dreaminaLoginLines: [],
   dreaminaLoginActive: false,

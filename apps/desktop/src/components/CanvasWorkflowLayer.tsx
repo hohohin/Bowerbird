@@ -1,3 +1,4 @@
+import { resolveNewCardImageProvider } from "../lib/newCardImageProvider";
 import { userErrorMessage } from "../lib/userError";
 import { useProjectChatSummaries, useLocalChatStore } from "../lib/localChatStore";
 import { agentChatOptions, localChat, localChatRunning, localChatStatusLabel, type ChatCardDefaults, type ChatProvider } from "../lib/localChat";
@@ -285,8 +286,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   const hoveredMaterialRef = useRef<string | null>(null);
   const hoveredHotspot = useRef<Element | null>(null);
   const hoveredMaterial = hoveredMaterialRef.current;
-  const state = useStore(state => ({ visualProfiles: state.visualProfiles, activeGenProvider: state.activeGenProvider,
-    defaultProvider: state.defaultProvider, codexHealth: state.codexHealth, dreaminaHealth: state.dreaminaHealth,
+  const state = useStore(state => ({ visualProfiles: state.visualProfiles,
+    defaultProvider: state.imageDefaultOrigin === "pin" ? state.defaultProvider : undefined, codexHealth: state.codexHealth, dreaminaHealth: state.dreaminaHealth,
     cloudAuth: state.cloudAuth, cloudEntitlement: state.cloudEntitlement, openVisualProfile: state.openVisualProfile }), shallow);
   const document = controller.document;
   const genJobs = useStore(state => state.genJobs);
@@ -1181,7 +1182,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     else setDisconnectMenu(choices.length ? { ...target, ...point } : null);
   }
   function connectionCard(option: typeof CONNECTION_CARDS[number], point: { x: number; y: number }) {
-    const node = newWorkflowNode(option.kind, point.x, point.y, state.activeGenProvider || state.defaultProvider);
+    const node = newWorkflowNode(option.kind, point.x, point.y, resolveNewCardImageProvider(useStore.getState()));
     if (option.media) node.generation = { ...node.generation, media: option.media };
     if (option.action) node.action = option.action;
     return node;
@@ -1597,7 +1598,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       return true;
     },
     add(kind, x, y) {
-      addCard(newWorkflowNode(kind, x, y, state.activeGenProvider || state.defaultProvider));
+      addCard(newWorkflowNode(kind, x, y, resolveNewCardImageProvider(useStore.getState())));
     },
     openCardMenu(x, y, point) {
       if (!armed && !automaticRef.current && !connectionRef.current) setBlankCardMenu({ x, y, point });
@@ -2285,8 +2286,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
               if (videoCard === (media === "video")) return;
               if (localVideo && media === "image") {
                 const next = selectWorkflowVideoProvider(node, node.generation?.videoChannel ?? "jimeng");
-                patch(node.id, { ...next, provider: state.activeGenProvider || state.defaultProvider, generation: { ...next.generation, media } }, false);
-              } else patch(node.id, { generation: { ...node.generation, media } });
+                patch(node.id, { ...next, provider: resolveNewCardImageProvider(useStore.getState()), generation: { ...next.generation, media } }, false);
+              } else patch(node.id, { ...(media === "image" ? { provider: resolveNewCardImageProvider(useStore.getState()) } : {}), generation: { ...node.generation, media } });
             }}>{media === "image" ? <Images size={13} aria-hidden="true" /> : <Clapperboard size={13} aria-hidden="true" />}{selectedIds.has(node.id) && <span>{media === "image" ? "图片" : "视频"}</span>}</button>)}
         </div>}
         <div className="workflow-card-body">
@@ -2340,7 +2341,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           {node.kind === "generation" && !localVideo && <div className="workflow-media-settings">
             {!videoCard && <div className="workflow-generation-parameters" role="toolbar" aria-label="生成参数" onPointerDown={event => event.stopPropagation()}>
               <fieldset disabled={busy}><RatioSelect value={node.ratio} onChange={ratio => patch(node.id, { ratio })} />
-                <ProviderSelect environmentInHeader value={node.provider} onChange={provider => patch(node.id, { provider })} codexHealth={state.codexHealth} dreaminaHealth={state.dreaminaHealth}
+                <ProviderSelect environmentInHeader value={node.provider} defaultProvider={state.defaultProvider} onSetDefaultProvider={useStore.getState().setDefaultProvider}
+                  onChange={provider => { patch(node.id, { provider }); useStore.getState().setActiveGenProvider(provider); }} codexHealth={state.codexHealth} dreaminaHealth={state.dreaminaHealth}
                   cloudAuth={state.cloudAuth} cloudEntitlement={state.cloudEntitlement} menuClassName="canvas-tactical-model-menu" /></fieldset>
             </div>}
             {videoCard && <fieldset className="workflow-video-parameters workflow-video-controls" aria-label="视频参数" disabled={busy} onPointerDown={event => event.stopPropagation()}>
@@ -2460,7 +2462,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           {agentChat && hasAgentMessages && <AgentCardConversation key={agentChat.id} summary={agentChat} busy={busy} blocked={!!providerIssue} onStop={stopAgent}
             onRerun={() => handle(handleAgentCard(node, conversationId, "run"))}
             history={agentHistory.length > 1 ? agentHistory : []} runPrompts={agentRunPrompts}
-            getCardDefaults={getChatCardDefaults ?? (() => ({ provider: useStore.getState().defaultProvider, videoChannel: "jimeng", videoOptions: { ...DEFAULT_VIDEO_OPTIONS } }))}
+            getCardDefaults={getChatCardDefaults ?? (() => ({ provider: resolveNewCardImageProvider(useStore.getState()), videoChannel: "jimeng", videoOptions: { ...DEFAULT_VIDEO_OPTIONS } }))}
             onOpen={(chatId, entryKey) => onOpenAgent(node.id, chatId === agentChat.id && entryKey ? undefined : chatId, entryKey)} />}
           {node.kind === "comfy-video" && run?.status === "stopped" && step?.jobId && !step.comfyCancelled && step.status !== "done" && <button disabled={busy} className="workflow-detail" onClick={() => handle(controller.recoverComfyVideo(run.id, node.id))}>取回上次视频</button>}
           {step?.agentRunId && node.kind === "skill" && <button className="workflow-detail" onClick={() => handle((async () => {
@@ -2577,7 +2579,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     {retryReview?.projectId === projectId && <ConfirmDialog open title="重做失败步骤？" confirmLabel="保留卡片并重做"
       message={`这一步已创建：${retryReview.cardNames.join("、")}。重做会保留这些卡片，也可能再次创建相同的内容。`}
       onCancel={() => setRetryReview(null)} onConfirm={() => { setRetryReview(null); handle(retryReview.confirm()); }} />}
-    {templateLibrary && <WorkflowTemplateLibrary controller={controller} selectedIds={selectedIds} graphNodes={graphNodes} provider={state.activeGenProvider || state.defaultProvider}
+    {templateLibrary && <WorkflowTemplateLibrary controller={controller} selectedIds={selectedIds} graphNodes={graphNodes} provider={resolveNewCardImageProvider(useStore.getState())}
       instanceRoot={templateLibrary.instanceRoot} importPackage={templateLibrary.importPackage} ensureMaterialized={ensureMaterialized} onClose={() => setTemplateLibrary(null)} onLocate={locateIssue} />}
     {templateSelection?.projectId === projectId && <SaveWorkflowTemplateDialog nodes={templateSelection.nodes} selectedIds={templateSelection.ids} graphNodes={templateSelection.canvas} bounds={templateSelection.bounds} mode={templateSelection.mode}
       onEncapsulate={async (name, members, template) => { await ensureMaterialized(); const result = await controller.encapsulate(name, members, templateSelection.bounds, template); onPlaced(result.bounds); return result; }}

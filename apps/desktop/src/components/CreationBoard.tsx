@@ -222,7 +222,7 @@ export function CreationBoard({
     if (draftRef.current) onDraftChange?.({ ...draftRef.current, generation });
   }, [generation]);
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
-  const defaultProvider = useStore((s) => s.defaultProvider);
+  const defaultProvider = useStore((s) => s.imageDefaultOrigin === "pin" ? s.defaultProvider : undefined);
   const setDefaultProvider = useStore((s) => s.setDefaultProvider);
   const startGeneration = useStore((s) => s.startGeneration);
   const presets = useStore((s) => s.presets);

@@ -1440,6 +1440,11 @@ fn local_chat_cards_call_replay_is_stable_after_finish_and_undo() {
 #[test]
 fn local_chat_cards_choose_image_provider_per_card_and_reject_invalid_batches() {
     let (db, started) = fixture();
+    let defaults = ChatCardDefaults { provider: "dreamina-web55".into(), ..Default::default() };
+    db.conn.lock().unwrap().execute(
+        "UPDATE local_chat_turns SET card_defaults_json=?1 WHERE id=?2",
+        (serde_json::to_string(&defaults).unwrap(), &started.turn_id),
+    ).unwrap();
     let mut args = json!({"cards":[
         {"id":"a","kind":"generation","mediaType":"image","title":"即梦","prompt":"a","provider":"dreamina-web55"},
         {"id":"b","kind":"generation","mediaType":"image","title":"本机","prompt":"b","provider":"minimax-h3-image"},
@@ -1455,7 +1460,7 @@ fn local_chat_cards_choose_image_provider_per_card_and_reject_invalid_batches() 
     args["cards"][2]["provider"] = json!("bowerbird-cloud-image_hd");
     let action = create(&db, &started, &args).unwrap();
     let canvas = document(&db);
-    for (card, expected) in action.cards.iter().zip(["dreamina-web55","minimax-h3-image","bowerbird-cloud-image_hd","jimeng"]) {
+    for (card, expected) in action.cards.iter().zip(["dreamina-web55","minimax-h3-image","bowerbird-cloud-image_hd","dreamina-web55"]) {
         let node = canvas["nodes"].as_array().unwrap().iter().find(|node| node["id"] == card.id).unwrap();
         assert_eq!(node["provider"], expected);
     }

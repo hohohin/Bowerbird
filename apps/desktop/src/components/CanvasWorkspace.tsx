@@ -1,3 +1,4 @@
+import { resolveNewCardImageProvider } from "../lib/newCardImageProvider";
 import { DimensionBadge } from "./DimensionBadge";
 import { replicationAnalysisNote } from "../lib/replicationAnalysisNote";
 import { optimizeComposerLocalVideo } from "../lib/composerLocalVideo";
@@ -1677,12 +1678,8 @@ export function CanvasWorkspace({
   function chatCardDefaults(): ChatCardDefaults {
     const state = useStore.getState();
     const video = parseCreativeComposerState(activeCanvasRef.current.draftJson).drafts.video?.generation;
-    return { provider: state.activeGenProvider || state.defaultProvider,
+    return { provider: resolveNewCardImageProvider(state),
       videoChannel: video?.videoChannel ?? "jimeng", videoOptions: { ...(video?.videoOptions ?? DEFAULT_VIDEO_OPTIONS) } };
-  }
-
-  function agentCardDefaults(): ChatCardDefaults {
-    return { ...chatCardDefaults(), provider: useStore.getState().defaultProvider };
   }
 
   async function undoChatCards(action: ChatCardAction) {
@@ -6511,7 +6508,7 @@ export function CanvasWorkspace({
               onUndoGenerationConnection={undoGenerationConnection}
               diagnosticTarget={diagnosticTarget} selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={workflowOnSelect}
               onNodesChanged={workflowOnNodesChanged} onEdited={workflowOnEdited}
-              onOpenAgent={workflowOnOpenAgent} getChatCardDefaults={agentCardDefaults} onNewAgentChat={workflowOnNewAgentChat} onOpenGeneration={workflowOnOpenGeneration}
+              onOpenAgent={workflowOnOpenAgent} getChatCardDefaults={chatCardDefaults} onNewAgentChat={workflowOnNewAgentChat} onOpenGeneration={workflowOnOpenGeneration}
               onDragStart={workflowOnDragStart} onDragMove={workflowOnDragMove} onDragEnd={workflowOnDragEnd} onNodeMenu={workflowOnNodeMenu}
               onRemove={workflowOnRemove} onPlaced={workflowOnPlaced}
               ensureMaterialized={workflowEnsureMaterialized} materials={workflowMaterials} />}
@@ -7048,7 +7045,7 @@ export function CanvasWorkspace({
           onClose={() => { setSelectedChatId(null); setH3ChatEditor(null); useStore.getState().setBoardActive(false); }}
           onSelectConversation={openLocalChat}
           onNewConversation={newLocalChat}
-          getCardDefaults={agentCardDefaults} onLocateCards={locateChatCards} onUndoCards={undoChatCards}
+          getCardDefaults={chatCardDefaults} onLocateCards={locateChatCards} onUndoCards={undoChatCards}
           onOpenLibrary={() => { openLibrary(); setCanvasLibraryOpen(true); useStore.getState().setBoardActive(true); }} />}
         {chatHistoryOpen && projectId && <div id="project-chat-history" className="canvas-chat-history"><LocalChatHistory projectId={projectId}
           activeConversationId={selectedChatId ?? undefined} onOpen={openLocalChat} onClose={() => setChatHistoryOpen(false)} /></div>}
@@ -7155,7 +7152,7 @@ export function CanvasWorkspace({
             const center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
             const position = placeCanvasCardNearSource({ x: center.x - 180, y: center.y - 160, width: 1460, height: 680 }, selectionAnchors().map(item => item.rect));
             const current = useStore.getState();
-            const built = replicationWorkflow(request, draft.id, current.activeGenProvider || current.defaultProvider, position.x, position.y);
+            const built = replicationWorkflow(request, draft.id, resolveNewCardImageProvider(current), position.x, position.y);
             const existing = await api.projectCanvasGet(draft.id);
             for (const note of built.notes) {
               if (existing.nodes.some(item => item.id === note.id)) continue;

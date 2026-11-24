@@ -1196,7 +1196,7 @@ function GenEditComposer({
   const [reviseProvider, setReviseProvider] = useState<string | null>(null);
   const activeGenProvider = isVideo ? videoProvider(videoChannel, selectedVideoOptions) : isRevise ? reviseProvider ?? continuationProvider : selectedProvider;
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
-  const defaultProvider = useStore((s) => s.defaultProvider);
+  const defaultProvider = useStore((s) => s.imageDefaultOrigin === "pin" ? s.defaultProvider : undefined);
   const setDefaultProvider = useStore((s) => s.setDefaultProvider);
   const codexHealth = useStore((s) => s.codexHealth);
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
@@ -1249,7 +1249,7 @@ function GenEditComposer({
   // provider 初值 = 该会话的 provider（进入编辑时同步当前选择，坞内可再切换；遗留 cloud key 归一化）。
   useEffect(() => {
     if (isRevise) return;
-    setActiveGenProvider(continuationProvider);
+    setActiveGenProvider(continuationProvider, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

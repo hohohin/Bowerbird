@@ -1,6 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { modelFavoriteKey, useModelFavorites } from "../../lib/modelFavorites";
 import { createPortal } from "react-dom";
 import { userErrorMessage } from "../../lib/userError";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Coins, Monitor, Pin, Star, UserRound } from "lucide-react";
@@ -19,11 +18,6 @@ export interface ModelOption {
   selectableWithIssue?: boolean;
 }
 
-const useFavorites = create<{ keys: string[]; toggle: (key: string) => void }>()(persist(set => ({
-  keys: [],
-  toggle: key => set(state => ({ keys: state.keys.includes(key) ? state.keys.filter(item => item !== key) : [...state.keys, key] })),
-}), { name: "bowerbird.model-favorites.v1" }));
-
 function family(label: string): string {
   return label.toLowerCase().startsWith("gpt-image") ? "gpt" : label.toLowerCase().split(" ")[0];
 }
@@ -34,15 +28,15 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
   kind?: string; quotaDetail?: string; cloudBalance?: number | null; cloudLoggedIn?: boolean; footer?: ReactNode | ((close: () => void) => ReactNode); menuClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const favoriteKeys = useFavorites(state => open ? state.keys : null);
-  const favoriteId = (option: ModelOption) => JSON.stringify([kind, option.source, option.key]);
+  const favoriteKeys = useModelFavorites(state => open ? state.keys : null);
+  const favoriteId = (option: ModelOption) => modelFavoriteKey(kind, option.source, option.key);
   const favorites = favoriteKeys ? options.filter(option => favoriteKeys.includes(favoriteId(option))) : [];
   function favoriteButton(option: ModelOption) {
     const key = favoriteId(option);
     const saved = favoriteKeys?.includes(key) ?? false;
     const action = `${saved ? "取消收藏" : "收藏"}：${option.label}`;
     return <button type="button" className="model-select-favorite" aria-label={action} title={action} aria-pressed={saved}
-      onClick={() => useFavorites.getState().toggle(key)}><Star size={13} fill={saved ? "currentColor" : "none"} aria-hidden /></button>;
+      onClick={() => useModelFavorites.getState().toggle(key)}><Star size={13} fill={saved ? "currentColor" : "none"} aria-hidden /></button>;
   }
   const portalTarget = usePortalTarget();
   const [openGroup, setOpenGroup] = useState<string | null>(null);

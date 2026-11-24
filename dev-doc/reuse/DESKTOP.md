@@ -235,3 +235,8 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 ### 本机提示的关闭记录
 
 [dismissedNotices.ts](../../apps/desktop/src/lib/dismissedNotices.ts) 提供按范围读取、批量关闭与订阅显示变化的入口。画布生成提示以项目和生成轮次标识，工作流使用诊断 ID 或旧步骤的运行与卡片 ID，通知铃铛使用任务和轮次标识。原任务仍负责运行、恢复和历史详情。素材库和工作流通过 [describeAssetWithNotice](../../apps/desktop/src/lib/describeNotices.ts) 调用单图反推，铃铛按本次执行更新状态并打开源素材。
+
+### 新建卡片的图像模型
+
+- 画板建卡、媒体切换及 Agent 的建卡请求使用 [resolveNewCardImageProvider](../../apps/desktop/src/lib/newCardImageProvider.ts)，在创建时读取最新权益和本机可用状态。图钉、会话内手选和按收藏顺序可用的图像模型依次生效。旧版未区分星标与图钉的已存选择排在收藏之后，最后使用账号默认 Cloud 档位。
+- [modelFavorites](../../apps/desktop/src/lib/modelFavorites.ts) 与选择器共用原有收藏键、来源及模型类型。

@@ -63,6 +63,10 @@ export function isCloudProvider(provider: string | null | undefined): boolean {
   return !!provider && provider.startsWith("bowerbird-cloud");
 }
 
+export function imageProviderSource(key: string): "cloud" | "local" | "personal" {
+  return isCloudProvider(key) ? "cloud" : key === H3_IMAGE ? "local" : "personal";
+}
+
 /** Bowerbird Cloud Pro：`image_hd` 档，兼容旧 `bowerbird-cloud` 键。 */
 export function isCloudProProvider(provider: string | null | undefined): boolean {
   return isCloudProvider(provider) && canonicalProviderKey(provider!) === "bowerbird-cloud-image_hd";

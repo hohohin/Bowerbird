@@ -1,3 +1,4 @@
+import { resolveNewCardImageProvider } from "./newCardImageProvider";
 import { assignCanvasCardNames } from "./canvasCardNames";
 import { describeAssetWithNotice } from "./describeNotices";
 import { mergeWorkflowChanges } from "./workflowExternalChanges";
@@ -1657,7 +1658,7 @@ export class CanvasWorkflowController {
         codexOptions: selectedChatOptions(provider, agentChatOptions(provider, existing ? useLocalChatStore.getState().drafts[existing.id]?.codexOptions ?? existing.codexOptions ?? node.chatCodexOptions : node.chatCodexOptions)),
         text: workflowAgentMessage(cloudAgentProfilePrompt(snapshot.prompt, snapshot.visualProfile), snapshot.source, provider, assets.map(asset => isVideoPath(asset.store_path!) ? "视频" : "图片")),
         referenceAssetIds: snapshot.assetIds,
-        cardDefaults: { provider: useStore.getState().defaultProvider, videoChannel: "jimeng", videoOptions: { ...DEFAULT_VIDEO_OPTIONS } },
+        cardDefaults: { provider: resolveNewCardImageProvider(useStore.getState()), videoChannel: "jimeng", videoOptions: { ...DEFAULT_VIDEO_OPTIONS } },
         placement: { x: node.x, y: node.y, width: workflowCardWidth(node), height: node.layoutSize?.height ?? 330, zIndex: Date.now() % 1000000 } };
       await this.step(runId, node.id, { status: "running", chatInput: input, detail: "正在发送" });
     }
