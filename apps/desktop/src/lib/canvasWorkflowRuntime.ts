@@ -157,7 +157,8 @@ export class CanvasWorkflowController {
   private writing: Promise<void> = Promise.resolve();
   private persistedDocument = emptyWorkflow();
   private queuedDocument = emptyWorkflow();
-  private queuedDraft?: { nodeId: string; document: CanvasWorkflow };
+  private queuedDraft?: { nodeId: string; document: CanvasWorkflow; write: Promise<void> };
+  private failedWriteBase?: CanvasWorkflow;
   private startingCards = new Map<string, CardStart>();
   private generationHandoffs = new Map<string, { runId: string; jobId: string; turnKey: string }>();
   private liveGenerationCheckpoint = (nodeId: string, run: WorkflowRun) => {
@@ -213,7 +214,6 @@ export class CanvasWorkflowController {
   private layoutNodes() {
     return this.document.nodes.map(node => this.measuredSizes.has(node.id) ? { ...node, layoutSize: this.measuredSizes.get(node.id) } : node);
   }
-  private pendingEditAuthorization = false;
   private encapsulating = false;
   private executing = new Set<string>();
   private reservations = new Map<string, { access: string[]; writes: string[] }>();
@@ -337,8 +337,10 @@ export class CanvasWorkflowController {
   private run(id: string) { return workflowRuns(this.document).find(run => run.id === id)!; }
   private saveRun(run: WorkflowRun, nodes = this.document.nodes) {
     const runs = workflowRuns(this.document);
-    const updated = runs.some(item => item.id === run.id) ? runs.map(item => item.id === run.id ? run : item) : [...runs, run];
-    return this.save({ ...this.document, nodes, runs: updated, run: updated[updated.length - 1] ?? null });
+    const existing = runs.some(item => item.id === run.id);
+    const updated = existing ? runs.map(item => item.id === run.id ? run : item) : [...runs, run];
+    // An unaccepted run must not enter another snapshot and be saved by a later edit.
+    return this.save({ ...this.document, nodes, runs: updated, run: updated[updated.length - 1] ?? null }, { deferPublication: !existing });
   }
   constructor(readonly projectId: string) {}
   subscribe = (listener: (urgent?: boolean, promptEditor?: string) => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -368,6 +370,7 @@ export class CanvasWorkflowController {
         // projection below copies only runs/steps whose transient state changes.
         this.persistedDocument = snapshot.document;
         this.queuedDocument = snapshot.document;
+        this.failedWriteBase = undefined;
         // Old dimension wires now carry the complete prompt through the single text port.
         const describes = new Set(this.document.nodes.filter(node => node.kind === "instruction" && node.action === "describe").map(node => node.id));
         const splits = new Set(this.document.nodes.filter(node => node.kind === "instruction" && node.action === "layers").map(node => node.id));
@@ -464,66 +467,82 @@ export class CanvasWorkflowController {
     this.emit();
     return this.loading;
   }
-  async save(document = this.document, authorizeEdit = false, draftNodeId?: string, editorOnly = false) {
+  async save(document = this.document, { draftNodeId, editorOnly, deferPublication }:
+    { draftNodeId?: string; editorOnly?: boolean; deferPublication?: boolean } = {}) {
     if (this.discarded) return;
-    if (authorizeEdit) this.pendingEditAuthorization = true;
     document = { ...document, nodes: document.nodes.map(node => {
       const size = this.measuredSizes.get(node.id);
       return size && (node.layoutSize?.width !== size.width || node.layoutSize.height !== size.height) ? { ...node, layoutSize: size } : node;
     }) };
     document = { ...document, cardNames: assignCanvasCardNames(document.cardNames, document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) }))) };
     const promptEditor = editorOnly ? draftNodeId : undefined;
-    this.document = document; this.emit(false, promptEditor);
     const initial = structuredClone(document);
     const base = this.queuedDocument;
-    this.queuedDocument = initial;
-    if (authorizeEdit && draftNodeId && this.queuedDraft?.nodeId === draftNodeId) {
+    if (!deferPublication) {
+      this.document = document;
+      this.queuedDocument = initial;
+      this.emit(false, promptEditor);
+    }
+    if (draftNodeId && this.queuedDraft?.nodeId === draftNodeId) {
       this.queuedDraft.document = initial;
-      return this.writing;
+      return this.queuedDraft.write;
     }
     // Only successive prompt edits to the same card may share a pending write.
     // An in-flight save, a structural edit or a run checkpoint is a boundary.
-    const draft = authorizeEdit && draftNodeId ? { nodeId: draftNodeId, document: initial } : undefined;
-    this.queuedDraft = draft;
-    let refreshBoard = !!this.error;
+    let draft: typeof this.queuedDraft;
     const write = this.writing.then(async () => {
       if (this.queuedDraft === draft) this.queuedDraft = undefined;
       const snapshot = draft?.document ?? initial;
       if (this.discarded) return;
-      if (authorizeEdit) await api.canvasWorkflowAuthorize();
-      let merged = mergeWorkflowChanges(base, snapshot, this.persistedDocument, this.liveGenerationCheckpoint);
-      let mergeBase = this.persistedDocument, revision = this.revision;
-      // A chat turn can append four batches while unrelated runs checkpoint.
-      for (let conflicts = 0; ; conflicts++) {
-        if (this.discarded) return;
-        try {
-          this.revision = await api.canvasWorkflowSave(this.projectId, revision, merged);
-          break;
-        } catch (error) {
-          if (!String(error).includes("工作流已被其他窗口修改") || conflicts >= 4) throw error;
-          refreshBoard = true;
-          const latest = await api.canvasWorkflowGet(this.projectId);
-          merged = mergeWorkflowChanges(mergeBase, merged, latest.document, this.liveGenerationCheckpoint);
-          mergeBase = latest.document; revision = latest.revision;
+      if (deferPublication && this.error) throw new Error(this.error);
+      // Later snapshots already include the optimistic edits from a failed write.
+      // Merge them from the previous accepted baseline so they are still persisted.
+      const writeBase = this.failedWriteBase ?? base;
+      let refreshBoard = !!this.error;
+      try {
+        let merged = mergeWorkflowChanges(writeBase, snapshot, this.persistedDocument, this.liveGenerationCheckpoint);
+        let mergeBase = this.persistedDocument, revision = this.revision;
+        // A chat turn can append four batches while unrelated runs checkpoint.
+        for (let conflicts = 0; ; conflicts++) {
+          if (this.discarded) return;
+          try {
+            this.revision = await api.canvasWorkflowSave(this.projectId, revision, merged);
+            break;
+          } catch (error) {
+            if (!String(error).includes("工作流已被其他窗口修改") || conflicts >= 4) throw error;
+            refreshBoard = true;
+            const latest = await api.canvasWorkflowGet(this.projectId);
+            merged = mergeWorkflowChanges(mergeBase, merged, latest.document, this.liveGenerationCheckpoint);
+            mergeBase = latest.document; revision = latest.revision;
+          }
         }
+        this.persistedDocument = structuredClone(merged);
+        this.failedWriteBase = undefined;
+        this.document = mergeWorkflowChanges(deferPublication ? base : snapshot, this.document, merged);
+        if (this.queuedDocument === (deferPublication ? base : snapshot)) this.queuedDocument = structuredClone(merged);
+        this.error = "";
+      } catch (error) {
+        if (!deferPublication) {
+          this.failedWriteBase = writeBase;
+          if (this.queuedDocument === snapshot) this.queuedDocument = writeBase;
+        }
+        this.error = `工作流未保存：${String(error)}`;
+        throw error;
+      } finally {
+        this.emit(false, refreshBoard || this.error ? undefined : promptEditor);
+        this.scheduleSessionCompletions();
+        this.scheduleTriggers();
       }
-      this.persistedDocument = structuredClone(merged);
-      this.document = mergeWorkflowChanges(snapshot, this.document, merged);
-      if (this.queuedDocument === snapshot) this.queuedDocument = structuredClone(merged);
     });
-    // Loading may repair a historical result link. Its caller observes the
-    // failed write below and holds the editor closed until the link is retried.
-    // Preserve ordering without poisoning the next load's repair or clearing a newer queue.
-    this.writing = !this.ready && !this.pendingEditAuthorization ? write.catch(() => {}) : write;
-    try {
-      await write; this.error = "";
-      if (this.writing === write) this.pendingEditAuthorization = false;
-    }
-    catch (error) { this.error = `工作流未保存：${String(error)}`; throw error; }
-    finally { this.emit(false, refreshBoard || this.error ? undefined : promptEditor); this.scheduleSessionCompletions(); this.scheduleTriggers(); }
+    this.queuedDraft = draft = draftNodeId ? { nodeId: draftNodeId, document: initial, write } : undefined;
+    this.writing = write.catch(() => {});
+    return write;
   }
   async flush() {
     await this.load();
+    await this.waitForWrites();
+  }
+  private async waitForWrites() {
     await this.writing;
     if (this.error) throw new Error(this.error);
   }
@@ -544,7 +563,7 @@ export class CanvasWorkflowController {
       // Rebase queued snapshots without treating unsaved live progress as persisted.
       this.queuedDocument = structuredClone(queued);
     });
-    this.writing = refresh;
+    this.writing = refresh.catch(() => {});
     try { await refresh; }
     catch (error) { this.error = `工作流未保存：${String(error)}`; throw error; }
     finally { this.emit(); this.scheduleTriggers(); }
@@ -557,9 +576,7 @@ export class CanvasWorkflowController {
   }
   async retrySave() {
     if (!this.ready) { await this.retryLoad(); return; }
-    await this.writing.catch(() => {}); this.writing = Promise.resolve();
-    this.queuedDocument = structuredClone(this.persistedDocument);
-    await this.save(this.document, this.pendingEditAuthorization);
+    await this.save();
   }
   async edit(nodes: WorkflowNode[], history?: { removedRuns: WorkflowRun[]; runOrder: string[] }, draftNodeId?: string, editorOnly = false) {
     if (this.encapsulating) throw new Error("正在封装卡片，请稍后再编辑");
@@ -572,25 +589,12 @@ export class CanvasWorkflowController {
         // Only the prompt can change here. Structural validation and trigger
         // reconciliation belong to edits that can actually change those fields.
         const updated = this.document.nodes.map(node => node === current ? { ...node, prompt: edited.prompt } : node);
-        await this.save({ ...this.document, nodes: updated }, true, draftNodeId, true);
+        await this.save({ ...this.document, nodes: updated }, { draftNodeId, editorOnly: true });
         return;
       }
     }
-    // Moving/removing an existing conversation keeps the composer's access rules.
-    // Native workflow_save still authorizes all definition changes and new runs.
-    const chatLayout = (node: WorkflowNode) => {
-      const { x: _x, y: _y, layoutSize: _size, ...definition } = node;
-      return node.kind === "agent" && node.chatConversationId ? definition : node;
-    };
-    const before = this.document.nodes.filter(node => node.kind !== "text");
-    const after = nodes.filter(node => node.kind !== "text");
-    const projectionOnly = after.every(node => {
-      const previous = before.find(candidate => candidate.id === node.id);
-      return previous && JSON.stringify(chatLayout(previous)) === JSON.stringify(chatLayout(node));
-    }) && before.every(node => after.some(candidate => candidate.id === node.id) || node.kind === "agent" && !!node.chatConversationId);
-    const authorizeEdit = !projectionOnly && (before.length > 0 || after.length > 0);
     const nodeIds = new Set(nodes.map(node => node.id));
-    const previousH3 = new Map(before.filter(node => node.kind === "comfy-video").map(node => [node.id, comfyVideoMode(node.comfyVideo)]));
+    const previousH3 = new Map(this.document.nodes.filter(node => node.kind === "comfy-video").map(node => [node.id, comfyVideoMode(node.comfyVideo)]));
     nodes = nodes.map(node => {
       if (this.isLocked(node.id)) return node;
       const normalized = normalizeWorkflowLocalVideo(normalizeWorkflowInputSlots(node));
@@ -659,15 +663,14 @@ export class CanvasWorkflowController {
         return run.scheduleId && !nodes.some(node => node.id === run.startId) ? []
           : [{ ...run, triggerQueue, status: "stopped" as const }];
       });
-    // Controlled inputs and undo need the edit synchronously; authorize each snapshot in the write queue.
-    await this.save({ ...this.document, nodes, runs, run: runs[runs.length - 1] ?? null }, authorizeEdit, draftNodeId, editorOnly);
+    await this.save({ ...this.document, nodes, runs, run: runs[runs.length - 1] ?? null }, { draftNodeId, editorOnly });
   }
   async encapsulate(name: string, members: string[], bounds: Parameters<typeof api.workflowEncapsulate>[4], template: Parameters<typeof api.workflowEncapsulate>[5]) {
     if (this.encapsulating || !this.ready || this.error) throw new Error("请先完成当前工作流保存");
     if (this.reservations.size || this.executing.size || workflowRuns(this.document).some(workflowRunActive)) throw new Error("请先停止当前运行的工作流再封装");
     this.encapsulating = true;
     try {
-      await this.writing;
+      await this.waitForWrites();
       const result = await api.workflowEncapsulate(this.projectId, this.revision, name, members, bounds, template);
       this.document = result.document; this.revision = result.revision; this.emit();
       this.persistedDocument = structuredClone(result.document);
@@ -1285,7 +1288,7 @@ export class CanvasWorkflowController {
     const runId = crypto.randomUUID(), threadId = crypto.randomUUID();
     this.reservations.set(runId, { access: lockedNodeIds, writes: writeNodeIds }); this.emit();
     try {
-    await this.writing;
+    await this.waitForWrites();
     if (scheduleId) {
       const owner = this.document.nodes.find(node => node.id === startId);
       const schedule = owner && activeTriggerSchedule(owner);
@@ -1440,7 +1443,7 @@ export class CanvasWorkflowController {
     }
   }
   async restartLoop(runId: string) {
-    await this.writing;
+    await this.waitForWrites();
     const run = this.run(runId), loop = run?.loop;
     if (!loop || run.status !== "stopped" || this.stopping.has(runId) || this.executing.has(runId)) return;
     if (loop.items && (loop.startIndex ?? 0) + loop.completed.length === loop.items.length) return;
@@ -1481,7 +1484,7 @@ export class CanvasWorkflowController {
     if (this.retryingLoops.has(runId)) return;
     this.retryingLoops.add(runId);
     try {
-    await this.writing;
+    await this.waitForWrites();
     const run = this.run(runId);
     if (!run?.loop || run.status !== "waiting" || this.executing.has(runId) || this.stopping.has(runId)) return;
     const steps = { ...run.steps };
@@ -2095,7 +2098,7 @@ export class CanvasWorkflowController {
     this.reservations.set(runId, { access: [nodeId], writes: [nodeId] });
     const start = this.beginStart(nodeId, "optimize");
     try {
-      await Promise.all([api.canvasWorkflowAuthorize(), this.writing]);
+      await Promise.all([api.canvasWorkflowAuthorize(), this.waitForWrites()]);
       if (!start.current()) return;
       await api.projectThreadCreate({ id: threadId, projectId: this.projectId, title: "H3 提示词优化", origin: "direct" });
       if (!start.current()) return;
@@ -2969,7 +2972,7 @@ export class CanvasWorkflowController {
       }
     };
     try {
-      await this.writing;
+      await this.waitForWrites();
       if (this.stopped.has(runId)) return;
       if (this.run(runId).status !== "running") await this.saveRun({ ...this.run(runId), status: "running" });
       while (!halted()) {

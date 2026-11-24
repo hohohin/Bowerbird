@@ -15,43 +15,23 @@ pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementServ
     if !login.logged_in || snapshot.user_id.is_empty() || login.user_id.as_deref() != Some(snapshot.user_id.as_str())
         || !matches!(snapshot.tier.as_str(), "pro" | "studio")
         || !matches!(snapshot.offline_state, Some(crate::cloud::entitlement::OfflineState::Fresh | crate::cloud::entitlement::OfflineState::Grace)) {
-        return Err(AppError::Other("工作流卡片的创建、编辑和运行需要 Pro；已有结果仍可查看和导出".into()));
+        return Err(AppError::Other("运行工作流卡片需要 Pro。已有结果仍可查看和导出".into()));
     }
     Ok(())
 }
 
-// Existing accepted runs can finish after expiry. Results do not change the paid definition.
-fn paid_definition(document: &Value) -> Vec<Value> {
-    document["nodes"].as_array().into_iter().flatten().filter(|n| n["kind"] != "text")
-        .map(|node| {
-            let mut node = node.clone();
-            if let Some(fields) = node.as_object_mut() {
-                for key in ["outputs","outputPorts","sessionNodeIds","activeSessionNodeId","resultNodeIds","resultGroupId","completionSeen","triggerCount","describeCache","profileCache","layoutSize"] { fields.remove(key); }
-                if fields.get("chatConversationId").is_some_and(Value::is_string) {
-                    fields.remove("x"); fields.remove("y");
-                }
-                if let Some(schedule) = fields.get_mut("triggerSchedule").and_then(Value::as_object_mut) {
-                    schedule.remove("status");
-                    if schedule.get("dailyAt").is_some_and(Value::is_string) { schedule.remove("at"); }
-                }
-            }
-            node
-        }).collect()
-}
-
+// Accepted active runs can finish after expiry. Undo can restore terminal history.
 fn has_new_run(before: &Value, after: &Value) -> bool {
     let ids = |doc: &Value| -> HashSet<String> {
         doc["runs"].as_array().into_iter().flatten().chain(std::iter::once(&doc["run"]))
+            .filter(|run| matches!(run["status"].as_str(), Some("running" | "waiting")))
             .filter_map(|r| r["id"].as_str().map(str::to_owned)).collect()
     };
     !ids(after).is_subset(&ids(before))
 }
 
-fn definition_changed(before: &Value, after: &Value) -> bool {
-    let mut previous = paid_definition(before);
-    previous.retain(|node| !(node["kind"] == "agent" && node["chatConversationId"].is_string()
-        && !after["nodes"].as_array().into_iter().flatten().any(|current| current["id"] == node["id"])));
-    previous != paid_definition(after)
+fn requires_run_pro(before: &Value, after: &Value) -> bool {
+    has_new_run(before, after) && after["nodes"].as_array().into_iter().flatten().any(|node| node["kind"] != "text")
 }
 
 // The schedule and the new run are claimed in the same SQLite transaction.
@@ -522,7 +502,7 @@ pub async fn canvas_workflow_get(paths: State<'_, Arc<LibraryPaths>>, project_id
 #[tauri::command]
 pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value, created_content: Option<NewCanvasNode>) -> AppResult<i64> {
     let before = db.workflow_get(&project_id)?.document;
-    if created_content.is_some() || definition_changed(&before, &document) || (has_new_run(&before,&document) && !paid_definition(&document).is_empty()) {
+    if requires_run_pro(&before, &document) {
         require_pro(&auth, &entitlement).await?;
     }
     db.workflow_save_with_content(&project_id, revision, document, created_content.as_ref())
@@ -532,16 +512,28 @@ pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, 
 mod tests {
     use super::*;
     #[test]
-    fn paid_edits_and_new_runs_are_distinct_from_accepted_results() {
-        let before=json!({"nodes":[node("paid",json!({}))],"runs":[{"id":"accepted"}],"run":null});
-        let mut result=before.clone(); result["nodes"][0]["outputs"]=json!({"image":{"type":"image","assetIds":["result"]}});
-        assert_eq!(paid_definition(&before),paid_definition(&result));
-        assert!(!has_new_run(&before,&result));
-        result["nodes"][0]["layoutSize"]=json!({"width":320,"height":156});
-        assert_eq!(paid_definition(&before),paid_definition(&result));
-        result["nodes"][0]["prompt"]=json!("changed"); assert_ne!(paid_definition(&before),paid_definition(&result));
-        result["runs"]=json!([{"id":"accepted"},{"id":"new"}]); assert!(has_new_run(&before,&result));
-        assert!(paid_definition(&json!({"nodes":[{"id":"text","kind":"text"}]})).is_empty());
+    fn pro_is_required_to_start_a_run_and_not_to_edit_or_restore_history() {
+        let before = json!({"nodes":[],"run":null});
+        let mut after = json!({"nodes":[node("paid", json!({}))],"run":null});
+        assert!(!requires_run_pro(&before, &after), "create a paid card locally");
+        let created = after.clone();
+        after["nodes"][0]["prompt"] = json!("edited without a login");
+        assert!(!requires_run_pro(&created, &after));
+
+        after["runs"] = json!([{"id":"restored","status":"done"}]);
+        assert!(!requires_run_pro(&created, &after), "restoring history on undo does not run anything");
+        let restored = after.clone();
+        after["runs"][0]["status"] = json!("running");
+        assert!(requires_run_pro(&restored, &after), "a terminal run cannot be made active without Pro");
+
+        after["run"] = json!({"id":"new","status":"running"});
+        assert!(requires_run_pro(&created, &after));
+        let accepted = after.clone();
+        after["run"]["status"] = json!("waiting");
+        after["nodes"][0]["outputs"] = json!({"image":{"type":"image","assetIds":["result"]}});
+        assert!(!requires_run_pro(&accepted, &after), "an accepted run may save checkpoints");
+        after["nodes"][0]["kind"] = json!("text");
+        assert!(!requires_run_pro(&before, &after), "text-only flows remain local");
     }
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
     #[test]
@@ -640,14 +632,10 @@ mod tests {
         let started = db.begin_local_chat(&input).unwrap();
         let mut snapshot = db.workflow_get("p").unwrap();
         let mut moved = snapshot.document.clone(); moved["nodes"][0]["x"] = json!(125); moved["nodes"][0]["y"] = json!(250);
-        assert_eq!(paid_definition(&snapshot.document), paid_definition(&moved));
         let revision = db.workflow_save("p", snapshot.revision, moved).unwrap();
         let position: (f64,f64) = db.conn.lock().unwrap().query_row("SELECT x,y FROM canvas_nodes WHERE id=?1", [&started.conversation.summary.node_id], |row|Ok((row.get(0)?,row.get(1)?))).unwrap();
         assert_eq!(position, (125.,250.));
         let empty = json!({"schema_version":1,"nodes":[],"run":null});
-        assert!(!definition_changed(&snapshot.document, &empty));
-        let mut changed_task = snapshot.document.clone(); changed_task["nodes"][0]["prompt"] = json!("不同的任务");
-        assert!(definition_changed(&snapshot.document, &changed_task));
         assert!(db.workflow_save("p", revision, empty.clone()).is_err());
         db.finish_local_chat(&started.conversation.summary.id, &started.turn_id, "done", None).unwrap();
         snapshot = db.workflow_get("p").unwrap();
@@ -706,9 +694,9 @@ mod tests {
         }
         let mut changed = doc.clone(); changed["nodes"][0]["kind"] = json!("generation"); assert!(validate(&changed).is_err());
         changed = doc.clone(); changed["nodes"][0]["triggerSchedule"]["status"] = json!("failed");
-        assert_eq!(paid_definition(&doc), paid_definition(&changed));
+        assert!(!requires_run_pro(&doc, &changed));
         changed["nodes"][0]["triggerSchedule"]["at"] = json!(1800000060000u64);
-        assert_ne!(paid_definition(&doc), paid_definition(&changed));
+        assert!(!requires_run_pro(&doc, &changed));
     }
     #[test]
     fn trigger_modes_roundtrip_and_inactive_appointments_cannot_be_claimed() {
@@ -754,7 +742,7 @@ mod tests {
         assert!(validate_schedule_claims(&cancelled, &candidate).is_err());
     }
     #[test]
-    fn daily_trigger_validates_local_time_and_keeps_progress_out_of_paid_definition() {
+    fn daily_trigger_validates_local_time_and_saves_schedule_without_pro() {
         let mut trigger = node("timer", json!({})); trigger["kind"] = json!("trigger");
         trigger["triggerSchedule"] = json!({"id":"daily","at":1800000000000u64,"dailyAt":"21:00","status":"armed"});
         let doc = json!({"schema_version":1,"nodes":[trigger],"run":null});
@@ -764,9 +752,9 @@ mod tests {
             assert!(validate(&bad).is_err());
         }
         let mut next = doc.clone(); next["nodes"][0]["triggerSchedule"]["at"] = json!(1800086400000u64);
-        assert_eq!(paid_definition(&doc), paid_definition(&next));
+        assert!(!requires_run_pro(&doc, &next));
         next["nodes"][0]["triggerSchedule"]["dailyAt"] = json!("22:00");
-        assert_ne!(paid_definition(&doc), paid_definition(&next));
+        assert!(!requires_run_pro(&doc, &next));
         next["nodes"][0]["triggerSchedule"]["status"] = json!("fired"); assert!(validate(&next).is_err());
     }
     #[test]

@@ -36,7 +36,7 @@ import { CanvasConnectionHandle } from "./CanvasConnectionHandle";
 import { CanvasConversationImages } from "./CanvasConversationImages";
 import { GenerationGroupControls } from "./GenerationGroupControls";
 import { canvasMaterialFilterState, type CanvasMaterialFilterState } from "../lib/canvasMaterialFilter";
-import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds, resolveGenerationCells, canvasSessionImages, workflowGenerationCardProjection, workflowGenerationActivity, type WorkflowGenerationActivity } from "../lib/canvasSessionOutputs";
+import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds, resolveGenerationCells, canvasSessionImages, workflowGenerationCardProjection, workflowGenerationActivity, workflowGenerationOrigins, type WorkflowGenerationActivity } from "../lib/canvasSessionOutputs";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { resolveWorkflowTaskFocus } from "../lib/workflowTaskFocus";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
@@ -936,6 +936,33 @@ export function CanvasWorkspace({
     [pinnedWorkflowCards, generationCardProjection.anchors, activeGenerationIds]);
   const collapsedGenerationAnchors = useMemo(() => new Map([...generationCardProjection.anchors].filter(([id]) => !pinnedCardOffsets.has(id) && !activeGenerationIds.has(id))),
     [generationCardProjection.anchors, pinnedCardOffsets, activeGenerationIds]);
+  const generationAnchorsBeforeRemoval = useRef<ReadonlyMap<string, ProjectGraphNode>>(new Map());
+  useLayoutEffect(() => {
+    // Original recycling hides its targets optimistically. Preserve ownership
+    // until a native snapshot confirms the removal.
+    const pending = [...generationAnchorsBeforeRemoval.current].filter(([id, anchor]) =>
+      projection.hidden.has(anchor.id) && !pinnedWorkflowCards.has(id) && !activeGenerationIds.has(id));
+    generationAnchorsBeforeRemoval.current = workflowInteractive
+      ? new Map([...pending, ...collapsedGenerationAnchors]) : new Map();
+  }, [workflowInteractive, collapsedGenerationAnchors, projection.hidden, pinnedWorkflowCards, activeGenerationIds]);
+  const removeExternallyHiddenGenerationCards = useLatestCallback((snapshot: Awaited<ReturnType<typeof api.projectCanvasGet>>) => {
+    if (!workflowInteractive || workflow?.projectId !== snapshot.canvas.projectId || !generationAnchorsBeforeRemoval.current.size) return;
+    const visible = new Set(snapshot.nodes.filter(node => node.hiddenAt == null).map(node => node.id));
+    const removed = new Set(workflow.document.nodes.flatMap(node => {
+      const anchor = generationAnchorsBeforeRemoval.current.get(node.id);
+      return anchor?.projectId === snapshot.canvas.projectId && !visible.has(anchor.id) && !workflowRef.current?.isLocked(node.id)
+        ? [node.id] : [];
+    }));
+    if (!removed.size) return;
+    const survivingOrigins = workflowGenerationOrigins(workflow.document, snapshot.nodes);
+    for (const node of snapshot.nodes) {
+      if (node.kind === "asset") {
+        const original = survivingOrigins.get(node.id);
+        if (original) removed.delete(original.id);
+      }
+    }
+    if (removed.size) void workflow.edit(removeWorkflowNodes(workflow.document.nodes, removed)).catch(error => notifyError(error, "工作流删除未完成"));
+  });
   const lastWorkflowFocus = useRef<{ id: string; element: HTMLElement } | null>(null);
   useEffect(() => {
     const rememberFocus = (event: FocusEvent) => {
@@ -2115,6 +2142,7 @@ export function CanvasWorkspace({
           return;
         }
         if (applySnapshot(snapshot, { restoreView: restoreImportedView, restoreDraft: false }, exactAssets, refreshRouteRevision, readEpoch)) {
+          removeExternallyHiddenGenerationCards(snapshot);
           restoreImportedView = false;
         }
       } catch (reason) {
@@ -3738,7 +3766,9 @@ export function CanvasWorkspace({
     }
     const assets = new Set(ids);
     const affected = graphNodesRef.current.filter(node => node.hiddenAt == null && node.assetId && assets.has(node.assetId));
-    if ([...nodeIds, ...affected.map(node => node.id)].some(id => workflowRef.current?.isLocked(id))) {
+    const affectedAnchors = new Set(affected.map(node => conversationCardsRef.current.aliases.get(node.id) ?? node.id));
+    const producers = [...generationCardProjection.anchors].filter(([, anchor]) => affectedAnchors.has(anchor.id)).map(([id]) => id);
+    if ([...nodeIds, ...affected.map(node => node.id), ...producers].some(id => workflowRef.current?.isLocked(id))) {
       throw new Error("卡片正在使用，请先停止对应任务再删除");
     }
   }
@@ -5159,6 +5189,10 @@ export function CanvasWorkspace({
     const materials = nodesRef.current.filter((node) => ids.has(node.id));
     for (const node of materials) {
       if (node.kind === "folder") for (const asset of node.assets) ids.add(asset.id);
+    }
+    for (const [id, anchor] of generationCardProjection.anchors) {
+      if (!ids.has(anchor.id)) continue;
+      if (activeGenerationIds.has(id) || collapsedGenerationAnchors.has(id)) ids.add(id);
     }
     const graph = graphNodesRef.current.filter((node) => ids.has(node.id) && node.hiddenAt == null);
     const draft = activeCanvasRef.current;

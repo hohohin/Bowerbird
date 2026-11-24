@@ -19,7 +19,7 @@ import { createPortal } from "react-dom";
 import { shallow } from "zustand/shallow";
 import { Clapperboard, Images, List, MessageCirclePlus, Palette, Play, Repeat2, Sparkles, Square, Timer, Workflow, X, Copy, CopyPlus, ImagePlus, MousePointer2, CalendarClock, CheckCheck, Pin, PinOff } from "lucide-react";
 import { api } from "../lib/api";
-import { comfyVideoMode, DEFAULT_COMFY_VIDEO } from "../lib/comfyVideo";
+import { copyComfyDiagnostic, comfyVideoMode, DEFAULT_COMFY_VIDEO } from "../lib/comfyVideo";
 import { startComposerLocalVideo } from "../lib/composerLocalVideo";
 import { activeCanvasNameCounts, assignCanvasCardNames, canvasCardNameError } from "../lib/canvasCardNames";
 import { CanvasCardName } from "./CanvasCardName";
@@ -305,6 +305,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const chat = node.kind !== "agent" ? undefined : node.chatConversationId ? chatSummaries[node.chatConversationId]
         : Object.values(chatSummaries).find(chat => chat.projectId === projectId && chat.nodeId === node.id);
       const issue = workflowProviderIssue(node, state, chat?.provider, quote, dsh);
+      // Let H3 cards explain the Pro requirement when the user starts a run.
+      if (issue?.settings === "account" && (node.kind === "comfy-video" || isH3ImageCard(node))) continue;
       if (issue) byId.set(node.id, issue);
       else if (node.kind === "voice" && voiceIssue) byId.set(node.id, { message: voiceIssue });
       else if (node.kind === "comfy-video" && comfyIssues[comfyCheckKey(node)] !== null) {
@@ -2400,7 +2402,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           {failure && !failure.dismissed && <p className="workflow-error" role="alert">
             {userErrorMessage(failure.diagnostic?.message ?? step?.error, "这一步未完成，请查看问题并重试。")}
             {failure.diagnostic && <button onClick={() => controller.showIssue(failure.diagnostic!)}>查看问题</button>}
-            {h3 && <button onClick={() => handle(navigator.clipboard.writeText(failure.diagnostic ? workflowDiagnosticReport(failure.diagnostic) : step?.error ?? "生成失败").then(() => notifySuccess("错误信息已复制")))}>复制错误信息</button>}
+            {h3 && <button onClick={() => handle(copyComfyDiagnostic(failure.diagnostic ? workflowDiagnosticReport(failure.diagnostic) : step?.error ?? "生成失败").then(() => notifySuccess("错误信息已复制")))}>复制错误信息</button>}
             <button onClick={() => controller.dismissCardFailure(failure.key)}>关闭提示</button>
           </p>}
           {imageFailure && <p className="workflow-error" role="alert">
@@ -2499,7 +2501,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       <div className="workflow-diagnostic-buttons"><button onClick={() => locateIssue(issue.nodeId)}>定位出错卡片</button>
         {deliveryRunIds.has(issue.runId ?? "") && <button onClick={() => handle(controller.continue(issue.runId))}>重试写入内容卡</button>}
         {issueSourceId && (document.nodes.some(node => node.id === issueSourceId) || graphNodes.some(node => node.id === issueSourceId && node.hiddenAt == null)) && <button onClick={() => locateIssue(issueSourceId)}>定位来源</button>}
-        <button onClick={() => handle(navigator.clipboard.writeText(workflowDiagnosticReport(issue)).then(() => notifySuccess("诊断信息已复制")))}>复制诊断信息</button>
+        <button onClick={() => handle((document.nodes.some(node => node.id === issue.nodeId && (node.kind === "comfy-video" || isH3ImageCard(node))) ? copyComfyDiagnostic(workflowDiagnosticReport(issue)) : navigator.clipboard.writeText(workflowDiagnosticReport(issue))).then(() => notifySuccess("诊断信息已复制")))}>复制诊断信息</button>
       </div>
       <details><summary>诊断详情</summary><pre>{workflowDiagnosticReport(issue)}</pre></details>
     </section>, diagnosticTarget)}

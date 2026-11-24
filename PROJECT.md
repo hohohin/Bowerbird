@@ -82,6 +82,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 ### 工作流、Agent 与本机对话
 
+- **工作流权益。** 建卡、编辑和保存草稿可离线进行。需 Pro 的工作流在运行时核验账号权益，已有运行仍沿原身份保存检查点和恢复结果。[画板工作流](dev-doc/CANVAS-WORKFLOW.md)
 - **画板连线。** 卡片接收与输出共用加号。精确引用绑定实例、端口或单元格，生成结果沿连接交付。连同新建、断开和撤销按完整关系保存。发条、循环和失败恢复沿原运行身份。[画板工作流](dev-doc/CANVAS-WORKFLOW.md)
 - **Agent 卡片与桌面对话。** 共用会话、续聊、模型、停止和恢复。改动同步核验本机 Codex、本机 DSH 与 DSH · Cloud。受控建卡须显式授权并按原轮次幂等写入，执行生成沿独立工作流。新增工具字段按客户端能力协商。[对话 provider](dev-doc/CHAT-PROVIDERS.md) · [Cloud 协议](apps/cloud/CHAT.md)
 - **Skill。** 本机 DSH 复用自己的登录、原生会话和用户 Skill。Cloud DSH 加载 VPS 发布的内置 Skill，客户端提交标识与参数，恢复沿原请求和冻结输入。[本机 Skill](dev-doc/CHAT-PROVIDERS.md#2026-11-15-本机-dsh-在卡片第一轮使用-skill) · [Cloud Skill 部署](project_logs/2026-11-08-cloud-dsh-skills.md)

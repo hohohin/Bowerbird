@@ -36,6 +36,7 @@ async function setup(delay, legacySizing = false) {
             window.promptTest.authorizations++;
             if (window.promptTest.denyAuthorize) throw new Error('模拟工作流权限已失效');
           }
+          if (command === 'canvas_workflow_save' && window.promptTest.denySave) throw new Error('模拟工作流保存失败');
           const result = await invoke(command, args);
           if (command === 'canvas_workflow_save') window.promptTest.writes++;
           return result;
@@ -172,37 +173,35 @@ try {
       const saved = JSON.parse(sessionStorage.getItem('workflow-p')).document;
       const writesBefore = window.promptTest.writes;
       window.promptTest.denyAuthorize = true;
-      let editError = '', startError = '', retryError = '';
-      // triggerCount is runtime state in native save, so edit authorization must survive a failed-write retry.
+      window.promptTest.denySave = true;
+      let editError = '', startError = '';
       try { await controller.edit(controller.document.nodes.map(node => node.id === 'h3-trigger' ? { ...node, triggerCount: 2 } : node)); } catch (error) { editError = String(error); }
       try { await controller.start('h3-prompt', true); } catch (error) { startError = String(error); }
-      try { await controller.retrySave(); } catch (error) { retryError = String(error); }
       const controllerError = controller.error;
       const writesAfterDenial = window.promptTest.writes - writesBefore;
       const persistedUnchanged = JSON.stringify(saved) === JSON.stringify(JSON.parse(sessionStorage.getItem('workflow-p')).document);
-      window.promptTest.denyAuthorize = false;
+      window.promptTest.denySave = false;
+      const authorizationsBeforeSave = window.promptTest.authorizations;
       await controller.retrySave();
       const recoveredCount = JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'h3-trigger').triggerCount;
-      const authorizationsBeforeSave = window.promptTest.authorizations;
       await controller.save();
       return { firstImmediate, secondImmediate, savedPrompt: saved.nodes.find(node => node.id === 'h3-prompt').prompt,
-        editError, startError, retryError, controllerError, writesAfterDenial, generations: window.promptTest.generations,
+        editError, startError, controllerError, writesAfterDenial, generations: window.promptTest.generations,
         persistedUnchanged, recoveredCount, runtimeSaveAuthorizations: window.promptTest.authorizations - authorizationsBeforeSave };
     });
     assert.equal(result.firstImmediate, `${original}甲`, 'edit updates the controller before returning its pending save');
     assert.equal(result.secondImmediate, `${original}甲乙`, 'a second pending edit uses the latest document');
     assert.equal(result.savedPrompt, `${original}甲乙`, 'queued persistence retains both edits');
-    assert.match(result.editError, /权限已失效/);
+    assert.match(result.editError, /模拟工作流保存失败/);
     assert.match(result.startError, /权限已失效/);
-    assert.match(result.retryError, /权限已失效/, 'retrying a trigger-count edit must repeat authorization');
     assert.match(result.controllerError, /工作流未保存/);
-    assert.equal(result.writesAfterDenial, 0, 'authorization denial never reaches native save');
+    assert.equal(result.writesAfterDenial, 0, 'rejected persistence never updates the stored revision');
     assert.equal(result.persistedUnchanged, true);
-    assert.equal(result.recoveredCount, 2, 'restored permission lets retry persist the pending edit');
-    assert.equal(result.runtimeSaveAuthorizations, 0, 'ordinary runtime persistence does not request edit authorization');
+    assert.equal(result.recoveredCount, 2, 'retry persists the pending edit even when runtime access is denied');
+    assert.equal(result.runtimeSaveAuthorizations, 0, 'local editing and retry never request runtime authorization');
     assert.equal(result.generations, 0);
     assert.deepEqual(errors, []);
-    console.log('H3 prompt synchronous edits, queued persistence and denied authorization: passed');
+    console.log('H3 prompt synchronous edits and save recovery while runtime authorization is denied: passed');
   } finally { await page.close(); }
   assert.equal(failures.length, 0, `${failures.length} H3 prompt input scenarios failed`);
 } finally { await browser.close(); await server.close(); }

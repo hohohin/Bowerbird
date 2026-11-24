@@ -79,6 +79,11 @@ export interface ComfyVideoStatus { status: "queued" | "running" | "offline" | "
 export function comfyVideo(action: "start" | "status" | "cancel", projectId: string, requestId: string, input?: ComfyVideoInput) {
   return invoke<ComfyVideoStatus>("comfy_video", { action, projectId, requestId, input: input ?? null });
 }
+export async function copyComfyDiagnostic(report: string) {
+  const log = await invoke<string>("comfy_video_log_tail").catch(() => "");
+  await navigator.clipboard.writeText(report + (log || ""));
+}
+
 export function checkComfyVideo(endpoint: string, mode: ComfyVideoMode = "frames") { return invoke<string>("comfy_video_check", { endpoint, mode }); }
 
 export type ComfyEnvironmentMode = ComfyVideoMode | "image" | "edit";
