@@ -12,9 +12,9 @@ Deno.test("Comfy gate uses live paid subscription or server-side test marker", (
   assertComfyDownloadAccess({ bowerbird_test: true }, null);
   for (const marker of [{}, { bowerbird_test: "true" }, null]) rejects(() => assertComfyDownloadAccess(marker, { tier: "free", status: "active" }));
 });
-Deno.test("Comfy signs only six fixed resource keys with no caller override", () => {
-  assert(manifest.files.length === 6);
-  assert(manifest.files.reduce((n, f) => n + f.size, 0) === 44048479273);
+Deno.test("Comfy signs only seven fixed resource keys with no caller override", () => {
+  assert(manifest.files.length === 7);
+  assert(manifest.files.reduce((n, f) => n + f.size, 0) === 65018858889);
   for (const file of manifest.files) assert(comfyDownloadFile({ version: manifest.version, file: file.file }) === file);
   for (const file of ["../portable.7z", "portable.7z?x=1", "windows_package/package.exe", "https://evil.example/", "licenses/NOTICE.txt"]) {
     rejects(() => comfyDownloadFile({ version: manifest.version, file }));

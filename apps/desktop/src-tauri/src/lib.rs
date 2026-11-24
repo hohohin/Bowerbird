@@ -724,6 +724,7 @@ pub fn run() {
             commands::comfy_video::comfy_video,
             commands::comfy_video::comfy_video_check,
             commands::comfy_setup::comfy_video_environment,
+            commands::comfy_setup::comfy_video_log_tail,
             commands::video_replication::video_replication,
             commands::video_replication::collection::video_collection,
             commands::library::count_assets,
@@ -901,6 +902,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, _event| {
             if matches!(&_event, tauri::RunEvent::Exit) {
+                commands::comfy_setup::shutdown();
                 tauri::async_runtime::block_on(async {
                     commands::local_chat::stop_dsh_host().await;
                     commands::agent_ds::video_studio::shutdown().await;

@@ -89,6 +89,7 @@ mod video_asset_revision;
 pub mod video_transcript;
 pub mod comfy_video;
 pub mod comfy_setup;
+mod install_download;
 mod comfy_discovery;
 pub mod video_replication;
 
