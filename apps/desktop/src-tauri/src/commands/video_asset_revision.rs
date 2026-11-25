@@ -20,6 +20,10 @@ pub(super) struct FileStamp {
 }
 
 impl FileStamp {
+    pub(super) fn parts(&self) -> (u64, &str) {
+        (self.size, &self.modified_nanos)
+    }
+
     pub(super) fn read(path: &Path) -> AppResult<Self> {
         let metadata = fs::metadata(path)?;
         let modified = metadata

@@ -268,7 +268,7 @@ pub fn ingest_generated_with_visibility(
     source_tag: &str,
     library_hidden: bool,
 ) -> AppResult<Asset> {
-    persist_generated(paths, db, source, session_id, source_tag, library_hidden, None)
+    persist_generated(paths, db, source, session_id, source_tag, library_hidden, None, |_, _| Ok(()))
 }
 
 pub(crate) struct GeneratedAudioClip<'a> {
@@ -283,7 +283,18 @@ pub(crate) fn ingest_generated_audio_clip(
     source: &Path,
     clip: GeneratedAudioClip<'_>,
 ) -> AppResult<Asset> {
-    persist_generated(paths, db, source, None, "audio-trim", false, Some(clip))
+    ingest_generated_audio_with(paths, db, source, clip, "audio-trim", |_, _| Ok(()))
+}
+
+pub(crate) fn ingest_generated_audio_with(
+    paths: &LibraryPaths,
+    db: &Database,
+    source: &Path,
+    clip: GeneratedAudioClip<'_>,
+    source_tag: &str,
+    record: impl FnOnce(&rusqlite::Transaction<'_>, &Asset) -> AppResult<()>,
+) -> AppResult<Asset> {
+    persist_generated(paths, db, source, None, source_tag, false, Some(clip), record)
 }
 
 fn persist_generated(
@@ -294,6 +305,7 @@ fn persist_generated(
     source_tag: &str,
     library_hidden: bool,
     clip: Option<GeneratedAudioClip<'_>>,
+    record: impl FnOnce(&rusqlite::Transaction<'_>, &Asset) -> AppResult<()>,
 ) -> AppResult<Asset> {
     let meta = media::probe::probe(source)?;
     let id = Ulid::new().to_string();
@@ -380,7 +392,8 @@ fn persist_generated(
         asset.file_mtime = staged.as_file().metadata().and_then(|value| value.modified()).ok()
             .and_then(|value| value.duration_since(UNIX_EPOCH).ok()).map(|value| value.as_secs() as i64);
         let mut published = false;
-        let saved = db.insert_saved_asset_for_project(&asset, false, None, clip.project_id, || {
+        let saved = db.insert_saved_asset_for_project(&asset, false, None, clip.project_id, |tx| {
+            record(tx, &asset)?;
             staged.persist_noclobber(&store_path).map_err(|error| error.error)?;
             published = true;
             Ok(())
