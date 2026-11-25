@@ -35,6 +35,7 @@ import { useWorkflowPortGeometry, type WorkflowPortTarget } from "../lib/useWork
 import { WorkflowCardItem, type WorkflowCardContext } from "./WorkflowCardItem";
 import { WorkflowWireLayer } from "./WorkflowWireLayer";
 import { renderCanvasCards, useCanvasEntryCardContext } from "./CanvasEntryCard";
+import { isWorkflowProDenied } from "../lib/workflowEntitlement";
 import { singleVideoOutput, useWorkflowConnectionGesture } from "./useWorkflowConnectionGesture";
 import { comfyCheckKey, WindingKey } from "./workflowCardPresentation";
 import { useLatestCallback } from "../lib/useCanvasFrame";
@@ -715,9 +716,12 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   function edit(nodes: WorkflowNode[], draftNodeId?: string, editorOnly = false) {
     const before = controller.document;
     const pending = controller.edit(nodes, undefined, draftNodeId, editorOnly);
-    // edit validates locks before synchronously applying its optimistic snapshot.
-    if (controller.document !== before) onEdited(before, controller.document);
-    return pending;
+    const after = controller.document;
+    const remember = () => { if (after !== before && activeController.current === controller) onEdited(before, after); };
+    return pending.then(remember, error => {
+      if (!isWorkflowProDenied(error)) remember();
+      throw error;
+    });
   }
   function patch(id: string, update: Partial<WorkflowNode>, invalidate = true) {
     const draft = pendingCards.current.get(id);
@@ -1164,7 +1168,11 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const before = controller.document;
       const saved = edit([...nodes, node]);
       if (controller.document !== before) onSelect(node.id);
-      await saved;
+      try { await saved; }
+      catch (error) {
+        if (isWorkflowProDenied(error) && activeController.current === controller && currentSelection.current.has(node.id)) onSelect(node.id, true);
+        throw error;
+      }
     })());
   }
   function newConnectionError(gesture: AutomaticGesture, node: WorkflowNode) {

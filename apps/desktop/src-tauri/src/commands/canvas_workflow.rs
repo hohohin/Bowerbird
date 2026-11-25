@@ -27,10 +27,7 @@ fn paid_definition(document: &Value) -> Vec<Value> {
         .map(|node| {
             let mut node = node.clone();
             if let Some(fields) = node.as_object_mut() {
-                for key in ["outputs","outputPorts","sessionNodeIds","activeSessionNodeId","resultNodeIds","resultGroupId","completionSeen","triggerCount","describeCache","profileCache","layoutSize"] { fields.remove(key); }
-                if fields.get("chatConversationId").is_some_and(Value::is_string) {
-                    fields.remove("x"); fields.remove("y");
-                }
+                for key in ["x","y","layoutSize","outputs","outputPorts","sessionNodeIds","activeSessionNodeId","resultNodeIds","resultGroupId","completionSeen","describeCache","profileCache"] { fields.remove(key); }
                 if let Some(schedule) = fields.get_mut("triggerSchedule").and_then(Value::as_object_mut) {
                     schedule.remove("status");
                     if schedule.get("dailyAt").is_some_and(Value::is_string) { schedule.remove("at"); }
@@ -48,11 +45,78 @@ fn has_new_run(before: &Value, after: &Value) -> bool {
     !ids(after).is_subset(&ids(before))
 }
 
+/// A detach can close gaps in numbered inputs. Binding identity and order stay fixed.
+fn binding_subsequence(before: Option<&Value>, after: Option<&Value>, renumber: bool) -> bool {
+    let Some(after) = after else { return true; };
+    let Some(after) = after.as_array() else { return false; };
+    let mut previous = before.and_then(Value::as_array).into_iter().flatten();
+    after.iter().enumerate().all(|(index, binding)| previous.any(|old| {
+        if old == binding { return true; }
+        if !renumber || binding["slot"].as_u64() != Some(index as u64 + 1) { return false; }
+        let mut old = old.clone();
+        let Some(fields) = old.as_object_mut() else { return false; };
+        fields.insert("slot".into(), binding["slot"].clone());
+        old == *binding
+    }))
+}
+
+fn removes_only_inputs(before: Option<&Value>, after: Option<&Value>, renumber: bool) -> bool {
+    let Some(after) = after else { return true; };
+    let Some(after) = after.as_object() else { return false; };
+    after.iter().all(|(port, bindings)| binding_subsequence(before.and_then(|old| old.get(port)), Some(bindings),
+        renumber && matches!(port.as_str(), "image" | "text")))
+}
+
+fn consumed_queued_trigger(before: &Value, after: &Value, id: &Value) -> bool {
+    before["runs"].as_array().into_iter().flatten().chain(std::iter::once(&before["run"]))
+        .filter(|run| run["id"].is_string() && run["triggerQueue"][0] == *id)
+        .any(|old| after["runs"].as_array().into_iter().flatten().chain(std::iter::once(&after["run"]))
+            .any(|new| new["id"] == old["id"] && new["startId"] == *id
+                && new["triggerQueue"].as_array().zip(old["triggerQueue"].as_array())
+                    .is_some_and(|(next, previous)| previous.split_first().is_some_and(|(_, rest)| next.as_slice() == rest))))
+}
+
 fn definition_changed(before: &Value, after: &Value) -> bool {
-    let mut previous = paid_definition(before);
-    previous.retain(|node| !(node["kind"] == "agent" && node["chatConversationId"].is_string()
-        && !after["nodes"].as_array().into_iter().flatten().any(|current| current["id"] == node["id"])));
-    previous != paid_definition(after)
+    let previous = paid_definition(before);
+    let paid_ids: HashSet<_> = previous.iter().filter_map(|node| node["id"].as_str()).collect();
+    // Native content writers stay free for ordinary content. A new output
+    // connection from a workflow card still edits the paid graph.
+    for node in after["nodes"].as_array().into_iter().flatten().filter(|node| node["kind"] == "text") {
+        if node["id"].as_str().is_some_and(|id| paid_ids.contains(id)) { return true; }
+        let uses_workflow = node["inputs"].as_object().into_iter().flatten().flat_map(|(_, bindings)| bindings.as_array().into_iter().flatten())
+            .any(|binding| binding["nodeId"].as_str().is_some_and(|id| paid_ids.contains(id)));
+        if uses_workflow {
+            let old = before["nodes"].as_array().into_iter().flatten().find(|old| old["id"] == node["id"]);
+            if !old.is_some_and(|old| old["textTarget"] == node["textTarget"]
+                && removes_only_inputs(old.get("inputs"), node.get("inputs"), false)) { return true; }
+        }
+    }
+    let mut previous = previous.into_iter();
+    !paid_definition(after).into_iter().all(|mut node| {
+        let Some(mut old) = previous.find(|old| old["id"] == node["id"]) else { return false; };
+        // Existing accepted runs can consume one already-queued trigger.
+        // Changing the configured count from the card still requires Pro.
+        if node["kind"] == "trigger" && old["kind"] == "trigger"
+            && node["triggerCount"].as_u64().zip(old["triggerCount"].as_u64())
+                .is_some_and(|(next, count)| next.checked_add(1) == Some(count))
+            && consumed_queued_trigger(before, after, &node["id"]) {
+            old["triggerCount"] = node["triggerCount"].clone();
+        }
+        let renumber = matches!(node["kind"].as_str(), Some("generation" | "agent" | "planner"));
+        let (Some(old_fields), Some(fields)) = (old.as_object_mut(), node.as_object_mut()) else { return false; };
+        removes_only_inputs(old_fields.remove("inputs").as_ref(), fields.remove("inputs").as_ref(), renumber)
+            && removes_only_inputs(old_fields.remove("savedComfyR2V").as_ref(), fields.remove("savedComfyR2V").as_ref(), false)
+            && binding_subsequence(old_fields.remove("savedComfyAudio").as_ref(), fields.remove("savedComfyAudio").as_ref(), false)
+            && old == node
+    })
+}
+
+fn workflow_save_requires_pro(before: &Value, after: &Value, creates_content: bool) -> bool {
+    creates_content || definition_changed(before, after) || (has_new_run(before, after) && !paid_definition(after).is_empty())
+}
+
+fn workflow_revision_conflict() -> AppError {
+    AppError::Other("工作流已被其他窗口修改，请重新打开项目".into())
 }
 
 // The schedule and the new run are claimed in the same SQLite transaction.
@@ -541,7 +605,7 @@ impl Database {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let current: i64 = tx.query_row("SELECT revision FROM canvas_workflows WHERE project_id=?1", [project_id], |r| r.get(0)).optional()?.unwrap_or(0);
-        if current != revision { return Err(AppError::Other("工作流已被其他窗口修改，请重新打开项目".into())); }
+        if current != revision { return Err(workflow_revision_conflict()); }
         let previous: Option<String> = tx.query_row("SELECT document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |row| row.get(0)).optional()?;
         let previous = previous.map(|json| serde_json::from_str::<Value>(&json)).transpose()?.unwrap_or(Value::Null);
         validate_schedule_claims(&previous, &document)?;
@@ -586,8 +650,9 @@ pub async fn canvas_workflow_get(paths: State<'_, Arc<LibraryPaths>>, project_id
 }
 #[tauri::command]
 pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value, created_content: Option<NewCanvasNode>) -> AppResult<i64> {
-    let before = db.workflow_get(&project_id)?.document;
-    if created_content.is_some() || definition_changed(&before, &document) || (has_new_run(&before,&document) && !paid_definition(&document).is_empty()) {
+    let before = db.workflow_get(&project_id)?;
+    if before.revision != revision { return Err(workflow_revision_conflict()); }
+    if workflow_save_requires_pro(&before.document, &document, created_content.is_some()) {
         require_pro(&auth, &entitlement).await?;
     }
     db.workflow_save_with_content(&project_id, revision, document, created_content.as_ref())
@@ -609,6 +674,68 @@ mod tests {
         assert!(paid_definition(&json!({"nodes":[{"id":"text","kind":"text"}]})).is_empty());
     }
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    #[test]
+    fn workflow_cleanup_preserves_the_pro_boundary_and_saves_parked_audio_removal() {
+        let mut source = node("video", json!({}));
+        source["kind"] = json!("comfy-video");
+        let audio = json!({"nodeId":"video","portId":"image","videoAudio":{}});
+        let mut receiver = node("receiver", json!({"image":[{"nodeId":"video","portId":"image","slot":1},{"assetId":"still","slot":2}]}));
+        receiver["generation"] = json!({"media":"video"});
+        receiver["savedComfyAudio"] = json!([audio]);
+        let before = json!({"schema_version":1,"nodes":[source,receiver],"run":null});
+
+        let mut moved = before.clone();
+        moved["nodes"][0]["x"] = json!(120);
+        moved["nodes"][1]["y"] = json!(180);
+        assert!(!definition_changed(&before, &moved), "layout changes alone are free");
+        let mut disconnected = moved.clone();
+        disconnected["nodes"][1]["inputs"]["image"] = json!([{"assetId":"still","slot":1}]);
+        disconnected["nodes"][1]["savedComfyAudio"] = json!([]);
+        assert!(!definition_changed(&before, &disconnected), "remove inputs and renumber surviving slots");
+        let mut removed = disconnected.clone();
+        removed["nodes"].as_array_mut().unwrap().remove(0);
+        assert!(!definition_changed(&before, &removed), "deletion also clears parked audio");
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.create_project("p","test","blank:p","blank:p","blank").unwrap();
+        assert_eq!(db.workflow_save("p", 0, before.clone()).unwrap(), 1);
+        assert_eq!(db.workflow_save("p", 1, moved).unwrap(), 2);
+        assert_eq!(db.workflow_save("p", 2, disconnected).unwrap(), 3);
+        assert_eq!(db.workflow_save("p", 3, removed.clone()).unwrap(), 4);
+        assert_eq!(db.workflow_get("p").unwrap().document, removed);
+
+        let mut prompt = removed.clone();
+        prompt["nodes"][0]["prompt"] = json!("changed");
+        assert!(definition_changed(&before, &prompt));
+        let mut added = before.clone();
+        added["nodes"].as_array_mut().unwrap().push(node("new",json!({})));
+        assert!(definition_changed(&before, &added));
+        let mut wire = before.clone();
+        wire["nodes"][1]["inputs"]["image"][0]["nodeId"] = json!("different");
+        assert!(definition_changed(&before, &wire));
+        let mut doubled = before.clone();
+        doubled["nodes"][1]["inputs"]["image"] = json!([{"assetId":"still","slot":1},{"assetId":"still","slot":2}]);
+        assert!(definition_changed(&before, &doubled));
+        let mut writer = before.clone();
+        let mut text = node("writer", json!({"image":[{"nodeId":"video","portId":"image"}]}));
+        text["kind"] = json!("text");
+        text["textTarget"] = json!({"nodeId":"note","cellId":"cell","image":true});
+        writer["nodes"].as_array_mut().unwrap().push(text);
+        assert!(workflow_save_requires_pro(&before, &writer, false));
+        let mut run = before.clone();
+        run["run"] = json!({"id":"new-run"});
+        assert!(workflow_save_requires_pro(&before, &run, false));
+
+        let mut trigger = node("switch", json!({}));
+        trigger["kind"] = json!("trigger");
+        trigger["triggerCount"] = json!(2);
+        let queued = json!({"nodes":[trigger],"run":{"id":"accepted","triggerQueue":["switch"]}});
+        let mut changed_count = queued.clone();
+        changed_count["nodes"][0]["triggerCount"] = json!(1);
+        assert!(workflow_save_requires_pro(&queued, &changed_count, false));
+        changed_count["run"] = json!({"id":"accepted","startId":"switch","triggerQueue":[]});
+        assert!(!workflow_save_requires_pro(&queued, &changed_count, false));
+    }
     #[test]
     fn dimension_wire_roundtrips_and_accepts_another_input() {
         let db = Database::open_in_memory().unwrap();

@@ -6,6 +6,7 @@ import { activeTriggerSchedule, advanceTriggerSchedule, triggerScheduleOccurrenc
 import { normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflowCompletionTriggers, h3CardDraft, h3DraftForResult, h3OriginalPrompt, h3PromptPatch, isH3ImageCard } from "./canvasWorkflow";
 import { resolveVideoCardOutputs } from "./workflowVideoFrames";
 import { prepareWorkflowMediaInputs } from "./canvasWorkflowMediaInputs";
+import { isWorkflowProDenied, workflowDefinitionRequiresPro } from "./workflowEntitlement";
 import { executeAgentCard, executeComfyVideoCard, executeGenerationCard, executeLoopCard, executeVoiceCard, runWorkflowComfyVideo,
   type WorkflowCardExecution, type WorkflowCardStart as CardStart, type WorkflowImageSessionInput } from "./canvasWorkflowCardExecutors";
 import { planAutomaticConnection, contentCardAcceptsMedia, type AutomaticOutput } from "./workflowAutoConnect";
@@ -174,6 +175,7 @@ export class CanvasWorkflowController {
     return this.document.nodes.map(node => this.measuredSizes.has(node.id) ? { ...node, layoutSize: this.measuredSizes.get(node.id) } : node);
   }
   private pendingEditAuthorization = false;
+  private writeBatch: { denial?: unknown } = {};
   private encapsulating = false;
   private executing = new Set<string>();
   private reservations = new Map<string, { access: string[]; writes: string[] }>();
@@ -426,6 +428,7 @@ export class CanvasWorkflowController {
   }
   async save(document = this.document, authorizeEdit = false, draftNodeId?: string, editorOnly = false) {
     if (this.discarded) return;
+    const batch = this.writeBatch;
     if (authorizeEdit) this.pendingEditAuthorization = true;
     document = { ...document, nodes: document.nodes.map(node => {
       const size = this.measuredSizes.get(node.id);
@@ -439,7 +442,9 @@ export class CanvasWorkflowController {
     this.queuedDocument = initial;
     if (authorizeEdit && draftNodeId && this.queuedDraft?.nodeId === draftNodeId) {
       this.queuedDraft.document = initial;
-      return this.writing;
+      await this.writing;
+      if (batch.denial) throw batch.denial;
+      return;
     }
     // Only successive prompt edits to the same card may share a pending write.
     // An in-flight save, a structural edit or a run checkpoint is a boundary.
@@ -447,6 +452,7 @@ export class CanvasWorkflowController {
     this.queuedDraft = draft;
     let refreshBoard = !!this.error;
     const write = this.writing.then(async () => {
+      if (batch !== this.writeBatch) return;
       if (this.queuedDraft === draft) this.queuedDraft = undefined;
       const snapshot = draft?.document ?? initial;
       if (this.discarded) return;
@@ -470,17 +476,33 @@ export class CanvasWorkflowController {
       this.persistedDocument = structuredClone(merged);
       this.document = mergeWorkflowChanges(snapshot, this.document, merged);
       if (this.queuedDocument === snapshot) this.queuedDocument = structuredClone(merged);
+    }).catch(error => {
+      if (!isWorkflowProDenied(error)) throw error;
+      // Queued snapshots may depend on the rejected edit. Cancel that batch
+      // without blocking a later cleanup, retry, or project switch.
+      batch.denial = error;
+      this.writeBatch = {};
+      this.document = structuredClone(this.persistedDocument);
+      this.queuedDocument = structuredClone(this.persistedDocument);
+      this.queuedDraft = undefined;
+      this.pendingEditAuthorization = false;
+      this.writing = Promise.resolve();
+      this.error = "";
     });
     // Loading may repair a historical result link. Its caller observes the
     // failed write below and holds the editor closed until the link is retried.
     // Preserve ordering without poisoning the next load's repair or clearing a newer queue.
     this.writing = !this.ready && !this.pendingEditAuthorization ? write.catch(() => {}) : write;
     try {
-      await write; this.error = "";
-      if (this.writing === write) this.pendingEditAuthorization = false;
+      await write;
+      if (batch === this.writeBatch) {
+        this.error = "";
+        if (this.writing === write) this.pendingEditAuthorization = false;
+      }
     }
     catch (error) { this.error = `工作流未保存：${String(error)}`; throw error; }
-    finally { this.emit(false, refreshBoard || this.error ? undefined : promptEditor); this.scheduleSessionCompletions(); this.scheduleTriggers(); }
+    finally { this.emit(false, refreshBoard || this.error || batch.denial ? undefined : promptEditor); this.scheduleSessionCompletions(); this.scheduleTriggers(); }
+    if (batch.denial) throw batch.denial;
   }
   async flush() {
     await this.load();
@@ -491,9 +513,11 @@ export class CanvasWorkflowController {
     await this.load();
     if (this.error) throw new Error(this.error);
     let readFailure: { error: unknown } | undefined;
+    const batch = this.writeBatch;
     // A refresh must not replace the merge base of an in-flight save/CAS retry.
     this.queuedDraft = undefined;
     const refresh = this.writing.then(async () => {
+      if (batch !== this.writeBatch) return;
       const latest = await api.canvasWorkflowGet(this.projectId).catch(error => { readFailure = { error }; return null; });
       if (!latest || latest.revision <= this.revision) return;
       const document = mergeWorkflowChanges(this.persistedDocument, this.document, latest.document, this.liveGenerationCheckpoint);
@@ -536,23 +560,17 @@ export class CanvasWorkflowController {
         return;
       }
     }
-    // Moving/removing an existing conversation keeps the composer's access rules.
-    // Native workflow_save still authorizes all definition changes and new runs.
-    const chatLayout = (node: WorkflowNode) => {
-      const { x: _x, y: _y, layoutSize: _size, ...definition } = node;
-      return node.kind === "agent" && node.chatConversationId ? definition : node;
-    };
     const before = this.document.nodes.filter(node => node.kind !== "text");
-    const after = nodes.filter(node => node.kind !== "text");
-    const projectionOnly = after.every(node => {
-      const previous = before.find(candidate => candidate.id === node.id);
-      return previous && JSON.stringify(chatLayout(previous)) === JSON.stringify(chatLayout(node));
-    }) && before.every(node => after.some(candidate => candidate.id === node.id) || node.kind === "agent" && !!node.chatConversationId);
-    const authorizeEdit = !projectionOnly && (before.length > 0 || after.length > 0);
+    const authorizeEdit = workflowDefinitionRequiresPro(this.document.nodes, nodes);
     const nodeIds = new Set(nodes.map(node => node.id));
     const previousH3 = new Map(before.filter(node => node.kind === "comfy-video").map(node => [node.id, comfyVideoMode(node.comfyVideo)]));
     nodes = nodes.map(node => {
       if (this.isLocked(node.id)) return node;
+      if (!authorizeEdit) {
+        // References keep their existing selectors. Input positions may close
+        // up after detaching a wire; no prompt or model fields need rewriting.
+        return { ...node, inputs: normalizeWorkflowInputSlots(node).inputs };
+      }
       const normalized = normalizeWorkflowLocalVideo(normalizeWorkflowInputSlots(node));
       if (normalized.kind !== "comfy-video" || previousH3.get(node.id) === comfyVideoMode(normalized.comfyVideo)) return normalized;
       const active = workflowExecutionInputs(normalized);
@@ -872,8 +890,12 @@ export class CanvasWorkflowController {
       const previous = this.document;
       const write = this.edit(nodes);
       const after = this.document;
+      try { await write; }
+      catch (error) {
+        if (!isWorkflowProDenied(error) && after !== previous) options.onEdited?.(before, after);
+        throw error;
+      }
       if (after !== previous) options.onEdited?.(before, after);
-      await write;
       return { before, after, createdNodeIds };
     });
   }

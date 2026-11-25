@@ -41,6 +41,7 @@ import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkf
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { resolveWorkflowTaskFocus } from "../lib/workflowTaskFocus";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
+import { isWorkflowProDenied } from "../lib/workflowEntitlement";
 import { restoreCanvasNoteEdit } from "../lib/canvasNoteUndo";
 import { removeWorkflowNodes } from "../lib/workflowRemoval";
 import { WORKFLOW_CARD_DRAG_TYPE, workflowCardWidth, workflowNodeRun, type WorkflowInput, type WorkflowKind, type WorkflowNode } from "../lib/canvasWorkflow";
@@ -5016,17 +5017,36 @@ export function CanvasWorkspace({
       for (const node of [...cloned.nodes, ...cloned.groups, ...cloned.workflow]) node.x += shift;
       const ids: string[] = cloned.workflow.map(node => node.id);
       if (controller.document.nodes.length + ids.length > 500) throw new Error("粘贴后工作流卡片超过 500 张，请缩小选区");
+      const requiresPro = cloned.workflow.some(node => node.kind !== "text");
+      if (requiresPro) await api.canvasWorkflowAuthorize();
+      let deniedPaste: unknown;
+      const discardDeniedPaste = async () => {
+        const current = await api.projectCanvasGet(draft.id);
+        for (const group of cloned.groups) if (current.groups.some(item => item.id === group.id)) await api.projectCanvasGroupDelete(group.id);
+        for (const node of cloned.nodes) if (current.nodes.some(item => item.id === node.id && item.hiddenAt == null)) await api.projectCanvasNodeRemove(node.id);
+        await refreshClipboardCanvas(draft.id);
+        notifyError(deniedPaste, "粘贴卡片失败");
+      };
       let completed = false;
       await enqueueWrite(async () => {
+        if (deniedPaste) { await discardDeniedPaste(); return; }
         await ensureMaterialized(draft);
         // Retry a partial write using the same identities, never create a second copy.
         const existing = await api.projectCanvasGet(draft.id);
         for (const node of cloned.nodes) if (!existing.nodes.some(item => item.id === node.id)) await api.projectCanvasNodeCreate(node);
         for (const group of cloned.groups) if (!existing.groups.some(item => item.id === group.id)) await api.projectCanvasGroupCreate(group, cloned.items.filter(item => item.groupId === group.id).map(item => item.nodeId));
         if (ids.length) {
-          if (controller.document.nodes.some(node => ids.includes(node.id))) {
-            if (controller.error) await controller.retrySave();
-          } else await controller.edit([...controller.document.nodes, ...cloned.workflow]);
+          try {
+            if (controller.document.nodes.some(node => ids.includes(node.id))) {
+              if (controller.error) await controller.retrySave();
+            } else await controller.edit([...controller.document.nodes, ...cloned.workflow]);
+          } catch (error) {
+            if (!isWorkflowProDenied(error)) throw error;
+            // A later native denial can follow a successful precheck.
+            deniedPaste = error;
+            await discardDeniedPaste();
+            return;
+          }
         }
         await refreshClipboardCanvas(draft.id);
         if (!completed && activeCanvasRef.current.id === draft.id) {
