@@ -31,9 +31,9 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 | 范围 | 当前状态与证据 |
 |---|---|
-| Windows | 公开版 **26.11.2403**，发布源码 8aca9a8c2 含 SQLite **0062**。11 月 24 日北京时间 18:02 公网复核通过，Tauri 更新签名有效，按用户授权跳过 Authenticode。[发布与回滚](dev-doc/DESKTOP-UPDATES.md#windows-26112403-已公开发布2026-11-24) |
+| Windows | 公开版 **26.11.2502**，产品源码 be645b167，SQLite **0062**。11 月 25 日北京时间 14:41 公网核验通过，Tauri 更新签名有效，按授权跳过 Authenticode。[发布与回滚](dev-doc/DESKTOP-UPDATES.md#windows-26112502-已公开发布2026-11-25) |
 | macOS | 公开通道为 Apple Silicon **26.10.801**、Intel **26.10.1501**。Apple Silicon 26.11.2403 本地签名测试包已交付 R2 独立目录。Mac 源码统一至 `dev` 26.11.2403／SQLite 0062。ARM 构建、Rust 全量和隔离 WKWebView 烟测通过，负责人已确认真实登录及线上 DSH · Cloud v2 验收通过。[桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 正式验收](macOS/RELEASE-READINESS.md) · [源码收口验证](macOS/DEV-CONVERGENCE-2026-11-24.md) |
-| 浏览器扩展 | 公开桌面包内为 **0.5.2**，扩展 **0.5.3** 源码待发。新版本合并多标签页心跳和批量连接，桌面能提示扩展更新。更新文件后在浏览器重新加载并刷新采集网页。[版本与验收](apps/extension/README.md) |
+| 浏览器扩展 | Windows 公开桌面包内为 **0.5.3**。新版本合并多标签页心跳和批量连接，桌面能提示扩展更新。更新文件后在浏览器重新加载并刷新采集网页。[版本与验收](apps/extension/README.md) |
 | Cloud 与官网 | Cloud 网关、原请求恢复和 VPS 定时巡检已上线。微信 Native v3 已开放公开购买，注册及 Pro 月度赠币已启用。Seedance 2.5 已开三档，分层已部署。GPT／Flash 未启价，Studio 未新增销售。[部署](apps/cloud/DEPLOY.md) · [微信支付](apps/cloud/WECHATPAY.md) · [现行定价](dev-doc/Bowerbird定价方案v2-订阅积分制.md) |
 | 对话 | 桌面对话与 Agent 卡片共用本机 Codex、本机 DSH 0.2 和 DSH · Cloud v2。Cloud 仅对标记账号开放 0 Bcoin 试用，0094／0095 已上线，0096 付费版是默认关闭的隔离候选。[桌面契约](dev-doc/CHAT-PROVIDERS.md) · [云端契约](apps/cloud/CHAT.md) |
 | 云端异步 Agent Run | 统一 Harness 与独立 HTML renderer 已部署，保持 **test-only**。[Harness](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) |
@@ -53,7 +53,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 ### 近期里程碑
 
-- **2026-11-25｜Windows 26.11.2502 发布候选。** 一级探索、素材库、视频分镜复刻与画板卡片改进。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112502-发布候选2026-11-25)
+- **2026-11-25｜Windows 26.11.2502 已公开发布。** 一级探索、素材库、视频分镜复刻与画板卡片改进。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112502-已公开发布2026-11-25)
 
 - **2026-11-25｜Windows 26.11.2403 后的源码存档。** 探索改为一级入口，素材库优化导航、搜索与大库概览。收录 H3 安装与参考素材、折叠卡恢复与删除、Seedream 5.5 分层候选、采集扩展及 MCP 本机管理工具。[验证记录](project_logs/2026-11-25-desktop-cloud-archive.md)
 
