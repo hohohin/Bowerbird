@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
+import { selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 
 const server = await createServer({ server: { host: "127.0.0.1", port: 1586, strictPort: true, hmr: false, watch: null } });
 await server.listen();
@@ -38,7 +39,7 @@ try {
   });
   await page.reload(); await node("model-node").waitFor();
   // Create by drawing, beside the existing section tool.
-  await page.getByRole("button", { name: "画板工具", exact: true }).click();
+  await selectCanvasTool(page, "合成画板");
   const stage = await page.locator(".canvas-stage").boundingBox();
   await page.mouse.move(stage.x + 300, stage.y + 180); await page.mouse.down();
   await page.mouse.move(stage.x + 700, stage.y + 580, { steps: 10 }); await page.mouse.up();

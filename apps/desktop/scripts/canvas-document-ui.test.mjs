@@ -1,3 +1,4 @@
+import { selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
@@ -94,7 +95,7 @@ try {
   assert.equal((await page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0])).promptReferences.length, 2);
   await mkdir('.tmp/canvas-document', { recursive: true });
   for (const theme of ['dark', 'light']) { await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme); await page.screenshot({ path: `.tmp/canvas-document/${theme}.png` }); }
-  await page.getByRole('button', { name: '文本卡片工具', exact: true }).click();
+  await selectCanvasTool(page, '文本卡片');
   const stage = await page.locator('.canvas-stage').boundingBox();
   await page.mouse.click(stage.x + 160, stage.y + 160);
   await page.waitForFunction(() => window.snapshot().nodes.filter(node => JSON.parse(node.payloadJson).note_type === 'document').length === 2);

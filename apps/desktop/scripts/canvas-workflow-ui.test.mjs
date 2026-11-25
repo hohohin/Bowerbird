@@ -1,4 +1,4 @@
-import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
+import { placeWorkflowCard, selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
@@ -52,7 +52,7 @@ try {
   await instruction.getByRole('button',{name:'运行此卡片',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p'))?.document.run?.status==='done');
   assert.equal((await snapshot()).nodes[0].trigger,false);
-  await page.getByRole('button',{name:'发条触发器',exact:true}).click();
+  await selectCanvasTool(page, '触发卡');
   await instruction.locator('header strong').click();
   await instruction.getByRole('button',{name:'上发条，运行工作流',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p'))?.document.run?.status==='done');

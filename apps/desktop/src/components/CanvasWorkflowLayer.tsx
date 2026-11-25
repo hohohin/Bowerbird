@@ -54,7 +54,7 @@ import { WorkflowWiresLayer } from "./WorkflowWiresLayer";
 export { WindingKey };
 export type { MaterialAnchor,WorkflowGeometry,WorkflowLayerHandle };
 
-export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, WorkflowLayerProps>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, settledZoom, opening, entryCardIds, deferredCandidateIds, materials, graphNodes, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, generationCardOrigins, generationActivities, activeGenerationIds, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, onConnectCollapsedGeneration, onUndoGenerationConnection, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
+export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, WorkflowLayerProps>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, settledZoom, opening, entryCardIds, deferredCandidateIds, materials, graphNodes, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, generationCardOrigins, generationActivities, activeGenerationIds, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, onConnectCollapsedGeneration, onUndoGenerationConnection, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onTriggerArmedChange, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
   const [runtimeRevision, updateRuntimeRevision] = useState(0);
@@ -876,6 +876,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
       ghostElement.current.style.top = `${cursor.current.y + 16}px`;
     }
   };
+  useLayoutEffect(() => { onTriggerArmedChange?.(armed); }, [onTriggerArmedChange, armed]);
   useLayoutEffect(() => updateCursor.current(), [connection, automatic, connectionMenu, armed, toBoardPoint, document.nodes, graphNodes, materials]);
 
   function automaticButton(id: string, side: "input" | "output", disabled = false) {

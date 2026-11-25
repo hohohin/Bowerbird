@@ -1,3 +1,4 @@
+import { selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import {createServer} from 'vite';
 import {chromium} from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -29,7 +30,7 @@ try {
       check(text.note.cells[0][0].text==='unchanged text','text remains literal');
     }
   });
-  await page.getByRole('button',{name:'内容卡片工具',exact:true}).click();
+  await selectCanvasTool(page, '内容卡片');
   await page.locator('.canvas-stage').click({position:{x:700,y:280}});
   const card=page.locator('.is-content-card').first();await card.waitFor();
   await page.evaluate(async()=>{

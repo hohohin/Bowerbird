@@ -1,3 +1,4 @@
+import { selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
@@ -22,7 +23,7 @@ try {
   });
   await page.reload();
   await page.locator('[data-canvas-node-id="old"]').waitFor();
-  await page.getByRole("button", { name: "气泡便签工具", exact: true }).click();
+  await selectCanvasTool(page, "气泡便签");
   await page.locator(".canvas-stage").click({ position: { x: 600, y: 350 } });
   await bubble.waitFor();
   const id = await bubble.getAttribute("data-canvas-node-id");

@@ -1,3 +1,4 @@
+import { enableCanvasToolbarPro, selectCanvasTool } from './fixtures/canvas-reference/place-card.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -80,7 +81,8 @@ try {
   await page.waitForFunction(() => JSON.parse(window.snapshot().nodes.find(n => n.id === 'target').payloadJson).cells.length === 4);
   await page.waitForFunction(() => document.querySelectorAll('[data-canvas-node-id="target"] [role="row"]').length === 4);
   await page.screenshot({ path: '.tmp/workflow/text-inputs.png' });
-  await page.getByRole('button', { name: '发条触发器', exact: true }).click();
+  await enableCanvasToolbarPro(page);
+  await selectCanvasTool(page, '触发卡');
   await target.getByLabel('第 1 行第 1 列', { exact: true }).click();
   const key = page.locator('[data-workflow-text-key="target"] .workflow-key');
   await key.waitFor();

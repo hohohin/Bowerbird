@@ -52,6 +52,7 @@ export interface WorkflowLayerProps {
   panReady: boolean;
   onSelect: (id: string, additive?: boolean) => void;
   onNodesChanged: () => void;
+  onTriggerArmedChange?: (armed: boolean) => void;
   onEdited: (before: CanvasWorkflow, after: CanvasWorkflow, connectedGenerationId?: string) => void;
   onOpenGeneration: (node: CanvasNode) => void;
   getChatCardDefaults?: () => ChatCardDefaults;

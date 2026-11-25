@@ -1,3 +1,4 @@
+import { selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
@@ -39,7 +40,7 @@ try {
   await node("old").waitFor();
 
   // Draw in reverse, include material + prompt, leave a partially/outside card out.
-  await page.getByRole("button", { name: "分区工具", exact: true }).click();
+  await selectCanvasTool(page, "分区");
   await drag(750, 380, 100, 80);
   const section = page.locator(".canvas-note.is-section");
   await section.waitFor();
@@ -96,7 +97,7 @@ try {
   assert.equal(await node("old").evaluate(element => element.classList.contains("is-selected")), true);
   await stage.click({ position: { x: 1200, y: 450 } });
 
-  await page.getByRole("button", { name: "内容卡片工具", exact: true }).click();
+  await selectCanvasTool(page, "内容卡片");
   await stage.click({ position: { x: 160, y: 520 } });
   const text = page.locator(".canvas-note.is-text");
   await text.waitFor();
@@ -316,7 +317,7 @@ try {
   await page.screenshot({ path: ".tmp/canvas-notes/insert-preview.png" });
 
   // Drawing can be cancelled without adding a region.
-  await page.getByRole("button", { name: "分区工具", exact: true }).click();
+  await selectCanvasTool(page, "分区");
   const box = await stage.boundingBox();
   await page.mouse.move(box.x + 800, box.y + 500);
   await page.mouse.down();
@@ -327,7 +328,7 @@ try {
   assert.equal(await page.locator(".canvas-section-preview").count(), 0);
 
   // A section containing the text card moves it and survives remove/undo without deleting members.
-  await page.getByRole("button", { name: "分区工具", exact: true }).click();
+  await selectCanvasTool(page, "分区");
   const textBounds = await text.boundingBox();
   const stageBounds = await stage.boundingBox();
   await drag(textBounds.x - stageBounds.x - 30, textBounds.y - stageBounds.y - 30,

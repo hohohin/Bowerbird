@@ -1,3 +1,4 @@
+import { selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
@@ -11,7 +12,7 @@ try {
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(()=>{const s=window.snapshot();s.nodes=s.nodes.filter(n=>n.id!=='far');sessionStorage.setItem('reference-fixture',JSON.stringify(s));});
   await page.reload(); await page.locator('[data-canvas-node-id="old"]').waitFor();
-  await page.getByRole('button',{name:'内容卡片工具',exact:true}).click();
+  await selectCanvasTool(page, '内容卡片');
   await page.locator('.canvas-stage').click({position:{x:650,y:260}});
   const card=page.locator('.is-content-card').first();await card.waitFor();
   assert.equal(await card.locator('textarea').count(),1);

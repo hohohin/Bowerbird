@@ -10,7 +10,7 @@ const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
-const toggle = page.getByRole("group", { name: "辅助", exact: true }).getByRole("button", { name: "吸附对齐" });
+const toggle = page.locator(".canvas-board-toolbar").getByRole("button", { name: "吸附对齐", exact: true });
 const guides = axis => page.locator(`.canvas-snap-guide.is-${axis}`);
 async function reset(zoom) {
   await page.evaluate(zoom => {
@@ -80,5 +80,5 @@ try {
     assert.equal(await toggle.getAttribute("aria-pressed"), "true");
   }
   assert.deepEqual(errors, []);
-  console.log("PASS left toolbar snap toggle, remembered state, spaced horizontal/vertical alignment, paired dashed guides at 100%/50%, free placement, stationary anchors and Ctrl+Z move undo.");
+  console.log("PASS top toolbar snap toggle, remembered state, spaced horizontal/vertical alignment, paired dashed guides at 100%/50%, free placement, stationary anchors and Ctrl+Z move undo.");
 } finally { await browser.close(); await server.close(); }

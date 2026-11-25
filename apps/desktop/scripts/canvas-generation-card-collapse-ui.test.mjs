@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 import { startBrowserDrag, finishBrowserDrag } from "./fixtures/explorer/native-drag.mjs";
+import { selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 
 const entry = "scripts/fixtures/canvas-reference/preview.html";
 const native = process.argv.includes("--native");
@@ -144,8 +145,10 @@ async function installControlledGeneration() {
   await page.evaluate(async () => {
     const { api } = await import("/src/lib/api.ts");
     const { FREE_POLICY } = await import("/src/lib/entitlement.ts");
-    window.store.setState({ codexHealth: { ok: true }, cloudAuth: { logged_in: true, cloud_available: true },
-      cloudEntitlement: { policy: { ...FREE_POLICY, can_use_byo: true, max_parallel_jobs: 5 }, balances: { daily: 100, sub: 0, topup: 0 } },
+    const user_id = "generation-collapse-fixture";
+    window.store.setState({ codexHealth: { ok: true }, cloudAuth: { user_id, logged_in: true, cloud_available: true },
+      cloudEntitlement: { user_id, tier: "pro", offline_state: "fresh",
+        policy: { ...FREE_POLICY, can_use_byo: true, max_parallel_jobs: 5 }, balances: { daily: 100, sub: 0, topup: 0 } },
       startGeneration: async (...args) => {
         const { jobId, turnKey } = args[12];
         const { threadId } = args[9];
@@ -226,7 +229,7 @@ async function watchRunningCard() {
 
 async function addCardsDuringRun() {
   const ids = new Set((await readWorkflow()).nodes.map(node => node.id));
-  await page.getByRole("button", { name: "新增指令卡片", exact: true }).click();
+  await selectCanvasTool(page, "指令卡片");
   const toolboxPoint = await blankPoint();
   await page.mouse.click(toolboxPoint.x, toolboxPoint.y);
   await page.waitForFunction(ids => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.some(node => !ids.includes(node.id)), [...ids]);

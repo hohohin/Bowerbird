@@ -1,10 +1,11 @@
 .canvas-material-selection { position:absolute; pointer-events:none; z-index:10002; outline:1px solid var(--bb-blue); }
 .canvas-drawing-tools {
-  --tools-top:calc(var(--canvas-chrome-inset) + var(--canvas-chrome-height) + var(--canvas-chrome-gap));
+  --tools-top:max(calc(var(--canvas-chrome-inset) + var(--canvas-chrome-height) + var(--canvas-chrome-gap)), calc(50% - 123px));
   position:absolute; left:var(--canvas-chrome-inset); top:var(--tools-top); max-height:calc(100% - var(--tools-top) - var(--canvas-chrome-inset));
-  z-index:30; display:flex; flex-direction:column; gap:5px; padding:6px; border:1px solid var(--bb-line-strong); border-radius:var(--canvas-chrome-radius); background:var(--bb-surface); box-shadow:var(--canvas-chrome-shadow);
+  z-index:30; display:flex; flex-direction:column; gap:3px; padding:5px; border:1px solid var(--bb-line-strong); border-radius:var(--canvas-chrome-radius); background:var(--bb-surface); box-shadow:var(--canvas-chrome-shadow);
+  user-select:none; touch-action:none;
 }
-.canvas-drawing-tools button { width:34px; height:34px; display:grid; place-items:center; border-radius:7px; color:var(--bb-muted); }
+.canvas-drawing-tools > button { width:36px; height:36px; display:grid; place-items:center; border-radius:0; color:var(--bb-muted); }
 .canvas-drawing-tools button:hover, .canvas-drawing-tools button[aria-pressed=true] { background:var(--bb-blue); color:white; }
 /* 原生 title 提示延迟由系统控制且过长，改用即时可控的自定义提示。 */
 .canvas-drawing-tools button[data-tip] { position:relative; }
@@ -19,16 +20,16 @@
 .canvas-drawing-tools button[data-tip]:hover::after,
 .canvas-drawing-tools button[data-tip]:focus-visible::after { opacity:1; }
 .canvas-drawing-tools hr { border:0; border-top:1px solid var(--bb-line); margin:2px 3px; }
-.canvas-assist-tools { display:flex; flex-direction:column; align-items:center; gap:4px; }
-.canvas-assist-tools > span { color:var(--bb-muted); font-size:9px; line-height:14px; }
-@media (max-height: 800px) {
-  .canvas-drawing-tools { gap:3px; padding:5px; }
-  .canvas-drawing-tools button { width:28px; height:28px; }
+.canvas-drawing-tools .canvas-tool-fold {
+  position:absolute; right:2px; bottom:2px; width:0; height:0;
+  border:3px solid transparent; border-left:0; border-right-color:currentColor; border-bottom-color:currentColor;
+  opacity:.7; pointer-events:none;
 }
-@media (max-height: 680px) {
+.canvas-drawing-tools .canvas-tool-pro-badge { position:absolute; top:0; right:-4px; z-index:1; height:11px; padding:0 2px; font-size:8px; background:var(--bb-surface-2); }
+@media (max-height: 530px) {
   .canvas-drawing-tools { --tools-divider-gap:1px; gap:0; padding:4px; }
+  .canvas-drawing-tools > button { width:30px; height:30px; }
   .canvas-drawing-tools hr { margin-block:1px; }
-  .canvas-drawing-tools .canvas-assist-tools { gap:2px; }
 }
 .canvas-stage.is-drawing, .canvas-stage.is-drawing * { cursor:crosshair !important; }
 /* 拖动便签/文本卡时禁止原生文字蓝底选区；单元格 textarea 不受祖先 user-select 影响，编辑选字照常 */

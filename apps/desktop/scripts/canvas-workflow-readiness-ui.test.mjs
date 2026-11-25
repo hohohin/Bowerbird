@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
+import { enableCanvasToolbarPro } from "./fixtures/canvas-reference/place-card.mjs";
 
 // Delay only the native replies. The workspace, store and workflow are the production components.
 const server = await createServer({
@@ -80,7 +81,11 @@ async function fixture(mode) {
   return page;
 }
 const cards = page => page.locator("[data-workflow-card]");
-const create = page => page.getByRole("button", { name: "新增生成卡片", exact: true });
+async function assertGenerationBlocked(page) {
+  await page.locator('[data-canvas-tool-group="workflow"]').press("ArrowRight");
+  assert.equal(await page.getByRole("menuitem", { name: "生成卡片", exact: true }).isDisabled(), true);
+  await page.keyboard.press("Escape");
+}
 async function switchTo(page, id) {
   await page.evaluate(async id => {
     const { useStore } = await import("/src/store.ts");
@@ -120,7 +125,8 @@ try {
   await history.getByText("正在加载工作流…", { exact: true }).waitFor();
   assert.equal(await history.evaluate(async () => (await import("/src/lib/canvasWorkflowRuntime.ts")).canvasWorkflowController("p").document.nodes.length), 4);
   assert.equal(await cards(history).count(), 0, "editor waits for recovery of historical H3 results");
-  await history.getByRole("button", { name: "工具箱", exact: true }).click();
+  await enableCanvasToolbarPro(history);
+  await history.locator('[data-canvas-tool-group="toolbox"]').press("ArrowRight");
   assert.equal(await history.getByRole("menuitem", { name: /本地 H3 视频/ }).isDisabled(), true);
   assert.equal(await history.getByRole("menuitem", { name: /视频复刻工具/ }).isEnabled(), true);
   await history.keyboard.press("Escape");
@@ -246,7 +252,7 @@ try {
   await switching.waitForFunction(() => !!window.releaseWorkflow.p1);
   await switching.locator('[data-canvas-node-id="far"]').waitFor({ state: "attached" });
   assert.equal(await cards(switching).count(), 0);
-  assert.equal(await create(switching).isDisabled(), true);
+  await assertGenerationBlocked(switching);
   await switching.getByRole("button", { name: "抓手工具" }).click();
   assert.equal(await switching.getByRole("button", { name: "抓手工具" }).getAttribute("aria-pressed"), "true");
   await switching.getByRole("button", { name: "选择工具" }).click();
@@ -260,7 +266,7 @@ try {
   await switching.evaluate(() => window.releaseWorkflow.q1());
   await switching.waitForFunction(async () => (await import("/src/lib/canvasWorkflowRuntime.ts")).canvasWorkflowController("q").ready);
   assert.equal(await cards(switching).count(), 0);
-  assert.equal(await create(switching).isDisabled(), true);
+  await assertGenerationBlocked(switching);
   await switching.evaluate(() => window.releaseWorkflow.p2());
   await ready(switching, "p");
   await switching.getByRole("textbox", { name: "反推要求" }).fill("p edited after return", { force: true });

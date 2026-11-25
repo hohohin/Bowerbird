@@ -25,7 +25,11 @@ import { documentToPromptLoad } from "../lib/documentComposer";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import { CanvasArtboardDialog } from "./CanvasArtboardDialog";
 import { CANVAS_ARTBOARD_FROM_IMAGE, artboardComposition, containArtboardImage, intersectArtboard, type ArtboardComposition, type ArtboardImage } from "../lib/canvasArtboard";
-import { CanvasToolbox } from "./CanvasToolbox";
+import { CanvasToolbox, type CanvasToolboxTool } from "./CanvasToolbox";
+import { CanvasToolGroup, CanvasToolGroups, useCanvasToolMemory, type CanvasToolActivation, type CanvasToolGroupId } from "./CanvasToolGroup";
+import { ModalShell } from "./ModalShell";
+import { WORKFLOW_CARD_PRESENTATION } from "./WorkflowLayerPresentation";
+import { canUseComfyVideo } from "../lib/comfyVideo";
 import { VideoReplicationDialog } from "./VideoReplicationDialog";
 import { CanvasWorkflowLayer, WindingKey, type WorkflowLayerHandle, type WorkflowGeometry, type MaterialAnchor } from "./CanvasWorkflowLayer";
 import { CanvasContextMenu, type CanvasContextMenuState, type CanvasMenuImage } from "./CanvasContextMenu";
@@ -114,7 +118,6 @@ import {
   Frame,
   Scan,
   Table2,
-  TextCursorInput,
   GripHorizontal,
   Hand,
   PanelLeftClose,
@@ -273,6 +276,16 @@ interface CanvasMarqueePress {
 }
 
 type CanvasTool = "select" | "pan" | "section" | "artboard" | "bubble" | "document" | Exclude<WorkflowKind, "trigger">;
+type CanvasToolbarTool = CanvasTool | CanvasToolboxTool | "trigger" | "templates";
+type WorkflowToolbarCard = "generation" | "agent" | "instruction" | "trigger" | "loop" | "visual-profile" | "skill" | "planner" | "templates";
+const workflowToolsAllowed = ({ cloudAuth, cloudEntitlement }: ReturnType<typeof useStore.getState>) =>
+  cloudAuth?.logged_in === true && !!cloudAuth.user_id && cloudEntitlement?.user_id === cloudAuth.user_id
+  && (cloudEntitlement.tier === "pro" || cloudEntitlement.tier === "studio")
+  && (cloudEntitlement.offline_state === "fresh" || cloudEntitlement.offline_state === "grace");
+const freeCanvasTools = new Set<CanvasToolbarTool>(["select", "pan", "section", "artboard", "document", "text", "bubble", "generation", "replication", "video-to-doc"]);
+function isToolbarToolLocked(tool: CanvasToolbarTool, pro: boolean, localVideoAllowed: boolean) {
+  return tool === "comfy-video" ? !localVideoAllowed : !pro && !freeCanvasTools.has(tool);
+}
 
 interface ActiveCanvasState {
   id: string;
@@ -743,9 +756,23 @@ export function CanvasWorkspace({
   const marqueePressRef = useRef<CanvasMarqueePress | null>(null);
   const blankPressCount = useRef(0);
   const [drawingTool, setDrawingTool] = useCanvasScopeValue(canvasScope, "drawingTool");
+  const { remembered: rememberedTool, remember: rememberTool } = useCanvasToolMemory();
+  const [toolUpgradeOpen, setToolUpgradeOpen] = useState(false);
+  const [triggerArmed, setTriggerArmed] = useState(false);
+  const workflowToolsPro = useStore(workflowToolsAllowed);
+  const localVideoAllowed = useStore(state => canUseComfyVideo(state.cloudAuth, state.cloudEntitlement));
+  const toolboxTestAccount = useStore(({ cloudAuth, cloudEntitlement }) => cloudAuth?.logged_in === true
+    && !!cloudAuth.user_id && cloudEntitlement?.user_id === cloudAuth.user_id && cloudEntitlement.is_test_account === true);
+  useEffect(() => { setToolUpgradeOpen(false); setTriggerArmed(false); }, [projectId, viewMode]);
   const [artboardDialog, setArtboardDialog] = useState<{ nodeId: string; projectId: string; revision: number; composition: ArtboardComposition } | null>(null);
   useEffect(() => { setArtboardDialog(null); }, [projectId]);
   const workflowRef = useRef<WorkflowLayerHandle>(null);
+  const chosenToolLocked = isToolbarToolLocked(triggerArmed ? "trigger" : drawingTool, workflowToolsPro, localVideoAllowed);
+  useEffect(() => {
+    if (!chosenToolLocked) return;
+    workflowRef.current?.cancelPlacement();
+    setDrawingTool("select");
+  }, [chosenToolLocked, setDrawingTool]);
   const pastingRef = useRef(false);
   const [workflowRevision, setWorkflowRevision] = useState(0);
   const workflow = projectId ? canvasWorkflowController(projectId) : null;
@@ -953,21 +980,44 @@ export function CanvasWorkspace({
     workflowRef.current?.cancelPlacement();
     setDrawingTool(tool);
   }
-  function canvasCardTool(kind: "bubble" | "document" | Exclude<WorkflowKind, "trigger">) {
-    const enabled = workflowInteractive || ["text", "document", "bubble"].includes(kind);
-    return {
-      disabled: !enabled,
-      draggable: enabled,
-      "aria-pressed": drawingTool === kind,
-      onClick: () => chooseCanvasTool(kind),
-      onDragStart: (event: DragEvent<HTMLButtonElement>) => {
-        if (loadingRef.current || useStore.getState().projectRoutePending) { event.preventDefault(); return; }
-        event.stopPropagation();
-        chooseCanvasTool("select");
-        event.dataTransfer.effectAllowed = "copy";
-        event.dataTransfer.setData(WORKFLOW_CARD_DRAG_TYPE, JSON.stringify({ kind, projectId }));
-      },
-    };
+  function toolbarToolLocked(tool: CanvasToolbarTool, state: ReturnType<typeof useStore.getState>) {
+    return isToolbarToolLocked(tool, workflowToolsAllowed(state), canUseComfyVideo(state.cloudAuth, state.cloudEntitlement));
+  }
+  function activateToolbarTool(group: CanvasToolGroupId, tool: CanvasToolbarTool, point?: CanvasToolActivation) {
+    const state = useStore.getState();
+    if (loadingRef.current || state.projectRoutePending || viewModeRef.current !== "canvas") return;
+    if (toolbarToolLocked(tool, state)) {
+      setToolUpgradeOpen(true);
+      return;
+    }
+    if ((group === "workflow" || tool === "comfy-video" || tool === "voice") && !workflowInteractive) return;
+    if (tool === "video-to-doc") { notify("功能开发中"); return; }
+    rememberTool(group, tool);
+    if (tool === "replication") {
+      chooseCanvasTool("select");
+      if (projectId) setReplicationProjectId(projectId);
+    } else if (tool === "templates") {
+      workflowRef.current?.templates();
+    } else if (tool === "trigger") {
+      clearTimeout(peekIntent.current);
+      setDrawingTool("select");
+      workflowRef.current?.arm(point?.x, point?.y);
+    } else chooseCanvasTool(tool);
+  }
+  function dragToolbarCard(group: "content" | "workflow", kind: CanvasToolbarTool, event: DragEvent<HTMLButtonElement>) {
+    const state = useStore.getState();
+    if (loadingRef.current || state.projectRoutePending || toolbarToolLocked(kind, state)) { event.preventDefault(); return; }
+    event.stopPropagation();
+    rememberTool(group, kind);
+    chooseCanvasTool("select");
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(WORKFLOW_CARD_DRAG_TYPE, JSON.stringify({ kind, projectId }));
+  }
+  function toggleCanvasSnap() {
+    const next = !canvasScope.getState().snapEnabled;
+    setSnapEnabled(next);
+    setGuides([]);
+    try { localStorage.setItem(CANVAS_SNAP_ENABLED_KEY, String(next)); } catch { /* Keep the toggle usable when storage is unavailable. */ }
   }
   const [sectionPreview, setSectionPreview] = useState<CanvasRect | null>(null);
   const sectionDrawRef = useRef<{ pointerId: number; start: CanvasPoint; artboard: boolean } | null>(null);
@@ -2146,7 +2196,7 @@ export function CanvasWorkspace({
   }, [exploring, projectId, setCanvasLibraryOpen]);
 
   const onWorkspaceKeyDown = useLatestCallback((event: KeyboardEvent) => {
-    if (workspaceRef.current?.closest("[inert]")) return;
+    if (event.defaultPrevented || workspaceRef.current?.closest("[inert]")) return;
     const target = event.target as HTMLElement | null;
     if ((useStore.getState().canvasLibraryOpen || useLocalFileMode.getState().open)
       && (!target || !boardShellRef.current?.contains(target))) return;
@@ -2170,6 +2220,19 @@ export function CanvasWorkspace({
       undoCanvasAction();
       return;
     }
+    const drawingKey = event.key.toLowerCase();
+    if (["v", "a", "b", "n"].includes(drawingKey)) {
+      if (event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.isComposing || event.keyCode === 229
+        || editing || exploring || scopedInspectorOpen || viewModeRef.current !== "canvas" || loadingRef.current
+        || promptMenu || useStore.getState().contextMenu
+        || document.querySelector('[role="menu"], [role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]')) return;
+      event.preventDefault();
+      if (drawingKey === "v") chooseCanvasTool("select");
+      else if (drawingKey === "a") chooseCanvasTool("pan");
+      else if (drawingKey === "b") activateToolbarTool("workflow", "agent");
+      else toggleCanvasSnap();
+      return;
+    }
     if (event.code === "Space") {
       if (scopedInspectorOpen) return;
       if (!editing && viewModeRef.current === "canvas") {
@@ -2180,7 +2243,7 @@ export function CanvasWorkspace({
       }
       return;
     }
-    if (event.key !== "Escape") return;
+    if (event.key !== "Escape" || toolUpgradeOpen) return;
     const marquee = marqueePressRef.current;
     if (marquee) {
       marqueePressRef.current = null;
@@ -4367,6 +4430,8 @@ export function CanvasWorkspace({
     } else if (kind === "text" || kind === "bubble") {
       createCanvasNote({ ...point, width: kind === "bubble" ? 240 : 320,
         height: kind === "bubble" ? 120 : canvasTextMinSize([[emptyCanvasCell()]]).height }, kind);
+    } else if (toolbarToolLocked(kind, useStore.getState())) {
+      setToolUpgradeOpen(true);
     } else {
       workflowRef.current?.add(kind, point.x, point.y);
     }
@@ -5205,6 +5270,7 @@ export function CanvasWorkspace({
 
   function selectViewMode(next: CreativeViewMode) {
     if (viewModeRef.current === next) return;
+    if (next !== "canvas") workflowRef.current?.cancelPlacement();
     setViewMode(next);
     markViewDirty();
   }
@@ -5851,7 +5917,12 @@ export function CanvasWorkspace({
               {writeJournalRef.current.failure != null && <button type="button" className="ml-2 underline" onClick={() => { void retryPendingWrites().catch(error => notifyError(error, "画板保存失败")); }}>重试保存画板</button>}
             </small>}
           </div>
-          <div className="canvas-zoom-controls" aria-label="画布缩放">
+          <div className="canvas-zoom-controls" role="toolbar" aria-label="画板控制">
+            <button type="button" title="撤销（Ctrl / ⌘ Z）" aria-label="撤销画布操作" disabled={viewMode !== "canvas" || !canUndo}
+              onPointerDown={event => event.preventDefault()} onClick={undoCanvasAction}><Undo2 size={14} /></button>
+            <button type="button" title="磁吸 N" aria-label="吸附对齐" aria-keyshortcuts="N" data-canvas-control="snap"
+              disabled={viewMode !== "canvas"} aria-pressed={snapEnabled} onClick={toggleCanvasSnap}><Magnet size={14} /></button>
+            <span className="canvas-toolbar-divider" aria-hidden="true" />
             {viewMode === "timeline" && threads.length > 0 && (
               <TacticalSelect
                 aria-label="时间线范围"
@@ -5897,6 +5968,7 @@ export function CanvasWorkspace({
               className={viewMode === "canvas" ? "is-active" : ""}
               title="画板视图"
               aria-label="画板视图"
+              aria-pressed={viewMode === "canvas"}
               onClick={() => selectViewMode("canvas")}
             >
               <LayoutDashboard size={14} />
@@ -5906,10 +5978,12 @@ export function CanvasWorkspace({
               className={viewMode === "timeline" ? "is-active" : ""}
               title="时间线视图"
               aria-label="时间线视图"
+              aria-pressed={viewMode === "timeline"}
               onClick={() => selectViewMode("timeline")}
             >
               <List size={14} />
             </button>
+            <span className="canvas-toolbar-divider" aria-hidden="true" />
             <button
               type="button"
               title="缩小"
@@ -6022,41 +6096,53 @@ export function CanvasWorkspace({
           onDrop={onCanvasDrop}
         >
           <div ref={gridElement} className="canvas-camera-grid" aria-hidden="true" />
-          <div className="canvas-drawing-tools" role="toolbar" aria-label="画板工具" onPointerDown={event => event.stopPropagation()}>
-            <button data-tip="选择" aria-label="选择工具" aria-pressed={drawingTool === "select"} onClick={() => chooseCanvasTool("select")}><MousePointer2 size={18} /></button>
-            <button data-tip="抓手 · 按住左键平移视图（Esc 退出）" aria-label="抓手工具" aria-pressed={drawingTool === "pan"} onClick={() => chooseCanvasTool("pan")}><Hand size={18} /></button>
-            <button data-tip="分区 · 拖拽画框" aria-label="分区工具" aria-pressed={drawingTool === "section"} onClick={() => chooseCanvasTool("section")}><Frame size={18} /></button>
-            <button data-tip="画板 · 拖框后拼放图片" aria-label="画板工具" aria-pressed={drawingTool === "artboard"} onClick={() => chooseCanvasTool("artboard")}><Scan size={18} /></button>
+          {viewMode === "canvas" && <CanvasToolGroups hoverBlocked={() => {
+            const state = useStore.getState();
+            return loadingRef.current || state.projectRoutePending || !!(activeDragRef.current || panDragRef.current
+              || marqueePressRef.current || sectionDrawRef.current || externalDragOver || workflowRef.current?.isConnecting()
+              || promptMenu || state.contextMenu || document.querySelector('[data-context-owner], [role="dialog"][aria-modal="true"]'));
+          }}>
+            <button type="button" data-tip="选择 V" aria-label="选择工具" aria-keyshortcuts="V" aria-pressed={drawingTool === "select" && !triggerArmed && !spacePanReady}
+              onClick={() => chooseCanvasTool("select")}><MousePointer2 size={18} aria-hidden="true" /></button>
+            <button type="button" data-tip="抓手 A" aria-label="抓手工具" aria-keyshortcuts="A" aria-pressed={drawingTool === "pan" || spacePanReady}
+              onClick={() => chooseCanvasTool("pan")}><Hand size={18} aria-hidden="true" /></button>
+            <CanvasToolGroup<"section" | "artboard"> group="container" label="容器工具" active={drawingTool}
+              remembered={rememberedTool.container} onTool={tool => activateToolbarTool("container", tool)}
+              sections={[{ tools: [
+                { id: "section", label: "分区", buttonLabel: "分区工具", icon: Scan },
+                { id: "artboard", label: "合成画板", icon: Frame },
+              ] }]} />
+            <CanvasToolGroup<"text" | "document" | "bubble"> group="content" label="基础内容工具" active={drawingTool}
+              remembered={rememberedTool.content} onTool={tool => activateToolbarTool("content", tool)}
+              onDragTool={(tool, event) => dragToolbarCard("content", tool, event)} sections={[{ tools: [
+                { id: "text", label: "内容卡片", buttonLabel: "内容卡片工具", icon: Table2, draggable: true },
+                { id: "document", label: "文本卡片", icon: FileText, draggable: true },
+                { id: "bubble", label: "气泡便签", icon: MessageCircle, draggable: true },
+              ] }]} />
             <hr />
-            <button data-tip="内容卡片 · 拖入画布或选中后点击放置" aria-label="内容卡片工具" {...canvasCardTool("text")}><Table2 size={18} /></button>
-            <button data-tip="文本卡片 · 拖入画布或选中后点击放置" aria-label="文本卡片工具" {...canvasCardTool("document")}><FileText size={18} /></button>
-            <button data-tip="气泡便签 · 拖入画布或选中后点击放置" aria-label="气泡便签工具" {...canvasCardTool("bubble")}><MessageCircle size={18} /></button>
-            <button data-tip="指令卡片 · 拖入画布或选中后点击放置" aria-label="新增指令卡片" {...canvasCardTool("instruction")}><List size={18} /></button>
-            <button data-tip="循环卡片 · 拖入画布或选中后点击放置" aria-label="新增循环卡片" {...canvasCardTool("loop")}><Repeat2 size={18} /></button>
-            <button data-tip="生成卡片 · 拖入画布或选中后点击放置" aria-label="新增生成卡片" {...canvasCardTool("generation")}><Images size={18} /></button>
-            {WORKFLOW_SKILL_ENABLED && <button data-tip="技能卡片 · 拖入画布或选中后点击放置" aria-label="新增技能卡片" {...canvasCardTool("skill")}><Sparkles size={18} /></button>}
-            {WORKFLOW_PLANNER_ENABLED && import.meta.env.DEV && <button data-tip="工作流助手 · 拖入画布或选中后点击放置" aria-label="新增工作流助手" {...canvasCardTool("planner")}><Sparkles size={18} /></button>}
-            <button data-tip="Agent 卡片 · 拖入画布或选中后点击放置" aria-label="新增 Agent 卡片" {...canvasCardTool("agent")}><TextCursorInput size={18} /></button>
-            <button data-tip="视觉规范卡片 · 拖入画布或选中后点击放置" aria-label="新增视觉规范卡片" {...canvasCardTool("visual-profile")}><Palette size={18} /></button>
-            {WORKFLOW_TEMPLATE_LIBRARY_ENABLED && <button disabled={!workflowInteractive} data-tip="模板库 · 子流程与分享" aria-label="工作流模板库" onClick={() => workflowRef.current?.templates()}><Copy size={18} /></button>}
-            <button disabled={!workflowInteractive} data-tip="发条 · 卡片上吸附，空白处创建" aria-label="发条触发器"
-              onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); setDrawingTool("select"); workflowRef.current?.arm(event.clientX, event.clientY); }}
-              onClick={event => { if (event.detail === 0) { setDrawingTool("select"); workflowRef.current?.arm(); } }}><WindingKey size={21} /></button>
-            <hr />
-            <CanvasToolbox workflowReady={workflowInteractive} onOpenVoice={() => chooseCanvasTool("voice")} onOpenReplication={() => { setDrawingTool("select"); if (projectId) setReplicationProjectId(projectId); }} onOpenLocalVideo={() => chooseCanvasTool("comfy-video")} />
-            <hr />
-            <div className="canvas-assist-tools" role="group" aria-label="辅助">
-              <span>辅助</span>
-              <button type="button" data-tip="撤销（Ctrl / ⌘ Z）" aria-label="撤销画布操作" disabled={!canUndo}
-                onPointerDown={event => event.preventDefault()} onClick={undoCanvasAction}><Undo2 size={18} /></button>
-              <button type="button" data-tip={snapEnabled ? "关闭吸附对齐" : "开启吸附对齐"} aria-label="吸附对齐" aria-pressed={snapEnabled} onClick={() => {
-                const next = !snapEnabled;
-                setSnapEnabled(next);
-                setGuides([]);
-                try { localStorage.setItem(CANVAS_SNAP_ENABLED_KEY, String(next)); } catch { /* Keep the toggle usable when storage is unavailable. */ }
-              }}><Magnet size={18} /></button>
-            </div>
-          </div>
+            <CanvasToolGroup<WorkflowToolbarCard> group="workflow" label="工作流工具" active={triggerArmed ? "trigger" : drawingTool}
+              remembered={rememberedTool.workflow} onTool={(tool, point) => activateToolbarTool("workflow", tool, point)}
+              onDragTool={(tool, event) => dragToolbarCard("workflow", tool, event)}
+              onUpgrade={workflowToolsPro ? undefined : () => setToolUpgradeOpen(true)}
+              sections={[
+                { label: "核心创作", tools: [
+                  { id: "generation", label: "生成卡片", buttonLabel: "新增生成卡片", icon: Images, disabled: !workflowInteractive, draggable: true },
+                ] },
+                { label: "自动化编排", locked: !workflowToolsPro, tools: [
+                  { id: "agent" as const, label: "Agent 卡片", icon: WORKFLOW_CARD_PRESENTATION.agent.icon, shortcut: "B", draggable: true },
+                  { id: "instruction" as const, label: "指令卡片", icon: List, draggable: true },
+                  { id: "trigger" as const, label: "触发卡", icon: WindingKey, windingKey: true },
+                  { id: "loop" as const, label: "循环卡片", icon: Repeat2, draggable: true },
+                  { id: "visual-profile" as const, label: "视觉规范卡片", icon: Palette, draggable: true },
+                  ...(WORKFLOW_SKILL_ENABLED ? [{ id: "skill" as const, label: "技能卡片", icon: Sparkles, draggable: true }] : []),
+                  ...(WORKFLOW_PLANNER_ENABLED && import.meta.env.DEV ? [{ id: "planner" as const, label: "工作流助手", icon: Sparkles, draggable: true }] : []),
+                  ...(WORKFLOW_TEMPLATE_LIBRARY_ENABLED ? [{ id: "templates" as const, label: "工作流模板库", icon: Copy }] : []),
+                ].map(tool => ({ ...tool, locked: !workflowToolsPro, disabled: workflowToolsPro && !workflowInteractive })) },
+              ]} />
+            <CanvasToolbox workflowReady={workflowInteractive} pro={workflowToolsPro} canUseLocalVideo={localVideoAllowed}
+              isTestAccount={toolboxTestAccount} active={drawingTool} remembered={rememberedTool.toolbox}
+              onTool={tool => activateToolbarTool("toolbox", tool)} />
+          </CanvasToolGroups>}
           <CanvasMediaProvider key={loading ? "loading" : projectId} zoom={zoomRef.current} zoomHandle={mediaZoomHandle} planeId={planeId}><div
             id={planeId}
             ref={planeRef}
@@ -6065,7 +6151,7 @@ export function CanvasWorkspace({
               "--canvas-workflow-foreground-z": workflowForegroundZ } as CSSProperties}
           >
             {projectId && workflowInteractive && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} getZoom={readCanvasZoom} settledZoom={zoom} opening={opening} entryCardIds={entryCardIds} deferredCandidateIds={deferredCandidateIds} graphNodes={nonChatGraphNodes} visibleGraphNodeIds={visibleGraphNodeIds} conversationCards={conversationCards} selectedConversationOutputs={selectedConversationOutputs} imageOnlyConversationIds={imageOnlyConversationIds} sessionHeights={sessionHeights} generationCardAnchors={generationCardProjection.anchors} pinnedCardOffsets={pinnedCardOffsets}
-              generationCardOrigins={generationCardProjection.origins}
+              generationCardOrigins={generationCardProjection.origins} onTriggerArmedChange={setTriggerArmed}
               peekCard={peekedCard && peekAnchorPoint ? { ...peekedCard, point: peekAnchorPoint } : undefined}
               generationActivities={generationActivities} activeGenerationIds={activeGenerationIds}
               onPeekInteraction={onPeekInteraction} onToggleGenerationPin={toggleGenerationPin} onConnectCollapsedGeneration={pinConnectedGeneration}
@@ -6644,6 +6730,14 @@ export function CanvasWorkspace({
           </ProjectInspectorShell>
         )}
         {transfer.dialogs}
+        {toolUpgradeOpen && <ModalShell title="解锁 Pro" onClose={() => setToolUpgradeOpen(false)}
+          footer={<>
+            <button type="button" className="app-modal-button" onClick={() => setToolUpgradeOpen(false)}>暂不升级</button>
+            <button type="button" className="app-modal-button is-primary" data-modal-autofocus onClick={() => {
+              setToolUpgradeOpen(false);
+              useStore.setState({ settingsRequest: { section: "account" } });
+            }}>查看 7 天 Pro 试用</button>
+          </>}>已有结果仍可查看和导出</ModalShell>}
         {promptMenu && <CanvasContextMenu key={`${promptMenu.x}:${promptMenu.y}`} menu={promptMenu} transfer={transfer}
           onClose={() => setPromptMenu(current => current === promptMenu ? null : current)}
           onSelect={action => selectCanvasMenuAction(action, promptMenu)} onAddImages={addCanvasImagesToBoard}

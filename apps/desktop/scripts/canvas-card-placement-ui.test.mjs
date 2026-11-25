@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
+import { enableCanvasToolbarPro, selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 
 const server = await createServer({ cacheDir: ".tmp/canvas-card-placement-vite",
   plugins: [{ name: "placement-hidden-tools", transform(code, id) {
@@ -11,10 +12,12 @@ const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
 const errors = []; page.on("pageerror", error => errors.push(error.message));
 const tools = [
-  ["text", "内容卡片工具"], ["document", "文本卡片工具"], ["bubble", "气泡便签工具"], ["instruction", "新增指令卡片"],
-  ["loop", "新增循环卡片"], ["generation", "新增生成卡片"], ["skill", "新增技能卡片"],
-  ["planner", "新增工作流助手"], ["agent", "新增 Agent 卡片"], ["visual-profile", "新增视觉规范卡片"],
+  ["text", "内容卡片", "content"], ["document", "文本卡片", "content"], ["bubble", "气泡便签", "content"],
+  ["instruction", "指令卡片", "workflow"], ["loop", "循环卡片", "workflow"], ["generation", "生成卡片", "workflow"],
+  ["skill", "技能卡片", "workflow"], ["planner", "工作流助手", "workflow"],
+  ["agent", "Agent 卡片", "workflow"], ["visual-profile", "视觉规范卡片", "workflow"],
 ];
+const groupButton = group => page.locator(`[data-canvas-tool-group="${group}"]`);
 const snapshot = () => page.evaluate(async () => {
   const { canvasWorkflowController } = await import("/src/lib/canvasWorkflowRuntime.ts");
   return [...window.snapshot().nodes, ...canvasWorkflowController("p").document.nodes];
@@ -45,21 +48,21 @@ try {
     const { canvasWorkflowController } = await import("/src/lib/canvasWorkflowRuntime.ts");
     return canvasWorkflowController("p").ready && document.querySelector('.canvas-workspace[aria-busy="false"]');
   });
+  await enableCanvasToolbarPro(page);
   const groups = await page.getByRole("toolbar", { name: "画板工具" }).evaluate(el => {
     const groups = [[]];
     for (const child of el.children) {
       if (child.tagName === "HR") groups.push([]);
-      else if (child.tagName === "BUTTON") groups.at(-1).push(child.getAttribute("aria-label"));
+      else if (child.tagName === "BUTTON") groups.at(-1).push(child.dataset.canvasToolGroup ?? child.getAttribute("aria-label"));
     }
     return groups;
   });
-  assert.deepEqual(groups[0], ["选择工具", "抓手工具", "分区工具", "画板工具"]);
-  assert.deepEqual(groups[1], [...tools.map(([, label]) => label), "发条触发器"]);
+  assert.deepEqual(groups, [["选择工具", "抓手工具", "container", "content"], ["workflow", "toolbox"]]);
 
-  for (const [kind, label] of tools) {
-    const button = page.getByRole("button", { name: label, exact: true });
+  for (const [kind, label, group] of tools) {
+    const button = groupButton(group);
     const before = await snapshot();
-    await button.click();
+    await selectCanvasTool(page, label);
     await button.click();
     assert.deepEqual(await snapshot(), before, `${kind}: clicking only selects the tool`);
     assert.equal(await button.getAttribute("aria-pressed"), "true");
@@ -77,19 +80,20 @@ try {
     await placed(beforeDrag, drop);
   }
   // Cancel a real drag outside the canvas, then switch tools without creating.
+  await selectCanvasTool(page, "内容卡片");
   const beforeCancel = await snapshot();
-  await page.getByRole("button", { name: "内容卡片工具", exact: true }).dragTo(page.getByRole("textbox", { name: "项目名称" }));
+  await groupButton("content").dragTo(page.getByRole("textbox", { name: "项目名称" }));
   assert.deepEqual(await snapshot(), beforeCancel);
-  await page.getByRole("button", { name: "新增指令卡片", exact: true }).click();
+  await selectCanvasTool(page, "指令卡片");
   await page.getByRole("button", { name: "抓手工具", exact: true }).click();
   const blank = await target(800, 700);
   await page.mouse.click(blank.clientX, blank.clientY);
   assert.deepEqual(await snapshot(), beforeCancel);
 
   // A pending winding key must not attach when another card tool takes over.
-  await page.getByRole("button", { name: "发条触发器", exact: true }).click();
+  await selectCanvasTool(page, "触发卡");
   assert.deepEqual(await snapshot(), beforeCancel);
-  await page.getByRole("button", { name: "气泡便签工具", exact: true }).click();
+  await selectCanvasTool(page, "气泡便签");
   const bubblePoint = await target(800, 500);
   await page.mouse.click(bubblePoint.clientX, bubblePoint.clientY);
   await placed(beforeCancel, bubblePoint);
@@ -100,12 +104,12 @@ try {
   await page.mouse.move(blank.clientX, blank.clientY); await page.mouse.down();
   await page.mouse.move(blank.clientX - 70, blank.clientY - 40, { steps: 6 }); await page.mouse.up();
   const scaledBefore = await snapshot(), scaledPoint = await target(700, 600);
-  await page.getByRole("button", { name: "新增生成卡片", exact: true }).click();
+  await selectCanvasTool(page, "生成卡片");
   await page.mouse.click(scaledPoint.clientX, scaledPoint.clientY);
   await placed(scaledBefore, scaledPoint);
-  const triggerTool = page.getByRole("button", { name: "发条触发器", exact: true });
+  const triggerTool = groupButton("workflow");
   const triggerBefore = await snapshot(), triggerPoint = await target(150, 800);
-  await triggerTool.click();
+  await selectCanvasTool(page, "触发卡");
   assert.deepEqual(await snapshot(), triggerBefore);
   await page.mouse.click(triggerPoint.clientX, triggerPoint.clientY);
   await placed(triggerBefore, triggerPoint);

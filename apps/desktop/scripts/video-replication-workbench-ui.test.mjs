@@ -1,3 +1,4 @@
+import { selectCanvasTool } from './fixtures/canvas-reference/place-card.mjs';
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -15,7 +16,7 @@ await server.listen();
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const page=await browser.newPage({viewport:{width:1500,height:1000}}),errors=[];
 page.on('pageerror',e=>errors.push(e.message));
-const openTool=async()=>{await page.getByRole('button',{name:'工具箱',exact:true}).click();await page.getByRole('menuitem',{name:/视频复刻工具/}).click();await page.getByRole('dialog',{name:'复刻任务',exact:true}).waitFor();};
+const openTool=async()=>{await selectCanvasTool(page,'视频复刻工具');await page.getByRole('dialog',{name:'复刻任务',exact:true}).waitFor();};
 async function installMock() {
  await page.evaluate(async()=>{
   const {useStore}=await import('/src/store.ts');

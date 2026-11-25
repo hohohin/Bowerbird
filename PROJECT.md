@@ -84,6 +84,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 ### 工作流、Agent 与本机对话
 
 - **画板连线。** 卡片接收与输出共用加号。精确引用绑定实例、端口或单元格，生成结果沿连接交付。连同新建、断开和撤销按完整关系保存。发条、循环和失败恢复沿原运行身份。[画板工作流](dev-doc/CANVAS-WORKFLOW.md)
+- **画板工作流权益。** 免费账号可以创建、编辑和运行独立生成卡，提交时按所选生成渠道校验权益与余额。新运行按实际执行与写入的卡片范围检查自动化权益。已有结果仍可查看和导出。[画板工作流](dev-doc/CANVAS-WORKFLOW.md#画板工具与工作流权益)
 - **Agent 卡片与桌面对话。** 共用会话、续聊、模型、停止和恢复。改动同步核验本机 Codex、本机 DSH 与 DSH · Cloud。受控建卡须显式授权并按原轮次幂等写入，执行生成沿独立工作流。新增工具字段按客户端能力协商。[对话 provider](dev-doc/CHAT-PROVIDERS.md) · [Cloud 协议](apps/cloud/CHAT.md)
 - **Skill。** 本机 DSH 复用自己的登录、原生会话和用户 Skill。Cloud DSH 加载 VPS 发布的内置 Skill，客户端提交标识与参数，恢复沿原请求和冻结输入。[本机 Skill](dev-doc/CHAT-PROVIDERS.md#2026-11-15-本机-dsh-在卡片第一轮使用-skill) · [Cloud Skill 部署](project_logs/2026-11-08-cloud-dsh-skills.md)
 - **异步 Agent Run。** 新建仅接受统一 Agent + DSH。图片与 HTML 复用 Tool Gateway。DSH 管理执行上下文，控制面保管授权、预算、审批、账本、恢复与取消。旧 Run 按原协议恢复，Codex 对话与直接生成沿各自入口。[Harness](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) · [HTML](dev-doc/HTML-RENDER-PLAN.md)

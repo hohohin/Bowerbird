@@ -1,3 +1,4 @@
+import { enableCanvasToolbarPro, selectCanvasTool } from './fixtures/canvas-reference/place-card.mjs';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -50,8 +51,7 @@ try {
   await page.goto('http://127.0.0.1:17996/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:true,user_id:'tester'},cloudEntitlement:{user_id:'tester',tier:'pro',offline_state:'fresh',is_test_account:true,balances:{daily:0,sub:0,topup:0},generation_services:[],policy:{can_use_byo:true,can_use_cloud:true}}}));
-  await page.getByRole('button',{name:'工具箱',exact:true}).click();
-  await page.getByRole('menuitem',{name:/角色声音/}).click();
+  await selectCanvasTool(page, '角色声音');
   await page.mouse.click(890,180);
   const card=page.locator('.workflow-card.is-voice');
   await card.waitFor();
@@ -89,8 +89,8 @@ try {
   await card.getByRole('textbox',{name:'配音台词'}).waitFor();
   assert.equal(await card.getByRole('textbox',{name:'配音台词'}).inputValue(),'欢迎来到这里。');
   assert.equal(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('voice-fixture')).jobs.length),2);
-  await page.getByRole('button',{name:'工具箱',exact:true}).click();
-  await page.getByRole('menuitem',{name:/角色声音/}).click();
+  await enableCanvasToolbarPro(page);
+  await selectCanvasTool(page, '角色声音');
   await page.mouse.click(700,700);
   const second=page.locator('.workflow-card.is-voice').nth(1);
   await second.waitFor();

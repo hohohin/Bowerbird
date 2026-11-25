@@ -1,3 +1,4 @@
+import { selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -103,7 +104,7 @@ try {
   await undo(); await card('image-a').waitFor();
 
   // Toolbar creation, removal and repeated undo share one chronological stack.
-  await page.getByRole('button', { name: '气泡便签工具', exact: true }).click();
+  await selectCanvasTool(page, '气泡便签');
   await page.mouse.click(950, 650);
   const bubble = page.locator('[data-canvas-node-id^="bubble-"]'); await bubble.waitFor();
   const bubbleId = await bubble.getAttribute('data-canvas-node-id');
