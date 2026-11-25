@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { dropData } from "./trusted-drag-fixture.mjs";
+import { injectContent } from "./isolated-content-fixture.mjs";
 import { readFile } from "node:fs/promises";
 import { chromium } from "../html-renderer/node_modules/playwright/index.mjs";
 
 const clip=await readFile(new URL("../desktop/src-tauri/tests/fixtures/media/fragmented.mp4",import.meta.url));
-const scripts=await Promise.all(["candidate-utils.js","collection-utils.js","video-utils.js","content.js"].map(name=>readFile(new URL(name,import.meta.url),"utf8")));
 const browser=await chromium.launch({channel:"chrome",headless:true});
 try {
   const page=await browser.newPage({viewport:{width:900,height:720}});
@@ -18,6 +18,8 @@ try {
     document.addEventListener("dragstart",()=>window.fixture.dragStarts++);
     document.getElementById("video").addEventListener("click",e=>window.fixture.clicks.push(e.defaultPrevented));
     window.chrome={runtime:{getURL:()=>"",sendMessage:(message,callback)=>{
+      if (message.type === "current_project") { callback({ok:true}); return; }
+      if (message.type === "site_visibility_get") { callback({ok:true,hidden:false}); return; }
       if (message.type === "button_position_get") { callback({position:null}); return; }
       if (message.type === "button_position_set") { callback({ok:true}); return; }
       if (message.type === "collect_access" || message.type === "collect_heartbeat") {
@@ -29,7 +31,7 @@ try {
     }}};
     window.WebSocket=class {constructor(){queueMicrotask(()=>this.onopen?.());}send(){queueMicrotask(()=>this.onmessage?.({data:'{"ok":true,"pong":true}'}));}close(){this.onclose?.();}};
   });
-  for(const content of scripts)await page.addScriptTag({content});
+  await injectContent(page);
   const target=page.getByRole("button",{name:"Bowerbird 采集菜单",exact:true});
   const video=page.locator("#video");
   const rect=await video.boundingBox();const drop=await target.boundingBox();
@@ -65,14 +67,14 @@ try {
   await dropData(page,target,{"text/html":'<img src="https://fixture.test/image.svg">'});
   assert.equal(await page.evaluate(()=>window.fixture.messages.length),2,'busy guard blocks image or video re-entry');
   await page.evaluate(()=>{window.fixture.pending=false;window.fixture.reply({ok:true,media_kind:"video"});});
-  await page.waitForFunction(()=>!document.querySelector('[aria-label="Bowerbird 采集菜单"]').disabled);
+  await page.waitForFunction(()=>!document.getElementById("__bowerbird_overlay").shadowRoot.querySelector('[aria-label="Bowerbird 采集菜单"]').disabled);
   await target.dispatchEvent("drop",{});
   assert.equal(await page.evaluate(()=>window.fixture.messages.length),2,'a scripted drop cannot submit a second capture');
   await dropData(page,target,{
     "text/html":'<a href="https://fixture.test/outer.mp4"><img src="https://fixture.test/image.svg"></a><video><source src="https://fixture.test/unrelated.mp4"></video>',
     "text/uri-list":"https://fixture.test/outer.mp4"
   });
-  await page.waitForFunction(()=>!document.querySelector('[aria-label="Bowerbird 采集菜单"]').disabled);
+  await page.waitForFunction(()=>!document.getElementById("__bowerbird_overlay").shadowRoot.querySelector('[aria-label="Bowerbird 采集菜单"]').disabled);
   assert.equal(await page.evaluate(()=>window.fixture.messages.length),3,'unrelated video sources must never join the image batch');
   assert.deepEqual(await page.evaluate(()=>[window.fixture.messages[2].type,window.fixture.messages[2].url]),["save_image","https://fixture.test/image.svg"],'dragged HTML images win over unrelated videos and outer video links');
   assert.deepEqual(errors,[]);

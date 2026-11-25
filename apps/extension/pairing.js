@@ -4,6 +4,10 @@
 // The desktop stores only the public half, copied from the options page.
 const BowerbirdPairing = (() => {
   const protocol = "bowerbird-v2";
+  let signingKey;
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.collectionKey) signingKey = undefined;
+  });
   const hex = bytes => Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, "0")).join("");
   async function load() {
     await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
@@ -32,7 +36,14 @@ const BowerbirdPairing = (() => {
     } catch { return { ok: false, code: "desktop_unavailable" }; }
     const time = Math.floor(Date.now()/1000);
     const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
-    const signing = await crypto.subtle.importKey("jwk", key.privateKey, "Ed25519", false, ["sign"]);
+    if (!signingKey || signingKey.publicKey !== key.publicKey) {
+      const pending = crypto.subtle.importKey("jwk", key.privateKey, "Ed25519", false, ["sign"]);
+      signingKey = { publicKey: key.publicKey, pending };
+      pending.catch(() => {
+        if (signingKey?.pending === pending) signingKey = undefined;
+      });
+    }
+    const signing = await signingKey.pending;
     const bytes = new TextEncoder().encode([protocol, session, scope, origin, time, nonce].join("\n"));
     const signature = hex(await crypto.subtle.sign("Ed25519", signing, bytes));
     return { ok: true, protocols: [protocol, `bb.${time}.${nonce}.${signature}`] };

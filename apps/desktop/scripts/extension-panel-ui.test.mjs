@@ -49,8 +49,8 @@ async function noNavigationSince(before) {
 try {
   await mkdir(".tmp/extension-panel", { recursive: true });
   await load();
-  await page.getByRole("textbox", { name: "网页地址" }).fill("https://fixture.example/collection/kept");
-  await page.getByRole("textbox", { name: "网页地址" }).press("Enter");
+  await page.getByLabel("网页地址", { exact: true }).fill("https://fixture.example/collection/kept");
+  await page.getByLabel("网页地址", { exact: true }).press("Enter");
   const nativeBefore = await page.evaluate(() => window.calls.filter(call => ["open_source_browser", "navigate_source_browser", "reload_source_browser"].includes(call.command)));
   await open();
   await dialog().getByText("未连接", { exact: true }).waitFor();
@@ -125,7 +125,7 @@ try {
   await lastVisible(true);
   assert.equal(await button("浏览器插件").evaluate(element => element === document.activeElement), true, "closing returns focus to the plugin entry");
   assert.equal(await page.evaluate(() => window.closedBrowser), 0, "Escape closes the dialog, not the exploration page");
-  assert.equal(await page.getByRole("textbox", { name: "网页地址" }).inputValue(), "https://fixture.example/collection/kept");
+  assert.equal(await page.getByLabel("网页地址", { exact: true }).inputValue(), "https://fixture.example/collection/kept");
   assert.equal(await page.getByRole("textbox", { name: "主页面草稿" }).inputValue(), "保留主页面状态");
   await noNavigationSince(nativeBefore);
 
@@ -165,6 +165,13 @@ try {
   await dialog().getByText("已连接", { exact: true }).waitFor();
   await button("安装或更新教程").waitFor();
   assert.equal(await button("安装或更新教程").getAttribute("aria-expanded"), "false");
+  const versionNotice = dialog().getByText(/请在扩展管理页重新加载/);
+  await page.evaluate(() => window.emit("collect://extension-connected", { reported: "0.5.2", expected: "0.5.3", update_required: true }));
+  assert.match(await versionNotice.textContent(), /0\.5\.2.*0\.5\.3/);
+  await page.evaluate(() => window.emit("collect://extension-connected", { reported: null, expected: "0.5.3", update_required: true }));
+  assert.match(await versionNotice.textContent(), /旧版/);
+  await page.evaluate(() => window.emit("collect://extension-connected", { reported: "0.5.3", expected: "0.5.3", update_required: false }));
+  await versionNotice.waitFor({ state: "hidden" });
   assert.match(await dialog().innerText(), /Alt/);
   await button("安装或更新教程").click();
   assert.equal(await button("安装或更新教程").getAttribute("aria-expanded"), "true");

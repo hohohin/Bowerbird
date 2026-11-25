@@ -25,6 +25,14 @@
     } catch { return {ok:false,code:"pair_required"}; }
   }
 
+  function pingMessage() {
+    return JSON.stringify({ type: "ping", extension_version: chrome.runtime.getManifest?.().version });
+  }
+
+  function openSocket(protocols) {
+    return new WebSocket("ws://127.0.0.1:39871/ws", protocols);
+  }
+
   async function queryDesktop(type, decode) {
     const access = await socketAccess();
     if (!access.ok) return access;
@@ -33,8 +41,8 @@
       const done=result=>{if(finished)return;finished=true;clearTimeout(timer);try{ws?.close();}catch{}resolve(result);};
       const timer=setTimeout(()=>done({ok:false,code:"desktop_unavailable"}),3000);
       try {
-        ws=new WebSocket("ws://127.0.0.1:39871/ws", access.protocols);
-        ws.onopen=()=>ws.send(JSON.stringify({type}));
+        ws=openSocket(access.protocols);
+        ws.onopen=()=>ws.send(type === "ping" ? pingMessage() : JSON.stringify({type}));
         ws.onmessage=event=>{try{done(decode(JSON.parse(event.data)));}catch{done({ok:false,code:"desktop_upgrade"});}};
         ws.onerror=()=>done({ok:false,code:"desktop_unavailable"});ws.onclose=ws.onerror;
       } catch {done({ok:false,code:"desktop_unavailable"});}
@@ -43,7 +51,7 @@
 
   function checkVideoSupport() {
     return queryDesktop("ping", reply => reply.capabilities?.video_blob === true
-      ? {ok:true,maxBytes:videoLimit(reply.capabilities)} : {ok:false,code:"desktop_upgrade"});
+      ? {ok:true,maxBytes:videoLimit(reply.capabilities),streamUpload:reply.capabilities.video_stream_upload === true} : {ok:false,code:"desktop_upgrade"});
   }
 
   function currentProject() {
@@ -89,11 +97,11 @@
         sent = true;
       };
       try {
-        ws = new WebSocket("ws://127.0.0.1:39871/ws", access.protocols);
+        ws = openSocket(access.protocols);
         ws.binaryType = "arraybuffer";
         ws.onopen = () => {
           try {
-            if(video) ws.send(JSON.stringify({type:"ping"}));
+            if(video) ws.send(pingMessage());
             else send();
           } catch { disconnected(); }
         };
@@ -148,27 +156,97 @@
     });
   }
 
-  async function runBatch(items, handlers, onProgress = () => {}) {
-    const selected = items.slice(0, MAX_ITEMS);
-    const summary = { total: selected.length, completed: 0, saved: 0, failed: 0, unconfirmed: 0, results: [] };
-    onProgress({ ...summary });
-    for (const item of selected) {
-      let result;
-      try {
-        if (item.canvas) result = await handlers.canvas(item);
-        else if (/^(blob:|data:image\/)/i.test(item.media_url || "")) result = await handlers.local(item);
-        else result = await handlers.remote(item);
-      } catch (error) {
-        result = { ok: false, code: "collect_failed", error: String(error) };
-      }
-      result ||= { ok: false, code: "result_unknown" };
-      summary.results.push(result);
-      summary.completed += 1;
-      if (result.ok) summary.saved += 1;
-      else if (result.code === "result_unknown") summary.unconfirmed += 1;
-      else summary.failed += 1;
-      onProgress({ ...summary });
+  function openImageBatch(items, signal) {
+    const candidates = items.flatMap((item, index) => !item.canvas && /^https?:\/\//i.test(item.media_url || "")
+      ? [{ index, url: item.media_url, pageUrl: item.source_url || "", candidateKind: item.candidate_kind, candidateSource: item.candidate_source }]
+      : []);
+    if (!candidates.length || (candidates.length === 1 && !signal) || !globalThis.chrome?.runtime?.connect) return null;
+    let port;
+    let pending;
+    let disconnected = false;
+
+    function disconnect() {
+      disconnected = true;
+      pending?.finish({ ok: false, code: "result_unknown" });
+      try { port?.disconnect(); } catch { /* extension may have reloaded */ }
     }
+
+    function cancel() {
+      if (disconnected) return;
+      try { port.postMessage({ type: "cancel" }); } catch { disconnect(); }
+    }
+
+    try {
+      port = chrome.runtime.connect({ name: "collect_image_batch" });
+      port.onDisconnect.addListener(() => {
+        void chrome.runtime.lastError;
+        disconnect();
+      });
+      port.onMessage.addListener(message => {
+        if (pending && message?.index === pending.index) {
+          pending.finish(message.result || { ok: false, code: "result_unknown" });
+        }
+      });
+      port.postMessage({ type: "start", items: candidates });
+      signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
+    } catch {
+      disconnect();
+      return null;
+    }
+
+    function save(item, index) {
+      if (!/^https?:\/\//i.test(item.media_url || "")) return requestBackground(item);
+      if (signal?.aborted) return Promise.resolve({ ok: false, code: "cancelled" });
+      if (disconnected) return Promise.resolve({ ok: false, code: "desktop_unavailable" });
+      return new Promise(resolve => {
+        const timer = setTimeout(disconnect, MESSAGE_TIMEOUT_MS);
+        pending = {
+          index,
+          finish(result) {
+            clearTimeout(timer);
+            pending = undefined;
+            resolve(result);
+          },
+        };
+        try { port.postMessage({ type: "save", index }); } catch { disconnect(); }
+      });
+    }
+
+    return { save, close() { signal?.removeEventListener("abort", cancel); disconnect(); } };
+  }
+
+  async function runBatch(items, handlers, onProgress = () => {}, { signal } = {}) {
+    const selected = items.slice(0, MAX_ITEMS);
+    const summary = { total: selected.length, completed: 0, saved: 0, failed: 0, unconfirmed: 0, cancelled: 0, results: [], failedItems: [] };
+    onProgress({ ...summary });
+    const batch = handlers.remote === requestBackground && !signal?.aborted ? openImageBatch(selected, signal) : null;
+    const remote = batch?.save || handlers.remote;
+    try {
+      for (const [index, item] of selected.entries()) {
+        if (signal?.aborted) break;
+        let result;
+        try {
+          if (item.canvas) result = await handlers.canvas(item, signal);
+          else if (/^(blob:|data:image\/)/i.test(item.media_url || "")) result = await handlers.local(item, signal);
+          else result = await remote(item, index);
+        } catch (error) {
+          result = { ok: false, code: "collect_failed", error: String(error) };
+        }
+        result ||= { ok: false, code: "result_unknown" };
+        if (result.code === "cancelled") break;
+        summary.results.push(result);
+        summary.completed += 1;
+        if (result.ok || result.saved === true) summary.saved += 1;
+        else if (result.code === "result_unknown") summary.unconfirmed += 1;
+        else {
+          summary.failed += 1;
+          summary.failedItems.push(item);
+        }
+        onProgress({ ...summary });
+      }
+    } finally { batch?.close(); }
+    summary.cancelled = summary.total - summary.completed;
     return summary;
   }
 
@@ -188,6 +266,7 @@
       if(result?.code==="incomplete_video") return "网站只返回了部分视频，请使用完整视频文件链接。";
       return "视频未能采集，请确认网页中可以播放、桌面应用正常运行后再试。";
     }
+    if (result?.saved === true) return "图片已保存，未能登记到当前项目，请在素材库查看。";
     if (result?.code === "desktop_upgrade") return "请更新并重启 Bowerbird，再采集未保存的图片。";
     if (result?.code === "result_unknown") return "部分图片的保存结果尚未确认，请先查看桌面素材库，不要重复采集。";
     if (result?.code === "reload_extension") return "扩展已更新或失效，请重新加载扩展并刷新网页后再试。";
@@ -197,6 +276,7 @@
     }
     if (result?.code === "fetch_timeout" || /读取.*超时|AbortError/.test(error)) return "读取图片超时，请检查网络后再试。";
     if (result?.code === "too_large" || /超过.*上限/.test(error)) return "图片过大，请选择较小的图片后再试。";
+    if (result?.code === "image_dimensions") return "图片尺寸超出上限，请选择较小的图片后再试。";
     if (result?.code === "canvas_blocked") return "网页限制了画布导出，请尝试采集原始图片。";
     if (/HTTP (401|403)/.test(error)) return "网站拒绝读取图片，请确认已登录并能打开原图后再试。";
     if (/HTTP (404|410)/.test(error)) return "图片地址已失效，请刷新网页后再试。";
@@ -211,12 +291,13 @@
       (summary.unconfirmed ? `，待确认 ${summary.unconfirmed} 张` : "");
     if (!finished) return `采集中 ${summary.completed}/${summary.total} · ${counts}`;
     const issue = summary.results.find((result) => result.code === "result_unknown") || summary.results.find((result) => !result.ok);
-    return `采集结束 · ${counts}（共 ${summary.total} 张）` + (issue ? `。${failureMessage(issue)}` : "");
+    const status = summary.cancelled ? `已停止采集 · ${counts}，${summary.cancelled} 张未采集` : `采集结束 · ${counts}（共 ${summary.total} 张）`;
+    return status + (issue ? `。${failureMessage(issue)}` : "");
   }
 
   root.BowerbirdCollection = {
     MAX_ITEMS, MAX_IMAGE_BYTES, MAX_INLINE_BYTES, FETCH_TIMEOUT_MS, UPLOAD_TIMEOUT_MS, MESSAGE_TIMEOUT_MS,
-    VIDEO_FETCH_TIMEOUT_MS, VIDEO_UPLOAD_TIMEOUT_MS, checkVideoSupport, currentProject,
+    VIDEO_FETCH_TIMEOUT_MS, VIDEO_UPLOAD_TIMEOUT_MS, socketAccess, openSocket, pingMessage, checkVideoSupport, currentProject,
     limitBatch, uploadBytes, requestBackground, runBatch, failureMessage, progressMessage,
   };
 })(globalThis);

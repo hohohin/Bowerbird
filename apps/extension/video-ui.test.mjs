@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { dropData } from "./trusted-drag-fixture.mjs";
+import { injectContent } from "./isolated-content-fixture.mjs";
 import { readFile, mkdir } from "node:fs/promises";
 import { chromium } from "../html-renderer/node_modules/playwright/index.mjs";
 const clip=await readFile(new URL("../desktop/src-tauri/tests/fixtures/media/fragmented.mp4",import.meta.url));
 const icon=`data:image/png;base64,${(await readFile(new URL("icons/48x48.png",import.meta.url))).toString("base64")}`;
-const scripts=await Promise.all(["candidate-utils.js","collection-utils.js","video-utils.js","content.js"].map(name=>readFile(new URL(name,import.meta.url),"utf8")));
 await mkdir(new URL("../../.tmp/video-extension/",import.meta.url),{recursive:true});
 const browser=await chromium.launch({channel:"chrome",headless:true});
 const page=await browser.newPage({viewport:{width:900,height:720}});
@@ -27,6 +27,8 @@ async function setup(url="https://fixture.test/page") {
     }
     window.fetch=(url,options)=>{window.fixture.fetches.push(url);return fetch(url,options);};
     window.chrome={runtime:{getURL:()=>icon,sendMessage:(message,callback)=>{
+      if (message.type === "current_project") { callback({ok:true}); return; }
+      if (message.type === "site_visibility_get") { callback({ok:true,hidden:false}); return; }
       if (message.type === "button_position_get") { callback({position:null}); return; }
       if (message.type === "button_position_set") { callback({ok:true}); return; }
       if (message.type === "collect_access" || message.type === "collect_heartbeat") {
@@ -49,7 +51,7 @@ async function setup(url="https://fixture.test/page") {
       close(){this.onclose?.();}
     };
   },icon);
-  for(const content of scripts)await page.addScriptTag({content});
+  await injectContent(page);
 }
 const entry=page.getByRole("button",{name:"Bowerbird 采集菜单",exact:true});
 const menu=page.getByRole("menu",{name:"Bowerbird 菜单"});
@@ -74,7 +76,7 @@ try {
   await picker.getByRole("button",{name:"采集视频",exact:true}).first().evaluate(el=>el.click());
   assert.equal(await page.evaluate(()=>window.fixture.messages.length+window.fixture.uploads.length),0);
   await picker.getByRole("button",{name:"采集视频",exact:true}).first().click();
-  await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent==="视频已保存到素材库");
+  await page.waitForFunction(()=>document.getElementById("__bowerbird_overlay").shadowRoot.getElementById("__bowerbird_toast")?.textContent==="视频已保存到素材库");
   assert.equal(await page.evaluate(()=>window.fixture.messages[0].type),"save_video");
   assert.equal(await page.evaluate(()=>window.fixture.messages[0].pageUrl),"https://fixture.test/page");
   await page.evaluate(()=>{window.fixture.pending=true;});
@@ -86,18 +88,18 @@ try {
   const pendingCount=await page.evaluate(()=>window.fixture.messages.length);
   await entry.evaluate(el=>el.click());
   await page.evaluate(()=>{window.fixture.reply({ok:false,saved:true,asset_id:"saved",media_kind:"video",code:"preview_unavailable"});window.fixture.pending=false;});
-  await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent.includes("已保存，预览暂不可用"));
+  await page.waitForFunction(()=>document.getElementById("__bowerbird_overlay").shadowRoot.getElementById("__bowerbird_toast")?.textContent.includes("已保存，预览暂不可用"));
   assert.equal(await page.evaluate(()=>window.fixture.messages.length),pendingCount,'busy entry and preview failure never resubmit a saved video');
   await page.locator("#blob").click({modifiers:["Alt"]});
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
   await page.waitForFunction(()=>window.fixture.uploads.length===1);
   assert.deepEqual(await page.evaluate(()=>[window.fixture.uploads[0].media_kind,window.fixture.uploads[0].byte_length===window.fixture.uploads[0].size,window.fixture.uploads[0].page_url]),["video",true,"https://fixture.test/page"]);
-  await page.waitForFunction(()=>!document.querySelector('[aria-label="Bowerbird 采集菜单"]').disabled);
+  await page.waitForFunction(()=>!document.getElementById("__bowerbird_overlay").shadowRoot.querySelector('[aria-label="Bowerbird 采集菜单"]').disabled);
   await page.evaluate(()=>{window.fixture.support=false;});
   await page.locator("#blob").click({modifiers:["Alt"]});
   const before=await page.evaluate(()=>window.fixture.fetches.length);
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
-  await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent.includes("更新并重启"));
+  await page.waitForFunction(()=>document.getElementById("__bowerbird_overlay").shadowRoot.getElementById("__bowerbird_toast")?.textContent.includes("更新并重启"));
   assert.equal(await page.evaluate(()=>window.fixture.fetches.length),before,'old desktop must be rejected before reading the large blob');
   await page.evaluate(()=>{
     window.fixture.support=true;
@@ -105,11 +107,11 @@ try {
   });
   await page.locator("#stream").click({modifiers:["Alt"]});
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
-  await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent.includes("分段播放"));
+  await page.waitForFunction(()=>document.getElementById("__bowerbird_overlay").shadowRoot.getElementById("__bowerbird_toast")?.textContent.includes("分段播放"));
   await page.evaluate(()=>{document.getElementById("stream").src=URL.createObjectURL(new MediaSource());});
   await page.locator("#stream").click({modifiers:["Alt"]});
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
-  await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent.includes("分段播放"));
+  await page.waitForFunction(()=>document.getElementById("__bowerbird_overlay").shadowRoot.getElementById("__bowerbird_toast")?.textContent.includes("分段播放"));
   await page.evaluate(()=>{window.fixture.messages=[];});
   await dropData(page,entry,{"text/html":'<video src="https://fixture.test/drop.mp4"></video>'});
   assert.equal(await page.evaluate(()=>window.fixture.messages.length),1,'dropping a video must collect directly without a second confirmation');

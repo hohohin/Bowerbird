@@ -1,8 +1,39 @@
-importScripts("pairing.js", "collection-utils.js", "video-utils.js");
+importScripts("pairing.js", "collection-utils.js", "video-utils.js", "image-batch.js", "preferences.js", "video-upload.js");
 const S = globalThis.BowerbirdCollection;
 const MAX_IMAGE_BYTES = S.MAX_IMAGE_BYTES;
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = S.FETCH_TIMEOUT_MS;
+const HEARTBEAT_INTERVAL_MS = 15000;
+let nextHeartbeatAt = 0;
+let heartbeatInFlight;
+let lastHeartbeat;
+let pairingCodeQueue = Promise.resolve();
+
+function heartbeat() {
+  const now = performance.now();
+  if (!heartbeatInFlight && now >= nextHeartbeatAt) {
+    nextHeartbeatAt = now + HEARTBEAT_INTERVAL_MS;
+    heartbeatInFlight = S.checkVideoSupport()
+      .catch(() => ({ ok: false }))
+      .then(result => { lastHeartbeat = result; return result; })
+      .finally(() => { heartbeatInFlight = undefined; });
+  }
+  const result = heartbeatInFlight || Promise.resolve(lastHeartbeat);
+  return result.then(value => ({
+    ...value,
+    retryAfterMs: Math.max(1, Math.ceil(nextHeartbeatAt - performance.now())),
+  }));
+}
+
+function pairingCode(rotate) {
+  const pending = pairingCodeQueue.then(async () => {
+    const key = (!rotate && await BowerbirdPairing.load()) || await BowerbirdPairing.generate();
+    if (!key?.publicKey) throw new Error("missing public key");
+    return { ok: true, code: `${chrome.runtime.id}.${key.publicKey}` };
+  }).catch(() => ({ ok: false, code: "pair_required" }));
+  pairingCodeQueue = pending.then(() => {});
+  return pending;
+}
 
 // content script 把候选交给 service worker；background 在浏览器会话内 fetch（自动走浏览器
 // 系统代理 + Cookie / 登录态），再把真实图片字节经 WS save_blob 两帧协议上传桌面端。
@@ -17,7 +48,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message?.type === "collect_heartbeat") {
-    S.checkVideoSupport().then(sendResponse, () => sendResponse({ok:false}));
+    if (_sender.id !== chrome.runtime.id || !_sender.tab) return false;
+    heartbeat().then(sendResponse);
     return true;
   }
   if (message?.type === "current_project") {
@@ -25,35 +57,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     S.currentProject().then(sendResponse, () => sendResponse({ok:false}));
     return true;
   }
-  if (message?.type === "pairing_code_get") {
+  if (message?.type === "pairing_code_get" || message?.type === "pairing_code_rotate") {
     if (_sender.id !== chrome.runtime.id) return false;
-    (async () => {
-      try {
-        const key = (await BowerbirdPairing.load()) || (await BowerbirdPairing.generate());
-        if (!key?.publicKey) throw new Error("missing public key");
-        sendResponse({ ok: true, code: `${chrome.runtime.id}.${key.publicKey}` });
-      } catch { sendResponse({ ok: false, code: "pair_required" }); }
-    })();
-    return true;
-  }
-  if (message?.type === "button_position_get") {
-    chrome.storage.local.get("bowerbird_button_position", (data) => {
-      sendResponse({ position: data?.bowerbird_button_position || null });
-    });
-    return true;
-  }
-  if (message?.type === "button_position_set") {
-    const position = message.position;
-    if (!position || typeof position !== "object") return false;
-    const saved = {
-      x: Number(position.x),
-      y: Number(position.y),
-      dock: position.dock === "left" || position.dock === "right" ? position.dock : null,
-    };
-    if (!Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return false;
-    chrome.storage.local.set({ bowerbird_button_position: saved }, () => {
-      sendResponse({ ok: !chrome.runtime.lastError });
-    });
+    const rotate = message.type === "pairing_code_rotate";
+    if (rotate && _sender.url !== chrome.runtime.getURL("options.html")) return false;
+    pairingCode(rotate).then(sendResponse);
     return true;
   }
   if (!["save_image","save_video"].includes(message?.type)) return false;
@@ -62,6 +70,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     .catch((error) => sendResponse({ ok: false, error: readableError(error) }));
   return true;
 });
+BowerbirdImageBatch.listen(fetchCandidateBytes);
 
 async function fetchVideo(message) {
   const V=globalThis.BowerbirdVideo;
@@ -79,22 +88,35 @@ async function fetchVideo(message) {
     const contentType=response.headers.get("content-type") || "";
     if(/mpegurl|dash\+xml/i.test(contentType)) return {ok:false,code:"unsupported_stream"};
     if(/text\/html|application\/json/i.test(contentType)) return {ok:false,code:"invalid_video"};
+    const metadata={media_kind:"video",requested_url:candidate.media_url,effective_url:response.url || candidate.media_url,
+      page_url:message.pageUrl || "",url:response.url || candidate.media_url,content_type:contentType,candidate_source:candidate.candidate_source};
+    if (support.streamUpload) {
+      return await BowerbirdVideoUpload.streamResponse(response, support, metadata, controller.signal, () => clearTimeout(timer));
+    }
     const bytes=await V.read(response,support.maxBytes);
     if(V.stream(bytes)) return {ok:false,code:"unsupported_stream"};
     const ext=V.format(bytes);
     if(!ext) return {ok:false,code:"invalid_video"};
     clearTimeout(timer);
-    return S.uploadBytes(bytes.buffer,{media_kind:"video",requested_url:candidate.media_url,effective_url:response.url || candidate.media_url,
-      page_url:message.pageUrl || "",url:response.url || candidate.media_url,file_name:`video.${ext}`,content_type:contentType,candidate_source:candidate.candidate_source});
+    return S.uploadBytes(bytes.buffer,{...metadata,file_name:`video.${ext}`});
   } catch(error) {return {ok:false,code:error?.code || (error?.name==="AbortError" ? "fetch_timeout" : "fetch_failed")};}
   finally {clearTimeout(timer);}
 }
 
 async function fetchCandidate(message) {
+  const candidate = await fetchCandidateBytes(message);
+  return candidate.ok ? S.uploadBytes(candidate.bytes, candidate.metadata) : candidate;
+}
+
+async function fetchCandidateBytes(message, signal) {
+  if (signal?.aborted) return { ok: false, code: "cancelled" };
   const controller = new AbortController();
+  const cancel = () => controller.abort();
+  signal?.addEventListener("abort", cancel, { once: true });
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let result;
   try {
-    return await fetchAndUpload(
+    result = await readCandidate(
       {
         url: message.url,
         pageUrl: message.pageUrl || "",
@@ -106,14 +128,17 @@ async function fetchCandidate(message) {
       0
     );
   } catch (error) {
-    if (error?.name === "AbortError") return { ok: false, error: "浏览器读取图片超时" };
-    return { ok: false, error: readableError(error) };
+    result = { ok: false, error: readableError(error) };
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", cancel);
   }
+  if (signal?.aborted) return { ok: false, code: "cancelled" };
+  if (controller.signal.aborted) return { ok: false, code: "fetch_timeout", error: "浏览器读取图片超时" };
+  return result;
 }
 
-async function fetchAndUpload(candidate, signal, visited, depth) {
+async function readCandidate(candidate, signal, visited, depth) {
   if (!/^https?:\/\//.test(candidate.url || "")) {
     return { ok: false, error: "图片地址不是 HTTP(S) URL" };
   }
@@ -151,17 +176,31 @@ async function fetchAndUpload(candidate, signal, visited, depth) {
   if (bytes.byteLength === 0) return { ok: false, error: "浏览器读取到的内容为空" };
 
   // 字节 magic 优先：服务器 MIME 写错但真实是图片时照常上传。
-  if (looksLikeImage(bytes, contentType)) {
-    return uploadBytes(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), {
+  const bmff = BowerbirdVideo.bmffImageFormat(bytes);
+  if (bmff || looksLikeImage(bytes, contentType)) {
+    const effectiveUrl = response.url || candidate.url;
+    let fileName = fileNameFromUrl(effectiveUrl);
+    let uploadedType = contentType;
+    if (bmff === "avif") {
+      // The desktop image ingest supports PNG. Chromium can decode AVIF into its first frame.
+      const normalized = await avifToPng(bytes, signal);
+      if (!normalized.ok) return normalized;
+      bytes = normalized.bytes;
+      uploadedType = "image/png";
+      fileName = `${fileName.replace(/\.[^.]+$/, "")}.png`;
+    }
+    const buffer = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+      ? bytes.buffer : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    return { ok: true, bytes: buffer, metadata: {
       type: "save_blob",
       requested_url: candidate.url,
-      effective_url: response.url || candidate.url,
+      effective_url: effectiveUrl,
       page_url: candidate.pageUrl || "",
-      url: response.url || candidate.url, // 兼容旧桌面协议
-      file_name: fileNameFromUrl(response.url || candidate.url),
-      content_type: contentType,
+      url: effectiveUrl, // 兼容旧桌面协议
+      file_name: fileName,
+      content_type: uploadedType,
       candidate_source: candidate.source,
-    });
+    } };
   }
 
   const looksHtml = claimsHtml || sniffHtml(bytes);
@@ -169,7 +208,7 @@ async function fetchAndUpload(candidate, signal, visited, depth) {
     const html = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
     const fallback = extractPageImage(html, response.url || candidate.url);
     if (fallback) {
-      return fetchAndUpload(
+      return readCandidate(
         { ...candidate, url: fallback, kind: "image-url", source: "html-metadata" },
         signal,
         visited,
@@ -178,6 +217,28 @@ async function fetchAndUpload(candidate, signal, visited, depth) {
     }
   }
   return { ok: false, error: "目标返回的不是可识别图片，页面也没有可用主图" };
+}
+
+async function avifToPng(bytes, signal) {
+  let bitmap;
+  try {
+    signal.throwIfAborted();
+    bitmap = await createImageBitmap(new Blob([bytes], { type: "image/avif" }));
+    signal.throwIfAborted();
+    const { width, height } = bitmap;
+    if (width > 32768 || height > 32768 || width * height > 100000000) return { ok: false, code: "image_dimensions" };
+    const canvas = new OffscreenCanvas(width, height);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    const png = await canvas.convertToBlob({ type: "image/png" });
+    signal.throwIfAborted();
+    if (png.size > MAX_IMAGE_BYTES) return { ok: false, code: "too_large" };
+    return { ok: true, bytes: new Uint8Array(await png.arrayBuffer()) };
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return { ok: false, code: "invalid_image" };
+  } finally {
+    bitmap?.close();
+  }
 }
 
 async function readResponseLimited(response, limit) {
@@ -250,13 +311,6 @@ function extractPageImage(html, base) {
     } catch { /* skip malformed metadata */ }
   }
   return null;
-}
-
-function uploadBytes(bytes, metadata) {
-  if (bytes.byteLength > MAX_IMAGE_BYTES) {
-    return Promise.resolve({ ok: false, code: "too_large", error: "图片超过 50 MiB 上限" });
-  }
-  return S.uploadBytes(bytes, metadata);
 }
 
 function fileNameFromUrl(url) {

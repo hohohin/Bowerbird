@@ -198,8 +198,8 @@ VPS 的 Agent、生成、理解和视觉提炼消费循环复用 [ControlTranspo
 ## 从浏览器扩展采集图片或视频
 
 - **用途／关键词**：MV3、网页取图、浏览器会话、save_blob、WebSocket、采集回执。
-- **入口**：[collection-utils.js](../../apps/extension/collection-utils.js) 经 `globalThis.BowerbirdCollection` 暴露 `uploadBytes`／`checkVideoSupport`；[background.js](../../apps/extension/background.js) 的消息监听接收 `save_image`／`save_video`。桌面入口为 [collect/ws_server.rs](../../apps/desktop/src-tauri/src/collect/ws_server.rs) 的 `start`，解析元数据帧和二进制帧。
-- **调用**：`background.js` 的 `fetchVideo` 调用 `BowerbirdCollection.uploadBytes`；桌面 [lib.rs](../../apps/desktop/src-tauri/src/lib.rs) 启动 `collect::ws_server::start`，视频保存走 [video_blob.rs](../../apps/desktop/src-tauri/src/collect/video_blob.rs) 的 `save`；内置探索 [source_browser_capture.rs](../../apps/desktop/src-tauri/src/commands/source_browser_capture.rs) 也复用该保存层。
+- **入口**：[collection-utils.js](../../apps/extension/collection-utils.js) 暴露 `runBatch`、`uploadBytes` 和 `checkVideoSupport`。[background.js](../../apps/extension/background.js) 接收单项采集和心跳，[image-batch.js](../../apps/extension/image-batch.js) 负责批量读图和有序保存。桌面 [collect/ws_server.rs](../../apps/desktop/src-tauri/src/collect/ws_server.rs) 接收心跳和上传。
+- **调用**：[video-upload.js](../../apps/extension/video-upload.js) 在桌面支持时分片上传，旧桌面沿用 `uploadBytes`。[video_blob.rs](../../apps/desktop/src-tauri/src/collect/video_blob.rs) 统一校验和保存整帧或分片视频，内置探索 [source_browser_capture.rs](../../apps/desktop/src-tauri/src/commands/source_browser_capture.rs) 复用该保存层。
 - 桌面主窗口通过 `pair_extension` 登记扩展安装公钥。后台 `pairing.js` 为每个连接签发绑定浏览器来源的限时凭据；页面只取得单次上传授权。兼容 URL 下载复用 `core/public_network.rs` 的公网地址判定，每跳独立固定解析结果。
 - 图片采集共用 `core/ingest.rs` 的近似／字节精确去重：仅复用当前可读且未隐藏、未清理、未断开的原件，丢弃新副本前再核对登记路径与可见性。有项目时保留 `LibraryPaths::for_project` 的目标目录；扩展 bytes／URL 和探索全局采集复用 `Database::link_external_to_library` 登记 `independent_library_assets`，使项目内原件的全局用途参与项目删除保护。
 - **边界／状态**：**模块内部专用（扩展采集协议）**；视频保存层在 Rust crate 内已有跨入口调用。扩展 JS 是 classic script/global 导出，不是 React 模块；浏览器下载保持站点会话，上传只发字节及来源，不导出 Cookie。视频必须能力协商。内置探索和扩展的下载范围不同，不能拿一侧流媒体支持替另一侧作保证；见 [扩展 README](../../apps/extension/README.md)、[探索契约](../EMBEDDED-BROWSER.md)。

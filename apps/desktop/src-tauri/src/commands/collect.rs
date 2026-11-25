@@ -5,15 +5,15 @@
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::collect::ws_server::ExtensionStatus;
+use crate::collect::ws_server::{ExtensionConnection, ExtensionStatus};
 use crate::error::AppError;
 
-/// 扩展是否已连接（最近 30s 内收过心跳 / 采集消息）。
+/// 扩展连接和最近一次已认证心跳上报的版本。
 #[tauri::command]
-pub async fn extension_status(status: State<'_, ExtensionStatus>) -> Result<bool, AppError> {
-    Ok(status.is_connected())
+pub fn extension_status(status: State<'_, ExtensionStatus>) -> ExtensionConnection {
+    status.snapshot()
 }
 
 /// 扩展文件夹绝对路径（引导「一键复制路径」用，用户粘贴到 chrome「加载已解压」对话框地址栏）。
@@ -42,5 +42,8 @@ pub async fn extension_folder_path(app: AppHandle) -> Result<String, AppError> {
 #[tauri::command]
 pub fn pair_extension(webview: tauri::Webview, status: State<'_, ExtensionStatus>, code: String) -> Result<(), AppError> {
     if webview.label() != "main" { return Err(AppError::Other("请在桌面浏览器插件设置中配对".into())); }
-    status.pairing.replace(&code).map_err(AppError::Other)
+    status.pairing.replace(&code).map_err(AppError::Other)?;
+    status.clear();
+    let _ = webview.emit("collect://extension-disconnected", ());
+    Ok(())
 }

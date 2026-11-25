@@ -2,9 +2,11 @@
 use crate::{core::{ingest, library::Asset, paths::LibraryPaths}, db::Database};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{fs, io::Write, path::Path, sync::Mutex};
+use std::{fs, io::{Read, Write}, path::{Path, PathBuf}, sync::Mutex};
+use tokio::io::AsyncWriteExt;
 
 pub(crate) const MAX_BYTES: usize = 200 * 1024 * 1024;
+pub(super) const MAX_CHUNK_BYTES: usize = 1024 * 1024;
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug)]
@@ -25,7 +27,7 @@ impl From<rusqlite::Error> for UploadError { fn from(error: rusqlite::Error) -> 
 
 fn invalid_video() -> UploadError { UploadError::new("invalid_media", "收到的内容不是完整视频，请确认视频可播放后重新采集。") }
 
-fn extension(bytes: &[u8]) -> Result<&'static str, UploadError> {
+fn extension(bytes: &[u8], length: usize) -> Result<&'static str, UploadError> {
     if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"AVI " { return Ok("avi"); }
     if bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
         let header = &bytes[..bytes.len().min(4096)];
@@ -35,7 +37,7 @@ fn extension(bytes: &[u8]) -> Result<&'static str, UploadError> {
     }
     if bytes.len() >= 16 && [b"ftyp", b"moov", b"mdat", b"wide", b"free"].iter().any(|kind| &bytes[4..8] == *kind) {
         let size = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
-        if size >= 8 && size <= bytes.len() { return Ok(if &bytes[4..8] == b"ftyp" && &bytes[8..12] == b"qt  " { "mov" } else { "mp4" }); }
+        if size >= 8 && size <= length { return Ok(if &bytes[4..8] == b"ftyp" && &bytes[8..12] == b"qt  " { "mov" } else { "mp4" }); }
     }
     Err(invalid_video())
 }
@@ -71,19 +73,82 @@ fn atomic_copy(source: &Path, destination: &Path) -> Result<(), UploadError> {
 pub(crate) fn save(paths: &LibraryPaths, db: &Database, bytes: &[u8], meta: &Value, project: Option<&str>) -> Result<Asset, UploadError> {
     validate_metadata(meta)?;
     if bytes.len() > MAX_BYTES { return Err(UploadError::new("too_large", "视频超过 200 MiB，请选择较小的视频。")); }
-    if bytes.is_empty() || meta.get("byte_length").and_then(Value::as_u64).is_some_and(|length| length != bytes.len() as u64) { return Err(invalid_video()); }
-    let ext = extension(bytes)?;
+    extension(bytes, bytes.len())?;
+    let temporary = create_staging(paths)?;
+    let mut file = fs::File::create(staging_path(&temporary))?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    save_staged(paths, db, temporary, bytes.len(), meta, project)
+}
+
+fn create_staging(paths: &LibraryPaths) -> Result<tempfile::TempDir, UploadError> {
+    let root = paths.root.join("extension-uploads");
+    fs::create_dir_all(&root)?;
+    Ok(tempfile::Builder::new().prefix("video-").tempdir_in(root)?)
+}
+
+fn staging_path(temporary: &tempfile::TempDir) -> PathBuf {
+    temporary.path().join("extension-video.partial")
+}
+
+pub(super) struct StreamUpload {
+    file: tokio::fs::File,
+    temporary: tempfile::TempDir,
+    received: usize,
+    meta: Value,
+    project: Option<String>,
+}
+
+impl StreamUpload {
+    pub(super) async fn start(paths: &LibraryPaths, meta: Value, project: Option<String>) -> Result<Self, UploadError> {
+        validate_metadata(&meta)?;
+        let temporary = create_staging(paths)?;
+        let file = tokio::fs::File::create(staging_path(&temporary)).await?;
+        Ok(Self { file, temporary, received: 0, meta, project })
+    }
+
+    pub(super) async fn write(&mut self, bytes: &[u8]) -> Result<usize, UploadError> {
+        if bytes.is_empty() || bytes.len() > MAX_CHUNK_BYTES { return Err(invalid_video()); }
+        let total = self.received + bytes.len();
+        if total > MAX_BYTES { return Err(UploadError::new("too_large", "视频超过 200 MiB，请选择较小的视频。")); }
+        self.file.write_all(bytes).await?;
+        self.file.flush().await?;
+        self.received = total;
+        Ok(total)
+    }
+
+    pub(super) async fn finish(self, paths: std::sync::Arc<LibraryPaths>, db: std::sync::Arc<Database>, announced: Option<u64>) -> Result<Asset, UploadError> {
+        let Self { file, temporary, received, meta, project } = self;
+        // Close before moving or removing staging files on Windows.
+        let file = file.into_std().await;
+        if announced != Some(received as u64) {
+            drop(file);
+            return Err(invalid_video());
+        }
+        tokio::task::spawn_blocking(move || {
+            file.sync_all()?;
+            drop(file);
+            save_staged(&paths, &db, temporary, received, &meta, project.as_deref())
+        }).await.map_err(UploadError::storage)?
+    }
+}
+
+fn save_staged(paths: &LibraryPaths, db: &Database, temporary: tempfile::TempDir, length: usize, meta: &Value, project: Option<&str>) -> Result<Asset, UploadError> {
+    if length == 0 || meta.get("byte_length").and_then(Value::as_u64).is_some_and(|declared| declared != length as u64) {
+        return Err(invalid_video());
+    }
+    let partial = staging_path(&temporary);
+    let mut header = Vec::with_capacity(4096);
+    fs::File::open(&partial)?.take(4096).read_to_end(&mut header)?;
+    let ext = extension(&header, length)?;
     let _lock = SAVE_LOCK.lock().unwrap();
     if let Some(id) = project {
         if db.get_project(id)?.is_none() { return Err(UploadError::new("project_unavailable", "采集目标项目已不存在，请重新选择项目后采集。")); }
     }
     let destination = paths.for_project(db, project)?;
-    let temporary_root = paths.root.join("extension-uploads");
-    fs::create_dir_all(&temporary_root)?;
-    let temporary = tempfile::Builder::new().prefix("video-").tempdir_in(&temporary_root)?;
     let source = temporary.path().join(format!("extension-video.{ext}"));
-    let mut file = fs::File::create(&source)?;
-    file.write_all(bytes)?; file.sync_all()?; drop(file);
+    fs::rename(partial, &source)?;
     let probed = crate::media::probe::probe(&source).map_err(|error| UploadError { diagnostic: error.to_string(), ..invalid_video() })?;
     if probed.width == 0 || probed.height == 0 || !probed.duration.is_finite() || probed.duration <= 0.0 { return Err(invalid_video()); }
 

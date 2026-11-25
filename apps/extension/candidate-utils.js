@@ -33,25 +33,53 @@
     }
   }
 
+  function srcsetRank(descriptors) {
+    let width;
+    let density;
+    let height;
+    for (const descriptor of descriptors.match(/[^\t\n\f\r ]+/g) || []) {
+      const amount = Number(descriptor.slice(0, -1));
+      if (!Number.isFinite(amount)) return null;
+      if (/^\d+w$/.test(descriptor) && amount > 0 && width === undefined) {
+        width = amount;
+      } else if (/^-?(?:\d+|\d*\.\d+)(?:[eE][+-]?\d+)?x$/.test(descriptor)
+          && amount >= 0 && density === undefined) {
+        density = amount;
+      } else if (/^\d+h$/.test(descriptor) && amount > 0 && height === undefined) {
+        height = amount;
+      } else {
+        return null;
+      }
+    }
+    if (width !== undefined && density !== undefined) return null;
+    if (height !== undefined && width === undefined) return null;
+    return width !== undefined ? { type: "w", score: width } : { type: "x", score: density ?? 1 };
+  }
+
   function parseSrcset(value, base) {
-    const entries = String(value || "")
-      .split(",")
-      .map((part) => {
-        const bits = part.trim().split(/\s+/);
-        const normalized = normalizeCandidateUrl(bits[0], base);
-        if (!normalized) return null;
-        const descriptor = bits[1] || "1x";
-        const type = descriptor.endsWith("w") ? "w" : "x";
-        const score = Number.parseFloat(descriptor) || (type === "x" ? 1 : 0);
-        return { ...normalized, type, score };
-      })
-      .filter(Boolean);
-    // 标准 srcset 不混用 w/x；遇到异常混用时优先宽度候选（最能代表原图尺寸）。
-    const comparable = entries.some((item) => item.type === "w")
-      ? entries.filter((item) => item.type === "w")
-      : entries;
-    comparable.sort((a, b) => b.score - a.score);
-    return comparable[0] || null;
+    const input = String(value || "");
+    const urlToken = /[\t\n\f\r ,]*([^\t\n\f\r ]+)/y;
+    // A descriptor can contain commas inside parentheses. Those commas do not split candidates.
+    const descriptorToken = /((?:[^,(]|\([^)]*(?:\)|$))*)(?:,|$)/y;
+    let best = null;
+    let match;
+    while ((match = urlToken.exec(input))) {
+      const url = match[1].replace(/,+$/, "");
+      let descriptors = "";
+      if (url === match[1]) {
+        descriptorToken.lastIndex = urlToken.lastIndex;
+        descriptors = descriptorToken.exec(input)[1];
+        urlToken.lastIndex = descriptorToken.lastIndex;
+      }
+      const normalized = normalizeCandidateUrl(url, base);
+      const rank = srcsetRank(descriptors);
+      if (!normalized || !rank) continue;
+      // Prefer the largest width, even if the page mixes width and density candidates.
+      if (!best || (rank.type === best.type ? rank.score > best.score : rank.type === "w")) {
+        best = { ...normalized, ...rank };
+      }
+    }
+    return best;
   }
 
   function candidate(value, base, options) {

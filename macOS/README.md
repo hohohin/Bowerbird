@@ -73,7 +73,7 @@ pnpm tauri dev
 - ProseMirror 中文输入、粘贴、图片 chip 与素材拖拽；
 - 右键“在所在文件夹中显示”能在 Finder 定位文件；
 - “用系统程序打开”正常；
-- Chrome/Chromium 加载 `apps/extension/` 后能连接 `127.0.0.1:39871` 并采集入库；
+- Chrome/Chromium 加载 `apps/extension/` 后能连接 `127.0.0.1:39871` 并采集入库；安装包从该目录取扩展，用户可在「探索 → 浏览器插件」复制安装包内的扩展路径；
 - 未安装 AI CLI 时相应功能置灰，应用不崩溃。
 
 ## Mac DMG 固定打包与交付流程

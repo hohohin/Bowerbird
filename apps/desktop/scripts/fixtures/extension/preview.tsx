@@ -37,9 +37,9 @@ mockWindows("main");
 mockIPC(async (command, args = {}) => {
   w.calls.push({ command, args });
   if (command === "extension_status") {
-    if (w.holdStatus) return new Promise(resolve => { w.resolveStatus = resolve; });
+    if (w.holdStatus) return new Promise(resolve => { w.resolveStatus = (connected: boolean) => resolve({ connected, version: w.version ?? null }); });
     if (w.statusError) throw w.statusError;
-    return w.connected;
+    return { connected: w.connected, version: w.version ?? null };
   }
   if (command === "extension_folder_path") {
     if (w.folderError) throw w.folderError;

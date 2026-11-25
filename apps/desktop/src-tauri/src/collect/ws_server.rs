@@ -6,8 +6,10 @@
 //!   `{ "type": "save_batch", "items": [...] }`                    → `{ "ok": true, "results": [...] }`
 //!   `{ "type": "save_blob", ... }` Text + 下一帧 Binary 图片字节 → `{ "ok": true, "asset_id": "..." }`
 //!   save_blob + media_kind:"video" → 已协商的视频二进制（200 MiB），回执附 media_kind。
+//!   save_blob_start → Binary 小块（逐块确认）→ save_blob_end → 视频入库回执。
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocketUpgrade};
 use axum::extract::State;
@@ -25,41 +27,88 @@ use crate::db::Database;
 pub const ADDR: &str = "127.0.0.1:39871";
 
 /// 扩展连接状态（ws_server 写、`extension_status` command 读，经 lib.rs `manage` 共享）。
-/// 内部 Arc，Clone 共享同一份 last_seen / connected。
 #[derive(Clone)]
 pub struct ExtensionStatus {
     pub(crate) pairing: Arc<super::pairing::Pairing>,
-    last_seen: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
-    connected: Arc<std::sync::atomic::AtomicBool>,
+    connection: Arc<std::sync::Mutex<Connection>>,
+}
+
+#[derive(Default)]
+struct Connection {
+    last_seen: Option<Instant>,
+    version: Option<ExtensionVersion>,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct ExtensionVersion {
+    reported: Option<String>,
+    expected: &'static str,
+    update_required: bool,
+}
+
+#[derive(serde::Serialize)]
+pub struct ExtensionConnection {
+    connected: bool,
+    version: Option<ExtensionVersion>,
+}
+
+fn version_parts(version: &str) -> Option<[u16; 4]> {
+    let mut parts = [0; 4];
+    for (index, part) in version.split('.').enumerate() {
+        if part.is_empty() || part.len() > 5 || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        *parts.get_mut(index)? = part.parse().ok()?;
+    }
+    Some(parts)
+}
+
+impl ExtensionVersion {
+    fn from_ping(version: Option<&str>) -> Self {
+        static EXPECTED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+            let manifest: serde_json::Value = serde_json::from_str(include_str!("../../../../extension/manifest.json"))
+                .expect("extension manifest must be valid JSON");
+            manifest["version"].as_str().expect("extension manifest version is required").to_owned()
+        });
+        let expected = version_parts(&EXPECTED).expect("extension manifest version is invalid");
+        let reported = version.and_then(version_parts);
+        Self {
+            reported: version.filter(|_| reported.is_some()).map(str::to_owned),
+            expected: &EXPECTED,
+            update_required: reported.is_none_or(|reported| reported < expected),
+        }
+    }
 }
 
 impl ExtensionStatus {
     pub fn open(path: &std::path::Path) -> std::io::Result<Self> {
-        Ok(Self { pairing: Arc::new(super::pairing::Pairing::open(path)?), last_seen: Default::default(), connected: Default::default() })
+        Ok(Self { pairing: Arc::new(super::pairing::Pairing::open(path)?), connection: Default::default() })
     }
     /// 收到扩展任意消息（ping/save/save_batch）时调：更新 last_seen；
     /// 返回是否「刚连上」（false→true 跳变），供调用方 emit `collect://extension-connected`。
     pub fn touch(&self) -> bool {
-        *self.last_seen.lock().unwrap() = Some(std::time::Instant::now());
-        !self
-            .connected
-            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        self.connection.lock().unwrap().last_seen.replace(Instant::now()).is_none()
     }
-    pub fn is_connected(&self) -> bool {
-        self.connected.load(std::sync::atomic::Ordering::Relaxed)
+
+    fn report_version(&self, version: Option<&str>) {
+        self.connection.lock().unwrap().version = Some(ExtensionVersion::from_ping(version));
+    }
+
+    pub fn snapshot(&self) -> ExtensionConnection {
+        let connection = self.connection.lock().unwrap();
+        ExtensionConnection { connected: connection.last_seen.is_some(), version: connection.version.clone() }
+    }
+
+    pub fn clear(&self) {
+        *self.connection.lock().unwrap() = Connection::default();
     }
     /// 心跳超时检查：距上次消息超过 `timeout` 且当前 connected → 清 last_seen 并置 false，
     /// 返回是否「刚断开」（true→false 跳变），供 tick task emit `collect://extension-disconnected`。
-    pub fn check_timeout(&self, timeout: std::time::Duration) -> bool {
-        let mut guard = self.last_seen.lock().unwrap();
-        if let Some(t) = *guard {
-            if t.elapsed() > timeout {
-                *guard = None;
-                drop(guard);
-                return self
-                    .connected
-                    .swap(false, std::sync::atomic::Ordering::Relaxed);
-            }
+    pub fn check_timeout(&self, timeout: Duration) -> bool {
+        let mut connection = self.connection.lock().unwrap();
+        if connection.last_seen.is_some_and(|time| time.elapsed() > timeout) {
+            *connection = Connection::default();
+            return true;
         }
         false
     }
@@ -94,8 +143,11 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
     tracing::debug!("collect ws: connection opened");
     // save_blob 两帧协议：先 Text metadata，再 Binary 图片字节（浏览器 background fetch，带 Cookie/代理）。
     let mut pending_upload: Option<(serde_json::Value, Option<String>)> = None;
+    let mut pending_stream: Option<video_blob::StreamUpload> = None;
     while let Ok(Some(Ok(msg))) = tokio::time::timeout(std::time::Duration::from_secs(180), socket.recv()).await {
-        if !state.status.pairing.allow_action(&grant, 1) { break; }
+        // A bounded stream is one upload, but every chunk still checks that the grant remains valid.
+        let cost = usize::from(!(pending_stream.is_some() && matches!(&msg, Message::Binary(_))));
+        if !state.status.pairing.allow_action(&grant, cost) { break; }
         match msg {
             Message::Text(text) => {
                 // 任意消息（ping / save / save_batch / save_blob metadata）= 扩展在线。
@@ -104,6 +156,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                 }
                 if text.len() > 64 * 1024 {
                     pending_upload = None;
+                    pending_stream = None;
                     let _ = socket
                         .send(Message::Text(
                             serde_json::json!({ "ok": false, "error": "metadata exceeds 64 KiB limit" })
@@ -114,20 +167,40 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                 }
                 let parsed = serde_json::from_str::<serde_json::Value>(&text).ok();
                 let kind = parsed.as_ref().and_then(|v| v["type"].as_str());
-                if grant.upload_only && !matches!(kind, Some("save_blob" | "ping")) { break; }
+                if grant.upload_only && !matches!(kind, Some("save_blob" | "save_blob_start" | "save_blob_end" | "ping")) { break; }
+                if kind == Some("ping") && !grant.upload_only {
+                    state.status.report_version(parsed.as_ref().and_then(|v| v["extension_version"].as_str()));
+                }
                 // A second upload or command invalidates the pending pair. Never let
                 // its next Binary frame acquire the first upload's provenance/project.
-                if pending_upload.is_some() && kind != Some("ping") {
+                if (pending_upload.is_some() && kind != Some("ping"))
+                    || (pending_stream.is_some() && !matches!(kind, Some("save_blob_end" | "ping")))
+                {
                     pending_upload = None;
-                    let _ = socket.send(Message::Text(serde_json::json!({"ok":false,"code":"protocol_error","error":"采集消息顺序异常，请重新采集。"}).to_string())).await;
+                    pending_stream = None;
+                    let _ = socket.send(Message::Text(protocol_error())).await;
                     continue;
                 }
-                if parsed
-                    .as_ref()
-                    .and_then(|v| v.get("type"))
-                    .and_then(|v| v.as_str())
-                    == Some("save_blob")
-                {
+                if kind == Some("save_blob_start") {
+                    let meta = parsed.unwrap();
+                    let reply = match video_blob::StreamUpload::start(&state.paths, meta, state.active_project.get()).await {
+                        Ok(upload) => {
+                            pending_stream = Some(upload);
+                            serde_json::json!({"ok":true,"received":0}).to_string()
+                        }
+                        Err(error) => video_error(error),
+                    };
+                    if socket.send(Message::Text(reply)).await.is_err() { break; }
+                } else if kind == Some("save_blob_end") {
+                    let reply = match pending_stream.take() {
+                        Some(upload) => {
+                            let length = parsed.as_ref().and_then(|value| value["byte_length"].as_u64());
+                            video_save_reply(upload.finish(state.paths.clone(), state.db.clone(), length).await, &state)
+                        }
+                        None => protocol_error(),
+                    };
+                    if socket.send(Message::Text(reply)).await.is_err() || grant.upload_only { break; }
+                } else if kind == Some("save_blob") {
                     if let Some(meta) = &parsed {
                         if meta["media_kind"] == "video" {
                             if let Err(error) = video_blob::validate_metadata(meta) {
@@ -151,12 +224,29 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                 }
             }
             Message::Binary(bytes) => {
+                if let Some(stream) = &mut pending_stream {
+                    state.status.touch();
+                    let reply = match stream.write(bytes.as_ref()).await {
+                        Ok(received) => serde_json::json!({"ok":true,"received":received}).to_string(),
+                        Err(error) => {
+                            pending_stream = None;
+                            video_error(error)
+                        }
+                    };
+                    if socket.send(Message::Text(reply)).await.is_err() || (pending_stream.is_none() && grant.upload_only) {
+                        break;
+                    }
+                    continue;
+                }
                 let resp = match pending_upload.take() {
                     Some((meta, project_id)) if meta["media_kind"] == "video" => {
                         let state = state.clone();
                         // Metadata probe, poster and filesystem work must not block the
                         // async socket executor while another client sends its heartbeat.
-                        tokio::task::spawn_blocking(move || handle_video_blob(bytes.as_ref(), &meta, project_id.as_deref(), &state)).await
+                        tokio::task::spawn_blocking(move || {
+                            let result = video_blob::save(&state.paths, &state.db, bytes.as_ref(), &meta, project_id.as_deref());
+                            video_save_reply(result, &state)
+                        }).await
                             .unwrap_or_else(|error| { tracing::error!("video upload worker: {error}"); serde_json::json!({"ok":false,"code":"save_failed","error":"视频未能保存，请稍后重试。"}).to_string() })
                     }
                     Some((meta, project_id)) if bytes.len() <= 50 * 1024 * 1024 => {
@@ -182,13 +272,17 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
     tracing::debug!("collect ws: connection closed");
 }
 
+fn protocol_error() -> String {
+    serde_json::json!({"ok":false,"code":"protocol_error","error":"采集消息顺序异常，请重新采集。"}).to_string()
+}
+
 fn video_error(error: video_blob::UploadError) -> String {
     tracing::warn!("extension video {}: {}", error.code, error.diagnostic);
     serde_json::json!({"ok":false,"code":error.code,"error":error.message}).to_string()
 }
 
-fn handle_video_blob(bytes: &[u8], meta: &serde_json::Value, project: Option<&str>, state: &AppState) -> String {
-    match video_blob::save(&state.paths, &state.db, bytes, meta, project) {
+fn video_save_reply(result: Result<crate::core::library::Asset, video_blob::UploadError>, state: &AppState) -> String {
+    match result {
         Ok(asset) => {
             let _ = state.app.emit("library://assets-changed", ());
             for path in [&asset.store_path, &asset.thumb_path].into_iter().flatten() {
@@ -300,8 +394,8 @@ async fn handle_message(text: &str, state: &AppState) -> String {
             Err(_) => serde_json::json!({"ok":false,"error":"project unavailable"}).to_string(),
         },
         "ping" => {
-            let _ = state.app.emit("collect://extension-connected", ());
-            serde_json::json!({"ok":true,"pong":true,"capabilities":{"video_blob":true,"video_max_bytes":video_blob::MAX_BYTES}}).to_string()
+            let _ = state.app.emit("collect://extension-connected", state.status.snapshot().version);
+            serde_json::json!({"ok":true,"pong":true,"capabilities":{"video_blob":true,"video_stream_upload":true,"video_max_bytes":video_blob::MAX_BYTES}}).to_string()
         }
         "save" => {
             if v["media_kind"] == "video" {

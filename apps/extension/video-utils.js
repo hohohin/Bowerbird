@@ -1,6 +1,29 @@
 (function (root) {
   "use strict";
   const MAX_BYTES = 200 * 1024 * 1024;
+  const AVIF_BRANDS = new Set(["avif", "avis"]);
+  const HEIC_BRANDS = new Set(["heic", "heix", "heif", "heim", "heis", "mif1", "msf1"]);
+  const ascii = (bytes, start, end) => String.fromCharCode(...bytes.subarray(start, end));
+
+  function bmffImageFormat(bytes) {
+    if (bytes.length < 16 || ascii(bytes, 4, 8) !== "ftyp") return null;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let size = view.getUint32(0);
+    const brandOffset = size === 1 ? 16 : 8;
+    if (bytes.length < brandOffset + 8) return null;
+    if (size === 1) size = Number(view.getBigUint64(8));
+    if (size !== 0 && size < brandOffset + 8) return null;
+    const major = ascii(bytes, brandOffset, brandOffset + 4);
+    if (AVIF_BRANDS.has(major)) return "avif";
+    let heic = HEIC_BRANDS.has(major);
+    const end = Math.min(size || bytes.length, bytes.length, 4096);
+    for (let offset = brandOffset + 8; offset + 4 <= end; offset += 4) {
+      const brand = ascii(bytes, offset, offset + 4);
+      if (AVIF_BRANDS.has(brand)) return "avif";
+      if (HEIC_BRANDS.has(brand)) heic = true;
+    }
+    return heic ? "heic" : null;
+  }
   function candidate(raw, pageUrl, options = {}) {
     if (!raw || String(raw).length > (/^data:video\//i.test(raw) ? Math.ceil(MAX_BYTES*4/3)+4096 : 16384)) return null;
     let url;
@@ -13,13 +36,13 @@
   }
   function format(bytes) {
     const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    const ascii = (start,end) => String.fromCharCode(...b.slice(start,end));
-    if (b.length >= 12 && ascii(4,8) === "ftyp") {
-      if (["avif","avis","heic","heix","heim","heis","mif1","msf1"].includes(ascii(8,12))) return null;
-      return ascii(8,12) === "qt  " ? "mov" : "mp4";
+    if (b.length >= 12 && ascii(b,4,8) === "ftyp") {
+      const brand = ascii(b,8,12);
+      if (bmffImageFormat(b) || AVIF_BRANDS.has(brand) || HEIC_BRANDS.has(brand)) return null;
+      return ascii(b,8,12) === "qt  " ? "mov" : "mp4";
     }
     if (b.length >= 4 && b[0]===26 && b[1]===69 && b[2]===223 && b[3]===163) return "webm";
-    if (b.length >= 12 && ascii(0,4)==="RIFF" && ascii(8,12)==="AVI ") return "avi";
+    if (b.length >= 12 && ascii(b,0,4)==="RIFF" && ascii(b,8,12)==="AVI ") return "avi";
     return null;
   }
   function stream(bytes) {
@@ -59,5 +82,5 @@
     const urls=[...variants.map(item=>item.masterUrl || item.master_url || item.url),note.video?.url,note.video?.playUrl];
     return urls.map(url=>candidate(url,pageUrl,{source:"xhs-video",name:note.title || "小红书视频"})).find(Boolean) || null;
   }
-  root.BowerbirdVideo = { MAX_BYTES,candidate,format,stream,read,element,xhs };
+  root.BowerbirdVideo = { MAX_BYTES,candidate,format,bmffImageFormat,stream,read,element,xhs };
 })(globalThis);

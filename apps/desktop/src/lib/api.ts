@@ -67,6 +67,10 @@ import type {
   TagCount,
 } from "./types";
 
+export type ExtensionVersion = { reported: string | null; expected: string; update_required: boolean };
+
+const extensionConnection = () => invoke<{ connected: boolean; version: ExtensionVersion | null }>("extension_status");
+
 const IMAGE_EXT = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif"];
 
 export interface SourceBrowserBounds {
@@ -645,7 +649,8 @@ export const api = {
   recoverCloudVideo: (jobId: string) => invoke<void>("recover_cloud_video", { jobId }),
   // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。
   pairExtension: (code: string) => invoke<void>("pair_extension", { code }),
-  extensionStatus: () => invoke<boolean>("extension_status"),
+  extensionStatus: async () => (await extensionConnection()).connected,
+  extensionConnection,
   extensionFolderPath: () => invoke<string>("extension_folder_path"),
   // 设置
   getSettings: () => invoke<AppSettings>("get_settings"),

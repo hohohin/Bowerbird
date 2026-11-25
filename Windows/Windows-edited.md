@@ -11,7 +11,7 @@
 - `Windows/prepare.ps1` 会把 canonical 项目复制到 `Windows/.work/`，不再应用 override。
 - `Windows/.work/` 和 `Windows/.cargo-target-*` 是生成目录，不是手写源码。
 - `Windows/dist/` 存放最终 Windows 安装包。
-- `Windows/extension/` 是供 Chrome / Edge 直接“加载已解压的扩展程序”的独立扩展目录。
+- Chrome / Edge 可以直接加载 `apps/extension/`。Windows 安装包从同一目录打包扩展，原 `Windows/extension/` 目录已退役。
 
 ## 2. Windows 构建与运行脚本
 
@@ -105,6 +105,8 @@
 ```
 
 ### `Windows/extension/manifest.json`
+
+以下文件是 Windows 扩展独立副本的历史记录。现行安装、通信和验证入口见 [Bowerbird Collect](../apps/extension/README.md)。
 
 - 注册 Manifest V3 `background.js` service worker。
 - 保留 `<all_urls>` host permission，使扩展后台可以读取网页图片。
@@ -252,6 +254,6 @@
 
 1. 桌面端源码和扩展协议同时修改，升级时必须同时更新两部分。
 2. 完全退出旧 Bowerbird 后运行 `Windows/dist/Bowerbird_0.1.0_x64-setup.exe`。
-3. 在 `chrome://extensions` 或 `edge://extensions` 中重新加载 `Windows/extension/`。
+3. 从「探索 → 浏览器插件」复制插件目录，或使用 `apps/extension/`。在 `chrome://extensions` 或 `edge://extensions` 加载后配对。若原目录已加载且只更新了文件，点击「重新加载」并刷新采集网页。
 4. 刷新待采集网页，让新的 content script 生效。
 5. 旧版本已经误入库的 `extension-image` HTML 记录不是真图片，无法恢复；为避免擅自删除用户库数据，本次没有自动清理，可在 App 内手动删除。

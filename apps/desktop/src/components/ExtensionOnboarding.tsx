@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { CheckCircle2, ChevronDown, Copy, LoaderCircle, RefreshCw, Unplug, X } from "lucide-react";
 import { useStore } from "../store";
-import { api } from "../lib/api";
+import { api, type ExtensionVersion } from "../lib/api";
 import { userErrorMessage } from "../lib/userError";
 import guide1 from "../assets/bowerbird-extension-guide-1.gif";
 import guide2 from "../assets/bowerbird-extension-guide-2.gif";
@@ -50,6 +50,7 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
   const [pairing, setPairing] = useState(false);
   const [checking, setChecking] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [version, setVersion] = useState<ExtensionVersion | null>(null);
   const [showTutorial, setShowTutorial] = useState(false);
   const [browser, setBrowser] = useState<Browser>("Chrome");
   const [folderPath, setFolderPath] = useState("");
@@ -72,11 +73,14 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
     setChecking(true);
     setStatusError(null);
     try {
-      const result = await api.extensionStatus();
+      const result = await api.extensionConnection();
       if (!alive.current || currentRequest !== request.current) return;
       // A live connection event received during this query is newer than its snapshot.
-      const current = revision === connectionRevision.current ? result : useStore.getState().extensionConnected;
-      if (revision === connectionRevision.current) useStore.getState().setExtensionConnected(current);
+      const current = revision === connectionRevision.current ? result.connected : useStore.getState().extensionConnected;
+      if (revision === connectionRevision.current) {
+        useStore.getState().setExtensionConnected(current);
+        setVersion(result.version);
+      }
       if (initial) setShowTutorial(!current);
     } catch (error) {
       if (!alive.current || currentRequest !== request.current) return;
@@ -115,15 +119,17 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
         setStatusError(null);
       }
     });
-    const recordConnection = (value: boolean) => {
+    const recordConnection = (value: boolean, reportedVersion?: ExtensionVersion | null) => {
       if (!active) return;
       // Repeated heartbeats are newer evidence even when the boolean stays the same.
       connectionRevision.current += 1;
       useStore.getState().setExtensionConnected(value);
+      if (!value) setVersion(null);
+      else if (reportedVersion) setVersion(reportedVersion);
       setStatusError(null);
     };
     void Promise.allSettled([
-      listen("collect://extension-connected", () => recordConnection(true)),
+      listen<ExtensionVersion | null>("collect://extension-connected", event => recordConnection(true, event.payload)),
       listen("collect://extension-disconnected", () => recordConnection(false)),
     ].map(registration => registration.then(unlisten => {
       if (active) unlisteners.push(unlisten);
@@ -171,6 +177,13 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const updateAvailable = connected && version?.update_required;
+  const connectionDescription = checking ? "正在检查浏览器与应用的连接。"
+    : statusError ? "可继续查看安装教程，稍后再检查连接。"
+    : updateAvailable ? `已连接${version.reported ? ` ${version.reported}` : "旧版"}插件。请在扩展管理页重新加载 ${version.expected}，再刷新采集网页。若插件未更新，请使用下方教程中的插件目录。`
+    : connected ? "已收到浏览器插件的连接信号，可以开始采集。"
+    : "未连接不代表未安装。请保持应用运行，并在浏览器中打开或刷新一个普通网页。";
+
   return <>
     <ModalShell title="浏览器插件" eyebrow="Browser collection" description="在 Chrome 或 Edge 中采集网页图片和视频。" width="lg" className="extension-setup" preventClose={zoom !== null} onClose={onClose}
       footer={<button type="button" onClick={onClose} className="app-modal-button">完成</button>}>
@@ -179,7 +192,7 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
           {checking ? <LoaderCircle size={19} className="animate-spin" aria-hidden /> : connected && !statusError ? <CheckCircle2 size={19} aria-hidden /> : <Unplug size={19} aria-hidden />}
           <div>
             <strong>{checking ? "正在检测…" : statusError ? "暂时无法确认连接状态" : connected ? "已连接" : "未连接"}</strong>
-            <p>{checking ? "正在检查浏览器与应用的连接。" : statusError ? "可继续查看安装教程，稍后再检查连接。" : connected ? "已收到浏览器插件的连接信号，可以开始采集。" : "未连接不代表未安装。请保持应用运行，并在浏览器中打开或刷新一个普通网页。"}</p>
+            <p>{connectionDescription}</p>
           </div>
         </div>
         <button type="button" onClick={() => void checkConnection()} disabled={checking} className="app-modal-button"><RefreshCw size={14} aria-hidden />{checking ? "正在检测…" : "重新检测"}</button>

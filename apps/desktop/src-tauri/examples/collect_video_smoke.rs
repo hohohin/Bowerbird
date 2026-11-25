@@ -14,6 +14,8 @@
 #[path = "../src/media/mod.rs"] mod media;
 #[path = "../src/prompt/mod.rs"] mod prompt;
 #[path = "../src/quick_transfer/mod.rs"] mod quick_transfer;
+#[cfg(windows)]
+#[path = "../src/windows_shell.rs"] mod windows_shell;
 use std::{path::PathBuf, sync::Arc};
 
 fn main() {
@@ -48,14 +50,21 @@ fn main() {
                 if std::time::Instant::now() >= deadline { handle.exit(2); return; }
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
-            let server = tokio::spawn(collect::ws_server::serve_listener(listener, paths, db.clone(), handle.clone(), collect::ws_server::ExtensionStatus::open(&root.join("fixture-pair.txt")).unwrap(), active));
+            let status = collect::ws_server::ExtensionStatus::open(&root.join("fixture-pair.txt")).unwrap();
+            let server = tokio::spawn(collect::ws_server::serve_listener(listener, paths, db.clone(), handle.clone(), status.clone(), active));
             std::fs::write(root.join("ready.json"), endpoint).unwrap();
             let started = std::time::Instant::now();
+            let mut previous_status = String::new();
             while !root.join("stop").exists() && started.elapsed().as_secs() < 90 {
+                let current = serde_json::to_string(&status.snapshot()).unwrap();
+                if current != previous_status {
+                    std::fs::write(root.join("status.json"), &current).unwrap();
+                    previous_status = current;
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
-            let assets = db.list_assets(None, None, 20, 0).unwrap();
-            let members = db.list_assets(None, Some("fixture-project"), 20, 0).unwrap();
+            let assets = db.list_assets(None, None, 100, 0).unwrap();
+            let members = db.list_assets(None, Some("fixture-project"), 100, 0).unwrap();
             std::fs::write(root.join("result.json"), serde_json::json!({"assets": assets, "members": members}).to_string()).unwrap();
             server.abort();
             handle.exit(if root.join("stop").exists() { 0 } else { 2 });

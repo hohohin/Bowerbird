@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
@@ -113,165 +114,85 @@ test("desktop disconnect before upload is unavailable; disconnect/timeout after 
   assert.equal((await unknown).code, "result_unknown");
 });
 
-function contentFixture({ urls = [], xhsState, remote, localResult = { ok: true } } = {}) {
-  const nodes = [];
-  const documentListeners = {};
-  class Element {
-    constructor(tag) { this.tagName = tag.toUpperCase(); this.style = {}; this.attributes = {}; this.listeners = {}; this.children = []; }
-    append(...children) { this.children.push(...children); }
-    attachShadow() { this.shadow = new Element("div"); return this.shadow; }
-    appendChild(child) { this.append(child); }
-    remove() { this.removed = true; }
-    setAttribute(key, value) { this.attributes[key] = value; }
-    getAttribute(key) { return this.attributes[key] || ""; }
-    addEventListener(name, fn) { this.listeners[name] = fn; }
-    closest() { return null; }
-    getBoundingClientRect() { return { width: 600, height: 400 }; }
-  }
-  const images = urls.map((url) => Object.assign(new Element("img"), { currentSrc: url, naturalWidth: 600, naturalHeight: 400 }));
-  const page = xhsState ? "https://www.xiaohongshu.com/explore/note-id" : "https://site.test/page";
-  const document = {
-    baseURI: page,
-    scripts: xhsState ? [{ textContent: `window.__INITIAL_STATE__=${JSON.stringify(xhsState)}` }] : [],
-    createElement: (tag) => { const node = new Element(tag); nodes.push(node); return node; },
-    documentElement: new Element("html"),
-    getElementById: (id) => nodes.findLast((node) => node.id === id && !node.removed),
-    querySelectorAll: (selector) => selector === "img" || selector === "*" ? images : [],
-    addEventListener: (name, fn) => { documentListeners[name] = fn; },
-  };
-  const fetched = [];
-  const uploads = [];
-  class Socket {
-    constructor() { queueMicrotask(() => this.onopen?.()); }
-    send(value) {
-      if (typeof value === "string") {
-        this.metadata = JSON.parse(value);
-        if (this.metadata.type === "ping") queueMicrotask(() => this.onmessage?.({ data: '{"ok":true,"pong":true}' }));
-      } else {
-        uploads.push(this.metadata);
-        queueMicrotask(() => this.onmessage?.({ data: JSON.stringify(localResult) }));
-      }
-    }
-    close() { this.onclose?.(); }
-  }
-  const messages = [];
-  const { context, timers } = runtime({
-    document, Element, window: {}, location: new URL(page), WebSocket: Socket,
-    getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1", backgroundImage: "none" }),
-    fetch: async (url) => {
-      fetched.push(url);
-      return { ok: true, headers: { get: (key) => key === "content-type" ? "image/png" : "8" }, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]).buffer };
-    },
-    chrome: { runtime: {
-      getURL: (url) => `chrome-extension://fixture/${url}`,
-      sendMessage: (message, cb) => {
-        if (message.type === "current_project") { cb({ok:true,name:"春季画册"}); return; }
-        if (message.type === "button_position_get") { cb({ position: null }); return; }
-        if (message.type === "button_position_set") { cb({ ok: true }); return; }
-        if (message.type === "collect_heartbeat" || message.type === "collect_access") { cb({ok:true,protocols:["bowerbird-v1","fixture"]}); return; }
-        messages.push(message); if (remote) remote(message, cb); else cb({ ok: true });
-      },
-    } },
-  });
-  vm.runInContext(source("candidate-utils.js"), context);
-  vm.runInContext(source("video-utils.js"), context);
-  vm.runInContext(source("content.js"), context);
-  const button = document.documentElement.children[0];
-  const openMenu = () => button.listeners.click({ isTrusted: true });
-  const startImages = async () => {
-    openMenu();
-    const menu = document.getElementById("__bowerbird_menu");
-    await menu.children.find(item => item.textContent === "采集本页图片").listeners.click({ isTrusted: true });
-  };
-  const confirm = async () => {
-    await startImages();
-    const card = document.getElementById("__bowerbird_confirm");
-    card.children[1].children[1].listeners.click({ isTrusted: true });
-    await flush();
-  };
-  return { document, button, nodes, messages, fetched, uploads, confirm, startImages, openMenu, documentListeners, timers };
+function messageEvent() {
+  const listeners = [];
+  return { addListener(fn) { listeners.push(fn); }, dispatch(...args) { return listeners.map(fn => fn(...args)); } };
 }
 
-test("real content click/confirmation saves mixed HTTP/blob/data batch with correct partial summary", async () => {
-  const fixture = contentFixture({
-    urls: ["https://cdn.test/a.jpg", "blob:https://site.test/b", "data:image/png;base64,AA=="],
-    remote: (_m, cb) => cb({ ok: false, error: "HTTP 403 private-data" }),
-  });
-  await fixture.confirm();
-  assert.equal(fixture.messages.length, 1);
-  assert.equal(fixture.fetched.length, 2);
-  assert.equal(fixture.uploads.length, 2);
-  assert.ok(fixture.uploads.every((meta) => meta.page_url === "https://site.test/page"));
-  const text = fixture.document.getElementById("__bowerbird_toast").textContent;
-  assert.match(text, /已保存 2 张，失败 1 张/);
-  assert.doesNotMatch(text, /private-data/);
-});
-
-test("content busy guard blocks repeat click, drop and Alt while an upload is pending", async () => {
-  let done;
-  const fixture = contentFixture({ urls: ["https://cdn.test/a.jpg"], remote: (_m, cb) => { done = cb; } });
-  await fixture.confirm();
-  await fixture.button.listeners.click({isTrusted:true});
-  await fixture.button.listeners.drop({ isTrusted:true, preventDefault() {}, dataTransfer: { getData() { throw new Error("busy drop must not read"); } } });
-  await fixture.documentListeners.click({ isTrusted:true, altKey: true, composedPath() { throw new Error("busy Alt must not scan"); } });
-  assert.equal(fixture.messages.length, 1);
-  assert.equal(fixture.document.getElementById("__bowerbird_confirm"), undefined);
-  assert.match(fixture.document.getElementById("__bowerbird_toast").textContent, /采集中 0\/1/);
-  done({ ok: true });
-  await flush();
-  assert.equal(fixture.button.attributes["aria-busy"], "false");
-});
-
-test("real XHS detail path keeps image order and note URL while limiting confirmation/upload to 100", async () => {
-  const imageList = Array.from({ length: 110 }, (_, i) => ({ urlDefault: `https://sns.xhscdn.com/${i}.jpg` }));
-  const fixture = contentFixture({ xhsState: { note: { noteDetailMap: { "note-id": { note: { type: "normal", imageList } } } } } });
-  await fixture.startImages();
-  const card = fixture.document.getElementById("__bowerbird_confirm");
-  assert.match(card.children[0].textContent, /110.*100/);
-  card.children[1].children[1].listeners.click({isTrusted:true});
-  for (let i = 0; i < 15; i += 1) await flush();
-  assert.equal(fixture.messages.length, 100);
-  assert.equal(fixture.messages[99].url, "https://sns.xhscdn.com/99.jpg");
-  assert.ok(fixture.messages.every((message) => message.pageUrl === "https://www.xiaohongshu.com/explore/note-id"));
-});
-
-function backgroundFixture(fetch, videoSupport = true) {
-  let listener;
+function backgroundFixture(fetch, videoSupport = true, receipt, pairing) {
+  const onMessage = messageEvent();
+  const onConnect = messageEvent();
   const uploads = [];
+  const sockets = [];
+  const pings = [];
   const stored = {};
+  let now = 0;
+  let proofs = 0;
   const storage = { local: {
     get: (key, callback) => callback({ [key]: stored[key] }),
     set: (value, callback) => { Object.assign(stored, value); callback?.(); },
   } };
   class Socket {
-    constructor() { queueMicrotask(() => this.onopen?.()); }
+    static OPEN = 1;
+    constructor() {
+      this.readyState = 0;
+      sockets.push(this);
+      queueMicrotask(() => { this.readyState = Socket.OPEN; this.onopen?.(); });
+    }
     send(value) {
       if (typeof value === "string") {
         this.metadata = JSON.parse(value);
-        if(this.metadata.type==="ping") queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({ok:true,pong:true,...(videoSupport ? {capabilities:{video_blob:true,video_max_bytes:209715200}} : {})})}));
+        if (this.metadata.type === "ping") {
+          pings.push(this.metadata);
+          this.reply({ok:true,pong:true,...(videoSupport ? {capabilities:{video_blob:true,video_max_bytes:209715200}} : {})});
+        }
       }
       else {
         uploads.push({ metadata: this.metadata, bytes: value });
-        queueMicrotask(() => this.onmessage?.({ data: JSON.stringify({ok:true,asset_id:"fixture",...(this.metadata.media_kind==="video" ? {media_kind:"video"} : {})}) }));
+        if (receipt) receipt(this, this.metadata);
+        else this.reply({ok:true,asset_id:"fixture",...(this.metadata.media_kind==="video" ? {media_kind:"video"} : {})});
       }
     }
-    close() { this.onclose?.(); }
+    reply(value) { queueMicrotask(() => this.onmessage?.({data:JSON.stringify(value)})); }
+    close() { if (this.readyState !== 3) { this.readyState = 3; this.onclose?.(); } }
   }
-  const { context, timers } = runtime({
-    fetch, WebSocket: Socket,
-    chrome: { storage, runtime: { id: "fixture", onMessage: { addListener: (fn) => { listener = fn; } } } },
+  const sender = tabId => ({ id: "fixture", tab: { id: tabId }, url: "https://site.test/page" });
+  const { context, timers, api } = runtime({
+    fetch, WebSocket: Socket, performance: { now: () => now },
+    fixturePairing: {
+      proof: async () => { proofs += 1; return { ok: true, protocols: ["bowerbird-v2", "fixture"] }; },
+      load: async () => ({publicKey:"public-key"}),
+      generate: async () => ({publicKey:"generated-key"}),
+      ...pairing,
+    },
+    chrome: { storage, runtime: { id: "fixture", getManifest: () => ({version:"1.2.3"}), getURL: path => `chrome-extension://fixture/${path}`, onMessage, onConnect,
+      connect({ name }) {
+        let closed = false;
+        const events = [messageEvent(), messageEvent()];
+        const disconnects = [messageEvent(), messageEvent()];
+        const ports = events.map((event, side) => ({ name, sender: sender(1), onMessage: event, onDisconnect: disconnects[side],
+          postMessage(message) {
+            if (closed) throw new Error("Port closed");
+            queueMicrotask(() => { if (!closed) events[1 - side].dispatch(message); });
+          },
+          disconnect() { if (!closed) { closed = true; disconnects[1 - side].dispatch(); } },
+        }));
+        queueMicrotask(() => onConnect.dispatch(ports[1]));
+        return ports[0];
+      },
+    } },
   });
-  context.importScripts = (...names) => names.forEach(name=>vm.runInContext(name === "pairing.js" ? 'const BowerbirdPairing={ proof:async()=>({ok:true,protocols:["bowerbird-v1","fixture"]}), load:async()=>({publicKey:"public-key"}), generate:async()=>({publicKey:"generated-key"}) };' : source(name), context));
+  context.importScripts = (...names) => names.forEach(name=>vm.runInContext(name === "pairing.js" ? 'const BowerbirdPairing = fixturePairing;' : source(name), context));
   vm.runInContext(source("background.js"), context);
+  const dispatch = (value, tabId, overrides, respond) => onMessage.dispatch(value, { ...sender(tabId), ...overrides }, respond).includes(true);
+  const message = (value, tabId = 1, overrides) => new Promise(resolve => {
+    assert.ok(dispatch(value, tabId, overrides, resolve));
+  });
   return {
-    uploads, timers, stored,
-    send: (message) => new Promise((resolve) => {
-      assert.equal(listener({ type: "save_image", ...message }, {}, resolve), true);
-    }),
-    message: (message) => new Promise((resolve) => {
-      assert.equal(listener(message, { id: "fixture" }, resolve), true);
-    }),
-    rejected: (message) => listener(message, { id: "fixture" }, () => {}),
+    api, uploads, sockets, pings, timers, message, dispatch,
+    send: value => message({ type: "save_image", ...value }),
+    time: value => { now = value; },
+    proofCount: () => proofs,
   };
 }
 
@@ -309,28 +230,190 @@ test("actual background fetch abort has no upload and is reported as a read time
   assert.equal(fixture.uploads.length, 0);
 });
 
-test("packaged manifest loads all content dependencies and Windows runtime stays identical", () => {
-  const manifest = JSON.parse(source("manifest.json"));
-  assert.equal(manifest.version, "0.5.1");
-  assert.deepEqual(manifest.content_scripts[0].js, ["candidate-utils.js", "collection-utils.js", "video-utils.js", "content.js"]);
-  for (const file of ["manifest.json", "candidate-utils.js", "collection-utils.js", "video-utils.js", "content.js", "background.js", "pairing.js", "options.html", "options.js"]) {
-    assert.equal(source(file), readFileSync(new URL(`../../Windows/extension/${file}`, import.meta.url), "utf8"), file);
-  }
+test("20 tabs share one authenticated heartbeat and receive the browser-wide cooldown", async () => {
+  const fixture = backgroundFixture(() => { throw new Error("heartbeat does not read images"); });
+  const ping = { type: "collect_heartbeat" };
+  const results = await Promise.all(Array.from({length:20}, (_, index) => fixture.message(ping, index + 1)));
+  assert.equal(fixture.proofCount(), 1);
+  assert.equal(fixture.sockets.length, 1);
+  assert.deepEqual(fixture.pings, [{ type: "ping", extension_version: "1.2.3" }]);
+  assert.ok(results.every(result => result.ok && result.retryAfterMs === 15000));
+  fixture.time(14999);
+  assert.equal((await fixture.message(ping)).retryAfterMs, 1);
+  assert.equal(fixture.proofCount(), 1);
+  fixture.time(15000);
+  assert.equal((await fixture.message(ping)).retryAfterMs, 15000);
+  assert.equal(fixture.proofCount(), 2);
 });
 
-test("content opens a secondary menu for image, video and settings without downloading", () => {
-  const fixture=contentFixture();
-  assert.equal(fixture.nodes.filter(node=>node.id==="__bowerbird_menu").length,0);
-  fixture.openMenu();
-  const menu=fixture.document.getElementById("__bowerbird_menu");
-  assert.ok(menu);
-  assert.equal(menu.attributes.role,"menu");
-  const project = menu.children[0].shadow.children[0];
-  assert.equal(project.textContent, "当前项目：春季画册");
-  assert.equal(project.title, "采集图将进入该项目的画布中");
-  assert.deepEqual(menu.children.slice(1).map(item=>item.textContent),["采集本页图片","采集本页视频","设置"]);
-  assert.equal(fixture.messages.length,0);
-  assert.equal(fixture.button.attributes["aria-expanded"],"true");
+test("authenticated operations import the private signing key once until rotation", async () => {
+  const changes = messageEvent();
+  let key;
+  let imports = 0;
+  const { context } = runtime({
+    AbortSignal, TextEncoder,
+    crypto: {
+      getRandomValues: value => webcrypto.getRandomValues(value),
+      subtle: {
+        generateKey: (...args) => webcrypto.subtle.generateKey(...args),
+        exportKey: (...args) => webcrypto.subtle.exportKey(...args),
+        sign: (...args) => webcrypto.subtle.sign(...args),
+        importKey: (...args) => { imports += 1; return webcrypto.subtle.importKey(...args); },
+      },
+    },
+    chrome: { storage: { onChanged: changes, local: {
+      setAccessLevel: async () => {},
+      get: async () => ({ collectionKey: key }),
+      set: async ({collectionKey}) => { key = collectionKey; changes.dispatch({ collectionKey: {} }, "local"); },
+    } } },
+    fetch: async () => ({status:204,headers:{get:()=>"0".repeat(32)}}),
+  });
+  vm.runInContext(source("pairing.js"), context);
+  const pairing = vm.runInContext("BowerbirdPairing", context);
+  await pairing.generate();
+  const proofs = await Promise.all(Array.from({length:8}, () => pairing.proof("chrome-extension://fixture", "extension")));
+  assert.ok(proofs.every(proof => proof.ok));
+  assert.equal(new Set(proofs.map(proof => proof.protocols[1])).size, 8);
+  assert.equal(imports, 1);
+  await pairing.generate();
+  assert.equal((await pairing.proof("chrome-extension://fixture", "extension")).ok, true);
+  assert.equal(imports, 2);
+});
+
+function imageResponse(url, bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10])) {
+  return { ok: true, url, headers: { get: () => null }, arrayBuffer: async () => bytes.buffer };
+}
+
+const imageItems = (count) => Array.from({length:count}, (_, index) => ({
+  media_url: `https://cdn.test/${index}.png`, source_url: `https://site.test/${index}`,
+}));
+
+test("HEIC major or compatible brands pass octet-stream image validation without copying the buffer", async () => {
+  const bytes = (major, compatible, boxSize = 24) => {
+    const header = new Uint8Array(24);
+    header[3] = boxSize;
+    header.set(new TextEncoder().encode(`ftyp${major}0000${compatible}`), 4);
+    return header;
+  };
+  for (const [major, compatible] of [["heic","mif1"], ["xxxx","heix"], ["heif","msf1"]]) {
+    const data = bytes(major, compatible);
+    const fixture = backgroundFixture(async url => ({ ...imageResponse(url, data), headers:{get: key => key === "content-type" ? "application/octet-stream" : null} }));
+    assert.equal((await fixture.send({url:"https://cdn.test/asset"})).ok, true);
+    assert.equal(fixture.uploads[0].bytes, data.buffer);
+  }
+  const fixture = backgroundFixture(async url => imageResponse(url, bytes("isom", "avif", 16)));
+  assert.equal((await fixture.send({url:"https://cdn.test/asset"})).ok, false);
+  assert.equal(fixture.uploads.length, 0);
+  const malformed = backgroundFixture(async url => imageResponse(url, bytes("mif1", "avif")));
+  const rejected = await malformed.send({url:"https://cdn.test/asset"});
+  assert.equal(rejected.code, "invalid_image");
+  assert.equal(malformed.uploads.length, 0);
+});
+
+test("50 remote images overlap at most four fetches and use one socket in original order", async t => {
+  const items = imageItems(50);
+  let concurrency = 0;
+  let peak = 0;
+  const fetch = async url => {
+    concurrency += 1;
+    peak = Math.max(peak, concurrency);
+    const index = Number(new URL(url).pathname.slice(1).split(".")[0]);
+    await new Promise(resolve => setTimeout(resolve, 16 + (index % 4 === 0 ? 4 : 0)));
+    concurrency -= 1;
+    return imageResponse(url);
+  };
+  const baseline = backgroundFixture(fetch);
+  const baselineStart = performance.now();
+  for (const item of items) await baseline.send({ url: item.media_url, pageUrl: item.source_url });
+  const baselineMs = performance.now() - baselineStart;
+  const fixture = backgroundFixture(fetch);
+  const start = performance.now();
+  const summary = await fixture.api.runBatch(items, { remote: fixture.api.requestBackground });
+  const batchMs = performance.now() - start;
+  t.diagnostic(`serial ${baselineMs.toFixed(0)} ms, batched ${batchMs.toFixed(0)} ms in synthetic fixture`);
+  assert.equal(summary.saved, 50);
+  assert.equal(peak, 4);
+  assert.equal(baseline.sockets.length, 50);
+  assert.equal(fixture.sockets.length, 1);
+  assert.equal(fixture.proofCount(), 1);
+  assert.deepEqual(fixture.uploads.map(({metadata}) => [metadata.requested_url, metadata.page_url]),
+    items.map(item => [item.media_url, item.source_url]));
+});
+
+test("batch reconnects remaining images after a lost receipt and retry excludes already saved items", async () => {
+  const items = imageItems(5);
+  const fixture = backgroundFixture(async url => url === items[3].media_url ? {ok:false,status:403} : imageResponse(url), true, (socket, metadata) => {
+    if (metadata.requested_url === items[1].media_url) queueMicrotask(() => socket.close());
+    else if (metadata.requested_url === items[2].media_url) socket.reply({ok:false,saved:true});
+    else socket.reply({ok:true});
+  });
+  const summary = await fixture.api.runBatch(items, { remote: fixture.api.requestBackground });
+  assert.equal(fixture.sockets.length, 2);
+  assert.equal(summary.saved, 3);
+  assert.equal(summary.unconfirmed, 1);
+  assert.equal(summary.failed, 1);
+  assert.equal(summary.results[1].code, "result_unknown");
+  assert.equal(summary.failedItems.length, 1);
+  assert.equal(summary.failedItems[0], items[3]);
+  assert.deepEqual(fixture.uploads.map(({metadata}) => metadata.requested_url), items.filter((_, index) => index !== 3).map(item => item.media_url));
+});
+
+test("mixed batches save page-owned images in order while sharing the remote socket", async () => {
+  const [first, last] = imageItems(2);
+  const local = { media_url: "blob:https://site.test/inline", source_url: "https://site.test/note" };
+  const canvas = { canvas: {}, source_url: "https://site.test/note" };
+  const order = [];
+  const fixture = backgroundFixture(async url => imageResponse(url), true, (socket, metadata) => {
+    order.push(metadata.requested_url);
+    socket.reply({ ok: true });
+  });
+  const summary = await fixture.api.runBatch([first, local, canvas, last], {
+    remote: fixture.api.requestBackground,
+    local: async item => { order.push(item.media_url); return { ok: true }; },
+    canvas: async item => { order.push(item.canvas); return { ok: true }; },
+  });
+  assert.equal(summary.saved, 4);
+  assert.equal(fixture.sockets.length, 1);
+  assert.deepEqual(order, [first.media_url, local.media_url, canvas.canvas, last.media_url]);
+});
+
+test("cancelling a batch aborts prefetched downloads and waits for an already sent item", async () => {
+  const items = imageItems(10);
+  const urls = [];
+  const aborted = [];
+  const controller = new AbortController();
+  let uploaded;
+  const firstUpload = new Promise(resolve => { uploaded = resolve; });
+  const fixture = backgroundFixture((url, { signal }) => {
+    urls.push(url);
+    if (url === items[0].media_url) return Promise.resolve(imageResponse(url));
+    return new Promise((_resolve, reject) => signal.addEventListener("abort", () => {
+      aborted.push(url);
+      reject(signal.reason);
+    }));
+  }, true, socket => uploaded(socket));
+  const result = fixture.api.runBatch(items, { remote: fixture.api.requestBackground }, undefined, { signal: controller.signal });
+  const firstSocket = await firstUpload;
+  controller.abort();
+  await flush();
+  assert.equal(aborted.length, 3);
+  assert.equal(urls.length, 4);
+  firstSocket.reply({ ok: true });
+  const summary = await result;
+  assert.equal(summary.saved, 1);
+  assert.equal(summary.cancelled, 9);
+  assert.equal(summary.unconfirmed, 0);
+  assert.equal(summary.failedItems.length, 0);
+  assert.equal(fixture.uploads.length, 1);
+});
+
+test("manifest resolves every declared content script inside the canonical extension", () => {
+  const manifest = JSON.parse(source("manifest.json"));
+  assert.match(manifest.version, /^\d+(?:\.\d+){2}$/);
+  const scripts = manifest.content_scripts[0].js;
+  assert.equal(scripts.at(-1), "content.js");
+  assert.equal(new Set(scripts).size, scripts.length);
+  for (const file of scripts) assert.ok(source(file).trim().length > 0, file);
 });
 
 test("background exposes the public pairing code for the settings panel", async () => {
@@ -340,17 +423,37 @@ test("background exposes the public pairing code for the settings panel", async 
   assert.equal(result.code,"fixture.public-key");
 });
 
-test("background persists only numeric button positions", async () => {
-  const fixture=backgroundFixture(async()=>{ throw new Error("position messages must not fetch"); });
-  assert.equal((await fixture.message({type:"button_position_get"})).position,null);
-  assert.equal((await fixture.message({type:"button_position_set",position:{x:"12",y:34,dock:"left"}})).ok,true);
-  const saved=fixture.stored.bowerbird_button_position;
-  assert.deepEqual([saved.x,saved.y,saved.dock],[12,34,"left"]);
-  const loaded=(await fixture.message({type:"button_position_get"})).position;
-  assert.deepEqual([loaded.x,loaded.y,loaded.dock],[12,34,"left"]);
-  assert.equal(fixture.rejected({type:"button_position_set",position:{x:"bad",y:34}}),false);
-  const unchanged=fixture.stored.bowerbird_button_position;
-  assert.deepEqual([unchanged.x,unchanged.y,unchanged.dock],[12,34,"left"]);
+test("pairing initialization and rotation share one queue and only options may rotate", async () => {
+  let key;
+  let generations = 0;
+  let release;
+  const initialGeneration = new Promise(resolve => { release = resolve; });
+  const fixture = backgroundFixture(() => { throw new Error("pairing codes must not fetch"); }, true, undefined, {
+    load: async () => key,
+    generate: async () => {
+      const count = ++generations;
+      await initialGeneration;
+      key = { publicKey: `public-${count}`, privateKey: `private-${count}` };
+      return key;
+    },
+  });
+  const get = { type: "pairing_code_get" };
+  const rotate = { type: "pairing_code_rotate" };
+  const options = { url: "chrome-extension://fixture/options.html" };
+  const tabCode = fixture.message(get, 1);
+  const optionsCode = fixture.message(get, 2, options);
+  await flush();
+  assert.equal(generations, 1);
+  release();
+  assert.equal(JSON.stringify(await tabCode), '{"ok":true,"code":"fixture.public-1"}');
+  assert.equal((await optionsCode).code, "fixture.public-1");
+  assert.equal(fixture.dispatch(rotate, 1, {}, () => {}), false);
+  assert.equal(fixture.dispatch(rotate, 2, {...options,id:"other-extension"}, () => {}), false);
+  const rotated = fixture.message(rotate, 2, options);
+  const refreshed = fixture.message(get, 1);
+  assert.equal((await rotated).code, "fixture.public-2");
+  assert.equal((await refreshed).code, "fixture.public-2");
+  assert.equal(generations, 2);
 });
 
 test("video background negotiates capability before browser-session download and sends verified video bytes", async () => {

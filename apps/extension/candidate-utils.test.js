@@ -30,6 +30,31 @@ test("srcset selects highest descriptor", () => {
   assert.equal(result.url, "https://example.com/large.jpg");
 });
 
+test("srcset preserves commas in the winning CDN URL with a descriptor", () => {
+  const result = c.parseSrcset(
+    "small.jpg 400w, https://res.cloudinary.com/demo/image/upload/w_800,q_auto,f_auto/sample.jpg 800w, medium.jpg 600w",
+    "https://example.com/p/"
+  );
+  assert.equal(result.url, "https://res.cloudinary.com/demo/image/upload/w_800,q_auto,f_auto/sample.jpg");
+  assert.equal(result.score, 800);
+});
+
+test("srcset separates descriptorless candidates at trailing commas", () => {
+  const result = c.parseSrcset("/a,b.jpg?crop=2,4, /preview.jpg .5x", "https://example.com/p/");
+  assert.equal(result.url, "https://example.com/a,b.jpg?crop=2,4");
+  assert.equal(c.parseSrcset("/a,b.jpg", "https://example.com").url, "https://example.com/a,b.jpg");
+});
+
+test("srcset accepts data images and discards invalid descriptors as whole candidates", () => {
+  const dataUrl = "data:image/png;base64,AAAA";
+  const result = c.parseSrcset(
+    `bad.jpg invalid(1, pretend.jpg 900w), /mixed.jpg 900w 2x, ${dataUrl} 2e0x, /fallback.jpg 1x`,
+    "https://example.com"
+  );
+  assert.equal(result.url, dataUrl);
+  assert.equal(result.kind, "data");
+});
+
 test("normalization preserves query and drops fragment", () => {
   const result = c.normalizeCandidateUrl("/image.jpg?w=1200#hero", "https://example.com/page");
   assert.equal(result.url, "https://example.com/image.jpg?w=1200");
