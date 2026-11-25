@@ -62,7 +62,7 @@ try {
     return { editError, prompt: controller.document.nodes[0].prompt, run: controller.document.run };
   });
   assert.deepEqual(expired, { editError: '', prompt: '过期后仍可保存的修改', run: null });
-  await card.getByRole('button', { name: '运行', exact: true }).click();
+  await card.getByRole('button', { name: /^运行(?:此卡片)?$/ }).click();
   await page.getByRole('alert', { name: '工作流问题' }).locator('p').filter({ hasText: denial }).waitFor();
   assert.deepEqual(await page.evaluate(() => window.accessCalls), ['canvas_workflow_authorize']);
 
@@ -74,7 +74,7 @@ try {
   await prompt.fill('登录后继续编辑的镜头');
   await saved('登录后继续编辑的镜头');
   assert.ok(await page.evaluate(() => window.accessCalls.every(command => command === 'canvas_workflow_authorize')));
-  await card.getByRole('button', { name: '运行', exact: true }).click();
+  await card.getByRole('button', { name: /^运行(?:此卡片)?$/ }).click();
   await page.waitForFunction(() => window.accessCalls.includes('comfy_video'));
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status === 'failed');
   await page.evaluate(() => {
