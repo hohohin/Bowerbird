@@ -1,6 +1,6 @@
 import type { CanvasGroupNode, CanvasPoint } from "./canvasLogic";
 import { isVideoPath } from "./videoGeneration.ts";
-import { isAudioPath } from "./audioMedia";
+import { isAudioPath } from "./audioMedia.ts";
 import { canvasNodePayload } from "./canvasNodePayload.ts";
 import type {
   Asset,
@@ -173,6 +173,7 @@ interface AssetPayload {
     height?: number;
   };
   execution?: unknown;
+  draft_document_id?: string;
 }
 
 function validatedAssetPayload(value: Partial<AssetPayload> | null): AssetPayload | null {

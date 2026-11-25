@@ -8,7 +8,7 @@ const env = {};
 for (const key of ['SystemRoot', 'WINDIR', 'LANG']) if (process.env[key]) env[key] = process.env[key];
 const child = spawn(process.execPath, [
   '--permission', '--disable-proto=throw',
-  ...['server.mjs', 'core.mjs', 'snapshot-store.mjs', 'package.json', '.local/snapshot.json'].map(p => `--allow-fs-read=${path.join(here, p)}`),
+  ...['server.mjs', 'core.mjs', 'protocol.mjs', 'snapshot-store.mjs', 'package.json', '.local/snapshot.json'].map(p => `--allow-fs-read=${path.join(here, p)}`),
   path.join(here, 'server.mjs'),
 ], { stdio: 'inherit', cwd: here, env, windowsHide: true });
 child.on('error', () => { console.error('Unable to start restricted MCP process. Node >=24.10 required.'); process.exitCode = 1; });

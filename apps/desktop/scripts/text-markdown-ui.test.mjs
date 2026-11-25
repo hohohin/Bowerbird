@@ -58,7 +58,7 @@ await check('quote and inline Markdown retain formatting after reopening',async(
   assert.equal(await editor.locator('code [data-slate-string]').innerText(),'code');
 });
 await check('selection toolbar preserves selection and toggles marks',async()=>{
-  await page.keyboard.type('selected text'); await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
+  await page.keyboard.type('selected text'); await page.keyboard.press('Home'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End');
   await floating.waitFor();
   await floating.locator('[aria-label="加粗"]').click();
   assert.equal(await editor.locator('strong').innerText(),'selected text');
@@ -74,7 +74,7 @@ await check('selection toolbar preserves selection and toggles marks',async()=>{
   await page.waitForFunction(()=>window.draft?.markdown.includes('selected text'));
 });
 await check('toolbar scoped to editor; fixed list button toggles off',async()=>{
-  await page.keyboard.type('line'); await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
+  await page.keyboard.type('line'); await page.keyboard.press('Home'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End');
   await floating.waitFor();
   const fixed=page.getByRole('toolbar',{name:'文字格式',exact:true});
   await fixed.getByRole('button', { name: '列表', exact: true }).click();
@@ -88,13 +88,13 @@ await check('toolbar scoped to editor; fixed list button toggles off',async()=>{
 });
 await check('keyboard selection across blocks; keyboard toolbar; scroll hides offscreen selection',async()=>{
   await page.keyboard.type('first'); await page.keyboard.press('Enter'); await page.keyboard.type('second');
-  await page.keyboard.press('Control+Home'); await page.keyboard.press('Control+Shift+End');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowDown' : 'Control+Shift+End');
   await floating.waitFor(); await page.keyboard.press('Alt+F10');
   await page.keyboard.press('ArrowRight'); await page.keyboard.press('Enter');
   assert.deepEqual(await editor.locator('strong').allTextContents(),['first','second']);
   await page.keyboard.press('ArrowRight'); await page.keyboard.press('Enter');
   for(let n=0;n<24;n++){await page.keyboard.type('paragraph '+n);await page.keyboard.press('Enter');}
-  await page.keyboard.press('Control+Home'); await page.keyboard.press('Shift+End');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End');
   await floating.waitFor();
   await editor.hover(); await page.mouse.wheel(0,1500);
   await floating.waitFor({state:'hidden'});
@@ -110,7 +110,7 @@ await check('Chinese composition and literal mid-line Markdown',async()=>{
   await cdp.detach();
 });
 await check('shared headings, mark shortcuts and slash quote insertion',async()=>{
-  await page.keyboard.type('format me'); await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
+  await page.keyboard.type('format me'); await page.keyboard.press('Home'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End');
   await floating.waitFor();
   await page.getByRole('toolbar',{name:'文字格式',exact:true}).getByRole('button',{name:'正文或标题',exact:true}).click();
   await page.getByRole('menuitemradio',{name:'标题 2',exact:true}).click();
@@ -143,7 +143,7 @@ await check('original asset detail shares toolbar; raw blocks remain literal',as
 });
 await check('floating toolbar stays inside writing panel at narrow width and both themes',async()=>{
   await page.setViewportSize({width:900,height:700});
-  await page.keyboard.type('Selected near the first line'); await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
+  await page.keyboard.type('Selected near the first line'); await page.keyboard.press('Home'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End');
   await floating.waitFor();
   await page.waitForFunction(()=>{const bar=document.querySelector('[aria-label="选中文字格式"]').getBoundingClientRect(),body=document.querySelector('.text-document-body').getBoundingClientRect();return bar.left>=body.left && bar.right<=body.right;});
   const bar=await floating.boundingBox(), body=await editor.boundingBox();

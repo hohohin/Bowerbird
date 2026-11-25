@@ -58,6 +58,11 @@ fn public_value(names: &[&str], files: &[HashMap<String, String>]) -> Option<Str
 
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rerun-if-changed=macos/screenshot_focus.m");
+        cc::Build::new()
+            .file("macos/screenshot_focus.m")
+            .flag("-fobjc-arc")
+            .compile("bowerbird_screenshot_focus");
         println!("cargo:rerun-if-changed=macos/external_drag.m");
         cc::Build::new().file("macos/external_drag.m").flag("-fobjc-arc")
             .compile("bowerbird_external_drag");
@@ -73,6 +78,10 @@ fn main() {
             .compile("bowerbird_browser_capture");
         println!("cargo:rustc-link-lib=framework=WebKit");
         println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rerun-if-changed=macos/heic_preview.m");
+        cc::Build::new().file("macos/heic_preview.m").flag("-fobjc-arc").flag("-fblocks")
+            .compile("bowerbird_heic_preview");
+        println!("cargo:rustc-link-lib=framework=CoreImage");
         println!("cargo:rerun-if-changed=macos/video_thumbnail.m");
         cc::Build::new().file("macos/video_thumbnail.m").flag("-fobjc-arc")
             .compile("bowerbird_video_thumbnail");

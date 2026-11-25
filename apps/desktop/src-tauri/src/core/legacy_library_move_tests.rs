@@ -25,6 +25,23 @@ impl Fixture {
 }
 impl Drop for Fixture {fn drop(&mut self){let mut c=self.db.conn.lock().unwrap_or_else(|e|e.into_inner());drop(std::mem::replace(&mut *c,Connection::open_in_memory().unwrap()));let _=fs::remove_dir_all(&self.root);}}
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_system_aliases_preserve_identity_but_user_links_stay_rejected() {
+    let f = Fixture::new();
+    let original = f.asset("a", &["p1"]);
+    let canonical = fs::canonicalize(&original).unwrap();
+    assert_eq!(path_key(&original), path_key(&canonical));
+    no_links(&original).unwrap();
+    assert_eq!(remap(original.to_str().unwrap(), &fs::canonicalize(&f.paths.images).unwrap(), Path::new("/destination")), Some("/destination/a.png".into()));
+    assert_eq!(remap(canonical.to_str().unwrap(), &f.paths.images, Path::new("/destination")), Some("/destination/a.png".into()));
+    let link = f.root.join("user-link");
+    std::os::unix::fs::symlink(&f.paths.images, &link).unwrap();
+    assert!(no_links(&link.join("a.png")).is_err());
+    assert!(no_links(&f.paths.images.join("../images/a.png")).is_err());
+    assert_ne!(path_key(&link.join("a.png")), path_key(&canonical));
+}
+
 #[test]
 fn history_groups_by_project_stores_shared_once_and_preserves_metadata_identity() {
     let f=Fixture::new();let old=f.asset("shared",&["p1","p2"]);f.asset("other",&["p2"]);f.asset("global",&[]);

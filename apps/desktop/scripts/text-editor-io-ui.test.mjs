@@ -15,7 +15,7 @@ const editor=page.getByRole('textbox',{name:'文档正文',exact:true}),toolbar=
 async function fresh(){await beginCoverage();await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-workspace-live/preview.html?markdown`,{timeout:60000});await editor.locator('[data-slate-node=element]').first().click();}
 try{
 await fresh();await page.context().grantPermissions(['clipboard-read','clipboard-write']);
-await page.evaluate(text=>navigator.clipboard.writeText(text),'# 文档标题\n\n**粗体**与[链接](https://example.com)\n\n| A | B |\n| --- | --- |\n| one | two |\n\n- [ ] task\n\n```js\nconst answer = 42;\n```\n');await page.keyboard.press('Control+v');
+await page.evaluate(text=>navigator.clipboard.writeText(text),'# 文档标题\n\n**粗体**与[链接](https://example.com)\n\n| A | B |\n| --- | --- |\n| one | two |\n\n- [ ] task\n\n```js\nconst answer = 42;\n```\n');await page.keyboard.press('ControlOrMeta+v');
 await editor.locator('h1').waitFor();assert.equal(await editor.locator('table').count(),1);assert.match(await editor.innerText(),/answer = 42/);console.log('PASS Markdown paste preserves heading, marks, links, table, task and code');
 await mkdir('.tmp/text-editor-io',{recursive:true});
 for(const [label,ext,signature] of [['Markdown','md','#'],['HTML','html','<!doctype html>'],['图片','png','PNG'],['Word','docx','PK']]){
@@ -42,7 +42,7 @@ await page.evaluate(text => navigator.clipboard.writeText(text), [
   '# 分页测试标题', 'PDF searchable text 中文检索', '公式 $\\sqrt{x^2+1}$', ...lines.slice(0, 18),
   `![完整分页图片](${image})`, table, ...lines.slice(18), '分页测试末尾',
 ].join('\n\n'));
-await page.keyboard.press('Control+v');
+await page.keyboard.press('ControlOrMeta+v');
 await editor.locator('table').waitFor();
 await editor.locator('img').waitFor();
 await page.evaluate(() => { window.print = () => { window.printReady = true; }; });
@@ -72,7 +72,7 @@ for (const pdfPage of pdf.getPages()) {
   }).join('\n');
   assert.match(commands, /\bBT\b[\s\S]*\bT[Jj]\b/, 'each page contains selectable text operators');
   const fonts = pdfPage.node.Resources().lookup(PDFName.of('Font'), PDFDict);
-  equationFont ||= fonts.entries().some(([, ref]) => pdf.context.lookup(ref, PDFDict).lookup(PDFName.of('BaseFont'), PDFName).asString().includes('KaTeX'));
+  equationFont ||= fonts.entries().some(([, ref]) => pdf.context.lookup(ref, PDFDict).lookupMaybe(PDFName.of('BaseFont'), PDFName)?.asString().includes('KaTeX'));
   imageDraws += [...commands.matchAll(/\/\w+\s+Do\b/g)].length;
 }
 assert.equal(imageDraws, 1, 'the image is drawn once on a single page');
@@ -85,7 +85,7 @@ await page.evaluate(async () => navigator.clipboard.write([new ClipboardItem({
   'text/plain': new Blob(['样式正文 有意强调'], { type: 'text/plain' }),
   'text/html': new Blob(['<p style="color:black;font-family:system-ui;font-size:16px"><b>样式正文</b><span style="color:red">有意强调</span></p>'], { type: 'text/html' }),
 })]));
-await page.keyboard.press('Control+v');
+await page.keyboard.press('ControlOrMeta+v');
 await page.waitForFunction(() => window.draft?.markdown?.includes('有意强调'));
 const pasted = await page.evaluate(async () => {
   const { parseMarkdown, serializeReadableMarkdown } = await import('/src/lib/documentCodec.ts');

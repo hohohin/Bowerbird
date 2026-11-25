@@ -60,6 +60,8 @@ try {
   // Central source can contain an image absent from the current project's assets.
   await page.evaluate(() => window.store.setState(state => ({ assets: state.assets.filter(asset => asset.id !== "d") })));
   await panel.getByRole("tab", { name: "全局素材" }).click();
+  await panel.getByRole("button", { name: "更多文件操作", exact: true }).click();
+  await panel.getByRole("button", { name: "历史素材", exact: true }).click();
   await settleLayout();
   await panel.locator('[data-asset-id="d"]').scrollIntoViewIfNeeded();
   const central = await captureWorkspace();
@@ -88,6 +90,8 @@ try {
   // Home library also keeps its scroll/filter context.
   await page.evaluate(async () => { await window.store.getState().exitProject(); window.store.getState().setMediaFilter("image"); });
   const home = page.locator(".library-home");
+  await home.getByRole("button", { name: "更多文件操作", exact: true }).click();
+  await home.getByRole("button", { name: "历史素材", exact: true }).click();
   await home.locator('[data-asset-id="detail-40"]').scrollIntoViewIfNeeded();
   const homeBefore = await captureWorkspace();
   await openDetails(home.locator('[data-asset-id="detail-40"]'));

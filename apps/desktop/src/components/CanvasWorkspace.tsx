@@ -5,6 +5,7 @@ import { JobProgressText } from "./JobProgressText";
 import { originalDeletionEpoch, originalDeletionFor, subscribeOriginalDeletionCommits, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { dismissNotices, readDismissedNotices, subscribeDismissedNotices } from "../lib/dismissedNotices";
 import { userErrorMessage } from "../lib/userError";
+import type { DraftDocument } from "../lib/draftDocument";
 import { isTextAsset, isTextPath } from "../lib/textMedia";
 import { readFileContentCards } from "../lib/fileContentCards";
 import { CreationImagePreview } from "./CreationImagePreview";
@@ -228,7 +229,7 @@ import {
   type CreativeLaunchRequest,
 } from "../lib/creativeLaunch";
 import { createOrderedWriteJournal, drainOrderedWriteJournal } from "../lib/orderedWriteJournal";
-import { useStore } from "../store";
+import { useStore, type DraftEditorRequest } from "../store";
 import { EXPLORER_CANVAS_DROP_EVENT, prepareExplorerCanvasDrop, type ExplorerCanvasDropDetail } from "../lib/explorerCanvasDrop";
 import { importDroppedMedia, prepareMediaImport } from "../lib/mediaImport";
 import type {
@@ -986,7 +987,11 @@ export function CanvasWorkspace({
     [generationCardProjection.anchors, pinnedCardOffsets, activeGenerationIds]);
   const generationAnchorsBeforeRemoval = useRef<ReadonlyMap<string, ProjectGraphNode>>(new Map());
   useLayoutEffect(() => {
-    if (!workflowInteractive || !projection.hidden.size) {
+    if (!workflowInteractive) {
+      generationAnchorsBeforeRemoval.current = new Map();
+      return;
+    }
+    if (!projection.hidden.size) {
       generationAnchorsBeforeRemoval.current = collapsedGenerationAnchors;
       return;
     }
@@ -2434,7 +2439,7 @@ export function CanvasWorkspace({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (workspaceRef.current?.closest("[inert]")) return;
+      if (workspaceRef.current?.closest("[inert]") || useStore.getState().draftEditor) return;
       const target = event.target as HTMLElement | null;
       if ((useStore.getState().canvasLibraryOpen || useLocalFileMode.getState().open)
         && (!target || !boardShellRef.current?.contains(target))) return;
@@ -3440,6 +3445,20 @@ export function CanvasWorkspace({
     };
   }, []);
 
+  useEffect(() => {
+    const prepare = (request: DraftEditorRequest) => {
+      const bounds = stageRef.current?.getBoundingClientRect();
+      const route = useStore.getState();
+      if (!bounds || loadingRef.current || route.projectRoutePending
+        || route.activeProjectId !== activeCanvasRef.current.id) return null;
+      return prepareDraftAt(toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2), request.canvasNodeId);
+    };
+    useStore.setState({ prepareCanvasDraft: prepare });
+    return () => {
+      if (useStore.getState().prepareCanvasDraft === prepare) useStore.setState({ prepareCanvasDraft: null });
+    };
+  }, []);
+
   function prepareAnnotatedImageAt(point: CanvasPoint) {
     const project = activeCanvasRef.current;
     const stage = stageRef.current;
@@ -3480,11 +3499,68 @@ export function CanvasWorkspace({
     };
   }
 
+  function prepareDraftAt(point: CanvasPoint, sourceNodeId?: string) {
+    const project = activeCanvasRef.current;
+    const stage = stageRef.current;
+    let nextOrder = nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1;
+    const saves = new Map<string, { asset: Asset | null; nodeId: string; order: number; queued: boolean; completed: boolean }>();
+    return async (document: DraftDocument, dataUrl: string, saveId: string): Promise<Asset> => {
+      let saved = saves.get(saveId);
+      if (!saved) {
+        saved = { asset: null, nodeId: canvasId("asset"), order: nextOrder++, queued: false, completed: false };
+        saves.set(saveId, saved);
+      }
+      const save = saved;
+      // Retrying the same save keeps its imported asset and node identity.
+      await retryPendingWrites();
+      if (!save.completed && !save.queued) {
+        save.queued = true;
+        const frozenDocument = structuredClone(document);
+        await enqueueWrite(async () => {
+          await ensureMaterialized(project);
+          save.asset ??= await api.saveDraftWorkspace({ document: frozenDocument, dataUrl, projectId: project.id, saveId });
+          const snapshot = createCanvasAssetSnapshot(save.asset, save.nodeId);
+          const size = assetNodeSize(snapshot);
+          const node: CanvasAssetNode = {
+            kind: "asset", id: save.nodeId, asset: snapshot,
+            x: point.x - size.width / 2, y: point.y - size.height / 2, ...size,
+            order: save.order,
+          };
+          const persisted = await api.draftWorkspaceCanvasUpsert({ projectId: project.id, documentId: frozenDocument.documentId,
+            assetId: save.asset.id, sourceNodeId: sourceNodeId ?? null, newNode: newProjectCanvasAssetNode(project.id, node) });
+          save.completed = true;
+          const route = useStore.getState();
+          if (stage?.isConnected && activeCanvasRef.current.id === project.id
+            && route.activeProjectId === project.id && !route.projectRoutePending) {
+            setCanvasAssets((current) => [...current.filter(asset => asset.id !== save.asset!.id), save.asset!]);
+            const asset = { ...createCanvasAssetSnapshot(save.asset, persisted.id), payloadJson: persisted.payloadJson };
+            const updated: CanvasAssetNode = { kind: "asset", id: persisted.id, asset,
+              x: persisted.x, y: persisted.y, width: persisted.width, height: persisted.height, order: persisted.zIndex };
+            let replaced = false;
+            const nextNodes = nodesRef.current.map(existing => {
+              if (existing.id === persisted.id && existing.kind === "asset") { replaced = true; return updated; }
+              if (existing.kind === "folder" && existing.assets.some(item => item.id === persisted.id)) {
+                replaced = true;
+                return { ...existing, assets: existing.assets.map(item => item.id === persisted.id ? asset : item) };
+              }
+              return existing;
+            });
+            commitNodes(replaced ? nextNodes : [...nextNodes, updated]);
+            graphNodesRef.current = [...graphNodesRef.current.filter(existing => existing.id !== persisted.id), persisted];
+            setGraphNodes(graphNodesRef.current);
+          }
+        });
+      }
+      if (writeJournalRef.current.failure != null) throw writeJournalRef.current.failure;
+      if (!save.completed || !save.asset) throw new Error("草稿尚未添加到画板，请重试保存");
+      return save.asset;
+    };
+  }
+
   function newDraftAt(point: CanvasPoint) {
     if (loadingRef.current || useStore.getState().projectRoutePending) return;
     setPromptMenu(null);
-    const save = prepareAnnotatedImageAt(point);
-    useStore.getState().openDraftAnnotator((dataUrl, meta) => save(dataUrl, meta, "草稿"));
+    useStore.getState().openDraftEditor({ assetId: null, projectId: activeCanvasRef.current.id, saveToCanvas: prepareDraftAt(point) });
   }
 
   function toggleCanvasNodeSelection(nodeId: string) {
@@ -4074,6 +4150,7 @@ export function CanvasWorkspace({
       asset: assetById.get(selectedAsset.assetId),
       canvasSelection: {
         projectId: activeCanvasRef.current.id,
+        primaryNodeId: selectedAsset.id,
         nodeIds,
         canAdjustLayer: canAdjustMenuLayers(nodeIds),
         generationActions: nodeIds.length === 1 && selectionNode.kind === "asset" ? generationMediaActions(selectionNode.id, selectedAsset) : undefined,
@@ -5164,8 +5241,8 @@ export function CanvasWorkspace({
         event.preventDefault(); event.stopPropagation(); void pasteCanvasSelection(value); return;
       }
       const stage = stageRef.current;
-      if (!stage || !(event.target instanceof Node) || !stage.contains(event.target)) return;
-      const files = Array.from(event.clipboardData?.files ?? []).filter(file => file.type.startsWith("image/"));
+      if (!stage) return;
+      const files = Array.from(event.clipboardData?.files ?? []).filter(file => file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp|svg|heic|heif)$/i.test(file.name));
       if (!files.length) return;
       event.preventDefault(); event.stopPropagation();
       const state = useStore.getState(), projectId = activeCanvasRef.current.id;

@@ -32,10 +32,7 @@ try {
   await page.goto('http://127.0.0.1:1694/scripts/fixtures/canvas-reference/preview.html?source-library&detail-route');
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.mouse.move(700, 450);
-  await page.locator('.app-sidebar-host.is-auto-hidden').waitFor({ state: 'attached' });
-  await page.locator('.app-sidebar-host').evaluate(async el => {
-    await Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {})));
-  });
+  assert.equal(await page.locator('.app-sidebar-host').count(), 0, 'project workspace no longer mounts the main sidebar');
   await frostVisible(false);
   const stageBefore = await page.locator('.canvas-stage').boundingBox();
   await page.getByRole('button', { name: '展开画板素材库', exact: true }).click();
@@ -73,10 +70,7 @@ try {
   await frostVisible(false);
   assert.equal(await page.getByRole('button', { name: '展开画板素材库', exact: true }).evaluate(el => el === document.activeElement), true);
   await page.setViewportSize({ width: 1400, height: 900 });
-  await page.locator('.app-sidebar-host.is-auto-hidden').waitFor({ state: 'attached' });
-  await page.locator('.app-sidebar-host').evaluate(async el => {
-    await Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {})));
-  });
+  assert.equal(await page.locator('.app-sidebar-host').count(), 0);
   assert.deepEqual(await page.locator('.canvas-stage').boundingBox(), stageBefore, 'drawer toggles do not resize the canvas');
   await page.getByRole('button', { name: '展开画板素材库', exact: true }).click();
   await settle();

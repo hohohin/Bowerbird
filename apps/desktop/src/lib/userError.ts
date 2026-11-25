@@ -88,6 +88,7 @@ export function userErrorMessage(error: unknown, fallback = DEFAULT_MESSAGE): st
   if (/database is locked|database is busy|SQLITE_BUSY|SQLITE_LOCKED/i.test(message)) return "资料库正忙，请稍候再试。";
   if (/database disk image is malformed|SQLITE_CORRUPT/i.test(message)) return "资料库暂时无法读取，请保留现有文件并联系支持。";
   if (/HTTP\s*401\b|invalid.?jwt|jwt.*expired|token.*expired|session_expired|refresh_token_not_found|not_authenticated/i.test(message)) return "登录已失效，请重新登录后继续。";
+  if (/model_not_found|model.{0,100}not supported when using Codex with a ChatGPT account/i.test(message)) return "当前账号无法使用所选模型，请更新应用或更换可用模型后重试。";
   if (/insufficient_(?:credits|balance)|credits?_insufficient|积分不足|Bcoin.*不足/i.test(message)) return "可用积分不足，请补充积分后继续。";
   if (/content_policy_violation|content_filter|safety_check_failed|内容.*未通过.*审核/i.test(message)) return "内容未通过审核，请调整文字或参考素材后再试。";
   if (/HTTP\s*429|too many requests|rate_limit(?:ed|_exceeded)?/i.test(message)) return "操作过于频繁，请稍后再试。";

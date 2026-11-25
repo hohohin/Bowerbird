@@ -160,6 +160,7 @@ fn referenced_assets(conn: &Connection, project: &str, candidates: &[Candidate],
 }
 
 fn path_key(path: &Path) -> String {
+    let path = super::paths::expand_macos_system_alias(path);
     let text = path.to_string_lossy().replace('\\', "/");
     let text = text.strip_prefix("//?/").unwrap_or(&text);
     if cfg!(windows) {
@@ -334,10 +335,16 @@ struct Manifest {
     project: String,
     operation: String,
     files: Vec<PathBuf>,
+    // Drafts are not staged: keep their controlled names until post-commit cleanup succeeds.
+    #[serde(default)]
+    draft_files: Vec<String>,
 }
 
 #[cfg(test)]
-thread_local! { static FAIL_UNLINK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+thread_local! {
+    static FAIL_UNLINK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_DRAFT_UNLINK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 fn staged(file: &Path, operation: &str, index: usize) -> PathBuf {
     file.with_file_name(format!(".bowerbird-delete-{operation}-{index}"))
@@ -345,6 +352,7 @@ fn staged(file: &Path, operation: &str, index: usize) -> PathBuf {
 
 fn finish_manifest(
     paths: &LibraryPaths,
+    conn: &Connection,
     manifest_path: &Path,
     manifest: &Manifest,
     restore: bool,
@@ -380,6 +388,21 @@ fn finish_manifest(
                 file.display()
             )));
         }
+    }
+    if !restore {
+        let mut draft_files = Vec::new();
+        for name in &manifest.draft_files {
+            if name.strip_suffix(".json").is_none_or(|id| id.parse::<ulid::Ulid>().is_err()) {
+                return Err(AppError::Other("草稿删除恢复路径无效".into()));
+            }
+            draft_files.push(paths.root.join("layers").join(name));
+        }
+        #[cfg(test)]
+        if !draft_files.is_empty() && FAIL_DRAFT_UNLINK.get() {
+            return Err(AppError::Other("synthetic draft unlink failure".into()));
+        }
+        let failures = super::library::cleanup_draft_workspace_files(conn, &draft_files);
+        if !failures.is_empty() { return Err(AppError::Other(failures.join("；"))); }
     }
     fs::remove_file(manifest_path)?;
     Ok(())
@@ -441,7 +464,7 @@ impl Database {
                 [&manifest.project],
                 |r| r.get(0),
             )?;
-            finish_manifest(paths, &entry.path(), &manifest, exists)?;
+            finish_manifest(paths, &conn, &entry.path(), &manifest, exists)?;
         }
         Ok(())
     }
@@ -480,6 +503,7 @@ impl Database {
         }
         let (transferred,originals)=super::file_workspace_move::history::transfer_shared(&tx,paths,project)?;
         plan.files.extend(originals);
+        let draft_files = super::library::draft_workspace_files(&tx, &plan.ids, Some(&paths.root))?;
         let removed_members: usize = tx.query_row(
             "SELECT COUNT(*) FROM project_assets WHERE project_id=?1",
             [project],
@@ -489,6 +513,7 @@ impl Database {
             project: project.into(),
             operation: ulid::Ulid::new().to_string(),
             files: plan.files.into_iter().collect(),
+            draft_files: draft_files.iter().filter_map(|file| file.file_name()?.to_str().map(str::to_owned)).collect(),
         };
         let dir = paths.root.join(".project-deletions");
         fs::create_dir_all(&dir)?;
@@ -503,6 +528,8 @@ impl Database {
         journal.write_all(&serde_json::to_vec(&manifest)?)?;
         journal.sync_all()?;
         drop(journal);
+        #[cfg(unix)]
+        fs::File::open(&dir)?.sync_all()?;
         let execution = (|| -> AppResult<()> {
             super::projects::discard_project_pending_results(&tx, project)?;
             for (i, file) in manifest.files.iter().enumerate() {
@@ -522,18 +549,18 @@ impl Database {
         })();
         if let Err(error) = execution {
             tx.rollback()?;
-            finish_manifest(paths, &manifest_path, &manifest, true).map_err(|restore| {
+            finish_manifest(paths, &conn, &manifest_path, &manifest, true).map_err(|restore| {
                 AppError::Other(format!("{error}；文件恢复未完成：{restore}"))
             })?;
             return Err(error);
         }
         if let Err(error) = tx.commit() {
-            finish_manifest(paths, &manifest_path, &manifest, true).map_err(|restore| {
+            finish_manifest(paths, &conn, &manifest_path, &manifest, true).map_err(|restore| {
                 AppError::Other(format!("{error}；文件恢复未完成：{restore}"))
             })?;
             return Err(error.into());
         }
-        let cleanup_pending = finish_manifest(paths, &manifest_path, &manifest, false)
+        let cleanup_pending: Vec<String> = finish_manifest(paths, &conn, &manifest_path, &manifest, false)
             .err()
             .map(|e| e.to_string())
             .into_iter()
@@ -664,6 +691,18 @@ mod tests {
     fn delete(db: &Database, paths: &LibraryPaths) -> AppResult<ProjectDeleteResult> {
         let impact = db.project_exclusive_impact(paths, "p")?;
         db.delete_project_exclusive(paths, "p", &impact.confirmation)
+    }
+    fn draft_workspace(db: &Database, paths: &LibraryPaths, asset: &str) -> PathBuf {
+        let name = format!("{}.json", ulid::Ulid::new());
+        let directory = paths.root.join("layers");
+        fs::create_dir_all(&directory).unwrap();
+        let file = directory.join(&name);
+        fs::write(&file, b"editable draft").unwrap();
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO analyses(id,asset_id,kind,payload) VALUES(?1,?2,'draft_workspace',?3)",
+            params![format!("draft-{asset}"), asset, name],
+        ).unwrap();
+        file
     }
     #[test]
     fn connected_managed_original_survives_every_project_cleanup_mode() {
@@ -1165,10 +1204,12 @@ mod tests {
         for committed in [false, true] {
             let (db, paths) = fixture();
             let file = asset(&db, &paths, "a");
+            let draft = draft_workspace(&db, &paths, "a");
             let manifest = Manifest {
                 project: "p".into(),
                 operation: ulid::Ulid::new().to_string(),
                 files: vec![file.clone()],
+                draft_files: vec![draft.file_name().unwrap().to_str().unwrap().into()],
             };
             let dir = paths.root.join(".project-deletions");
             fs::create_dir(&dir).unwrap();
@@ -1177,10 +1218,13 @@ mod tests {
             let temporary = staged(&file, &manifest.operation, 0);
             fs::rename(&file, &temporary).unwrap();
             if committed {
-                db.delete_project("p", ProjectDeleteMode::Keep).unwrap();
+                db.conn.lock().unwrap().execute_batch("BEGIN IMMEDIATE; DELETE FROM projects WHERE id='p'; DELETE FROM assets WHERE id='a'; COMMIT;").unwrap();
             }
+            drop(db);
+            let db = Database::open(&paths.db).unwrap();
             db.recover_project_deletions(&paths).unwrap();
             assert_eq!(file.exists(), !committed);
+            assert_eq!(draft.exists(), !committed);
             assert!(!temporary.exists());
             assert!(!journal.exists());
             db.recover_project_deletions(&paths).unwrap();
@@ -1217,6 +1261,77 @@ mod tests {
             .unwrap();
         db.recover_project_deletions(&paths).unwrap();
         assert!(!entry.path().exists());
+    }
+
+    #[test]
+    fn draft_cleanup_failure_remains_in_journal_and_retries_after_database_reopen() {
+        let (db, paths) = fixture();
+        asset(&db, &paths, "draft");
+        let draft = draft_workspace(&db, &paths, "draft");
+        FAIL_DRAFT_UNLINK.set(true);
+        let result = delete(&db, &paths);
+        FAIL_DRAFT_UNLINK.set(false);
+        assert!(!result.unwrap().cleanup_pending.is_empty());
+        assert!(db.get_asset("draft").unwrap().is_none());
+        assert!(draft.is_file());
+        let journal = fs::read_dir(paths.root.join(".project-deletions")).unwrap().next().unwrap().unwrap().path();
+        let manifest: Manifest = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(manifest.draft_files, vec![draft.file_name().unwrap().to_str().unwrap()]);
+        assert!(manifest.files.iter().enumerate().all(|(i, file)| !staged(file, &manifest.operation, i).exists()));
+        drop(db);
+        let db = Database::open(&paths.db).unwrap();
+        FAIL_DRAFT_UNLINK.set(true);
+        let retry = db.recover_project_deletions(&paths);
+        FAIL_DRAFT_UNLINK.set(false);
+        assert!(retry.is_err()); assert!(journal.is_file()); assert!(draft.is_file());
+        db.recover_project_deletions(&paths).unwrap();
+        assert!(!draft.exists()); assert!(!journal.exists());
+    }
+
+    #[test]
+    fn recovery_rechecks_shared_draft_references_and_rejects_external_names() {
+        let (db, paths) = fixture();
+        asset(&db, &paths, "draft");
+        let draft = draft_workspace(&db, &paths, "draft");
+        FAIL_DRAFT_UNLINK.set(true);
+        let result = delete(&db, &paths);
+        FAIL_DRAFT_UNLINK.set(false);
+        result.unwrap();
+        let journal = fs::read_dir(paths.root.join(".project-deletions")).unwrap().next().unwrap().unwrap().path();
+        let mut manifest: Manifest = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        let name = manifest.draft_files[0].clone();
+        db.conn.lock().unwrap().execute_batch("INSERT INTO assets(id,name) VALUES('retained','retained');").unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO analyses(id,asset_id,kind,payload) VALUES('retained-draft','retained','layer_workspace',?1)",[&name]).unwrap();
+        let outside = paths.root.join("outside.json"); fs::write(&outside, b"preserve").unwrap();
+        manifest.draft_files = vec!["../outside.json".into()];
+        fs::write(&journal, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        drop(db);
+        let db = Database::open(&paths.db).unwrap();
+        assert!(db.recover_project_deletions(&paths).is_err());
+        assert_eq!(fs::read(&outside).unwrap(), b"preserve"); assert!(journal.is_file());
+        manifest.draft_files = vec![name]; fs::write(&journal, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        db.recover_project_deletions(&paths).unwrap();
+        assert!(draft.is_file()); assert!(!journal.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn draft_symlink_failure_keeps_recovery_record_until_safe_to_retry() {
+        let (db, paths) = fixture();
+        asset(&db, &paths, "draft");
+        let draft = draft_workspace(&db, &paths, "draft");
+        let outside = paths.root.join("outside.json"); fs::rename(&draft, &outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &draft).unwrap();
+        assert!(!delete(&db, &paths).unwrap().cleanup_pending.is_empty());
+        drop(db);
+        let db = Database::open(&paths.db).unwrap();
+        assert!(db.recover_project_deletions(&paths).is_err());
+        assert_eq!(fs::read(&outside).unwrap(), b"editable draft");
+        assert_eq!(fs::read_dir(paths.root.join(".project-deletions")).unwrap().count(), 1);
+        fs::remove_file(&draft).unwrap(); fs::copy(&outside, &draft).unwrap();
+        db.recover_project_deletions(&paths).unwrap();
+        assert!(!draft.exists()); assert!(outside.is_file());
+        assert_eq!(fs::read_dir(paths.root.join(".project-deletions")).unwrap().count(), 0);
     }
 
     #[test]

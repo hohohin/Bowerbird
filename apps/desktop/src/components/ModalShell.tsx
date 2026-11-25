@@ -15,7 +15,7 @@ const FOCUSABLE = [
 
 function isVisibleFocusTarget(element: HTMLElement) {
   return !element.matches(":disabled")
-    && !element.closest("[hidden], [inert], details:not([open]) > :not(summary:first-of-type)")
+    && !element.closest('[hidden], [inert], [aria-hidden="true"], details:not([open]) > :not(summary:first-of-type)')
     && element.getClientRects().length > 0
     && getComputedStyle(element).visibility === "visible";
 }

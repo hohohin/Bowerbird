@@ -165,8 +165,8 @@ try {
   await page.locator('[data-collection-id="child"]').click();
   const reference = page.locator('[data-connection-entry="ref-two"] .folder-media-card');
   const other = page.locator('[data-connection-entry="child-0"] .folder-media-card');
-  await other.click({ modifiers: ["Control"] });
-  await reference.click({ modifiers: ["Control"] });
+  await other.click({ modifiers: [process.platform === "darwin" ? "Meta" : "Control"] });
+  await reference.click({ modifiers: [process.platform === "darwin" ? "Meta" : "Control"] });
   await reference.click({ button: "right" });
   await action().click();
   assert.equal(await page.evaluate(async () => (await import("/src/lib/pinterestSearch.ts")).usePinterestSearch.getState().request.assetId), "root-0");

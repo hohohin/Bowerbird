@@ -284,7 +284,7 @@ try {
   console.log('PASS library image preview and library-origin double-click reference');
 
   await reset();
-  await node('old').click({ modifiers: ['Control'] });
+  await node('old').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await assertNoPreview();
   assert.deepEqual(await picks(), []);
   assert.match(await node('old').getAttribute('class'), /is-selected/);

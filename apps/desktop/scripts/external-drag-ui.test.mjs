@@ -143,8 +143,8 @@ try {
       return original(command, args);
     };
   });
-  await page.locator('[data-canvas-node-id="old"]').click({ modifiers: ['Control'] });
-  await page.locator('[data-canvas-node-id="far"]').click({ modifiers: ['Control'], position: { x: 1, y: 1 } });
+  await page.locator('[data-canvas-node-id="old"]').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
+  await page.locator('[data-canvas-node-id="far"]').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'], position: { x: 1, y: 1 } });
   await page.locator('[data-canvas-node-id="far"]').click({ button: 'right', position: { x: 1, y: 1 } });
   await page.getByRole('menu', { name: '画板节点菜单', exact: true }).waitFor();
   assert.equal(await page.getByRole('menuitem', { name: '拖入到其他应用', exact: true }).count(), 0);

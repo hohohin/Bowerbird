@@ -9,3 +9,5 @@ Used under the included MIT license. Tests run offline without system codecs.
 
 The orientation test changes the existing `irot` property to 90° counterclockwise;
 it does not rotate the coded pixels, so it exercises actual display metadata.
+
+`synthetic-p3.heic` and `synthetic-pq.heic` are locally generated 384 × 128 strips with six linear BT.2020 RGB patches (18% gray, reference white, 4× white, red, green, blue). Apple Core Image encoded the first in 8-bit Display P3 with ICC and the second in 10-bit BT.2100 PQ with NCLX. They contain no photographs.

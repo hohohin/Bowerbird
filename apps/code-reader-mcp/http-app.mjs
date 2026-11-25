@@ -12,9 +12,24 @@ const equal = (left, right) => typeof left === 'string' && typeof right === 'str
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const escape = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 
+export const GEMINI_ORIGIN = 'https://mcp.bowerbird.cn';
+export const GEMINI_MAC_ORIGIN = 'https://mcp-mac.bowerbird.cn';
+export const GEMINI_REMOTE_PORT = 48732;
+export const GEMINI_SSH_USER = 'bowerbird-mcp';
+
 export function validateConfig(config) {
-  if (config?.origin !== 'https://mcp.bowerbird.cn' || !/^[A-Za-z0-9_-]{43,}$/.test(config.adminPassword) ||
+  if (![GEMINI_ORIGIN, GEMINI_MAC_ORIGIN].includes(config?.origin) || typeof config.adminPassword !== 'string' ||
+      !/^[A-Za-z0-9_-]{43,}$/.test(config.adminPassword) ||
       !Number.isInteger(config.port) || config.port < 0 || config.port > 65535) throw new Error('Invalid Gemini MCP configuration');
+  if (config.remotePort !== undefined &&
+      (!Number.isInteger(config.remotePort) || config.remotePort < 1 || config.remotePort > 65535)) {
+    throw new Error('Invalid Gemini SSH remote port');
+  }
+  if (config.sshUser !== undefined &&
+      (typeof config.sshUser !== 'string' || config.sshUser.length > 32 ||
+        !/^[a-z_]/.test(config.sshUser) || /[^a-z0-9_-]/.test(config.sshUser))) {
+    throw new Error('Invalid Gemini SSH user');
+  }
   if (config.oauthClient && (!object(config.oauthClient) ||
       !/^[A-Za-z0-9_-]{43}$/.test(config.oauthClient.clientId ?? '') ||
       !/^[A-Za-z0-9_-]{43}$/.test(config.oauthClient.clientSecret ?? '') ||

@@ -441,6 +441,57 @@ pub fn delete_asset_files(store_path: Option<&Path>, thumb_path: Option<&Path>) 
     }
 }
 
+/// Capture draft pointers before asset rows cascade away. In-memory callers must supply a root.
+pub(crate) fn draft_workspace_files(conn: &Connection, ids: &[String], root: Option<&Path>) -> AppResult<Vec<PathBuf>> {
+    if ids.is_empty() { return Ok(Vec::new()); }
+    let mut statement = conn.prepare("SELECT DISTINCT payload FROM analyses WHERE kind='draft_workspace' AND asset_id IN (SELECT value FROM json_each(?1))")?;
+    let names = statement.query_map([serde_json::to_string(ids)?], |row| row.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+    if names.is_empty() { return Ok(Vec::new()); }
+    let root = if let Some(root) = root { root.to_path_buf() } else {
+        let file: String = conn.query_row("SELECT file FROM pragma_database_list WHERE name='main'", [], |row| row.get(0))?;
+        let Some(parent) = Path::new(&file).parent().filter(|parent| parent.is_absolute()) else { return Ok(Vec::new()); };
+        parent.to_path_buf()
+    };
+    Ok(names.into_iter().filter(|name| name.strip_suffix(".json").is_some_and(|id| id.parse::<Ulid>().is_ok()))
+        .map(|name| root.join("layers").join(name)).collect())
+}
+
+/// Call only after commit, while holding the connection: a shared draft/layer pointer keeps its file.
+pub(crate) fn cleanup_draft_workspace_files(conn: &Connection, files: &[PathBuf]) -> Vec<String> {
+    let mut failures = Vec::new();
+    for file in files {
+        let result = (|| -> AppResult<()> {
+            let name = file.file_name().and_then(|name| name.to_str()).ok_or_else(|| AppError::Other("草稿工程路径无效".into()))?;
+            if name.strip_suffix(".json").is_none_or(|id| id.parse::<Ulid>().is_err()) { return Ok(()); }
+            let referenced: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM analyses WHERE kind IN ('draft_workspace','layer_workspace') AND payload=?1)", [name], |row| row.get(0))?;
+            if referenced { return Ok(()); }
+            let meta = match std::fs::symlink_metadata(file) {
+                Ok(meta) => meta,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
+            let directory = file.parent().unwrap();
+            let root = directory.parent().unwrap();
+            if !meta.is_file() || meta.file_type().is_symlink()
+                || std::fs::canonicalize(directory)? != std::fs::canonicalize(root)?.join("layers") {
+                return Err(AppError::Other("草稿工程路径不安全，已保留文件".into()));
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if meta.file_attributes() & 0x400 != 0 { return Err(AppError::Other("草稿工程是链接文件，已保留".into())); }
+            }
+            std::fs::remove_file(file)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            tracing::warn!("draft workspace cleanup pending for {}: {error}", file.display());
+            failures.push(error.to_string());
+        }
+    }
+    failures
+}
+
 /// 文件 stem 净化（`rename_asset_files` 用）：替换 Windows 非法字符与控制字符
 /// （对齐 projects.rs `move_destination` 的替换表）、trim 首尾空白 + 尾随 `.`/空格、
 /// 限长 64 字符；空或命中 Windows 保留名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）→ 回退 id。
@@ -872,11 +923,13 @@ impl Database {
             )
             .optional()?
             .unwrap_or((None, None));
+        let draft_files = draft_workspace_files(&conn, &[id.to_string()], None)?;
         let tx = conn.unchecked_transaction()?;
         crate::core::project_canvas::hide_empty_generation_cards_for_asset(&tx, id, None)?;
         crate::core::project_canvas::hide_asset_canvas_nodes(&tx, id, None)?;
         tx.execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![id])?;
         tx.commit()?;
+        cleanup_draft_workspace_files(&conn, &draft_files);
         drop(conn); // 释放锁后再做文件 IO，避免阻塞其它 DB 操作。
         // External previews are shared cache files; neither they nor originals belong to this row.
         if !external {

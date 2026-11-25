@@ -17,12 +17,13 @@ mod quick_transfer;
 #[cfg(windows)]
 mod windows_shell;
 
+pub use core::canvas_frequent_assets::CanvasFrequentAssetsPreferences;
 pub use media::thumb::video_thumbnail_worker;
 pub use media::probe::video_probe_worker;
 pub use agent_generation_wait::agent_generation_wait_worker;
 
 #[cfg(debug_assertions)]
-#[path = "../tests/pinterest_native_fixture.rs"]
+#[path = "../tests/support/pinterest_native_fixture.rs"]
 mod pinterest_native_fixture;
 #[cfg(debug_assertions)]
 pub use pinterest_native_fixture::run_pinterest_search_fixture;
@@ -648,6 +649,10 @@ pub fn run() {
             commands::library::import_folder,
             commands::library::import_image_bytes,
             commands::library::save_annotated_image,
+            commands::drafts::draft_workspace_asset_ids,
+            commands::drafts::draft_workspace_load,
+            commands::drafts::draft_workspace_save,
+            commands::drafts::draft_workspace_canvas_upsert,
             commands::layers::layer_workspace_asset_ids,
             commands::layers::layer_workspace_load,
             commands::layers::layer_workspace_save,
@@ -733,6 +738,7 @@ pub fn run() {
             commands::comfy_video::comfy_video,
             commands::comfy_video::comfy_video_check,
             commands::comfy_setup::comfy_video_environment,
+            commands::comfy_setup::comfy_video_log_tail,
             commands::video_replication::video_replication,
             commands::video_replication::collection::video_collection,
             commands::library::count_assets,

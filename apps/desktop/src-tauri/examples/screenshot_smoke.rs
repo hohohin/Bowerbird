@@ -8,11 +8,10 @@ pub mod settings;
 mod file_workspace;
 mod migrate { pub type PendingMove = serde_json::Value; }
 mod core {
-    pub use crate::settings;
-    // This fixture never opens a database or uses canvas preferences.
     pub mod canvas_frequent_assets {
-        pub type CanvasFrequentAssetsPreferences = serde_json::Value;
+        pub use bowerbird_desktop_lib::CanvasFrequentAssetsPreferences;
     }
+    pub use crate::settings;
 }
 #[path = "../src/commands/screenshot.rs"]
 pub mod screenshot;

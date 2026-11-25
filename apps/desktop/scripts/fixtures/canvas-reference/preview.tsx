@@ -10,6 +10,7 @@ import { createRoot } from "react-dom/client";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { ImageAnnotator } from "../../../src/components/ImageAnnotator";
+import { DraftEditor } from "../../../src/components/DraftEditor";
 import { useStore } from "../../../src/store";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { ToastViewport } from "../../../src/components/ToastViewport";
@@ -63,6 +64,8 @@ if (sessionStorage.getItem("canvas-media-dimensions")) {
   }
 }
 assets.push(...JSON.parse(sessionStorage.getItem("reference-drafts") || "[]"));
+const draftWorkspaces = new Map<string, any>(JSON.parse(sessionStorage.getItem("reference-draft-workspaces") || "[]"));
+const draftSaves = new Map<string, string>();
 if (detailRoute) assets.push(...Array.from({ length: 60 }, (_, index) => ({ ...assets[0], id: `detail-${index}`, name: `返回位置测试 ${index}` })));
 if (canvasLibrary) {
   const hidden: string[] = JSON.parse(sessionStorage.getItem("canvas-only-assets") || "[]");
@@ -82,7 +85,8 @@ const currentFiles = (entries: any[]) => entries.flatMap(entry => fileChanges.ha
 w.snapshot = () => structuredClone(snapshot);
 w.save = () => {
   sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
-  sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation" || asset.source === "external" || asset.source === "video-frame" || asset.source === "video-audio" || asset.ext === "mp4")));
+  sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation" || asset.source === "draft" || asset.source === "external" || asset.source === "video-frame" || asset.source === "video-audio" || asset.ext === "mp4")));
+  sessionStorage.setItem("reference-draft-workspaces", JSON.stringify([...draftWorkspaces]));
 };
 w.emitFixtureEvent = (name: string, payload: unknown) => {
   for (const [handler, event] of listeners) if (event === name) callbacks.get(handler)?.({ event, id: handler, payload });
@@ -293,8 +297,17 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "project_canvas_node_create") {
       if (w.failNodeSave) throw "模拟草稿卡片保存失败";
+      const existing = snapshot.nodes.find((node: any) => node.id === args.value.id);
+      if (existing) {
+        if (Object.entries(args.value).some(([key, value]) => JSON.stringify(existing[key]) !== JSON.stringify(value))) {
+          throw "模拟重复节点内容不一致";
+        }
+        return existing;
+      }
       const node = { ...args.value, hiddenAt: null, createdAt: 10, updatedAt: 10 };
-      snapshot.nodes.push(node); return node;
+      snapshot.nodes.push(node);
+      if (w.loseNodeSaveReply) throw "模拟草稿卡片确认失败";
+      return node;
     }
     if (command === "project_canvas_note_update") {
       if (w.failNoteSave) throw "模拟文本保存失败";
@@ -440,6 +453,36 @@ w.__TAURI_INTERNALS__ = {
       }
       annotationSnapshots.set(asset.id, { id: crypto.randomUUID(), dataUrl: args.dataUrl, meta });
       return asset;
+    }
+    if (command === "draft_workspace_load") return structuredClone(draftWorkspaces.get(args.assetId) ?? null);
+    if (command === "draft_workspace_asset_ids") return [...draftWorkspaces.keys()];
+    if (command === "draft_workspace_save") {
+      if (w.failDraftSave) throw "模拟草稿保存失败";
+      const previousId = draftSaves.get(args.saveId);
+      if (previousId) return assets.find(asset => asset.id === previousId);
+      const asset = { id: `draft-${assets.length}`, name: "草稿", ext: "png", width: args.document.width, height: args.document.height,
+        store_path: args.dataUrl, source: "draft" };
+      assets.push(asset);
+      draftWorkspaces.set(asset.id, structuredClone(args.document));
+      draftSaves.set(args.saveId, asset.id);
+      return asset;
+    }
+    if (command === "draft_workspace_canvas_upsert") {
+      if (w.failNodeSave) throw "模拟草稿卡片保存失败";
+      const source = snapshot.nodes.find((node: any) => node.id === args.sourceNodeId);
+      if (args.sourceNodeId && (!source || source.hiddenAt != null || source.projectId !== args.projectId)) throw "草稿原卡片已不可用";
+      const documentId = (node: any) => JSON.parse(node.payloadJson).draft_document_id ?? draftWorkspaces.get(node.assetId)?.documentId;
+      let node = source && documentId(source) === args.documentId ? source : snapshot.nodes.find((candidate: any) =>
+        candidate.projectId === args.projectId && candidate.kind === "asset" && candidate.hiddenAt == null && documentId(candidate) === args.documentId);
+      if (node?.assetId === args.assetId && JSON.parse(node.payloadJson).draft_document_id === args.documentId) return structuredClone(node);
+      if (!node) {
+        node = { ...args.newNode, hiddenAt: null, createdAt: 10, updatedAt: 10 };
+        snapshot.nodes.push(node);
+      }
+      node.assetId = args.assetId;
+      node.payloadJson = JSON.stringify({ ...JSON.parse(node.payloadJson), snapshot: JSON.parse(args.newNode.payloadJson).snapshot, draft_document_id: args.documentId });
+      if (w.loseNodeSaveReply) throw "模拟草稿卡片确认失败";
+      return structuredClone(node);
     }
     if (command === "list_analyses_by_asset") {
       const entry = annotationSnapshots.get(args.assetId);

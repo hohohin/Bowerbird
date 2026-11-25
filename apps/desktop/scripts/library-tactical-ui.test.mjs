@@ -224,7 +224,7 @@ try {
   assert.equal(await mark.evaluate(el => getComputedStyle(el).pointerEvents), 'none');
   assert.equal(await card.evaluate(el => getComputedStyle(el, '::after').content), 'none');
   await page.screenshot({ path: `${output}/hover.png` });
-  await card.click({ modifiers: ["Control"] }); await page.mouse.move(0, 0);
+  await card.click({ modifiers: [process.platform === "darwin" ? "Meta" : "Control"] }); await page.mouse.move(0, 0);
   assert.equal(await card.getAttribute("aria-pressed"), "true");
   assert.equal(await card.evaluate(element => getComputedStyle(element, "::after").opacity), "1", "selected points persist after pointer exit");
   await page.getByRole("button", { name: "取消选择", exact: true }).click();

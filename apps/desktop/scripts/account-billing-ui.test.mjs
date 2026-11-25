@@ -99,7 +99,7 @@ try {
   assert.match(await plan.innerText(), /工作流/);
   assert.match(await plan.innerText(), /本地生成/);
   await assertComparison(plan);
-  await yearly.click();
+  await yearly.locator('..').click();
   assert.equal(await yearly.isChecked(), true);
   assert.equal(await monthly.isChecked(), false);
   await yearly.focus();
@@ -111,17 +111,17 @@ try {
   await assertSingleRechargeRow(recharge);
   await assertAmount(20);
   for (const amount of [5, 10, 20, 50, 100, 500]) {
-    await amountRadio(amount).click();
+    await amountRadio(amount).locator('..').click();
     await assertAmount(amount);
   }
-  await amountRadio(20).click();
+  await amountRadio(20).locator('..').click();
   await amountRadio(20).focus();
   await page.keyboard.press('ArrowRight');
   await assertAmount(50);
   await page.keyboard.press('ArrowLeft');
   await assertAmount(20);
 
-  await custom.click();
+  await custom.locator('..').click();
   await customInput.waitFor();
   for (const amount of [1, 7, 25, 1234]) {
     await customInput.fill(String(amount));
@@ -133,7 +133,7 @@ try {
   }
   await customInput.fill('25');
   assert.match(await displayedBcoin(), /^500(?:Bcoin)?$/i);
-  await amountRadio(20).click();
+  await amountRadio(20).locator('..').click();
   await assertAmount(20);
 
   for (const section of [plan, recharge]) {
@@ -155,13 +155,13 @@ try {
       balances: { daily: 0, sub: 0, topup: 400 }, policy: { ...window.free.policy, can_use_byo: tier !== 'free' } } }), tier);
     await plan.getByText(`当前方案 · ${tier === 'free' ? 'Free' : tier === 'pro' ? 'Pro' : 'Studio'}`, { exact: true }).waitFor();
     assert.equal(await recharge.getByRole('radio').count(), 7);
-    assert.equal(await page.getByRole('button', { name: '领取一次 7 天 Pro 功能体验' }).count(), tier === 'free' ? 1 : 0);
+    assert.equal(await page.getByRole('button', { name: '领取 7 天 Pro 体验' }).count(), tier === 'free' ? 1 : 0);
   }
   for (const offline_state of ['expired', 'invalid']) {
     await page.evaluate(offline_state => window.store.setState({ cloudEntitlement: { ...window.free, offline_state } }), offline_state);
     await plan.getByText('权益需刷新', { exact: true }).waitFor();
     assert.equal(await plan.getByText('当前方案 · Free', { exact: true }).count(), 0);
-    assert.equal(await page.getByRole('button', { name: '领取一次 7 天 Pro 功能体验' }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: '领取 7 天 Pro 体验' }).count(), 0);
     assert.match(await recharge.locator('.account-billing-balance-value').innerText(), /^—\s*Bcoin$/);
     await page.getByRole('region', { name: '账号概览' }).getByText('权益待同步', { exact: true }).waitFor();
   }
@@ -179,17 +179,17 @@ try {
     await page.screenshot({ animations: 'disabled', path: `.tmp/account-billing/${theme}-plan.png` });
     await recharge.scrollIntoViewIfNeeded();
     await page.screenshot({ animations: 'disabled', path: `.tmp/account-billing/${theme}-recharge.png` });
-    await custom.click();
+    await custom.locator('..').click();
     await customInput.fill('25');
     await customInput.blur();
     await page.mouse.move(5, 5);
     await customInput.scrollIntoViewIfNeeded();
     await page.screenshot({ animations: 'disabled', path: `.tmp/account-billing/${theme}-custom.png` });
-    await amountRadio(20).click();
+    await amountRadio(20).locator('..').click();
   }
   await page.setViewportSize({ width: 600, height: 650 });
   await assertSingleRechargeRow(recharge, true);
-  await amountRadio(20).click();
+  await amountRadio(20).locator('..').click();
   await recharge.locator('.account-billing-topup-options').evaluate(el => { el.scrollLeft = 0; });
   for (const section of [plan, recharge]) {
     await section.scrollIntoViewIfNeeded();
@@ -206,7 +206,7 @@ try {
   await plan.getByText('登录后查看方案', { exact: true }).waitFor();
   assert.match(await recharge.locator('.account-billing-balance-value').innerText(), /^—\s*Bcoin$/);
   assert.equal(await page.getByLabel('兑换 Pro', { exact: true }).count(), 0);
-  assert.equal(await page.getByRole('button', { name: '领取一次 7 天 Pro 功能体验' }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: '领取 7 天 Pro 体验' }).count(), 0);
   assert.equal(await page.getByRole('region', { name: '积分明细', exact: true }).count(), 0);
 
   // Start at the real topbar. Login returns directly to the same account overview.
@@ -249,11 +249,11 @@ try {
   const standaloneRecharge = standalone.getByRole('region', { name: 'Bcoin 充值', exact: true });
   await standalonePlan.getByText('当前方案 · Pro', { exact: true }).waitFor();
   await assertComparison(standalonePlan);
-  await standalonePlan.getByRole('radio', { name: /359/ }).click();
+  await standalonePlan.getByRole('radio', { name: /359/ }).locator('..').click();
   assert.equal(await standalonePlan.getByRole('radio', { name: /359/ }).isChecked(), true);
-  await standaloneRecharge.getByRole('radio', { name: /^充值 ¥500，/ }).click();
+  await standaloneRecharge.getByRole('radio', { name: /^充值 ¥500，/ }).locator('..').click();
   assert.equal((await standaloneRecharge.getByLabel('充值到账 Bcoin', { exact: true }).innerText()).replace(/,/g, ''), '10000');
-  await standaloneRecharge.getByRole('radio', { name: /自定义/ }).click();
+  await standaloneRecharge.getByRole('radio', { name: /自定义/ }).locator('..').click();
   await standaloneRecharge.getByLabel('自定义充值金额（元）', { exact: true }).fill('25');
   assert.equal(await standaloneRecharge.getByLabel('充值到账 Bcoin', { exact: true }).innerText(), '500');
   assert.equal(await standalone.getByRole('button', { name: '购买暂未开放', exact: true }).isDisabled(), true);

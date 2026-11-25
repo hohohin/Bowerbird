@@ -57,7 +57,7 @@ const assetsOf = (entries: ConnectionEntry[]) => [...new Map(entries.map(entry =
 const visibleEntry = (entry: ConnectionEntry) => !originalDeletionFor(entry.asset_id, entry.asset.store_path);
 const browsePositions = new Map<string, LibraryBrowsePosition>();
 
-export function ConnectedCollections({ media = "images", projectId = null, positionId = "default", sidebarBody, showGallery, selectedFolderId, foldersExpanded, onFoldersExpandedChange, onClose, onNavigate, onCreateProject, onAssetsChange, toolbarActions, onInsertAsset, onOpenAsset, onAssetContextMenu, catalogPreview }: Omit<ComponentProps<typeof CategorizedLibrary>, "kind"> & {
+export function ConnectedCollections({ media = "images", projectId = null, positionId = "default", sidebarBody, showGallery, selectedFolderId, foldersExpanded, onFoldersExpandedChange, onClose, onNavigate, onCreateProject, onAssetsChange, toolbarActions, onPickImages, onInsertAsset, onOpenAsset, onAssetContextMenu, catalogPreview }: Omit<ComponentProps<typeof CategorizedLibrary>, "kind"> & {
   showGallery: boolean; selectedFolderId: string | null; foldersExpanded: boolean; onFoldersExpandedChange: (expanded: boolean) => void;
 }) {
   const mode = useLibraryModeStore();
@@ -328,7 +328,8 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
   function openDetail(asset: Pick<Asset, "id">) { if (onOpenAsset) onOpenAsset(asset); else useStore.getState().openDetail(asset.id); }
   function openAsset(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
-    if (onInsertAsset) onInsertAsset(asset);
+    if (onPickImages) void run(() => onPickImages([asset]));
+    else if (onInsertAsset) onInsertAsset(asset);
     else if (isAudioAsset(asset)) {
       const state = useStore.getState();
       if (state.boardOpen || state.genEditing) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
@@ -357,6 +358,7 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
     });
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
+    if (onPickImages) return;
     const entry = entryOf(asset);
     const entryIds = selected.has(entry.id) ? [...selected] : [entry.id];
     openCatalogMenu({
@@ -416,14 +418,19 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
   useLayoutEffect(() => {
     if (!searching && galleryReady) searchReturn.current = undefined;
   });
-  return <section ref={root} data-catalog-searching={searching || undefined} className="categorized-library library-tactical connected-collections" aria-label="按文件夹浏览素材" data-creation-pick-disabled={multiple || busy} data-file-import-project-id={scope ?? ""}
+  return <section ref={root} data-catalog-searching={searching || undefined} className="categorized-library library-tactical connected-collections" aria-label="按文件夹浏览素材" data-creation-pick-disabled={!!onPickImages || multiple || busy} data-file-import-project-id={scope ?? ""}
     data-file-import-collection-id={compact && selectedFolder ? selectedFolder.id : undefined}
     data-file-import-collection-name={compact && selectedFolder ? selectedFolder.name : undefined}
     data-file-import-collection-available={compact && selectedFolder ? canDropInFolder(selectedFolder) : undefined}
     style={{ ...glass.style, display: showGallery ? undefined : "none" } as CSSProperties}>
     {showGallery && <>{glass.definition}<LibraryMotion/>
     <div className="file-view-heading">
-      {selected.size > 0 || multiple ? <CatalogSelectionBar count={selected.size} busy={busy} projectId={projectId} onFinish={finishSelection} onSelectAll={selectAll}
+      {selected.size > 0 || multiple ? <CatalogSelectionBar onPickImages={onPickImages && (() => void run(async () => {
+        const entries = await resolve([...selected]);
+        if (!canShowOverlay() || filterRef.current !== filterKey) return;
+        await onPickImages(assetsOf(entries));
+        finishSelection();
+      }))} count={selected.size} busy={busy} projectId={projectId} onFinish={finishSelection} onSelectAll={selectAll}
         onMove={() => setMoveEntries({ entryIds: [...selected] })}
         onAssign={() => void run(async () => { const entries = await resolve([...selected]); if (canShowOverlay()) setAssign(assetsOf(entries).map(asset => asset.id)); })}
         onTags={trigger => void run(async () => {
@@ -433,7 +440,7 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
         })}
         onAdd={media !== "audios" ? () => void run(async () => { const key = filterRef.current; const entries = await resolve([...selected]); if (!canShowOverlay() || filterRef.current !== key) return; await addMaterialAssets(assetsOf(entries), projectId, onNavigate ?? onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); }) : undefined}/>
       : catalogPreview ? catalogPreview.heading(selectedFolder?.name ?? "全部文件夹素材", sections.reduce((count, section) => count + section.count, 0))
-      : <div className="video-collection-controls"><LibraryCatalogControls filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared} onSearchStart={() => {
+      : <div className="video-collection-controls"><LibraryCatalogControls fixedMedia={!!onPickImages} filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared} onSearchStart={() => {
       if (galleryReady) searchReturn.current = scroll.current?.scrollTop;
     }} onStartSelection={() => { setMultiple(true); requestAnimationFrame(() => root.current?.querySelector<HTMLButtonElement>(".catalog-selection button")?.focus()); }}>
       <button className="library-filter-trigger" aria-label="刷新文件夹" title="刷新同步" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}
@@ -461,13 +468,13 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
               const folder = foldersById.get(id);
               return folder && foldersById.get(folder.root_id)?.available === false ? "文件夹已离线" : folder?.scanning ? "正在读取文件夹…" : null;
             }}
-            onAssetsChange={assetsChanged} onSelect={select} onActivate={activate} onOpen={openAsset} onContextMenu={context}
+            onAssetsChange={assetsChanged} onSelect={select} onActivate={onPickImages ? undefined : activate} onOpen={openAsset} onContextMenu={context}
             renderItem={(head, style, ratio, location, pageRevision) => <CatalogAssetCard key={entryKey(head)} asset={head} group={(head as EntryAsset).connectionGroup} itemKey={entryKey}
               style={style} ratio={ratio} selected={selected} revision={pageRevision} onBrowseGroup={onBrowseGroup}
               onSelect={(asset, additive, range) => select(asset, additive, range, location)} onOpen={openAsset} onContextMenu={(asset, x, y) => context(asset, x, y, location)}
               renderMedia={(asset, mediaStyle, mediaRatio) => { const entry = entryOf(asset); return <div key={entry.id} data-connection-entry={entry.id} data-reference={entry.is_reference || undefined} className="connected-media" style={mediaStyle}>
               <FileMediaCard entry={{ path: asset.store_path ?? "", name: entry.name, directory: false, preview: asset.thumb_path, version: entry.version ?? `${asset.id}:${asset.file_mtime}:${asset.thumb_path ?? pageRevision}` }} expectedVersion={entry.version ?? undefined} style={{ width: "100%", height: "100%" }} aspectRatio={mediaRatio} selected={selected.has(entry.id)} revision={pageRevision} labels={[]} assetId={asset.id} generated={!!(head as EntryAsset).connectionGroup?.length || !!asset.generation_session_id || asset.source === "comfy-h3"} duration={asset.duration}
-                onSelect={(additive, range) => select(asset, additive, range, location)} onActivate={!multiple ? () => activate(asset) : undefined} onOpen={() => openAsset(asset)} onContextMenu={(x, y) => context(asset, x, y, location)}
+                onSelect={(additive, range) => select(asset, additive, range, location)} onActivate={!multiple && !onPickImages ? () => activate(asset) : undefined} onOpen={() => openAsset(asset)} onContextMenu={(x, y) => context(asset, x, y, location)}
                 dragAssetIds={() => {
                   if (!entry.available || !visibleEntry(entry)) return [];
                   if (!selected.has(entry.id)) return [entry.asset_id];

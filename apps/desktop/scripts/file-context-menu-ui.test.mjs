@@ -67,7 +67,7 @@ try {
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
     await first.click();
-    await second.click({ modifiers: ['Control'] });
+    await second.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
     await first.click({ button: 'right' });
     await page.getByRole('menu', { name: '已选 2 项素材的操作', exact: true }).waitFor();
     assert.deepEqual(await page.evaluate(() => window.store.getState().contextMenu.fileSelection.assets.map(a => a.id)), ['external-original', 'external-other']);
@@ -89,7 +89,7 @@ try {
     await first.click(); await second.click({ modifiers: ['Shift'] });
     assert.equal(await page.locator('.folder-media-card[aria-pressed="true"]').count(), 2, 'shift range');
     await page.getByRole('button', { name: '取消文件选择', exact: true }).click();
-    await first.focus(); await page.keyboard.press('Control+a');
+    await first.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a');
     assert.equal(await page.locator('.folder-media-card[aria-pressed="true"]').count(), 2, 'select all only includes media');
     await page.getByRole('button', { name: '取消文件选择', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => [...window.store.getState().selectedIds]), ['a', 'b']);
@@ -135,7 +135,7 @@ try {
   await page.getByRole('button', { name: '取消', exact: true }).click();
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === 'local_file_delete').length), 0, 'cancel never deletes');
   // Execute only synthetic deletion; a partial failure retries only the failed file.
-  await renamed.click(); await second.click({ modifiers: ['Control'] }); await renamed.click({ button: 'right' });
+  await renamed.click(); await second.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] }); await renamed.click({ button: 'right' });
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole('menuitem', { name: '删除本机文件', exact: true }).click();
   await page.getByRole('dialog', { name: '删除 2 个本机文件', exact: true }).waitFor();
@@ -157,7 +157,7 @@ try {
   await page.reload();
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await page.getByRole('button', { name: '文件浏览器', exact: true }).click();
-  await first.waitFor(); await first.click(); await second.click({ modifiers: ['Control'] });
+  await first.waitFor(); await first.click(); await second.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await page.getByRole('button', { name: '把所选素材添加到新项目', exact: true }).click();
   await page.waitForFunction(() => window.store.getState().activeProjectId === 'library-project');
   await page.waitForFunction(() => window.store.getState().assets.length === 2);
@@ -178,12 +178,16 @@ try {
   await page.screenshot({ path: '.tmp/file-context-menu/new-project-library.png' });
   await page.getByRole('tab', { name: '全局素材', exact: true }).click();
   await page.setViewportSize({ width: 760, height: 840 });
-  await page.getByRole('button', { name: '颜色筛选', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.canvas-source-panel .library-controls-host')?.classList.contains('is-compact'));
+  const colorsButton = page.getByRole('button', { name: '颜色筛选', exact: true });
+  const moreControls = page.getByRole('button', { name: '更多素材库控件', exact: true });
+  if (await moreControls.getAttribute('aria-expanded') !== 'true') await moreControls.click();
+  await colorsButton.click();
   await page.waitForTimeout(240);
   const colorLayout = await page.locator('.canvas-source-panel .library-color-control').evaluate(el => {
     const heading = el.closest('.file-view-heading');
     const panel = document.querySelector('.canvas-source-panel').getBoundingClientRect();
-    const nav = heading.querySelector('.library-browser-heading').getBoundingClientRect();
+    const nav = heading.querySelector('.library-view-switch').getBoundingClientRect();
     return { right: el.getBoundingClientRect().right, limit: panel.right, left: nav.left,
       count: el.querySelectorAll('.library-filter-colors button').length };
   });

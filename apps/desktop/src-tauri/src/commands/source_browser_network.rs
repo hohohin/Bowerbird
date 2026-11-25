@@ -195,7 +195,7 @@ async fn capture_mac_resource(webview: &Webview, url: &str, page: &Url, maximum:
     let url = CString::new(url).map_err(|_| AppError::Other("媒体地址无效。".into()))?;
     let id = CString::new(uuid::Uuid::new_v4().to_string()).unwrap();
     let native_id = id.clone();
-    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let (sender, receiver) = tokio::sync::oneshot::channel::<AppResult<CaptureResource>>();
     let browser = webview.clone();
     let page = page.clone();
     webview.with_webview(move |view| {

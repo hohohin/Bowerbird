@@ -468,7 +468,7 @@ pub fn repair_migrated_library_paths(
 
 /// 启动时复制并校验，旧库完整保留。
 /// 返回规范化后的新根目录，供命令层写入设置。
-fn migrate_library(db: &Database, paths: &LibraryPaths, new_root: &Path) -> AppResult<String> {
+pub(crate) fn migrate_library(db: &Database, paths: &LibraryPaths, new_root: &Path) -> AppResult<String> {
     validate_target(&paths.root, new_root)?;
     let new_paths = LibraryPaths::init(normalize(new_root)?)?;
     let new_root = new_paths.root.clone();
