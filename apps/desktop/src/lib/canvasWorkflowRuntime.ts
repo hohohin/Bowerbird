@@ -175,7 +175,7 @@ export class CanvasWorkflowController {
   private beginStart(nodeId: string, kind: CardStart["kind"], background = false): CardStart {
     const origin = this.host.getState();
     const cancellation = new AbortController();
-    const unsubscribe = this.host.subscribe?.(state => {
+    let unsubscribe = this.host.subscribe?.(state => {
       if (origin.cloudAuth?.user_id !== state.cloudAuth?.user_id) cancellation.abort();
     });
     const start: CardStart = { kind, signal: cancellation.signal, cancel: () => cancellation.abort(), current: () => {
