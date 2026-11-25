@@ -67,6 +67,14 @@ macOS 的双架构回执单独维护。[macOS 全量发布验收](../macOS/RELEA
 
 自 2026-11-21 起，Windows 官网发布按用户授权在缺少 Authenticode 时继续，保留 Tauri 更新签名和公网安装包完整回读验签。下文可信发布者签名验收用于接入该能力时。
 
+## Windows 26.11.2504 已公开发布（2026-11-25）
+
+发布源码 `3d725df56`。免费、未登录和 Pro 到期时均可编辑画板工作流，需 Pro 的卡片在执行时校验权益。Agent 支持取消启动中的任务，并改善状态恢复。画板改进运行中卡片的连线，Windows 本地 H3 改进内存处理。
+
+TypeScript、Vite 生产构建和安装器静态校验通过。Rust 原生回归 1518 项通过，70 项按配置忽略。画板编辑与权限、Agent 停止、连线和项目状态同步通过定向回归。另跑的 H3 界面夹具已验证权益过期后可保存编辑，随后定位运行按钮超时。
+
+官网和 Windows 自动更新已切换。CDN 完整回读并通过 Tauri 验签，安装包 SHA-256 为 `4b891b3f021bda071059c9ab781d64b81169aa0a39c79bf809cfc5a7afc4ddce`。按既有授权跳过 Authenticode。回滚目标为 26.11.2503，旧版应用内安装及重启待实机验证。回执见 `.tmp/release-windows-26.11.2504/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2504_x64-setup.exe)
+
 ## Windows 26.11.2503 已公开发布（2026-11-25）
 
 北京时间 17:26:59 公网核验通过，发布源码 `b6581ad0a`，SQLite 0062。画板工具重新分组，改进卡片与快捷入口的可读性，重构画板状态、工作流运行及保存。[画板集成回执](../project_logs/2026-11-25-canvas-dev-integration.md)
