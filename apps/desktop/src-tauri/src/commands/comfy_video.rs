@@ -7,6 +7,7 @@ use rusqlite::OptionalExtension;
 use tauri::{AppHandle, Emitter, State};
 use crate::{cloud::{AuthClient, EntitlementService}, core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}, media::audio};
 use crate::core::library::{GenerationHistory, GenerationHistoryTurn};
+use super::comfy_memory;
 #[path = "comfy_progress.rs"]
 mod progress;
 #[path = "comfy_video_r2v.rs"]
@@ -384,14 +385,23 @@ async fn prepare_prompt(http: &reqwest::Client, db: &Database, record: &Record, 
 // /prompt has no idempotency guarantee: a durable submitted marker prevents retries.
 async fn submit_prompt(http: &reqwest::Client, path: &Path, record: &mut Record, request: &str, prompt: Value, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<()> {
     let base = endpoint(&record.input.endpoint)?;
+    let weights = model_names_for_mode(record.input.mode)[0];
+    owner()?;
+    let mut cache = comfy_memory::before_submit(http, &base, weights).await;
     owner()?;
     record.submitted = true; save(path,record)?;
+    cache.submitted(weights);
     let response = http.post(format!("{base}/prompt")).json(&json!({"prompt":prompt,"client_id":request,"extra_data":{"bowerbird_request_id":request,"workflow":record.input.mode.workflow()}}))
         .timeout(Duration::from_secs(25)).send().await.map_err(|e| error(format!("提交结果未知：{e}")))?;
     let code = response.status();
     let response: Value = response.json().await.map_err(|_| error("提交结果未知，请继续查询原任务"))?;
+    drop(cache);
     if !code.is_success() {
-        let message = format!("ComfyUI 拒绝生成（{code}）：{}",response.to_string().chars().take(1500).collect::<String>());
+        let detail = response.to_string();
+        let message = match comfy_memory::host_buffer_guidance(&base, &detail).await {
+            Some(guidance) => guidance.into(),
+            None => format!("ComfyUI 拒绝生成（{code}）：{}", detail.chars().take(1500).collect::<String>()),
+        };
         record.failure = Some(message.clone()); save(path,record)?; return Err(error(message));
     }
     record.prompt_id = Some(response["prompt_id"].as_str().ok_or_else(|| error("ComfyUI 提交结果未知，请继续取回原任务"))?.into());
@@ -453,7 +463,9 @@ async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path:
         let mut message = result["status"]["messages"].as_array().and_then(|messages| messages.iter().find(|m| m[0] == "execution_error" || m[0] == "execution_interrupted"))
             .map(|m| format!("ComfyUI 生成失败：{}",m[1]["exception_message"].as_str().unwrap_or("任务被中断"))).unwrap_or_else(|| "ComfyUI 生成失败".into());
         let diagnostic = message.to_ascii_lowercase();
-        if diagnostic.contains("cuda out of memory") || diagnostic.contains("cuda_error_out_of_memory") {
+        if let Some(guidance) = comfy_memory::host_buffer_guidance(&base, &message).await {
+            message = guidance.into();
+        } else if diagnostic.contains("cuda out of memory") || diagnostic.contains("cuda_error_out_of_memory") {
             message = format!("本机视频生成时显存不足。请关闭占用显存的应用，或降低视频分辨率后重新生成。{message}");
         }
         record.failure = Some(message.clone()); save(path,record)?; return Ok(status("failed",&message));

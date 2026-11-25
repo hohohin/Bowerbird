@@ -5,6 +5,7 @@ use super::{
 };
 use crate::{
     cloud::AuthClient,
+    commands::comfy_memory,
     commands::comfy_video::{client, endpoint, json_response, upload_image_path},
     error::{AppError, AppResult},
 };
@@ -208,11 +209,25 @@ impl GenProvider for Provider {
         let seed = u64::from_le_bytes(self.ticket.id.as_bytes()[..8].try_into().unwrap()) >> 11;
         let graph = graph(&req.instruction, &refs, size, seed, &id)?;
         self.ticket.check_owner(&self.auth)?;
+        let mut cache = comfy_memory::before_submit(&http, &base, UNET).await;
+        self.ticket.check_owner(&self.auth)?;
+        cache.submitted(UNET);
         let response = json_response(
             http.post(format!("{base}/prompt"))
+                .timeout(Duration::from_secs(25))
                 .json(&json!({"prompt_id":id,"prompt":graph,"client_id":id})),
         )
-        .await?;
+        .await;
+        drop(cache);
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                if let Some(guidance) = comfy_memory::host_buffer_guidance(&base, &error.to_string()).await {
+                    return Err(err(guidance));
+                }
+                return Err(error);
+            }
+        };
         if response["prompt_id"] != id {
             return Err(err("服务未确认指定的任务编号，请检查 ComfyUI 版本"));
         }
@@ -286,6 +301,9 @@ async fn retrieve(ticket: &Ticket, auth: &AuthClient) -> AppResult<(Vec<PathBuf>
                 .flatten()
                 .find_map(|m| m[1]["exception_message"].as_str())
                 .unwrap_or("任务中断");
+            if let Some(guidance) = comfy_memory::host_buffer_guidance(&base, reason).await {
+                return Err(err(guidance));
+            }
             return Err(err(format!("本机 H3 图片生成失败：{reason}")));
         }
         if result["status"]["completed"] == true {

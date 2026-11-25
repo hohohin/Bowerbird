@@ -22,7 +22,7 @@ import { resolveVideoCardOutputs } from "./workflowVideoFrames";
 type Halted = () => boolean;
 type Inputs = Record<string, WorkflowValue[]>;
 
-export type WorkflowCardStart = { kind: "run" | "optimize"; current: () => boolean; cancel: () => void; release: () => void };
+export type WorkflowCardStart = { kind: "run" | "optimize"; signal: AbortSignal; current: () => boolean; cancel: () => void; release: () => void };
 type CardRun = { runId: string; node: WorkflowNode; halted: Halted };
 export type WorkflowImageSessionInput = {
   prompt: string; rawPrompt: string; references: Asset[]; ratio: string | null; visualProfileId: string | null;
@@ -189,7 +189,7 @@ export async function runWorkflowComfyVideo(host: WorkflowCardExecution, runId: 
       if (!endpoint || halted()) return;
       input = { ...input, endpoint };
       jobId = crypto.randomUUID();
-      await host.step(runId, id, { status: "running", jobId, error: undefined, detail: "正在提交本机视频工作流",
+      await host.step(runId, id, { status: "running", jobId, dispatchAt: Date.now(), error: undefined, detail: "正在提交本机视频工作流",
         generationRunInput: generationRunInput ?? step.generationRunInput });
       if (halted()) return;
       if (start && !start.current()) { await host.stopBeforeDispatch(runId); return; }

@@ -467,11 +467,15 @@ export const CanvasTextCard = memo(function CanvasTextCard({ value, readCurrentV
       {!bubble && (["row", "column"] as const).flatMap(axis => {
         const count = axis === "row" ? rows : columns;
         const weights = axis === "row" ? rowWeights : columnWeights;
-        return Array.from({ length: count + 1 }, (_, index) => <button key={`${axis}-${index}`}
-          className={`canvas-text-insert is-${axis}`} aria-label={`在第 ${index + 1} ${axis === "row" ? "行" : "列"}位置插入`}
-          title={`插入${axis === "row" ? "行" : "列"}`} style={axis === "row" ? { top: `${boundaryFraction(weights, index) * 100}%` } : { left: `${boundaryFraction(weights, index) * 100}%` }}
-          onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
-          onClick={() => insert(axis, index)}><Plus size={14} /></button>);
+        return Array.from({ length: count + 1 }, (_, index) => {
+          const key = `${axis}-${index}`, position = `${boundaryFraction(weights, index) * 100}%`;
+          const label = axis === "row" ? "行" : "列";
+          const button = <button key={key} className={`canvas-text-insert is-${axis}`} aria-label={`在第 ${index + 1} ${label}位置插入`}
+            title={`插入${label}`} style={axis === "row" ? { top: position } : undefined}
+            onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
+            onClick={() => insert(axis, index)}><Plus size={14} /></button>;
+          return axis === "row" ? button : <div key={key} className="canvas-text-column-insert" style={{ left: position }}>{button}</div>;
+        });
       })}
       {!bubble && (["row", "column"] as const).flatMap(axis => {
         const count = axis === "row" ? rows : columns;

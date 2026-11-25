@@ -10,18 +10,20 @@ const browser = await chromium.launch({ channel: "chrome", headless: true });
 const modifier = process.platform === "darwin" ? "Meta" : "Control";
 
 try {
-  for (const action of ["keyboard", "project", "original", "pinned", "original-failed", "project-reanchor"]) {
+  for (const action of ["keyboard", "project", "original", "pinned", "original-failed", "project-reanchor", "keyboard-reanchor"]) {
+    const reanchor = action.endsWith("-reanchor");
+    const dissolved = action === "keyboard-reanchor";
     const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
     page.setDefaultTimeout(10000);
     page.setDefaultNavigationTimeout(60000);
     const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
     const producer = page.locator('[data-workflow-card="producer"]');
-    const image = node("session").locator('[data-conversation-image="a"]');
+    const image = dissolved ? node("gen-output:h3-job:later:0") : node("session").locator('[data-conversation-image="a"]');
     const workflowContainsProducer = () => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.some(node => node.id === "producer");
 
     await page.goto(`${server.resolvedUrls.local[0]}${entry}`);
     await node("old").waitFor();
-    await page.evaluate(async reanchor => {
+    await page.evaluate(async ({ reanchor, dissolved }) => {
       const { newWorkflowNode } = await import("/src/lib/canvasWorkflow.ts");
       const snapshot = window.snapshot(), base = snapshot.nodes[0];
       const group = 'workflow:["p","producer"]';
@@ -39,10 +41,13 @@ try {
       if (reanchor) {
         const next = { ...prompt, id: "later-session", createdAt: prompt.createdAt + 1,
           payloadJson: JSON.stringify({ ...JSON.parse(prompt.payloadJson), turn_key: "later" }) };
-        const nextOutput = { ...output, id: "gen-output:h3-job:later:0", assetId: "b", createdAt: next.createdAt,
+        const nextOutput = { ...output, id: "gen-output:h3-job:later:0", assetId: "b", createdAt: next.createdAt, x: dissolved ? 630 : output.x,
           payloadJson: JSON.stringify({ ...JSON.parse(output.payloadJson), execution: { job_id: "h3-job", turn_key: "later" } }) };
         snapshot.nodes.push(next, nextOutput);
         snapshot.edges.push({ ...link, id: "later-output", fromNodeId: next.id, toNodeId: nextOutput.id, createdAt: next.createdAt });
+      }
+      if (dissolved) for (const item of snapshot.nodes.filter(node => node.id !== "copy")) {
+        item.payloadJson = JSON.stringify({ ...JSON.parse(item.payloadJson), generation_group_dissolved: true });
       }
       snapshot.groups = []; snapshot.groupItems = [];
       snapshot.view = { ...snapshot.view, panX: 0, panY: 0, zoom: 1 };
@@ -51,7 +56,7 @@ try {
         activeSessionNodeId: reanchor ? "later-session" : prompt.id,
         sessionNodeIds: reanchor ? [prompt.id, "later-session"] : [prompt.id] };
       sessionStorage.setItem("workflow-p", JSON.stringify({ revision: 0, document: { schema_version: 1, nodes: [source], run: null } }));
-    }, action === "project-reanchor");
+    }, { reanchor, dissolved });
     await page.reload();
     if (action === "project-reanchor") {
       await node("session").getByRole("button", { name: "上一张生成图片", exact: true }).click();
@@ -59,15 +64,20 @@ try {
     await image.waitFor();
     assert.equal(await producer.count(), 0, "completed H3 card is collected in its result");
     assert.equal(await page.evaluate(workflowContainsProducer), true);
+    if (dissolved) {
+      await image.hover();
+      await producer.getByRole("button", { name: "固定在画板上", exact: true }).waitFor();
+    }
 
-    if (action === "keyboard" || action === "pinned") {
+    if (action.startsWith("keyboard") || action === "pinned") {
       if (action === "pinned") {
         await image.hover();
         await producer.getByRole("button", { name: "固定在画板上", exact: true }).click();
         await producer.getByRole("button", { name: "取消固定并收起", exact: true }).waitFor();
       }
       await image.click({ modifiers: [modifier] });
-      await page.waitForFunction(() => document.querySelector('[data-canvas-node-id="session"]')?.classList.contains("is-selected"));
+      const selectedId = dissolved ? "gen-output:h3-job:later:0" : "session";
+      await page.waitForFunction(id => document.querySelector(`[data-canvas-node-id="${id}"]`)?.classList.contains("is-selected"), selectedId);
       await page.mouse.move(5, 5);
       if (action === "keyboard") {
         await page.evaluate(async () => {
@@ -122,11 +132,16 @@ try {
       console.log(`PASS collapsed H3 deletion: ${action}`);
       continue;
     }
-    await node("session").waitFor({ state: "detached" });
-    if (action === "project-reanchor") {
-      await node("later-session").locator('[data-conversation-image="b"]').waitFor();
+    await (dissolved ? image : node("session")).waitFor({ state: "detached" });
+    if (reanchor) {
+      const survivor = dissolved ? node("gen-output:h3-job:turn:0") : node("later-session").locator('[data-conversation-image="b"]');
+      await survivor.waitFor();
       assert.equal(await page.evaluate(workflowContainsProducer), true, "another output keeps the producer");
       assert.equal(await producer.count(), 0, "the generation card follows the surviving result");
+      if (dissolved) {
+        await survivor.hover();
+        await producer.getByRole("button", { name: "固定在画板上", exact: true }).waitFor();
+      }
       await page.close();
       console.log(`PASS collapsed H3 deletion: ${action}`);
       continue;

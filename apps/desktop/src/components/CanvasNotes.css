@@ -106,11 +106,7 @@
 .is-content-card .canvas-text-insert.is-row { left:-26px; width:calc(100% + 26px); height:12px; }
 .is-content-card .canvas-text-insert.is-row::before { left:20px; }
 .is-content-card .canvas-text-insert.is-row svg { left:0; top:-4px; }
-.is-content-card .canvas-text-insert.is-column { top:0; height:calc(100% + 8px); width:12px; }
-.is-content-card .canvas-text-insert.is-column::before { display:block; top:0; bottom:8px; left:5px; width:2px; }
-.is-content-card .canvas-text-insert.is-column svg { top:100%; left:-4px; }
 .is-content-card .workflow-cell-port { z-index:6; }
-.is-content-card .canvas-text-remove.is-column { top:calc(100% + 8px); }
 .canvas-image-content { display:flex; flex-direction:column; gap:6px; min-height:90px; padding:10px; }
 .canvas-image-content .canvas-image-preview { display:block; flex:none; width:100%; min-width:0; padding:0; border:0; background:transparent; cursor:zoom-in; }
 .canvas-image-preview[aria-disabled=true] { cursor:default; }

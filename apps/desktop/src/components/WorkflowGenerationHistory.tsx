@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { canvasSessionImages, workflowSessionIds } from "../lib/canvasSessionOutputs";
 import type { WorkflowNode, WorkflowRun } from "../lib/canvasWorkflow";
 import { notifyError, notifySuccess } from "../lib/notify";
+import { userErrorMessage } from "../lib/userError";
 import type { Asset, CanvasNode } from "../lib/types";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { VideoPoster } from "./VideoPoster";
@@ -96,13 +97,29 @@ export function WorkflowGenerationHistory({ node, graphNodes, onOpen, h3Runs }: 
           </span>
         </button></li>;
       })}</ul>}
-      {open && dispatches.map((run, i) => {
+      {dispatches.map((run, i) => {
         const step = run.steps[node.id];
+        const status = run.status === "stopped" && step.status !== "done" ? "已停止"
+          : ({ pending: "待执行", running: "执行中", waiting: "等待继续", done: "完成", failed: "失败" })[step.status];
+        const issue = step.diagnostic?.message || step.error;
+        const recordedAt = step.dispatchAt ?? step.diagnostic?.timestamp;
+        const date = recordedAt == null ? null : new Date(recordedAt);
+        const phase = step.diagnostic ? (step.diagnostic.phase === "validation" ? "检查输入与配置" : "执行生成")
+          : step.detail && userErrorMessage(step.detail, "执行生成");
         const report = JSON.stringify({ runId: run.id, jobId: step.jobId, status: step.status, detail: step.detail,
-          cardInput: step.generationRunInput, error: step.error, diagnostic: step.diagnostic }, null, 2);
-        return <details key={run.id} className="h3-dispatch-record"><summary>第 {dispatches.length - i} 次调度 · {
-          run.status === "stopped" && step.status !== "done" ? "已停止" : ({ pending: "待执行", running: "执行中", waiting: "等待继续", done: "完成", failed: "失败" })[step.status]}</summary>
-          <pre>{report}</pre><button type="button" onClick={() => void navigator.clipboard.writeText(report)
+          dispatchAt: step.dispatchAt, cardInput: step.generationRunInput, error: step.error, diagnostic: step.diagnostic }, null, 2);
+        return <details key={run.id} className="h3-dispatch-record">
+          <summary>第 {dispatches.length - i} 次调度 · {status}</summary>
+          <dl>
+            {date && Number.isFinite(date.getTime()) && <><dt>{step.dispatchAt != null ? "调度时间" : "诊断时间"}</dt>
+              <dd><time dateTime={date.toISOString()}>{date.toLocaleString("zh-CN")}</time></dd></>}
+            {phase && <><dt>执行阶段</dt><dd>{phase}</dd></>}
+            {(issue || step.status === "failed") && <><dt>失败原因</dt>
+              <dd>{userErrorMessage(issue, "本次调度未完成，请复制调度记录以便排查。")}</dd></>}
+            {step.diagnostic?.action && <><dt>建议操作</dt>
+              <dd>{userErrorMessage(step.diagnostic.action, "请先核对原任务状态，再决定是否重试。")}</dd></>}
+          </dl>
+          <button type="button" onClick={() => void navigator.clipboard.writeText(report)
             .then(() => notifySuccess("调度记录已复制")).catch(error => notifyError(error, "未能复制调度记录"))}>复制调度记录</button></details>;
       })}
       <BoardChipPreview hostRef={popup} extraAssets={assets} clickToFocus={false} zIndex={100000} />

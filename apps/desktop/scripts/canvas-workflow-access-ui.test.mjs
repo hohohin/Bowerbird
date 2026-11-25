@@ -33,7 +33,7 @@ try {
       if (command === 'comfy_video_environment') return { phase: 'ready', mode: args.mode, endpoint: args.endpoint, message: '本机环境已就绪' };
       if (command === 'comfy_video') {
         window.accessCalls.push(command);
-        return { status: 'failed', message: '测试服务已收到任务' };
+        return { status: 'failed', message: 'Error: {"diagnostic":"mock traceback"}' };
       }
       return invoke(command, args);
     };
@@ -81,6 +81,23 @@ try {
   await card.getByRole('button', { name: '运行', exact: true }).click();
   await page.waitForFunction(() => window.accessCalls.includes('comfy_video'));
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status === 'failed');
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true,
+      value: { writeText: async value => { window.copiedDispatch = value; } } });
+  });
+  await card.getByRole('button', { name: '生成历史' }).click();
+  const history = page.getByRole('dialog', { name: '生成历史' });
+  const dispatch = history.locator('.h3-dispatch-record');
+  await dispatch.locator('summary').click();
+  assert.match(await dispatch.innerText(), /失败原因/);
+  assert.match(await dispatch.innerText(), /执行阶段|建议操作/);
+  assert.doesNotMatch(await dispatch.innerText(), /[{}]|"diagnostic"|Error:|mock traceback/);
+  assert.equal(await dispatch.locator('time').count(), 1);
+  await dispatch.getByRole('button', { name: '复制调度记录' }).click();
+  const copied = JSON.parse(await page.evaluate(() => window.copiedDispatch));
+  assert.ok(copied.runId && copied.jobId);
+  assert.match(copied.diagnostic.message, /mock traceback/);
+  await page.keyboard.press('Escape');
 
   const queue = await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -118,8 +135,8 @@ try {
   assert.match(queue.firstError, /模拟首次写入失败/);
   assert.deepEqual([queue.prompt, queue.y, queue.error], ['首次写入未成功的提示词', 123, '']);
 
-  for (const runRejected of [true, false]) {
-    const outcome = await page.evaluate(async runRejected => {
+  for (const rejection of ['模拟运行检查点保存失败', '运行工作流卡片需要 Pro。已有结果仍可查看和导出', '']) {
+    const outcome = await page.evaluate(async rejection => {
       const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
       const { newWorkflowNode, workflowRuns } = await import('/src/lib/canvasWorkflow.ts');
       const controller = canvasWorkflowController('p');
@@ -135,7 +152,7 @@ try {
         if (command === 'canvas_workflow_save' && acceptCheckpoint && args.document.run?.status === 'running') {
           acceptCheckpoint(); acceptCheckpoint = undefined;
           await waiting;
-          if (runRejected) throw new Error('模拟运行检查点保存失败');
+          if (rejection) throw new Error(rejection);
         }
         return invoke(command, args);
       };
@@ -153,11 +170,10 @@ try {
         release();
         window.__TAURI_INTERNALS__.invoke = invoke;
       }
-    }, runRejected);
+    }, rejection);
     assert.equal(outcome.note, '运行检查点写入期间的新草稿');
-    if (runRejected) assert.match(outcome.runError, /模拟运行检查点保存失败/);
-    else assert.equal(outcome.runError, '');
-    assert.deepEqual([outcome.runs, outcome.submissions], runRejected ? [0, 0] : [1, 1]);
+    assert.equal(outcome.runError, rejection ? `Error: ${rejection}` : '');
+    assert.deepEqual([outcome.runs, outcome.submissions], rejection ? [0, 0] : [1, 1]);
   }
   assert.deepEqual(errors, []);
   console.log('Workflow editing and serialized save recovery: passed');

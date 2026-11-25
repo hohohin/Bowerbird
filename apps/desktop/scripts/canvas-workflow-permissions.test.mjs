@@ -16,9 +16,14 @@ try {
     controller.ready = true;
     const saves = [], events = [];
     let release;
-    const authorization = new Promise(resolve => { release = resolve; });
-    api.canvasWorkflowAuthorize = async () => { events.push('authorize'); await authorization; };
-    api.canvasWorkflowSave = async (_project, revision, document) => { events.push('save'); saves.push(structuredClone(document)); return revision + 1; };
+    const firstSave = new Promise(resolve => { release = resolve; });
+    api.canvasWorkflowAuthorize = async () => { events.push('authorize'); throw Error('运行工作流卡片需要 Pro'); };
+    api.canvasWorkflowSave = async (_project, revision, document) => {
+      events.push('save');
+      if (!revision) await firstSave;
+      saves.push(structuredClone(document));
+      return revision + 1;
+    };
     const node = { ...newWorkflowNode('generation', 0, 0, 'generate'), generation: { media: 'video', videoOptions: { kind: 'frames2video', duration: 4, model_version: 'seedance2.5', video_resolution: '720p' } } };
     const before = controller.document;
     const first = controller.edit([node]);
@@ -27,19 +32,17 @@ try {
     const latest = controller.document.nodes[0];
     const second = controller.edit([{ ...latest, generation: { ...latest.generation, videoOptions: { ...latest.generation.videoOptions, duration: 8 } } }]);
     await Promise.resolve();
-    const beforeAuthorization = saves.length;
+    const beforeFirstSave = [...events];
     release(); await Promise.all([first, second]);
-    api.canvasWorkflowAuthorize = async () => { throw new Error('工作流卡片的创建、编辑和运行需要 Pro；已有结果仍可查看和导出'); };
-    let rejected = false;
-    try { await controller.edit([{ ...controller.document.nodes[0], prompt: 'rejected edit' }]); } catch { rejected = true; }
-    return { immediate, beforeAuthorization, events, rejected, error: controller.error, prompt: controller.document.nodes[0].prompt, saves: saves.map(doc => doc.nodes[0].generation.videoOptions) };
+    await controller.edit([{ ...controller.document.nodes[0], prompt: '可直接编辑的提示词' }]);
+    return { immediate, beforeFirstSave, events, error: controller.error, prompt: controller.document.nodes[0].prompt,
+      saves: saves.map(doc => doc.nodes[0].generation.videoOptions) };
   });
   assert.equal(result.immediate, true, 'editing must publish the optimistic snapshot synchronously for subsequent edits and undo');
-  assert.equal(result.beforeAuthorization, 0, 'no save before Pro authorization');
-  assert.deepEqual(result.events, ['authorize', 'save', 'authorize', 'save']);
-  assert.deepEqual(result.saves.map(value => [value.kind, value.duration]), [['frames2video', 4], ['frames2video', 8]]);
-  assert.equal(result.rejected, true);
-  assert.equal(result.error, "", "a definitive denial clears the save error");
-  assert.notEqual(result.prompt, "rejected edit", "the persisted prompt is restored");
-  console.log('PASS delayed Pro authorization preserves edits and undo snapshots; denied edits never reach storage');
+  assert.deepEqual(result.beforeFirstSave, ['save']);
+  assert.deepEqual(result.events, ['save', 'save', 'save']);
+  assert.deepEqual(result.saves.map(value => [value.kind, value.duration]), [['frames2video', 4], ['frames2video', 8], ['frames2video', 8]]);
+  assert.equal(result.error, '');
+  assert.equal(result.prompt, '可直接编辑的提示词');
+  console.log('PASS edits publish immediately and serialize saves without Pro authorization');
 } finally { await browser.close(); await server.close(); }

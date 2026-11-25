@@ -46,7 +46,6 @@ import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkf
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { resolveWorkflowTaskFocus } from "../lib/workflowTaskFocus";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
-import { isWorkflowProDenied } from "../lib/workflowEntitlement";
 import { restoreCanvasNoteEdit } from "../lib/canvasNoteUndo";
 import { removeWorkflowNodes } from "../lib/workflowRemoval";
 import { WORKFLOW_CARD_DRAG_TYPE, workflowCardWidth, workflowNodeRun, type WorkflowInput, type WorkflowKind, type WorkflowNode } from "../lib/canvasWorkflow";
@@ -4940,19 +4939,8 @@ export function CanvasWorkspace({
       for (const node of [...cloned.nodes, ...cloned.groups, ...cloned.workflow]) node.x += shift;
       const ids: string[] = cloned.workflow.map(node => node.id);
       if (controller.document.nodes.length + ids.length > 500) throw new Error("粘贴后工作流卡片超过 500 张，请缩小选区");
-      const requiresPro = cloned.workflow.some(node => node.kind !== "text");
-      if (requiresPro) await api.canvasWorkflowAuthorize();
-      let deniedPaste: unknown;
-      const discardDeniedPaste = async () => {
-        const current = await api.projectCanvasGet(draft.id);
-        for (const group of cloned.groups) if (current.groups.some(item => item.id === group.id)) await api.projectCanvasGroupDelete(group.id);
-        for (const node of cloned.nodes) if (current.nodes.some(item => item.id === node.id && item.hiddenAt == null)) await api.projectCanvasNodeRemove(node.id);
-        await refreshClipboardCanvas(draft.id);
-        notifyError(deniedPaste, "粘贴卡片失败");
-      };
       let completed = false;
       await enqueueWrite(async () => {
-        if (deniedPaste) { await discardDeniedPaste(); return; }
         await ensureMaterialized(draft);
         // Retry a partial write using the same identities, never create a second copy.
         const existing = await api.projectCanvasGet(draft.id);
@@ -4966,17 +4954,9 @@ export function CanvasWorkspace({
           await api.projectCanvasNodesBatchCreate(draft.id, nodesToCreate, groupsToCreate);
         }
         if (ids.length) {
-          try {
-            if (controller.document.nodes.some(node => ids.includes(node.id))) {
-              if (controller.error) await controller.retrySave();
-            } else await controller.edit([...controller.document.nodes, ...cloned.workflow]);
-          } catch (error) {
-            if (!isWorkflowProDenied(error)) throw error;
-            // A later native denial can follow a successful precheck.
-            deniedPaste = error;
-            await discardDeniedPaste();
-            return;
-          }
+          if (controller.document.nodes.some(node => ids.includes(node.id))) {
+            if (controller.error) await controller.retrySave();
+          } else await controller.edit([...controller.document.nodes, ...cloned.workflow]);
         }
         await refreshClipboardCanvas(draft.id);
         if (!completed && activeCanvasRef.current.id === draft.id) {
@@ -5048,13 +5028,24 @@ export function CanvasWorkspace({
     for (const node of materials) {
       if (node.kind === "folder") for (const asset of node.assets) ids.add(asset.id);
     }
-    for (const [id, anchor] of generationCardProjection.anchors) {
-      if (!ids.has(anchor.id)) continue;
-      if (activeGenerationIds.has(id) || collapsedGenerationAnchors.has(id)) ids.add(id);
-    }
-    const graph = graphNodesRef.current.filter((node) => ids.has(node.id) && node.hiddenAt == null);
     const draft = activeCanvasRef.current;
     const controller = canvasWorkflowController(draft.id);
+    const collapsedToRemove = new Set<string>();
+    for (const [id, anchor] of generationCardProjection.anchors) {
+      if (!ids.has(anchor.id)) continue;
+      if (activeGenerationIds.has(id)) ids.add(id);
+      else if (collapsedGenerationAnchors.has(id)) collapsedToRemove.add(id);
+    }
+    if (collapsedToRemove.size) {
+      const origins = workflowGenerationOrigins(controller.document, graphNodesRef.current);
+      for (const node of graphNodesRef.current) {
+        if (node.kind !== "asset" || node.hiddenAt != null || ids.has(node.id)) continue;
+        const producer = origins.get(node.id);
+        if (producer) collapsedToRemove.delete(producer.id);
+      }
+      for (const id of collapsedToRemove) ids.add(id);
+    }
+    const graph = graphNodesRef.current.filter((node) => ids.has(node.id) && node.hiddenAt == null);
     const workflowIds = new Set(controller.document.nodes.filter(node => ids.has(node.id)).map(node => node.id));
     if ([...ids].some(id => workflowRef.current?.isLocked(id) || workflowRef.current?.isLocked(conversationCardsRef.current.aliases.get(id) ?? id))) {
       notify("卡片正在使用，请先停止对应任务再删除", "info"); return;

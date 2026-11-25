@@ -35,7 +35,7 @@ interface LocalChatState {
   applyConversation: (conversation: ChatConversation) => void;
   loadProject: (projectId: string) => Promise<void>;
   loadConversation: (conversationId: string) => Promise<ChatConversation | null>;
-  send: (input: Omit<LocalChatSendInput, "requestId"> & { requestId?: string }, confirmPaid?: boolean) => Promise<ChatConversation>;
+  send: (input: Omit<LocalChatSendInput, "requestId"> & { requestId?: string }, confirmPaid?: boolean, isCurrent?: () => boolean) => Promise<ChatConversation>;
   stop: (conversationId: string, turnId?: string) => Promise<void>;
   recover: (conversationId: string) => Promise<void>;
   setDraft: (conversationId: string, draft: LocalChatDraft) => void;
@@ -195,7 +195,7 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
     loadingConversations.set(conversationId, request);
     return request;
   },
-  send: async (input, confirmPaid = false) => {
+  send: async (input, confirmPaid = false, isCurrent = () => true) => {
     // An unaccepted workflow step may replay its saved input after a desktop upgrade.
     const provider = parseChatProvider(input.provider);
     if (provider && provider !== input.provider) input = { ...input, provider };
@@ -242,13 +242,17 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
           authorization = { account_id, model: quote.model, pricing_version, max_credits, max_output_tokens };
         }
       }
+      if (!isCurrent()) throw new DOMException("本轮发送已取消", "AbortError");
       pendingSubmissions.set(key, { fingerprint, requestId });
       const chat = await localChat.send({ ...input, requestId }, authorization);
-      get().applyConversation(chat);
+      const publish = isCurrent();
+      if (publish) get().applyConversation(chat);
       pendingSubmissions.delete(key);
+      // The workflow still receives a late receipt to stop its exact turn.
+      if (!publish) return chat;
       return { ...(get().conversations[chat.id] ?? chat), submittedTurnId: chat.submittedTurnId };
     } catch (error) {
-      if (!(error instanceof ChatPaymentCancelled)) set(state => ({ errors: { ...state.errors, [key]: error } }));
+      if (isCurrent() && !(error instanceof ChatPaymentCancelled)) set(state => ({ errors: { ...state.errors, [key]: error } }));
       throw error;
     } finally { set(state => ({ sending: { ...state.sending, [key]: false } })); }
   },

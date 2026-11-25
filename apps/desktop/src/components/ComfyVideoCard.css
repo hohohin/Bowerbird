@@ -115,5 +115,7 @@ html[data-theme] .canvas-tactical .workflow-card[data-h3-card] footer .h3-run-ac
 .workflow-card[data-h3-card] .workflow-generation-history { position: relative; }
 .h3-dispatch-record { border-top: 1px solid var(--bb-line); padding: 8px; }
 .h3-dispatch-record summary { cursor: pointer; }
-.h3-dispatch-record pre { margin: 8px 0; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.h3-dispatch-record dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 8px; margin: 8px 0; font-size: 12px; }
+.h3-dispatch-record dl:empty { display: none; }
+.h3-dispatch-record dd { margin: 0; overflow-wrap: anywhere; user-select: text; }
 .h3-dispatch-record button { color: var(--bb-blue); }

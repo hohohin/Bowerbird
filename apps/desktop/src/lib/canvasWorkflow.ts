@@ -112,6 +112,7 @@ export interface H3ImageGenerationInput {
   promptParts?: GenerationPromptParts;
 }
 export interface WorkflowStep {
+  dispatchAt?: number;
   generationRunInput?: { prompt: string; references: string[][] };
   voiceRequest?: import("./voiceCard").VoiceCardRequest;
   comfyProgress?: import("./comfyVideo").ComfyVideoProgress;

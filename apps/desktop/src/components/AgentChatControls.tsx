@@ -22,7 +22,7 @@ export function AgentChatControls({ node, busy, onChange, onProviderChange, newC
     <div className="workflow-agent-provider-row">
       <ChatProviderSelect value={provider} access={access} disabled={busy}
         onChange={next => { if (next !== provider) onProviderChange(next); }} />
-      <CodexModelSelect compact provider={provider} allowServiceDefault={provider !== "dsh-local"} value={agentChatOptions(provider, options) ?? {}} catalog={models} disabled={busy}
+      <CodexModelSelect compact provider={provider} value={agentChatOptions(provider, options) ?? {}} catalog={models} disabled={busy}
         onChange={chatCodexOptions => {
           if (provider === "dsh-local") rememberAgentDshOptions(chatCodexOptions);
           if (conversationId) useLocalChatStore.getState().setDraft(conversationId, { ...localChatDraft(conversationId), codexOptions: chatCodexOptions });

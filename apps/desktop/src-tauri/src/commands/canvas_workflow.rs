@@ -19,7 +19,7 @@ pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementServ
     if !login.logged_in || snapshot.user_id.is_empty() || login.user_id.as_deref() != Some(snapshot.user_id.as_str())
         || !matches!(snapshot.tier.as_str(), "pro" | "studio")
         || !matches!(snapshot.offline_state, Some(crate::cloud::entitlement::OfflineState::Fresh | crate::cloud::entitlement::OfflineState::Grace)) {
-        return Err(AppError::Other("工作流卡片的创建、编辑和运行需要 Pro；已有结果仍可查看和导出".into()));
+        return Err(AppError::Other("运行工作流卡片需要 Pro。已有结果仍可查看和导出".into()));
     }
     Ok(())
 }
@@ -241,8 +241,8 @@ fn definition_changed(before: &Value, after: &Value) -> bool {
     })
 }
 
-fn workflow_save_requires_pro(before: &Value, after: &Value, creates_content: bool) -> bool {
-    creates_content || definition_changed(before, after) || requires_run_pro(before, after)
+fn workflow_save_requires_pro(before: &Value, after: &Value, _creates_content: bool) -> bool {
+    requires_run_pro(before, after)
 }
 
 // The schedule and the new run are claimed in the same SQLite transaction.
@@ -745,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn workflow_cleanup_preserves_the_pro_boundary_and_saves_parked_audio_removal() {
+    fn workflow_edits_and_parked_audio_removal_require_no_pro() {
         let mut source = node("video", json!({}));
         source["kind"] = json!("comfy-video");
         let audio = json!({"nodeId":"video","portId":"image","videoAudio":{}});
@@ -757,14 +757,11 @@ mod tests {
         let mut moved = before.clone();
         moved["nodes"][0]["x"] = json!(120);
         moved["nodes"][1]["y"] = json!(180);
-        assert!(!definition_changed(&before, &moved), "layout changes alone are free");
         let mut disconnected = moved.clone();
         disconnected["nodes"][1]["inputs"]["image"] = json!([{"assetId":"still","slot":1}]);
         disconnected["nodes"][1]["savedComfyAudio"] = json!([]);
-        assert!(!definition_changed(&before, &disconnected), "remove inputs and renumber surviving slots");
         let mut removed = disconnected.clone();
         removed["nodes"].as_array_mut().unwrap().remove(0);
-        assert!(!definition_changed(&before, &removed), "deletion also clears parked audio");
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
         db.create_project("p","test","blank:p","blank:p","blank").unwrap();
@@ -985,14 +982,12 @@ mod tests {
         let started = db.begin_local_chat(&input).unwrap();
         let mut snapshot = db.workflow_get("p").unwrap();
         let mut moved = snapshot.document.clone(); moved["nodes"][0]["x"] = json!(125); moved["nodes"][0]["y"] = json!(250);
-        assert_eq!(paid_definition(&snapshot.document), paid_definition(&moved));
+        assert!(!workflow_save_requires_pro(&snapshot.document, &moved, false));
         let revision = db.workflow_save("p", snapshot.revision, moved).unwrap();
         let position: (f64,f64) = db.conn.lock().unwrap().query_row("SELECT x,y FROM canvas_nodes WHERE id=?1", [&started.conversation.summary.node_id], |row|Ok((row.get(0)?,row.get(1)?))).unwrap();
         assert_eq!(position, (125.,250.));
         let empty = json!({"schema_version":1,"nodes":[],"run":null});
-        assert!(!definition_changed(&snapshot.document, &empty));
-        let mut changed_task = snapshot.document.clone(); changed_task["nodes"][0]["prompt"] = json!("不同的任务");
-        assert!(definition_changed(&snapshot.document, &changed_task));
+        assert!(!workflow_save_requires_pro(&snapshot.document, &empty, false));
         assert!(db.workflow_save("p", revision, empty.clone()).is_err());
         db.finish_local_chat(&started.conversation.summary.id, &started.turn_id, "done", None).unwrap();
         snapshot = db.workflow_get("p").unwrap();
@@ -1051,9 +1046,7 @@ mod tests {
         }
         let mut changed = doc.clone(); changed["nodes"][0]["kind"] = json!("generation"); assert!(validate(&changed).is_err());
         changed = doc.clone(); changed["nodes"][0]["triggerSchedule"]["status"] = json!("failed");
-        assert_eq!(paid_definition(&doc), paid_definition(&changed));
-        changed["nodes"][0]["triggerSchedule"]["at"] = json!(1800000060000u64);
-        assert_ne!(paid_definition(&doc), paid_definition(&changed));
+        assert!(validate(&changed).is_ok());
     }
     #[test]
     fn trigger_modes_roundtrip_and_inactive_appointments_cannot_be_claimed() {
@@ -1099,7 +1092,7 @@ mod tests {
         assert!(validate_schedule_claims(&cancelled, &candidate).is_err());
     }
     #[test]
-    fn daily_trigger_validates_local_time_and_keeps_progress_out_of_paid_definition() {
+    fn daily_trigger_validates_local_time_and_allows_progress_updates() {
         let mut trigger = node("timer", json!({})); trigger["kind"] = json!("trigger");
         trigger["triggerSchedule"] = json!({"id":"daily","at":1800000000000u64,"dailyAt":"21:00","status":"armed"});
         let doc = json!({"schema_version":1,"nodes":[trigger],"run":null});
@@ -1109,9 +1102,9 @@ mod tests {
             assert!(validate(&bad).is_err());
         }
         let mut next = doc.clone(); next["nodes"][0]["triggerSchedule"]["at"] = json!(1800086400000u64);
-        assert_eq!(paid_definition(&doc), paid_definition(&next));
+        assert!(validate(&next).is_ok());
         next["nodes"][0]["triggerSchedule"]["dailyAt"] = json!("22:00");
-        assert_ne!(paid_definition(&doc), paid_definition(&next));
+        assert!(validate(&next).is_ok());
         next["nodes"][0]["triggerSchedule"]["status"] = json!("fired"); assert!(validate(&next).is_err());
     }
     #[test]

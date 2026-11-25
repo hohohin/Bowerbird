@@ -39,8 +39,6 @@ pub async fn video_shots_delivery_get(
 pub async fn video_shots_deliver(
     app: tauri::AppHandle,
     db: State<'_, Arc<Database>>,
-    auth: State<'_, AuthClient>,
-    entitlement: State<'_, EntitlementService>,
     project_id: String,
     source_asset_id: String,
     source_hash: String,
@@ -51,9 +49,6 @@ pub async fn video_shots_deliver(
     frames: Vec<NewCanvasNode>,
     additions: Vec<Value>,
 ) -> AppResult<String> {
-    if !additions.is_empty() {
-        require_pro(&auth, &entitlement).await?;
-    }
     let focus = commit_delivery(
         &db,
         project_id.clone(),

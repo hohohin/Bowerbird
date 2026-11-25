@@ -22,10 +22,25 @@
 }
 .canvas-cell-connection.canvas-connection-handle:disabled { opacity: 0; pointer-events: none; }
 
-/* Column insertion stays on its visible button, leaving the cell edge for wires. */
-.canvas-note.is-content-card .canvas-text-insert.is-column { top:calc(100% + 8px); width:20px; height:20px; }
-.canvas-note.is-content-card .canvas-text-insert.is-column::before { display:none; }
-.canvas-note.is-content-card .canvas-text-insert.is-column svg { top:0; left:0; }
+/* Only the bottom buttons and their short hover bridge receive pointer input. */
+.canvas-text-column-insert {
+  position:absolute; inset-block:0; width:20px; transform:translateX(-50%); z-index:2; pointer-events:none;
+}
+.canvas-text-column-insert:has(> button:is(:hover,:focus-visible))::before {
+  content:""; position:absolute; inset-block:0; left:calc(50% - 1px); width:2px; background:var(--bb-blue);
+}
+.canvas-text-column-insert > .canvas-text-insert.is-column { left:0; transform:none; }
+.canvas-note.is-content-card :is(.canvas-text-insert,.canvas-text-remove).is-column {
+  top:calc(100% + 8px); pointer-events:none;
+}
+.canvas-note.is-content-card :is(.canvas-text-insert,.canvas-text-remove).is-column::after {
+  content:""; position:absolute; inset:-8px 0 0;
+}
+.canvas-note.is-content-card:is(:hover,.is-selected,:focus-within) :is(.canvas-text-insert,.canvas-text-remove).is-column {
+  opacity:.75; pointer-events:auto;
+}
+.canvas-note.is-content-card :is(.canvas-text-insert,.canvas-text-remove).is-column:is(:hover,:focus-visible) { opacity:1; }
+.canvas-note.is-content-card:has(.canvas-text-column-insert) > .canvas-note-dismiss-error { top:calc(100% + 20px); }
 
 /* Keep gallery paging inside the image, clear of the edge connection handles. */
 .canvas-text-cell > .canvas-conversation-images .previous { left:16px; }

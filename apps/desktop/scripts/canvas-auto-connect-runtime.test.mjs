@@ -81,6 +81,43 @@ try {
         'the same Asset ID in a separately placed copy remains an exact static input');
       canvas.nodes.splice(1);
     }
+    {
+      const c = new CanvasWorkflowController('running-source');
+      await c.load();
+      const source = { ...newWorkflowNode('instruction', 0, 0, 'codex'), id: 'active-source', action: 'reuse',
+        outputs: { image: { type: 'image', assetIds: ['previous-output'] } } };
+      const receiver = { ...newWorkflowNode('instruction', 400, 0, 'codex'), id: 'idle-receiver', action: 'reuse' };
+      const created = { ...receiver, id: 'new-receiver' };
+      await c.edit([source, receiver]);
+      const run = { id: 'active-run', startId: source.id, threadId: 'thread', status: 'running', order: [source.id],
+        lockedNodeIds: [source.id], writeNodeIds: [source.id], steps: { [source.id]: { status: 'running' } } };
+      await c.save({ ...c.document, run, runs: [run] });
+      const output = { type: 'image', media: 'image', binding: { nodeId: source.id, portId: 'image' } };
+      const current = () => c.document.nodes.find(node => node.id === source.id);
+      const sourceBefore = JSON.stringify(current());
+      await c.connectAutomatic([output], { nodeId: receiver.id });
+      await c.connectAutomatic([output], { nodeId: created.id }, { createNodes: [created] });
+      check(c.document.nodes.filter(node => node.inputs.image?.[0].nodeId === source.id).length === 2, 'both readers persist while the writer runs');
+      check(JSON.stringify(current()) === sourceBefore && c.document.run.status === 'running', 'the running source definition and run stay intact');
+      await rejects(() => c.connectAutomatic([{ type: 'image', media: 'image', binding: { assetId: 'photo' } }], { nodeId: source.id }), 'active receiver still rejects new data');
+      const conflict = await c.start(receiver.id, true).then(() => '', error => String(error));
+      check(conflict.includes('正在使用') && c.document.run.status === 'running', 'new reader cannot run against the active writer');
+
+      const finished = { ...run, status: 'done', steps: { [source.id]: { status: 'done' } } };
+      await c.save({ ...c.document, run: finished, runs: [finished], nodes: c.document.nodes.map(node => node.id === source.id
+        ? { ...node, outputs: { image: { type: 'image', assetIds: ['latest-output'] } } } : node) });
+      const createThread = api.projectThreadCreate, generationHistory = api.generationHistory;
+      try {
+        api.projectThreadCreate = async () => {};
+        api.generationHistory = async assetId => {
+          check(assetId === 'latest-output', 'the reader receives the final output');
+          return { turns: [{ prompt: 'latest prompt' }], references: [] };
+        };
+        await c.start(receiver.id, true);
+      } finally { api.projectThreadCreate = createThread; api.generationHistory = generationHistory; }
+      check(c.document.run.status === 'done' && c.document.nodes.find(node => node.id === receiver.id).outputs.text?.text === 'latest prompt',
+        'idle reader runs with the latest output after the writer finishes');
+    }
     const controller = new CanvasWorkflowController('auto-runtime'); await controller.load();
     const source = { ...newWorkflowNode('instruction', 0, 0, 'codex'), id: 'source', action: 'reuse',
       outputs: { text: { type: 'text', text: 'reference text' }, image: { type: 'image', assetIds: ['photo'] } } };

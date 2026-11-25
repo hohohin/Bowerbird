@@ -12,6 +12,57 @@ page.setDefaultTimeout(10000);
 try {
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/canvas-reference/preview.html`);
   await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await page.evaluate(() => {
+    const snapshot = window.snapshot();
+    const cell = id => ({ id, text: id, content_type: 'text' });
+    snapshot.nodes = [{ ...snapshot.nodes[0], id: 'column-card', kind: 'note', assetId: null, role: null,
+      x: 130, y: 130, width: 320, height: 250, payloadJson: JSON.stringify({ schema_version: 1,
+        note_type: 'text', member_ids: [], cells: [[cell('first')], [cell('second')]] }) }];
+    snapshot.edges = []; snapshot.view = { ...snapshot.view, panX: 120, panY: 90, zoom: 0.55 };
+    sessionStorage.setItem('reference-fixture', JSON.stringify(snapshot));
+  });
+  await page.reload();
+  const table = page.locator('[data-canvas-node-id="column-card"]');
+  const columnInsert = index => table.getByRole('button', { name: `在第 ${index} 列位置插入`, exact: true });
+  const waitForColumnOpacity = (minimum, index) => page.waitForFunction(({ minimum, index }) => {
+    const buttons = [...document.querySelectorAll('[data-canvas-node-id="column-card"] .canvas-text-insert.is-column')];
+    return index === undefined ? buttons.length > 0 && buttons.every(button => Number(getComputedStyle(button).opacity) >= minimum)
+      : !!buttons[index] && Number(getComputedStyle(buttons[index]).opacity) >= minimum;
+  }, { minimum, index }, { timeout: 2000 });
+  const waitForSavedColumns = columns => page.waitForFunction(columns => JSON.parse(window.snapshot().nodes[0].payloadJson).cells[0].length === columns, columns);
+  const data = () => page.evaluate(() => {
+    const node = window.snapshot().nodes[0];
+    return { width: node.width, columns: JSON.parse(node.payloadJson).cells[0].length };
+  });
+  await table.locator('textarea').first().hover();
+  await waitForColumnOpacity(0.5);
+  const beforeInsert = await data();
+  const add = await columnInsert(2).boundingBox();
+  await page.mouse.move(add.x + add.width / 2, add.y - 13);
+  await page.mouse.move(add.x + add.width / 2, add.y + add.height / 2, { steps: 10 });
+  await waitForColumnOpacity(0.95, 1);
+  assert.notEqual(await columnInsert(2).evaluate(button => getComputedStyle(button.parentElement, '::before').content), 'none', 'hover previews the column boundary');
+  await page.mouse.click(add.x + add.width / 2, add.y + add.height / 2);
+  await columnInsert(3).waitFor();
+  await waitForSavedColumns(2);
+  assert.deepEqual(await data().then(({ width, columns }) => ({ wider: width > beforeInsert.width, columns })), { wider: true, columns: 2 });
+  await table.locator('textarea').first().hover();
+  const outlet = table.locator('.canvas-cell-connection[data-canvas-connect-side="output"]').first();
+  assert.equal(await outlet.evaluate(element => getComputedStyle(element).pointerEvents), 'auto');
+  await columnInsert(2).click();
+  await columnInsert(4).waitFor();
+  const remove = table.getByRole('button', { name: '删除第 2 列', exact: true });
+  await remove.hover();
+  assert.equal(await table.locator('.canvas-text-cell.is-removing').count(), 2);
+  await remove.click();
+  await columnInsert(4).waitFor({ state: 'detached' });
+  await waitForSavedColumns(2);
+  const bounds = await table.boundingBox();
+  await page.mouse.click(bounds.x + 7, bounds.y + bounds.height / 2);
+  await table.and(page.locator('.is-selected')).waitFor();
+  await page.mouse.move(20, 20);
+  await waitForColumnOpacity(0.5);
+
   for (const axis of ['row', 'column']) {
     await page.evaluate(axis => {
       const snapshot = window.snapshot(), base = snapshot.nodes[0];

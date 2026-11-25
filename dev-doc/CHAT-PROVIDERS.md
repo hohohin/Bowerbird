@@ -10,6 +10,8 @@
 | 本机 DSH 0.2 | 使用原生 Session、用户本机 Skill 及当轮建卡授权。原宿主退出后按原 Session 和 callId 恢复待答。 | [本机 Skill](#2026-11-15-本机-dsh-在卡片第一轮使用-skill) · [原生待答](#2026-11-19-本机-dsh-画布待答与桌面回答源码) |
 | DSH · Cloud | 使用 VPS 的 v2 原生会话。新单按账号试用资格受理，0 Bcoin。内置 Skill 由 Worker 加载，工具字段按客户端能力协商。 | [Cloud 协议](../apps/cloud/CHAT.md) |
 
+Agent 卡片和对话详情中的 DeepSeek 模型与思考强度必须是明确值。缺省时使用 DeepSeek V4.1 Flash 和 `high`，本机 DSH 优先沿用用户上次在卡片中选用的模型与档位。菜单显示 `none`、`low`、`high` 和 `max`，其中 `none` 沿现有协议保存和发送为 `off`。
+
 旧 `deepseek-cloud` 与 `dsh-vps-v1` 新请求返回 426。旧卡片和草稿发新消息时映射到 DSH · Cloud，已受理原单仍用原协议、账号与键查询。Agent 卡片改动应同步验证三个 provider。独立异步 Agent Run 的入口见 [架构地图](Bowerbird开发计划.md#agent-与对话)。桌面安装包边界见 [发布记录](DESKTOP-UPDATES.md)。
 
 ## 实现与验证记录

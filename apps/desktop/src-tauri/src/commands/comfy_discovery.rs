@@ -73,7 +73,8 @@ pub(super) fn discover(config_dirs: &[PathBuf], selected: Option<&Path>, names: 
                 let args: Vec<&str> = entry["launchArgs"].as_str().unwrap_or("").split_whitespace().collect();
                 // Preserve known resource/performance options, never shell strings or arbitrary script arguments.
                 for (index, arg) in args.iter().enumerate() {
-                    if ["--use-sage-attention", "--lowvram", "--normalvram", "--highvram", "--disable-smart-memory", "--cache-none"].contains(arg) {
+                    if ["--use-sage-attention", "--lowvram", "--normalvram", "--highvram", "--disable-smart-memory", "--cache-none",
+                        "--disable-pinned-memory", "--disable-mmap", "--disable-dynamic-vram", "--enable-dynamic-vram"].contains(arg) {
                         instance.launch_args.push((*arg).into());
                     } else if ["--reserve-vram", "--cache-ram"].contains(arg) {
                         if let Some(value) = args.get(index + 1).filter(|v| v.parse::<f64>().is_ok_and(|n| n.is_finite() && n >= 0.0)) {

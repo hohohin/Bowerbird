@@ -70,6 +70,21 @@ try {
   assert.equal(await options.count(), 0);
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'import_image_bytes').length), 0);
 
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p'), isWriteLocked = c.isWriteLocked.bind(c);
+    c.isWriteLocked = id => id === 'clip-node' || isWriteLocked(id);
+    window.unlockStaticVideo = () => { c.isWriteLocked = isWriteLocked; };
+  });
+  await openVideoOptions('clip-node', videoReceiver);
+  assert.equal(await option('引用完整视频').isEnabled(), true, 'saving a reference does not read the static file');
+  for (const label of ['引用首帧画面', '引用尾帧画面', '引用视频音频']) {
+    assert.equal(await option(label).isDisabled(), true);
+    assert.match(await option(label).getAttribute('title'), /来源卡片正在使用/);
+  }
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => window.unlockStaticVideo());
+
   for (const [source, label] of [['clip-node', '引用首帧画面'], ['clip-session', '引用尾帧画面']]) {
     await openVideoOptions(source, imageReceiver);
     await option(label).click();
@@ -208,6 +223,13 @@ try {
   assert.equal(input.nodeId, 'a');
   assert.equal(input.portId, 'image');
   assert.equal(input.assetId, undefined);
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    const run = { id: 'active-video', startId: 'a', threadId: 'thread', status: 'running', order: ['a'],
+      lockedNodeIds: ['a'], writeNodeIds: ['a'], steps: { a: { status: 'running' } } };
+    await c.save({ ...c.document, run, runs: [run] });
+  });
   await dragVideoWire('a', { x: targetHeader.x + targetHeader.width / 2, y: targetHeader.y + 10 });
   await option('引用视频音频').click();
   await workflowCard('b').getByText('视频音频 · 等待上游素材', { exact: true }).waitFor();
@@ -232,6 +254,12 @@ try {
   await option('引用首帧画面').click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(
     n => n.kind === 'generation' && n.inputs.image?.[0].nodeId === 'a' && n.inputs.image[0].videoFrame?.position === 'first'));
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    if (c.document.run?.status !== 'running') throw Error('creating readers must leave the video run active');
+    await c.save({ ...c.document, run: null, runs: [] });
+  });
 
   const setVideoOutput = assetId => page.evaluate(async assetId => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');

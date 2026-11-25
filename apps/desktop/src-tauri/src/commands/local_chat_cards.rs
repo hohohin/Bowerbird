@@ -82,12 +82,9 @@ pub fn local_chat_claim_card_run(
 pub async fn local_chat_cards_undo(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
-    auth: State<'_, AuthClient>,
-    entitlement: State<'_, EntitlementService>,
     conversation_id: String,
     action_id: String,
 ) -> AppResult<ChatConversation> {
-    super::canvas_workflow::require_pro(&auth, &entitlement).await?;
     db.undo_local_chat_cards(&conversation_id, &action_id)?;
     publish(&app, &db, &conversation_id, &action_id, true, true);
     db.get_local_chat(&conversation_id)?

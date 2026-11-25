@@ -133,6 +133,7 @@ interface WorkflowCardItemProps {
   creating: boolean;
   locked: boolean;
   starting: ReturnType<CanvasWorkflowController["startingAction"]>;
+  stopping: boolean;
   removableLocalVideo: boolean;
   imageActivity: WorkflowGenerationActivity;
   agentChat?: ChatSummary;
@@ -159,7 +160,7 @@ interface WorkflowCardItemProps {
 }
 
 export const WorkflowCardItem = memo(function WorkflowCardItem({
-  context, node, run, creating, locked, starting, removableLocalVideo, imageActivity, agentChat,
+  context, node, run, creating, locked, starting, stopping, removableLocalVideo, imageActivity, agentChat,
   selected, pinned, peek, x, y, armed, panReady, activeHandle, showKeyProgress, showStaleReview, pendingAgent, deliveryPending,
   videoJobActive, providerIssue, loopProviderIssues, loopPreview, failureKey, failureDismissed, failureDiagnostic, getChatCardDefaults,
 }: WorkflowCardItemProps) {
@@ -211,6 +212,8 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
   const stopAgent = node.kind !== "agent" ? undefined : starting ? () => controller.cancelStarting(node.id)
     : chatBusy && agentChat && !controller.isLocked(node.id) ? () => useLocalChatStore.getState().stop(agentChat.id)
       : activeWorkflow ? () => controller.stop(activeWorkflow.id) : undefined;
+  const runStatus = stopping ? "正在停止" : starting === "run" ? "准备运行"
+    : node.kind === "agent" && run?.status === "stopped" && !chatBusy && step?.status !== "done" ? "已停止" : undefined;
   const busy = creating || node.kind !== "trigger" && (!!starting || imageActivity.running || locked || chatBusy || pendingAgent || node.planning?.status === "waiting");
   const loop = node.kind === "loop" && run?.loop?.nodeId === node.id ? run.loop : undefined;
   const restartIssue = loop && run?.status === "stopped" ? loop.bodyIds.map(id => loopProviderIssues?.get(id)).find(Boolean) : null;
@@ -684,11 +687,11 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
             {!localVideo && h3Status === generatingStatus && imageActivity.jobId && <GenerationJobProgress jobId={imageActivity.jobId} detailFor={h3Status} />}
           </span>
           {h3Progress && <ComfyGenerationProgress progress={h3Progress} />}
-        </span> : (!hasAgentMessages || agentChat?.status !== "idle") && <span role={imageActivity.running ? "status" : undefined}>{imageActivity.running ? <GenerationJobProgress jobId={imageActivity.jobId} /> : agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount) : node.kind === "trigger" && (queuedTrigger || triggerExecuting) ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>}
+        </span> : (runStatus || !hasAgentMessages || agentChat?.status !== "idle") && <span role={runStatus || imageActivity.running ? "status" : undefined}>{runStatus ?? (imageActivity.running ? <GenerationJobProgress jobId={imageActivity.jobId} /> : agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount) : node.kind === "trigger" && (queuedTrigger || triggerExecuting) ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行")}</span>}
         {starting && node.kind !== "agent" ? <button title="取消启动" onClick={() => controller.cancelStarting(node.id)}><Square size={13} />停止</button> : imageActivity.running && imageActivity.jobId && !controller.isLocked(node.id) ? <button type="button" aria-label="停止生成" onClick={() => useStore.getState().cancelGeneration(imageActivity.jobId)}><Square size={13} />停止</button> : activeWorkflow ? <>
           {retryDelivery && <button onClick={() => handle(controller.continue(activeWorkflow.id))}>重试写入内容卡</button>}
           {continueWorkflow && <button aria-label="继续工作流" onClick={() => handle(controller.continue(activeWorkflow.id))}><Play size={13} />继续</button>}
-          {node.kind !== "agent" && <button disabled={!!step?.comfyStopping} aria-label="停止工作流" title={node.kind === "comfy-video" ? "取消排队或中断本次生成" : "停止工作流"} onClick={() => handle(controller.stop(activeWorkflow.id))}><Square size={12} /></button>}
+          {node.kind !== "agent" && <button disabled={stopping || !!step?.comfyStopping} aria-label="停止工作流" title={node.kind === "comfy-video" ? "取消排队或中断本次生成" : "停止工作流"} onClick={() => handle(controller.stop(activeWorkflow.id))}><Square size={12} /></button>}
         </> : node.kind !== "agent" && node.kind !== "trigger" && <>
           {(localVideo || localImage) && <label className="workflow-video-auto-optimize" title="运行前通过 Cloud DSH 优化一次提示词，可能消耗 Bowerbird 积分。" onPointerDown={event => event.stopPropagation()}>
             <input type="checkbox" aria-label="自动优化提示词" checked={h3AutoOptimize} disabled={busy || savingH3Preference} onChange={event => {
@@ -704,7 +707,7 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
         </>}
         {node.kind === "trigger" && triggerMode === "manual" && <button disabled={creating || !!providerIssue} aria-label="触发下游" onClick={() => handle(controller.start(node.id))}><Play size={13} />触发下游</button>}
         {node.kind === "agent" && !hasAgentMessages && <button type="button" aria-label={stopAgent ? "停止回复" : "运行此卡片"}
-          disabled={stopAgent ? agentChat?.status === "stopping" : busy || !!providerIssue}
+          disabled={stopAgent ? stopping || agentChat?.status === "stopping" : busy || !!providerIssue}
           onClick={() => handle(stopAgent ? Promise.resolve(stopAgent()) : handleAgentCard(node, conversationId, "run"))}>
           {stopAgent ? <Square size={13} fill="currentColor" /> : <><Play size={13} />运行</>}
         </button>}

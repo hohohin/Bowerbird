@@ -423,8 +423,11 @@ try {
   beforeRejected = await state();
   assert.match(await dragHandleToCard('a', 'output', 'b'), /运行|停止/);
   assert.deepEqual(await state(), beforeRejected, 'a running receiver refuses connection changes');
-  assert.match(await dragHandleToCard('b', 'output', 'c'), /来源卡片正在使用/);
-  assert.deepEqual(await state(), beforeRejected, 'the handle stays available for control wires, but a writing source refuses a new data wire');
+  await dragHandleToCard('b', 'output', 'c');
+  await waitInputs('c', 1);
+  const connectedWhileRunning = await state();
+  assert.deepEqual(connectedWhileRunning.nodes.find(node => node.id === 'b'), beforeRejected.nodes.find(node => node.id === 'b'),
+    'connecting a reader preserves the running source definition');
 
   // Scoped menus retain the simple handles while allowing precise table destinations.
   await page.evaluate(async () => {

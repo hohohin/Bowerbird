@@ -155,7 +155,7 @@ try {
   await composer.getByRole('combobox', {name: 'DSH 模型'}).click();
   await page.getByRole('option', {name: /Pro/i}).click();
   await composer.getByRole('combobox', {name: 'DSH 推理强度'}).click();
-  await page.getByRole('option', {name: '高', exact:true}).click();
+  await page.getByRole('option', {name: 'high', exact:true}).click();
   await composer.getByRole('button', { name: '发送', exact: true }).click();
   await panel.waitFor();
   assert.match(await panel.locator('.local-chat-provider').innerText(), /DSH · Cloud · 0 Bcoin/);

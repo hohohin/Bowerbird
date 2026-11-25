@@ -35,9 +35,9 @@ export function rememberAgentDshOptions(options: ChatCodexOptions) {
   localStorage.setItem(agentDshPreference, JSON.stringify(options));
 }
 export function agentChatOptions(provider: ChatProvider, options?: ChatCodexOptions) {
-  if (provider !== "dsh-local") return options;
+  if (provider === "codex-local") return options;
   let preferred = options;
-  if (!preferred?.model) {
+  if (provider === "dsh-local" && !options?.model) {
     try { preferred = JSON.parse(localStorage.getItem(agentDshPreference) ?? "null"); }
     catch { preferred = undefined; }
   }

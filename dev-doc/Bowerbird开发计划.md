@@ -32,6 +32,7 @@ Bowerbird 是本地优先的 AI 多类型素材库与创作工作台：收集、
 | 使用主题变量、按钮／选择器、弹窗／菜单、滚动容器；统一媒体反馈和创作界面 | [UI、样式与交互](reuse/UI.md) |
 | 管理素材与多栏状态、选择／拖动／预览；复用标注、文本、生成草稿和项目恢复逻辑 | [桌面状态、工具与业务逻辑](reuse/DESKTOP.md) |
 | 调用本机命令、处理媒体／文件、接入 provider；检查权益、Cloud 请求与 Agent 工具边界 | [接口、本机与云端服务](reuse/SERVICES.md) |
+| 通过只读源码快照核对已导出的分支、提交和本机 Git 分支关系 | [代码 MCP 项目概览](../apps/code-reader-mcp/README.md#git-分支摘要) |
 | 检测原件缺失、自动清理失效展示、保留创作身份与恢复原件 | [文件契约](FOLDER-MODE.md#自动检测与清理2026-11-04源码待发布)；[分批检测](../apps/desktop/src-tauri/src/core/missing_originals.rs) 复用 `Database::cleanup_missing_original`，不调用文件回收接口 |
 | 复用图片标注与截图的绘制、文字、撤销和平移 | [标注专项](reuse/ANNOTATION.md) |
 | 确认哪些板块已查、理解多实现差异、复查三个常见任务的查找路径 | [覆盖范围与核验](reuse/REVIEW.md) |

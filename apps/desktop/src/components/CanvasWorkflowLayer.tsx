@@ -33,7 +33,6 @@ import { WorkflowCardItem, type WorkflowCardContext } from "./WorkflowCardItem";
 import { WorkflowWiresLayer } from "./WorkflowWiresLayer";
 import { WorkflowDisconnectOverlay, WorkflowOverlays } from "./WorkflowOverlays";
 import { renderCanvasCards, useCanvasEntryCardContext } from "./CanvasEntryCard";
-import { isWorkflowProDenied } from "../lib/workflowEntitlement";
 import { singleVideoOutput, useWorkflowConnectionGesture } from "./useWorkflowConnectionGesture";
 import { comfyCheckKey, disconnectKey, WindingKey } from "./WorkflowLayerPresentation";
 import type { AutomaticGesture, AutomaticTarget, Connection, ConnectionMenuState, DisconnectTarget, H3RunChoice, MaterialAnchor, PendingConnectionCard, VideoReferenceTarget, WorkflowGeometry, WorkflowLayerHandle, WorkflowLayerProps } from "./WorkflowLayerTypes";
@@ -483,7 +482,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
   };
   async function handleAgentCard(node: WorkflowNode, conversationId: string | undefined, action: "run" | "new" | ChatProvider, confirmedRequestId?: string) {
     const locks = agentActionLocks.current;
-    if (locks.has(node.id) || controller.isLocked(node.id)) return;
+    if (locks.has(node.id) || controller.startingAction(node.id) || controller.isLocked(node.id)) return;
     const store = useLocalChatStore.getState();
     if (conversationId && localChatRunning(store.summaries[conversationId])) return;
     locks.add(node.id);
@@ -514,13 +513,14 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
           await controller.refreshExternalCards();
           if (chat.id !== conversationId) onNewAgentChat?.(conversationId);
         }
-        await controller.start(node.id, true);
-        return;
+        // start registers its own lock synchronously. The card action lock covers preparation only.
+        return controller.start(node.id, true);
       }
       const provider = action === "new" ? undefined : action;
       if (conversationId) {
         await controller.flush();
-        const options = provider ? agentChatOptions(provider) : store.drafts[conversationId]?.codexOptions ?? store.summaries[conversationId]?.codexOptions ?? node.chatCodexOptions;
+        const savedOptions = store.drafts[conversationId]?.codexOptions ?? store.summaries[conversationId]?.codexOptions ?? node.chatCodexOptions;
+        const options = agentChatOptions(provider ?? workflowAgentProvider(node), provider ? undefined : savedOptions);
         const chat = await localChat.newOnCard(projectId, node.id, conversationId, options, provider);
         store.applyConversation(chat);
         if (provider && chat.id === conversationId) {
@@ -651,7 +651,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
     const after = controller.document;
     const remember = () => { if (after !== before && activeController.current === controller) onEdited(before, after); };
     return pending.then(remember, error => {
-      if (!isWorkflowProDenied(error)) remember();
+      remember();
       throw error;
     });
   }
@@ -864,14 +864,16 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
     return () => window.removeEventListener("bowerbird://dimension-wire", startDimension);
   }, [projectId, panReady, controller, materialById, materialByAsset, graphNodes]);
 
-  function lockedOutput(outputs: AutomaticOutput[], extractMedia = false) {
-    return outputs.some(({ binding }) => [binding.nodeId, binding.canvasNodeId, binding.assetNodeId,
+  function staticVideoSourceLocked(binding: WorkflowInput) {
+    if (binding.nodeId) return false;
+    const sourceId = binding.assetNodeId ?? binding.canvasNodeId;
+    const owner = sourceId && generationCardOrigins?.get(sourceId)?.id;
+    return [sourceId, owner,
       ...workflowInputProducers(controller.document.nodes, binding)]
-      .some(id => id && (extractMedia ? controller.isLocked(id) : controller.isWriteLocked(id))));
+      .some(id => id && (controller.isWriteLocked(id) || activeGenerationIds.has(id)));
   }
   function automaticError(outputs: AutomaticOutput[], target: AutomaticTarget) {
     const controlWire = nodeById.get(target.nodeId ?? "")?.kind === "trigger" || outputs.length > 0 && outputs.every(output => output.type === "signal");
-    if (!controlWire && lockedOutput(outputs)) return "来源卡片正在使用";
     if (target.nodeId) {
       if (target.collapsedAnchorId && generationCardAnchors?.get(target.nodeId)?.id !== target.collapsedAnchorId) return "接收卡片已不存在";
       if (!controlWire && (controller.isLocked(target.nodeId) || activeGenerationIds.has(target.nodeId)
@@ -898,7 +900,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
     if (mode && (video.created ?? nodeById.get(video.target.nodeId ?? ""))?.kind === "trigger") return "此输入只接收完成信号";
     if (mode === "audio" && video.target.canvasNodeId) return "此位置不能接收音频";
     const output = videoReferenceOutput(video.output, mode);
-    if ((mode || video.created) && lockedOutput([output], !!mode && (mode !== "audio" || !output.binding.nodeId))) return "来源卡片正在使用";
+    if (mode && staticVideoSourceLocked(output.binding)) return "来源卡片正在使用";
     if (!video.created) return automaticError([output], video.target);
     return planAutomaticConnection([...controller.document.nodes, video.created], [output], video.created.id).error;
   }
@@ -974,10 +976,15 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
           const preview = videoReferenceOutput(source, mode);
           if (target.nodeId && !created && !planAutomaticConnection(controller.document.nodes, [preview], target.nodeId,
             target.collapsedAnchorId ? generationCardOrigins : undefined).bindings.length) return;
+          const canReadSource = () => {
+            if (!sameRoute()) return false;
+            if (staticVideoSourceLocked(source.binding)) throw new Error("来源卡片正在使用");
+            return true;
+          };
           try {
             outputs = [mode === "audio"
-              ? await materializeVideoAudioOutput(projectId, source, sameRoute)
-              : await materializeVideoFrameOutput(projectId, source, mode, sameRoute)];
+              ? await materializeVideoAudioOutput(projectId, source, canReadSource)
+              : await materializeVideoFrameOutput(projectId, source, mode, canReadSource)];
           } catch (error) {
             if (!sameRoute()) return;
             throw error;
@@ -1122,16 +1129,11 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
       const before = controller.document;
       const saved = edit([...nodes, node]);
       if (controller.document !== before) onSelect(node.id);
-      try { await saved; }
-      catch (error) {
-        if (isWorkflowProDenied(error) && activeController.current === controller && currentSelection.current.has(node.id)) onSelect(node.id, true);
-        throw error;
-      }
+      await saved;
     })());
   }
   function newConnectionError(gesture: AutomaticGesture, node: WorkflowNode) {
-    if (gesture.side === "output") return node.kind !== "trigger" && gesture.outputs.some(output => output.type !== "signal") && lockedOutput(gesture.outputs) ? "来源卡片正在使用"
-      : receiverError(gesture.outputs, { nodeId: node.id }, node);
+    if (gesture.side === "output") return receiverError(gesture.outputs, { nodeId: node.id }, node);
     const outputs = canvasAutomaticOutputs(node.id, [node], [], [], []);
     if (gesture.target.nodeId && controller.isLocked(gesture.target.nodeId) && node.kind !== "trigger") return "这张卡片正在运行";
     if (gesture.target.nodeId) return planAutomaticConnection([...controller.document.nodes, node], outputs, gesture.target.nodeId).error;
@@ -1176,7 +1178,12 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
   }
   function connect(toId: string, inputId: string, point = cursor.current) {
     const draft = connectionRef.current;
-    if (!draft || inputId !== "*auto" && inputId !== "completion" && draft.type !== "signal" && controller.isLocked(toId)) return;
+    if (!draft) return;
+    if (inputId !== "*auto" && inputId !== "completion" && draft.type !== "signal"
+      && (controller.isLocked(toId) || controller.startingAction(toId) || activeGenerationIds.has(toId))) {
+      connectionRef.current = null; setConnection(null);
+      notifyError(null, "这张卡片正在运行"); return;
+    }
     if (inputId === "*auto") {
       connectAutomaticDraft(draft, automaticTarget(toId), point);
       return;
@@ -1191,7 +1198,6 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
       connectionRef.current = null; setConnection(null);
       return;
     }
-    if (source.type !== "signal" && source.nodeId && controller.isLocked(source.nodeId)) { notifyError(null, "来源卡片正在使用"); return; }
     const latest = source.cellId === "*latest" || source.cellId === "*latest-image";
     const producers = workflowInputProducers(nodes, source);
     const error = (latest ? [] : producers).map(producer => workflowConnectionError(nodes, producer, source.portId ?? source.type, toId, inputId)).find(Boolean)
@@ -1426,7 +1432,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
       const node = controller.document.nodes.find(node => node.id === id);
       const chat = node?.kind === "agent" && (node.chatConversationId ? chatSummaries[node.chatConversationId]
         : Object.values(chatSummaries).find(chat => chat.projectId === projectId && chat.nodeId === id));
-      return controller.isLocked(id) || !!chat && localChatRunning(chat) || agentActionLocks.current.has(id)
+      return controller.isLocked(id) || !!controller.startingAction(id) || !!chat && localChatRunning(chat) || agentActionLocks.current.has(id)
         || node?.planning?.status === "waiting"
         || activeGenerationIds.has(id)
         || controller.document.nodes.some(node => (node.textSource === id || node.textTarget?.nodeId === id || node.resultNodeIds?.includes(id)) && controller.isLocked(node.id));
@@ -1758,7 +1764,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
       const agentChat = node.kind === "agent" ? (node.chatConversationId ? chatSummaries[node.chatConversationId] : chatsByCard.get(node.id)) : undefined;
       const videoJobId = run?.steps[node.id]?.jobId;
       return <WorkflowCardItem context={cardContext} node={node} run={run} creating={!nodeById.has(node.id)}
-        starting={controller.startingAction(node.id)} locked={controller.isLocked(node.id)}
+        starting={controller.startingAction(node.id)} stopping={!!run && controller.isStopping(run.id)} locked={controller.isLocked(node.id)}
         removableLocalVideo={node.kind === "comfy-video" && controller.canDiscardLocalVideo(node.id)}
         imageActivity={generationActivities.get(node.id) ?? IDLE_GENERATION} agentChat={agentChat} selected={selectedIds.has(node.id)}
         pinned={!!pinnedCardOffsets?.has(node.id)} peek={peek} x={x} y={y} armed={armed} panReady={panReady}

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ArrowDown, ArrowUp, Check, Coins, Copy, History, ImagePlus, LoaderCircle, LocateFixed, MessageCircle, Plus, Search, Square, Undo2, UserRound, Wrench, X } from "lucide-react";
 import { api } from "../lib/api";
-import { CHAT_PROVIDER_LABELS, LOCAL_CHAT_MAX_REFERENCES, chatAssistantLabel, chatCodexOptionError, chatUsesCloud, localChatRunning, localChatStatusLabel, type ChatCardAction, type ChatCardDefaults, type ChatConversation, type ChatMessage, type ChatSummary } from "../lib/localChat";
+import { CHAT_PROVIDER_LABELS, LOCAL_CHAT_MAX_REFERENCES, agentChatOptions, chatAssistantLabel, chatCodexOptionError, chatUsesCloud, localChatRunning, localChatStatusLabel, type ChatCardAction, type ChatCardDefaults, type ChatConversation, type ChatMessage, type ChatSummary } from "../lib/localChat";
 import { localChatDraft, pinLocalChat, useProjectChatSummaries, useLocalChatStore, type LocalChatDraft } from "../lib/localChatStore";
 import { ChatPaymentCancelled } from "../lib/localChatPaid";
 import { ChatPaidReceipt } from "./ChatPaidReceipt";
@@ -168,7 +168,8 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
   const codex = provider === "codex-local";
   const access = useChatProviderAccess();
   const running = localChatRunning(ownedChat);
-  const codexOptions = draft.codexOptions ?? ownedChat?.codexOptions;
+  const savedOptions = draft.codexOptions ?? ownedChat?.codexOptions;
+  const codexOptions = onApplyPrompt ? savedOptions : agentChatOptions(provider, savedOptions);
   const chatModels = useChatCodexModels();
   const providerIssue = access.issue(provider);
   const blockedReason = providerIssue?.message ?? (codex ? chatCodexOptionError(codexOptions ?? {}, chatModels.models) : null);
@@ -332,7 +333,7 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
             onChange={event => useLocalChatStore.getState().setDraft(conversationId, { ...draft, text: event.target.value })}
             onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }}
             onKeyDown={event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !composingRef.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); void send(); } }} />
-          {ownedChat && <CodexModelSelect provider={provider} value={codexOptions ?? {}} catalog={chatModels} disabled={running || sending || recoverPending}
+          {ownedChat && <CodexModelSelect allowServiceDefault={!!onApplyPrompt} provider={provider} value={codexOptions ?? {}} catalog={chatModels} disabled={running || sending || recoverPending}
             onChange={options => useLocalChatStore.getState().setDraft(conversationId, { ...draft, codexOptions: options })} />}
           <div className="local-chat-reply-toolbar"><span className="local-chat-provider" data-quota={cloud ? "bowerbird" : "chatgpt"} title={cloud ? "使用 Bowerbird Bcoin" : codex ? QUOTA_SOURCES.chatgpt.detail : "使用本机 DSH 的登录配置"}><span className="local-chat-provider-avatar">{cloud ? <Coins size={12} aria-hidden="true" /> : <UserRound size={12} aria-hidden="true" />}</span>{CHAT_PROVIDER_LABELS[provider]}{cloud && access.cloudPrice ? ` · ${access.cloudPrice}` : ""}</span>
             {onOpenLibrary && <button type="button" className="local-chat-add-image" onClick={onOpenLibrary} aria-label="添加对话参考素材" title="从素材库选择参考素材"><ImagePlus size={16} /></button>}

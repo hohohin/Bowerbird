@@ -554,7 +554,8 @@ async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str,
     progress("正在启动本机环境并检查模型…".into(), state.total_bytes);
     let mut cmd = command(portable(root).join("python_embeded/python.exe"));
     cmd.current_dir(portable(root)).args(["-s", "ComfyUI/main.py", "--windows-standalone-build", "--listen", "127.0.0.1", "--port", mode.port(), "--disable-auto-launch", "--extra-model-paths-config"])
-        .arg(root.join("models.yaml"));
+        .arg(root.join("models.yaml"))
+        .args(comfy_memory_args(&portable(root).join("ComfyUI/main.py"), &[]));
     launch(app, cmd, mode.endpoint(), root, &root.join("startup.log"), cancel, owner, mode).await
 }
 fn startup_log_tail(path: &Path) -> String {
@@ -726,9 +727,30 @@ async fn start_existing(app: &AppHandle, instance: &Installation, cancel: &Atomi
     let mut cmd = command(python);
     cmd.current_dir(instance.main.parent().unwrap()).arg("-s").arg(&instance.main)
         .args(["--listen", "127.0.0.1", "--port", port, "--disable-auto-launch"])
-        .args(existing_launch_args(&instance.launch_args, mode));
+        .args(existing_launch_args(&instance.launch_args, mode))
+        .args(comfy_memory_args(&instance.main, &instance.launch_args));
     if !instance.model_configs.is_empty() { cmd.arg("--extra-model-paths-config").args(&instance.model_configs); }
     launch(app, cmd, endpoint, &instance.path, &logs.join(if mode.image() { "image-startup.log" } else { "startup.log" }), cancel, owner, mode).await
+}
+
+fn comfy_memory_args(main: &Path, args: &[String]) -> Option<&'static str> {
+    const DISABLE_PINNED_MEMORY: &str = "--disable-pinned-memory";
+    if !cfg!(windows) || args.iter().any(|arg| arg == DISABLE_PINNED_MEMORY) { return None; }
+    // An older installation can still be started without a flag it doesn't recognize.
+    let cli = std::fs::read_to_string(main.parent()?.join("comfy/cli_args.py")).ok()?;
+    cli.contains(DISABLE_PINNED_MEMORY).then_some(DISABLE_PINNED_MEMORY)
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn only_append_supported_comfy_memory_flag_once() {
+    let root = tempfile::tempdir().unwrap();
+    let main = root.path().join("main.py");
+    assert_eq!(comfy_memory_args(&main, &[]), None);
+    std::fs::create_dir(root.path().join("comfy")).unwrap();
+    std::fs::write(root.path().join("comfy/cli_args.py"), "parser.add_argument('--disable-pinned-memory')").unwrap();
+    assert_eq!(comfy_memory_args(&main, &[]), Some("--disable-pinned-memory"));
+    assert_eq!(comfy_memory_args(&main, &["--disable-pinned-memory".into()]), None);
 }
 
 fn existing_launch_args(args: &[String], mode: Mode) -> Vec<&str> {
