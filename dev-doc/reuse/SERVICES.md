@@ -28,6 +28,7 @@
 - **用途／关键词**：画板自动接线、组图、显式合组、来源索引。
 - **入口**：[project_canvas.rs](../../apps/desktop/src-tauri/src/core/project_canvas.rs) 提供画板读取，[generation_gallery_manual.rs](../../apps/desktop/src-tauri/src/core/generation_gallery_manual.rs) 写入显式合组。
 - **调用**：用 api.projectCanvasVisibleNodes 读指定可见实例；历史和会话恢复使用 api.projectCanvasGet。调用 api.mergeGenerationGalleries／undoGenerationGalleryMerge 修改展示，读取上一生成用 previousGalleryGeneration。
+- **批量写入**：[api.ts](../../apps/desktop/src/lib/api.ts) 的 `projectCanvasNodesBatchUpdate` 在一个项目内提交节点及组的布局，`projectCanvasNodesBatchCreate` 一次提交复制的节点、组与组成员顺序。画板拖动、粘贴和撤销复用有序写入队列。主键和内容一致的创建可重放，校验失败时事务整批回滚。[本机命令](../../apps/desktop/src-tauri/src/commands/project_canvas.rs)
 - **边界／状态**：catalog 和文件夹用 [with_gallery_cache](../../apps/desktop/src-tauri/src/core/generation_gallery.rs) 共用索引与失效条件。筛选、合组及解散按查询计算，0057 只存展示别名，生成及 provider 身份保持。[工作流](../CANVAS-WORKFLOW.md)。
 
 ## 通过 DSH 受控建卡

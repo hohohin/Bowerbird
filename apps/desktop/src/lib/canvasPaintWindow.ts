@@ -2,18 +2,20 @@ import type { CanvasPoint } from "./canvasLogic";
 
 type WireBounds = Pick<DOMRect, "x" | "y" | "width" | "height">;
 
-// Our absolute wire paths use M/C for curves and H/V for obstacle routing.
+// Bound our absolute wire paths without measuring SVG layout.
 // The control points bound a Bézier curve without forcing SVG layout.
 function wireBounds(path: SVGPathElement): WireBounds | undefined {
-  const segments = path.getAttribute("d")?.trim().split(/(?=[MCHV])/);
+  const segments = path.getAttribute("d")?.trim().split(/(?=[MCLHVZ])/);
   if (!segments?.[0]?.startsWith("M")) return;
-  let x = 0, y = 0;
+  let x = 0, y = 0, startX = 0, startY = 0;
   let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
   for (const segment of segments) {
     const command = segment[0];
+    if (command === "Z" && segment.trim() === "Z") { x = startX; y = startY; continue; }
     const values = segment.slice(1).trim().split(/[ ,]+/).map(Number);
-    const size = command === "C" ? 6 : command === "M" ? 2 : 1;
+    const size = command === "C" ? 6 : command === "M" || command === "L" ? 2 : 1;
     if (values.length !== size || values.some(value => !Number.isFinite(value))) return;
+    if (command === "M") { startX = values[0]; startY = values[1]; }
     if (command === "H") x = values[0];
     if (command === "V") y = values[0];
     for (let i = 0; i < values.length; i += 2) {
@@ -67,15 +69,19 @@ export function canvasPaintWindow(plane: HTMLElement, stage: HTMLElement) {
   function locate(el: HTMLElement, card: Card) {
     // Materials and graph nodes use translate3d; workflow cards and plain
     // sections use left/top. The live multi-drag adds an individual translation.
-    const base = el.style.transform ? new DOMMatrixReadOnly(el.style.transform) : null;
+    const [, x, y] = /^translate3d\((-?[\d.e+]+)px,\s*(-?[\d.e+]+)px,/.exec(el.style.transform) ?? [];
     const [dx, dy] = el.style.translate.split(" ");
-    card.x = (parseFloat(el.style.left) || 0) + (base?.e ?? 0) + (parseFloat(dx) || 0);
-    card.y = (parseFloat(el.style.top) || 0) + (base?.f ?? 0) + (parseFloat(dy) || 0);
+    card.x = (parseFloat(el.style.left) || 0) + (Number(x) || 0) + (parseFloat(dx) || 0);
+    card.y = (parseFloat(el.style.top) || 0) + (Number(y) || 0) + (parseFloat(dy) || 0);
   }
   const sizes = new ResizeObserver(entries => {
     for (const entry of entries) {
       const el = entry.target as HTMLElement, box = entry.borderBoxSize[0];
-      if (el === stage) { width = stage.clientWidth; height = stage.clientHeight; }
+      if (el === stage) {
+        const content = entry.contentBoxSize[0];
+        width = content?.inlineSize ?? entry.contentRect.width;
+        height = content?.blockSize ?? entry.contentRect.height;
+      }
       else {
         const card = owners.get(el);
         if (card && box) { card.w = box.inlineSize; card.h = box.blockSize; }
@@ -102,6 +108,7 @@ export function canvasPaintWindow(plane: HTMLElement, stage: HTMLElement) {
     card.parts.add(el); el.toggleAttribute(flag, card.clipped);
     if (el.hasAttribute("data-canvas-node")) {
       owners.set(el, card); locate(el, card); sizes.observe(el);
+      positions.observe(el, { attributes: true, attributeFilter: ["style"] });
     }
   }
   // React can replace a card or its detached title/hotspot during a gesture.
@@ -110,6 +117,7 @@ export function canvasPaintWindow(plane: HTMLElement, stage: HTMLElement) {
   function watchWires(layer: SVGSVGElement) {
     for (const path of layer.children) if (path instanceof SVGPathElement) changedWires.add(path);
     topology.observe(layer, { childList:true });
+    positions.observe(layer, { attributes: true, subtree: true, attributeFilter: ["d"] });
     schedule();
   }
   const topology = new MutationObserver(records => {
@@ -141,7 +149,6 @@ export function canvasPaintWindow(plane: HTMLElement, stage: HTMLElement) {
     else if (wireLayer(el)) watchWires(el);
   }
   topology.observe(plane, { childList:true });
-  positions.observe(plane, { attributes:true, attributeFilter:["style","d"], subtree:true });
   return { paint, dispose() {
     topology.disconnect(); sizes.disconnect(); positions.disconnect(); cancelAnimationFrame(pending);
     for (const card of cards.values()) for (const el of card.parts) el.removeAttribute(flag);

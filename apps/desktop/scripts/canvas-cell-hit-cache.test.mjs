@@ -33,11 +33,11 @@ try {
       if (this.hasAttribute("data-canvas-cell")) window.measurements++;
       return original.call(this);
     };
-    window.cache = createCanvasCellHitCache(stage, (clientX, clientY) => {
+    window.cache = createCanvasCellHitCache((clientX, clientY) => {
       const bounds = stage.getBoundingClientRect();
       return { x: (clientX - bounds.left - camera.x) / camera.zoom, y: (clientY - bounds.top - camera.y) / camera.zoom };
     }, () => camera.zoom);
-    window.read = (fresh = false) => cache.get(fresh).map(({ targetId, cellId, rect }) => ({ targetId, cellId, rect }));
+    window.read = (fresh = false) => cache.get(document.querySelector("#content"), fresh);
     window.cameraMove = () => { Object.assign(camera, { x: 73, y: 29, zoom: 2 }); world.style.transform = `translate(${camera.x}px,${camera.y}px) scale(${camera.zoom})`; };
     window.settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   });
@@ -72,7 +72,7 @@ try {
   assert.equal((await page.evaluate(() => read()))[0].rect.y, 45);
   const removed = await page.evaluate(() => { document.querySelector("[data-canvas-cell=b]").remove(); return read(); });
   assert.deepEqual(removed.map(entry => entry.cellId), ["replacement", "new"]);
-  await page.evaluate(() => { cache.invalidate(); read(); measurements = 0; cache.dispose(); document.querySelector("#content").style.left = "400px"; });
+  await page.evaluate(() => { measurements = 0; cache.dispose(); document.querySelector("#content").style.left = "400px"; });
   assert.deepEqual(await page.evaluate(async () => { await settle(); return { measurements, result: read(true) }; }), { measurements: 0, result: [] });
   assert.deepEqual(errors, []);
   console.log("canvas cell hit cache: reuse, camera, material drag, fresh hit, cell/card edits, resize, scroll, insertion/removal and disposal passed");

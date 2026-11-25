@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 await mkdir('.tmp/workflow-schedule', { recursive: true });
-const server = await createServer({ configFile: false, cacheDir: '.tmp/workflow-schedule/vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1697, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } }, cacheDir: '.tmp/workflow-schedule/vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1697, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
+page.setDefaultNavigationTimeout(60000);
 try {
   await page.goto('http://127.0.0.1:1697/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
@@ -112,6 +114,7 @@ try {
       window.store.setState({ projects: [...projects, { id: 'background', archived_at: null }, { id: 'archived', archived_at: 1 }] });
       await until(() => !removedObserver.triggerTimersEnabled);
       now += 60000;
+      document.dispatchEvent(new Event('visibilitychange'));
       // Exercise the real timeout with the canvas still displaying project p.
       await until(() => observer.document.run?.status === 'done');
       check(calls === 4 && !canvasWorkflowController('archived').ready && removedObserver.document.run === null,

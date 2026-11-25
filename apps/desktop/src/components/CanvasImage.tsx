@@ -1,10 +1,27 @@
-import { createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useState, type ImgHTMLAttributes, type ReactNode, type Ref } from "react";
+import { createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ImgHTMLAttributes, type ReactNode, type Ref } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { canvasImagePreviewSize, requestCanvasImagePreview } from "../lib/canvasImagePreview";
 import { useMediaVisibility } from "../lib/useMediaVisibility";
 
-const MediaZoom = createContext(1);
+function mediaZoomStore(scale: number) {
+  const listeners = new Set<() => void>();
+  return {
+    get: () => scale,
+    set(value: number) {
+      if (scale === value) return;
+      scale = value;
+      for (const listener of listeners) listener();
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+  };
+}
+const MediaZoom = createContext(mediaZoomStore(1));
+const noZoomSubscription = () => () => {};
+const defaultZoom = () => 1;
 export function CanvasMediaProvider({ zoom: initialZoom, zoomHandle, planeId, children }: {
   zoom: number; zoomHandle?: Ref<(value: number) => void>; planeId?: string; children: ReactNode;
 }) {
@@ -13,6 +30,8 @@ export function CanvasMediaProvider({ zoom: initialZoom, zoomHandle, planeId, ch
   useLayoutEffect(() => setZoom(initialZoom), [initialZoom]);
   const [settledZoom, setSettledZoom] = useState(zoom);
   const [pixelRatio, setPixelRatio] = useState(() => window.devicePixelRatio);
+  const [mediaZoom] = useState(() => mediaZoomStore(initialZoom * pixelRatio));
+  const decoration = useRef<((value: string) => void) | undefined>();
   useEffect(() => {
     const query = window.matchMedia(`(resolution: ${pixelRatio}dppx)`);
     const update = () => setPixelRatio(window.devicePixelRatio);
@@ -24,11 +43,27 @@ export function CanvasMediaProvider({ zoom: initialZoom, zoomHandle, planeId, ch
     const timer = setTimeout(() => setSettledZoom(zoom), 150);
     return () => clearTimeout(timer);
   }, [zoom]);
-  // Scope zoom-dependent decoration to its actual consumers. Inheriting either
-  // variable from the plane restyles thousands of unrelated editing controls.
-  return <>{planeId && <style>{`#${CSS.escape(planeId)} :is(.canvas-card-running,.canvas-card-error) { --canvas-running-width:${4 / zoom}px; }
-    #${CSS.escape(planeId)} :is(.canvas-section-heading,.canvas-card-name.is-section-name) { --section-title-scale:${Math.max(1, 14 / (16 * zoom))}; }`}</style>}
-    <MediaZoom.Provider value={settledZoom * pixelRatio}>{children}</MediaZoom.Provider></>;
+  useLayoutEffect(() => { mediaZoom.set(settledZoom * pixelRatio); }, [mediaZoom, settledZoom, pixelRatio]);
+  useLayoutEffect(() => {
+    if (!planeId) return;
+    if (typeof CSSStyleSheet !== "undefined" && "replaceSync" in CSSStyleSheet.prototype && "adoptedStyleSheets" in document) {
+      const sheet = new CSSStyleSheet();
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      decoration.current = rules => sheet.replaceSync(rules);
+      return () => { document.adoptedStyleSheets = document.adoptedStyleSheets.filter(value => value !== sheet); decoration.current = undefined; };
+    }
+    const style = document.createElement("style");
+    document.head.append(style);
+    decoration.current = rules => { style.textContent = rules; };
+    return () => { style.remove(); decoration.current = undefined; };
+  }, [planeId]);
+  useLayoutEffect(() => {
+    if (!planeId) return;
+    const plane = CSS.escape(planeId);
+    decoration.current?.(`#${plane} :is(.canvas-card-running,.canvas-card-error) { --canvas-running-width:${4 / zoom}px; }
+      #${plane} :is(.canvas-section-heading,.canvas-card-name.is-section-name) { --section-title-scale:${Math.max(1, 14 / (16 * zoom))}; }`);
+  }, [planeId, zoom]);
+  return <MediaZoom.Provider value={mediaZoom}>{children}</MediaZoom.Provider>;
 }
 
 type Props = Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> & {
@@ -42,7 +77,8 @@ const visiblePreviews = new Map<string, Set<Preview>>();
 
 export const CanvasImage = memo(function CanvasImage({ path, thumbPath, sourceWidth, sourceHeight, progressiveThumbnail, onError, ...props }: Props) {
   const { ref, visible, width, height } = useMediaVisibility<HTMLImageElement>();
-  const zoom = useContext(MediaZoom);
+  const mediaZoom = useContext(MediaZoom);
+  const zoom = useSyncExternalStore(visible ? mediaZoom.subscribe : noZoomSubscription, visible ? mediaZoom.get : defaultZoom);
   const fallback = canvasAssetMediaPath({ storePath: path ?? null, thumbPath: thumbPath ?? null });
   const size = path ? canvasImagePreviewSize(path, Math.max(width, height) * zoom,
     Math.max(sourceWidth ?? 0, sourceHeight ?? 0)) : null;
@@ -58,7 +94,7 @@ export const CanvasImage = memo(function CanvasImage({ path, thumbPath, sourceWi
     return () => { current = false; request.release(); };
   }, [visible, path, size, version, width > 0, height > 0]);
   // Intrinsic dimensions remain available while a resource is offscreen or queued.
-  const placeholder = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${sourceWidth || 160}" height="${sourceHeight || 100}"/>`)}`;
+  const placeholder = useMemo(() => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${sourceWidth || 160}" height="${sourceHeight || 100}"/>`)}`, [sourceWidth, sourceHeight]);
   const preview = loaded && loaded.path === path && loaded.version === version ? loaded.preview : null;
   let interim: string | undefined;
   if (progressiveThumbnail && visible && path && size !== null && !preview) {

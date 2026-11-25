@@ -354,6 +354,7 @@ pub fn run() {
             app.asset_protocol_scope().allow_directory(files.proposed_root(), true)?;
             for path in files.snapshot().projects.values() { app.asset_protocol_scope().allow_directory(path, true)?; }
             app.manage(files);
+            app.manage(Arc::new(commands::canvas_image_preview::PreviewCache::default()));
             for path in db.external_paths()? {
                 app.asset_protocol_scope().allow_file(path)?;
             }
@@ -539,6 +540,8 @@ pub fn run() {
             commands::project_canvas::project_thread_restore,
             commands::project_canvas::project_canvas_node_create,
             commands::project_canvas::project_canvas_node_update,
+            commands::project_canvas::project_canvas_nodes_batch_update,
+            commands::project_canvas::project_canvas_nodes_batch_create,
             commands::project_canvas::project_canvas_note_update,
             commands::canvas_workflow::canvas_workflow_get,
             commands::canvas_workflow::canvas_workflow_save,

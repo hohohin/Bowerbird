@@ -178,6 +178,9 @@ function observeGeometry(plane: HTMLElement, getZoom: () => number, geometry: Ma
   plane.addEventListener("scroll", scroll, true);
 
   return {
+    resume() {
+      if (pausedForZoom && dirty.size && !frame) frame = requestAnimationFrame(flush);
+    },
     update(nextTargets: WorkflowPortTarget[]) {
       const previous = targets;
       targets = new Map();
@@ -223,7 +226,7 @@ function observeGeometry(plane: HTMLElement, getZoom: () => number, geometry: Ma
 }
 
 /** Cache connected sockets in board coordinates without synchronously measuring the SVG transform. */
-export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets: WorkflowPortTarget[], getZoom: () => number) {
+export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets: WorkflowPortTarget[], getZoom: () => number, settledZoom?: number) {
   const geometry = useRef(new Map<string, Map<string, Rect>>());
   const observer = useRef<ReturnType<typeof observeGeometry>>();
   const zoom = useRef(getZoom);
@@ -238,7 +241,8 @@ export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets:
   useLayoutEffect(() => {
     zoom.current = getZoom;
     observer.current?.update(targets);
-  });
+  }, [getZoom, targets]);
+  useLayoutEffect(() => { observer.current?.resume(); }, [settledZoom]);
   return (node: CanvasNode | undefined, kind: WorkflowPortTarget["kind"], port: string, image = false) => {
     if (!node) return undefined;
     const rect = geometry.current.get(node.id)?.get(targetKey(kind, port, image));

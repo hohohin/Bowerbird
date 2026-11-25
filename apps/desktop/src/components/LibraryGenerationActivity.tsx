@@ -1,5 +1,7 @@
 import { ArrowUpRight, Check, ChevronDown, CircleAlert, LoaderCircle } from "lucide-react";
 import { useStore } from "../store";
+import { generationProgressLabel } from "../lib/generationProgress";
+import { useGenerationJob } from "./GenerationJobFeedback";
 import { useLocalChatStore } from "../lib/localChatStore";
 import { libraryGenerationTasks, type LibraryActivityTask } from "../lib/libraryGenerationActivity";
 import { openLibraryActivityTask, useLibraryGenerationRuntime } from "../lib/libraryGenerationRuntime";
@@ -14,11 +16,13 @@ function ActivitySummary({ running, unread }: { running: number; unread: boolean
 
 function ActivityRow({ task, projectName, open }: { task: LibraryActivityTask; projectName: string; open: (task: LibraryActivityTask) => void }) {
   const Icon = task.status === "running" ? LoaderCircle : task.status === "completed" ? Check : CircleAlert;
+  const job = useGenerationJob(task.source === "generation" && task.status === "running" ? task.id : undefined);
+  const statusLabel = job ? generationProgressLabel(job) : task.statusLabel;
   return <div role="listitem"><button type="button"
     className={`library-generation-task is-${task.status}`} onClick={() => open(task)}
-    aria-label={`${projectName} · ${task.title} · ${task.statusLabel}，查看画板`}>
+    aria-label={`${projectName} · ${task.title} · ${statusLabel}，查看画板`}>
     <Icon size={14} aria-hidden /><span className="library-generation-task-copy"><span>{task.title}</span><small>{projectName}</small></span>
-    <span className="library-generation-task-status">{task.statusLabel}</span><ArrowUpRight size={13} aria-hidden />
+    <span className="library-generation-task-status">{statusLabel}</span><ArrowUpRight size={13} aria-hidden />
   </button></div>;
 }
 

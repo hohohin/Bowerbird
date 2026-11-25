@@ -5,15 +5,24 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::State;
 
-use crate::core::paths::LibraryPaths;
 use crate::core::project_canvas::{
-    CanvasEdge, CanvasGroup, CanvasGroupItem, CanvasNode, CanvasNodeLayoutUpdate,
-    CanvasNodeRemoval, CanvasView, CanvasViewInput, CreativeThread, NewCanvasEdge, NewCanvasGroup,
-    NewCanvasNode, NewCreativeThread, ProjectCanvas, ProjectCanvasMaterializeInput,
-    ProjectCanvasSnapshot,
+    CanvasBatchCreated, CanvasEdge, CanvasGroup, CanvasGroupBatchCreate, CanvasGroupItem,
+    CanvasNode, CanvasNodeBatchLayout, CanvasNodeLayoutUpdate, CanvasNodeRemoval, CanvasView,
+    CanvasViewInput, CreativeThread, NewCanvasEdge, NewCanvasGroup, NewCanvasNode,
+    NewCreativeThread, ProjectCanvas, ProjectCanvasMaterializeInput, ProjectCanvasSnapshot,
 };
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
+
+pub(super) async fn run_canvas_db<T: Send + 'static>(
+    db: &Arc<Database>,
+    action: impl FnOnce(&Database) -> AppResult<T> + Send + 'static,
+) -> AppResult<T> {
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || action(&db))
+        .await
+        .map_err(|error| AppError::Other(error.to_string()))?
+}
 
 #[tauri::command]
 pub async fn project_canvas_materialize(
@@ -24,13 +33,20 @@ pub async fn project_canvas_materialize(
     initial_nodes: Vec<NewCanvasNode>,
     initial_view: Option<CanvasViewInput>,
 ) -> AppResult<ProjectCanvas> {
-    value.workspace_path = files.project_directory(&value.project_id, &value.name)?.to_string_lossy().into_owned();
-    db.materialize_project_canvas(
-        &value,
-        &initial_threads,
-        &initial_nodes,
-        initial_view.as_ref(),
-    )
+    let files = files.inner().clone();
+    run_canvas_db(db.inner(), move |db| {
+        value.workspace_path = files
+            .project_directory(&value.project_id, &value.name)?
+            .to_string_lossy()
+            .into_owned();
+        db.materialize_project_canvas(
+            &value,
+            &initial_threads,
+            &initial_nodes,
+            initial_view.as_ref(),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -38,18 +54,18 @@ pub async fn project_canvas_ensure(
     db: State<'_, Arc<Database>>,
     project_id: String,
 ) -> AppResult<ProjectCanvas> {
-    db.ensure_project_canvas(&project_id)
+    run_canvas_db(db.inner(), move |db| db.ensure_project_canvas(&project_id)).await
 }
 
 #[tauri::command]
 pub async fn project_canvas_get(
-    paths: State<'_, Arc<LibraryPaths>>,
+    db: State<'_, Arc<Database>>,
     project_id: String,
 ) -> AppResult<ProjectCanvasSnapshot> {
-    let path = paths.db.clone();
-    tokio::task::spawn_blocking(move || Database::open_read_only(&path)?.project_canvas_snapshot(&project_id))
-        .await
-        .map_err(|error| AppError::Other(error.to_string()))?
+    run_canvas_db(db.inner(), move |db| {
+        db.project_canvas_snapshot(&project_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -58,7 +74,10 @@ pub async fn project_canvas_visible_nodes(
     project_id: String,
     node_ids: Vec<String>,
 ) -> AppResult<Vec<CanvasNode>> {
-    db.visible_canvas_nodes(&project_id, &node_ids)
+    run_canvas_db(db.inner(), move |db| {
+        db.visible_canvas_nodes(&project_id, &node_ids)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -67,7 +86,10 @@ pub async fn project_canvas_rename(
     project_id: String,
     title: String,
 ) -> AppResult<bool> {
-    db.rename_canvas_project(&project_id, &title)
+    run_canvas_db(db.inner(), move |db| {
+        db.rename_canvas_project(&project_id, &title)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -76,7 +98,10 @@ pub async fn project_canvas_title_from_first_prompt(
     project_id: String,
     title: String,
 ) -> AppResult<bool> {
-    db.title_canvas_project_from_first_prompt(&project_id, &title)
+    run_canvas_db(db.inner(), move |db| {
+        db.title_canvas_project_from_first_prompt(&project_id, &title)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -85,7 +110,10 @@ pub async fn project_canvas_update_draft(
     project_id: String,
     draft_json: String,
 ) -> AppResult<bool> {
-    db.update_project_canvas_draft(&project_id, &draft_json)
+    run_canvas_db(db.inner(), move |db| {
+        db.update_project_canvas_draft(&project_id, &draft_json)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -93,7 +121,7 @@ pub async fn project_canvas_touch(
     db: State<'_, Arc<Database>>,
     project_id: String,
 ) -> AppResult<bool> {
-    db.touch_project_canvas(&project_id)
+    run_canvas_db(db.inner(), move |db| db.touch_project_canvas(&project_id)).await
 }
 
 #[tauri::command]
@@ -101,7 +129,7 @@ pub async fn project_thread_create(
     db: State<'_, Arc<Database>>,
     value: NewCreativeThread,
 ) -> AppResult<CreativeThread> {
-    db.create_creative_thread(&value)
+    run_canvas_db(db.inner(), move |db| db.create_creative_thread(&value)).await
 }
 
 #[tauri::command]
@@ -109,7 +137,7 @@ pub async fn project_thread_archive(
     db: State<'_, Arc<Database>>,
     thread_id: String,
 ) -> AppResult<bool> {
-    db.archive_creative_thread(&thread_id)
+    run_canvas_db(db.inner(), move |db| db.archive_creative_thread(&thread_id)).await
 }
 
 #[tauri::command]
@@ -117,7 +145,7 @@ pub async fn project_thread_restore(
     db: State<'_, Arc<Database>>,
     thread_id: String,
 ) -> AppResult<bool> {
-    db.restore_creative_thread(&thread_id)
+    run_canvas_db(db.inner(), move |db| db.restore_creative_thread(&thread_id)).await
 }
 
 #[tauri::command]
@@ -125,7 +153,7 @@ pub async fn project_canvas_node_create(
     db: State<'_, Arc<Database>>,
     value: NewCanvasNode,
 ) -> AppResult<CanvasNode> {
-    db.create_canvas_node(&value)
+    run_canvas_db(db.inner(), move |db| db.create_canvas_node(&value)).await
 }
 
 #[tauri::command]
@@ -134,7 +162,10 @@ pub async fn project_canvas_note_update(
     node_id: String,
     payload_json: String,
 ) -> AppResult<CanvasNode> {
-    db.update_canvas_note_payload(&node_id, &payload_json)
+    run_canvas_db(db.inner(), move |db| {
+        db.update_canvas_note_payload(&node_id, &payload_json)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -143,7 +174,36 @@ pub async fn project_canvas_node_update(
     node_id: String,
     value: CanvasNodeLayoutUpdate,
 ) -> AppResult<Option<CanvasNode>> {
-    db.update_canvas_node_layout(&node_id, &value)
+    run_canvas_db(db.inner(), move |db| {
+        db.update_canvas_node_layout(&node_id, &value)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn project_canvas_nodes_batch_update(
+    db: State<'_, Arc<Database>>,
+    project_id: String,
+    updates: Vec<CanvasNodeBatchLayout>,
+    groups: Option<Vec<CanvasGroup>>,
+) -> AppResult<()> {
+    run_canvas_db(db.inner(), move |db| {
+        db.update_canvas_nodes_batch(&project_id, &updates, &groups.unwrap_or_default())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn project_canvas_nodes_batch_create(
+    db: State<'_, Arc<Database>>,
+    project_id: String,
+    values: Vec<NewCanvasNode>,
+    groups: Option<Vec<CanvasGroupBatchCreate>>,
+) -> AppResult<CanvasBatchCreated> {
+    run_canvas_db(db.inner(), move |db| {
+        db.create_canvas_nodes_batch(&project_id, &values, &groups.unwrap_or_default())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -152,7 +212,10 @@ pub async fn project_canvas_node_restore(
     project_id: String,
     node_id: String,
 ) -> AppResult<Option<CanvasNode>> {
-    db.restore_canvas_node(&project_id, &node_id)
+    run_canvas_db(db.inner(), move |db| {
+        db.restore_canvas_node(&project_id, &node_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -160,7 +223,7 @@ pub async fn project_canvas_node_remove(
     db: State<'_, Arc<Database>>,
     node_id: String,
 ) -> AppResult<Option<CanvasNodeRemoval>> {
-    db.remove_canvas_node(&node_id)
+    run_canvas_db(db.inner(), move |db| db.remove_canvas_node(&node_id)).await
 }
 
 #[tauri::command]
@@ -169,7 +232,10 @@ pub async fn project_canvas_group_create(
     value: NewCanvasGroup,
     node_ids: Vec<String>,
 ) -> AppResult<CanvasGroup> {
-    db.create_canvas_group_with_items(&value, &node_ids)
+    run_canvas_db(db.inner(), move |db| {
+        db.create_canvas_group_with_items(&value, &node_ids)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -178,7 +244,10 @@ pub async fn project_canvas_group_set_items(
     group_id: String,
     node_ids: Vec<String>,
 ) -> AppResult<Vec<CanvasGroupItem>> {
-    db.set_canvas_group_items(&group_id, &node_ids)
+    run_canvas_db(db.inner(), move |db| {
+        db.set_canvas_group_items(&group_id, &node_ids)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -186,7 +255,7 @@ pub async fn project_canvas_group_update(
     db: State<'_, Arc<Database>>,
     value: CanvasGroup,
 ) -> AppResult<bool> {
-    db.update_canvas_group(&value)
+    run_canvas_db(db.inner(), move |db| db.update_canvas_group(&value)).await
 }
 
 #[tauri::command]
@@ -194,7 +263,7 @@ pub async fn project_canvas_group_delete(
     db: State<'_, Arc<Database>>,
     group_id: String,
 ) -> AppResult<bool> {
-    db.delete_canvas_group(&group_id)
+    run_canvas_db(db.inner(), move |db| db.delete_canvas_group(&group_id)).await
 }
 
 #[tauri::command]
@@ -202,7 +271,7 @@ pub async fn project_canvas_edge_create(
     db: State<'_, Arc<Database>>,
     value: NewCanvasEdge,
 ) -> AppResult<CanvasEdge> {
-    db.create_canvas_edge(&value)
+    run_canvas_db(db.inner(), move |db| db.create_canvas_edge(&value)).await
 }
 
 #[tauri::command]
@@ -210,7 +279,7 @@ pub async fn project_canvas_edge_delete(
     db: State<'_, Arc<Database>>,
     edge_id: String,
 ) -> AppResult<bool> {
-    db.delete_canvas_edge(&edge_id)
+    run_canvas_db(db.inner(), move |db| db.delete_canvas_edge(&edge_id)).await
 }
 
 #[tauri::command]
@@ -218,7 +287,7 @@ pub async fn project_canvas_view_upsert(
     db: State<'_, Arc<Database>>,
     value: CanvasViewInput,
 ) -> AppResult<CanvasView> {
-    db.upsert_canvas_view(&value)
+    run_canvas_db(db.inner(), move |db| db.upsert_canvas_view(&value)).await
 }
 
 #[tauri::command]
@@ -226,7 +295,7 @@ pub async fn project_canvas_view_flush(
     db: State<'_, Arc<Database>>,
     value: CanvasViewInput,
 ) -> AppResult<CanvasView> {
-    db.upsert_canvas_view(&value)
+    run_canvas_db(db.inner(), move |db| db.upsert_canvas_view(&value)).await
 }
 
 #[derive(Debug, Serialize)]
@@ -242,13 +311,16 @@ pub async fn project_canvas_for_asset(
     db: State<'_, Arc<Database>>,
     asset_id: String,
 ) -> AppResult<Option<ProjectCanvasLocation>> {
-    Ok(db
-        .project_canvas_location_for_asset(&asset_id)?
-        .map(|(project_id, node_id, thread_id)| ProjectCanvasLocation {
-            project_id,
-            node_id,
-            thread_id,
-        }))
+    run_canvas_db(db.inner(), move |db| {
+        Ok(db.project_canvas_location_for_asset(&asset_id)?.map(
+            |(project_id, node_id, thread_id)| ProjectCanvasLocation {
+                project_id,
+                node_id,
+                thread_id,
+            },
+        ))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -258,11 +330,14 @@ pub async fn project_canvas_for_node(
     thread_id: String,
     node_id: String,
 ) -> AppResult<ProjectCanvasLocation> {
-    let (project_id, node_id, thread_id) =
-        db.project_canvas_location_for_node(&project_id, &thread_id, &node_id)?;
-    Ok(ProjectCanvasLocation {
-        project_id,
-        node_id,
-        thread_id,
+    run_canvas_db(db.inner(), move |db| {
+        let (project_id, node_id, thread_id) =
+            db.project_canvas_location_for_node(&project_id, &thread_id, &node_id)?;
+        Ok(ProjectCanvasLocation {
+            project_id,
+            node_id,
+            thread_id,
+        })
     })
+    .await
 }

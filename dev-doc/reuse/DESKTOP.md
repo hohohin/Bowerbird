@@ -47,9 +47,9 @@
 ## 展示生成阶段
 
 - **用途／关键词**：生成进度、任务阶段、排队数字、job／turn。
-- **入口**：[generationProgress.ts](../../apps/desktop/src/lib/generationProgress.ts) 的 `applyGenerationProgress`／`generationProgressLabel`。
+- **入口**：[generationProgress.ts](../../apps/desktop/src/lib/generationProgress.ts) 的 `applyGenerationProgress`／`generationProgressLabel`。[GenerationJobFeedback.tsx](../../apps/desktop/src/components/GenerationJobFeedback.tsx) 提供按 job 订阅的进度、预览和 `useGenerationJob`。
 - **安装更新前判断本地生成**：[hasRunningLocalGeneration](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 汇总各项目正在运行的卡片和已交给生成会话的任务，可传入 `api.listGenJobs()` 的原生队列快照。[更新状态](../../apps/desktop/src/lib/appUpdater.ts) 在画板保存后复查。
-- **调用**：store 按运行中的 job＋turn 接收事件，`GenerationPanel`、`CanvasWorkspace` 和 `libraryGenerationActivity` 共用文案。
+- **调用**：store 按 job 与 turn 接收事件，流式正文、阶段与首图存在 `genJobStreams`。画板和任务列表从结构性 `genJobs` 做投影，需要实时字段的卡片或详情按 job 订阅。
 - **边界／状态**：显示后端观察到的阶段及有效排队数字。耗时和调用次数不用于推算百分比。[阶段与恢复契约](../CANVAS-WORKFLOW.md#2026-11-08生成阶段反馈与-cli-进度核查源码待发布)。
 
 ## 启动工作流或恢复定时预约
@@ -57,6 +57,7 @@
 - **用途／关键词**：触发器、定时、跨画板、执行锁、运行恢复、删除项目后的调度收尾。
 - **画板入口**：`CanvasWorkflowLayer` 的卡头拖动入口复用加号的拖线反馈，调用项目控制器的 `connectCompletionTrigger`，一次保存触发卡与完成／触发连线。
 - **入口**：[canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `canvasWorkflowController(projectId)` 提供项目控制器。[WorkflowScheduleCoordinator](../../apps/desktop/src/components/WorkflowScheduleCoordinator.tsx) 由 `App` 挂载，通过 `setTriggerTimersEnabled` 管理非归档项目计时。
+- **会话完成**：协调器接收画板与生成终态事件，并在应用重新可见时唤醒调度。只有有待确认的轮次才退避查询，路由离场后清理闲置计时。
 - **调用**：手动和定时运行复用 `start`。Agent 用 `create_canvas_cards` 配置触发卡，用 `runCard` 指定本批运行入口，协调器领取保存的动作，断线后读取原回执。[workflowTriggerSchedule.ts](../../apps/desktop/src/lib/workflowTriggerSchedule.ts) 提供 `workflowTriggerMode` 及 `activeTriggerSchedule`，供表单和运行时兼容旧卡、筛选有效预约。`nextDailyTrigger`／`triggerScheduleOccurrence`／`advanceTriggerSchedule` 计算本机时刻、运行身份及下次预约。
 - **边界／状态**：**工作流内部专用**。应用运行时调度，原生 SQLite 事务保护到点消费，复制清除 `triggerSchedule`。删除沿 `useProjectDeletion` → `ProjectDeleteDialog` → `deleteProjectCanvas`，原生成功后 store 调用 `discardProjectWorkflow`，只停止该项目的本地调度、计时器和后续保存。远端任务沿原身份处理。[工作流预约](../CANVAS-WORKFLOW.md#2026-11-05触发器定时执行源码未发布) · [项目删除](../PROJECT-CANVAS-PLAN.md#2026-11-10确认删除项目后不再由任务状态否决源码待发布)。
 
@@ -71,7 +72,7 @@
 ## 读取项目对话摘要和流式正文
 
 - **用途／关键词**：项目对话列表、Agent 卡片、正文增量、工作流等待。
-- **入口**：项目内会话列表或画板卡面使用 [localChatStore.ts](../../apps/desktop/src/lib/localChatStore.ts) 的 `useProjectChatSummaries(projectId)`。打开正文时沿用 `LocalChatPanel` 的 `pinLocalChat` 与 `loadConversation`，读取缺口快照、处理文本增量及保留活跃会话均由 store 负责。
+- **入口**：项目内会话列表使用 [localChatStore.ts](../../apps/desktop/src/lib/localChatStore.ts) 的 `useProjectChatSummaries(projectId)`，画板布局传入第二参数 `true`，按结构变化更新。正文由会话 ID 订阅，`LocalChatPanel` 的 `pinLocalChat` 与 `loadConversation` 处理缺口快照和活跃会话。
 - **调用**：工作流 Agent 步骤用 `CanvasWorkflowController.waitForChatTurn` 订阅已接受会话。五秒未收到目标更新时通过 `localChat.revision(id)` 读取单个版本号，发现差异才读取正文。
 - **边界／状态**：工作流停止按提交轮次执行，其他续聊继续运行。
 

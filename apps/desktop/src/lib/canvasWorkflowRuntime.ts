@@ -28,7 +28,7 @@ import { canStartAnotherAgentRun, canUseAgentRun, understandProvider } from "./e
 import { renderLayerDocument } from "./layerDocument";
 import { workflowLayerDecompose } from "./workflowLayerDecompose";
 import { readCanvasNote, emptyCanvasCell, canvasGridWeights, canvasTextMinSize } from "./canvasNotes";
-import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationCells, latestWorkflowSessionImage, completedCanvasSessions, canvasSessionCompleted, canvasSessionCompletionLookup, submittedTurnState, workflowGenerationActivity, workflowGenerationOrigins } from "./canvasSessionOutputs";
+import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationCells, latestWorkflowSessionImage, completedCanvasSessions, canvasSessionCompleted, canvasSessionCompletionLookup, canvasSessionCompletionStatus, submittedTurnState, workflowGenerationActivity, workflowGenerationOrigins } from "./canvasSessionOutputs";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasContentInput, contentInputAxisIndex } from "./canvasContentInput";
 import { agentResultValue } from "./workflowAgentResult";
@@ -99,11 +99,42 @@ export async function filterAutomaticMediaValues(node: WorkflowNode, values: Rec
 }
 const scheduleSessionStartedAt = Date.now();
 const workflowPollTimeout = 30 * 60_000;
+const promptSaveDelay = 180;
+const completionPollDelay = 1500;
+const maximumTriggerDelay = 20_000;
+let activeCanvasProject: string | null | undefined;
+const sessionCompletionTrigger = (node: WorkflowNode) => node.kind === "trigger" && workflowTriggerMode(node) === "completion"
+  && node.inputs.completion?.some(input => input.canvasNodeId || input.pendingCompletionSession);
+function sessionCompletionConfigChanged(before: CanvasWorkflow, after: CanvasWorkflow) {
+  const previous = new Map(before.nodes.filter(sessionCompletionTrigger).map(node => [node.id, node]));
+  const current = after.nodes.filter(sessionCompletionTrigger);
+  return previous.size !== current.length || current.some(node => {
+    const prior = previous.get(node.id);
+    return !prior || prior.inputs.completion !== node.inputs.completion || prior.triggerCount !== node.triggerCount;
+  });
+}
 type CardStart = { kind: "run" | "optimize"; current: () => boolean; cancel: () => void; release: () => void };
 export function canvasWorkflowController(projectId: string) {
   let controller = controllers.get(projectId);
-  if (!controller) { controller = new CanvasWorkflowController(projectId); controllers.set(projectId, controller); }
+  if (!controller) {
+    controller = new CanvasWorkflowController(projectId);
+    if (activeCanvasProject !== undefined) controller.setCanvasActive(activeCanvasProject === projectId);
+    controllers.set(projectId, controller);
+  }
   return controller;
+}
+
+export function setActiveWorkflowCanvas(projectId: string | null) {
+  activeCanvasProject = projectId;
+  for (const controller of controllers.values()) controller.setCanvasActive(controller.projectId === projectId);
+}
+
+export function notifyWorkflowSessionCompletion(projectId: string) {
+  controllers.get(projectId)?.notifySessionCompletionChange();
+}
+
+export function wakeWorkflowSchedules() {
+  for (const controller of controllers.values()) controller.wakeSchedule();
 }
 
 /** Includes background projects and image jobs already handed off by their workflow step. */
@@ -128,10 +159,11 @@ export class CanvasWorkflowController {
   private discarded = false;
   discard() {
     this.discarded = true;
+    this.queuedDraft?.release();
     for (const start of this.startingCards.values()) { start.cancel(); start.release(); }
     for (const run of workflowRuns(this.document)) this.stopped.add(run.id);
     for (const abort of this.executionAborts.values()) abort.abort();
-    clearTimeout(this.triggerTimer); clearTimeout(this.sessionCompletionTimer);
+    clearTimeout(this.triggerTimer); this.clearSessionCompletionTimer();
     this.ready = false;
     this.emit();
   }
@@ -163,7 +195,7 @@ export class CanvasWorkflowController {
   private persistedDocument = emptyWorkflow();
   private queuedDocument = emptyWorkflow();
   private queuedWriteVersion = 0;
-  private queuedDraft?: { draft: { nodeId: string; document: CanvasWorkflow }; result: Promise<void> };
+  private queuedDraft?: { draft: { nodeId: string; document: CanvasWorkflow }; result: Promise<void>; release: () => void; debounce?: () => void };
   private startingCards = new Map<string, CardStart>();
   private generationHandoffs = new Map<string, { runId: string; jobId: string; turnKey: string }>();
   private liveGenerationCheckpoint = (nodeId: string, run: WorkflowRun) => {
@@ -230,6 +262,11 @@ export class CanvasWorkflowController {
   private executionDrains = new Map<string, Promise<void>>();
   private resources = new Map<string, Promise<unknown>>();
   private sessionCompletionTimer: ReturnType<typeof setTimeout> | undefined;
+  private sessionCompletionRequest?: { canvas?: readonly CanvasNode[] };
+  private pendingSessionCompletion = false;
+  private blockedSessionCompletion = false;
+  private completionBackoff = completionPollDelay;
+  private canvasActive = true;
   private checkingSessionCompletions = false;
   private dispatchingSessionCompletions = new Set<string>();
   private sessionCompletionFailures = new Set<string>();
@@ -240,6 +277,16 @@ export class CanvasWorkflowController {
   setTriggerTimersEnabled(enabled: boolean) {
     this.triggerTimersEnabled = enabled;
     this.scheduleTriggers();
+  }
+  setCanvasActive(active: boolean) {
+    if (active === this.canvasActive) return;
+    this.canvasActive = active;
+    if (active) this.notifySessionCompletionChange();
+    else if (!this.pendingSessionCompletion && !this.executing.size) this.clearSessionCompletionTimer();
+  }
+  wakeSchedule() {
+    this.scheduleTriggers();
+    if (this.canvasActive || this.pendingSessionCompletion || this.executing.size) this.notifySessionCompletionChange();
   }
   private scheduleTriggers() {
     clearTimeout(this.triggerTimer);
@@ -252,7 +299,7 @@ export class CanvasWorkflowController {
     this.triggerTimer = setTimeout(() => {
       this.triggerTimer = undefined;
       void this.checkScheduledTriggers();
-    }, remaining > 0 ? Math.min(1000, remaining) : 1000);
+    }, remaining > 0 ? Math.min(maximumTriggerDelay, remaining) : 1000);
   }
   private async checkScheduledTriggers() {
     if (!this.triggerTimersEnabled || !this.ready || this.error || this.dispatchingSchedule || this.encapsulating) { this.scheduleTriggers(); return; }
@@ -274,31 +321,61 @@ export class CanvasWorkflowController {
     } catch (error) { console.warn("保存定时触发状态失败", error); }
     finally { this.dispatchingSchedule = false; this.scheduleTriggers(); }
   }
+  private hasSessionCompletionTargets() {
+    return this.document.nodes.some(sessionCompletionTrigger);
+  }
+  private clearSessionCompletionTimer() {
+    clearTimeout(this.sessionCompletionTimer);
+    this.sessionCompletionTimer = undefined;
+  }
+  notifySessionCompletionChange(canvas?: readonly CanvasNode[]) {
+    if (this.discarded || !this.ready || !this.hasSessionCompletionTargets()) return;
+    // An event may be newer than the projected canvas still mounted in React.
+    if (!canvas || !this.sessionCompletionRequest || this.sessionCompletionRequest.canvas) this.sessionCompletionRequest = { canvas };
+    this.completionBackoff = completionPollDelay;
+    this.clearSessionCompletionTimer();
+    this.scheduleSessionCompletions();
+  }
   private scheduleSessionCompletions() {
-    if (this.discarded || this.sessionCompletionTimer || !this.ready || this.error || !this.document.nodes.some(node =>
-      node.kind === "trigger" && workflowTriggerMode(node) === "completion" && (node.triggerCount ?? 0) > 0 && node.inputs.completion?.some(input => input.canvasNodeId || input.pendingCompletionSession && !node.completionSeen?.includes(input.pendingCompletionSession)))) return;
+    if (this.discarded || !this.ready || this.error || !this.hasSessionCompletionTargets()) {
+      this.clearSessionCompletionTimer();
+      return;
+    }
+    if (this.sessionCompletionTimer !== undefined || this.checkingSessionCompletions || this.encapsulating) return;
+    if (!this.sessionCompletionRequest && !this.pendingSessionCompletion) return;
+    const delay = this.sessionCompletionRequest ? 0 : this.completionBackoff;
+    if (delay) this.completionBackoff = Math.min(maximumTriggerDelay, delay * 2);
     this.sessionCompletionTimer = setTimeout(() => {
       this.sessionCompletionTimer = undefined;
-      void this.checkSessionCompletions();
-    }, 1500);
+      const request = this.sessionCompletionRequest;
+      this.sessionCompletionRequest = undefined;
+      void this.checkSessionCompletions(request?.canvas);
+    }, delay);
   }
-  private async checkSessionCompletions() {
-    if (!this.ready || this.error || this.checkingSessionCompletions || this.encapsulating) return;
+  private async checkSessionCompletions(knownCanvas?: readonly CanvasNode[]) {
+    if (this.discarded || !this.ready || this.error || this.checkingSessionCompletions || this.encapsulating || !this.hasSessionCompletionTargets()) return;
     this.checkingSessionCompletions = true;
     try {
-      if (!this.document.nodes.some(node => node.kind === "trigger" && workflowTriggerMode(node) === "completion" && node.inputs.completion?.some(input => input.canvasNodeId || input.pendingCompletionSession))) return;
       const watchedTurns = this.document.nodes.flatMap(node => node.inputs.completion?.flatMap(input => input.pendingCompletionSession ?? []) ?? []);
-      const canvas = await api.projectCanvasGet(this.projectId);
-      const closed = new Set(watchedTurns.filter(id => this.historicalSessionCompletions.has(id) || submittedTurnState(id, canvas.nodes) === "closed"));
+      const knownTurns = knownCanvas && watchedTurns.length ? new Set(knownCanvas.filter(node => node.kind === "prompt").map(node => node.id)) : undefined;
+      const canvas = knownCanvas && (!knownTurns || watchedTurns.every(id => knownTurns.has(id)))
+        ? knownCanvas : (await api.projectCanvasGet(this.projectId)).nodes;
+      if (this.discarded) return;
+      const closed = new Set(watchedTurns.filter(id => this.historicalSessionCompletions.has(id) || submittedTurnState(id, canvas) === "closed"));
       if (closed.size) await this.save({ ...this.document, nodes: this.document.nodes.map(node => {
         if (!node.inputs.completion?.some(input => input.pendingCompletionSession && closed.has(input.pendingCompletionSession))) return node;
         return { ...node, inputs: { ...node.inputs, completion: node.inputs.completion.map(input =>
           input.pendingCompletionSession && closed.has(input.pendingCompletionSession) ? { ...input, pendingCompletionSession: undefined } : input) } };
       }) });
-      for (const id of this.document.nodes.filter(node => node.kind === "trigger").map(node => node.id)) {
+      const status = canvasSessionCompletionStatus(canvas, useStore.getState().genJobs);
+      this.pendingSessionCompletion = false;
+      this.blockedSessionCompletion = false;
+      for (const id of this.document.nodes.filter(sessionCompletionTrigger).map(node => node.id)) {
         const node = this.document.nodes.find(node => node.id === id);
-        if (!node || workflowTriggerMode(node) !== "completion" || this.dispatchingSessionCompletions.has(id)) continue;
-        const completed = completedCanvasSessions(node.inputs.completion ?? [], canvas.nodes, useStore.getState().genJobs);
+        if (!node || workflowTriggerMode(node) !== "completion") continue;
+        const { completed, pending } = status(node.inputs.completion ?? []);
+        this.pendingSessionCompletion ||= pending && (node.triggerCount ?? 0) > 0;
+        if (this.dispatchingSessionCompletions.has(id)) continue;
         const unseen = completed.filter(id => !node.completionSeen?.includes(id) && !this.historicalSessionCompletions.has(id));
         if (!unseen.length) continue;
         if (!(node.triggerCount! > 0)) {
@@ -308,11 +385,16 @@ export class CanvasWorkflowController {
         }
         const sessionId = unseen[0], key = `${id}:${sessionId}`;
         if (this.sessionCompletionFailures.has(key)) continue;
+        this.blockedSessionCompletion = true;
         this.dispatchingSessionCompletions.add(id);
         void this.startRun(id, false, sessionId).catch(error => {
           this.sessionCompletionFailures.add(key);
           this.showIssue(workflowDiagnostic(error, node, "validation"));
-        }).finally(() => { this.dispatchingSessionCompletions.delete(id); this.scheduleSessionCompletions(); });
+        }).finally(() => {
+          this.dispatchingSessionCompletions.delete(id);
+          if (this.document.nodes.some(node => node.id === id && node.completionSeen?.includes(sessionId))) this.notifySessionCompletionChange();
+          else if (!this.sessionCompletionFailures.has(key)) this.blockedSessionCompletion = true;
+        });
       }
     } catch (error) {
       // Canvas reads can fail transiently; a failed durable write already blocks execution.
@@ -474,7 +556,7 @@ export class CanvasWorkflowController {
           await this.save({ ...this.document, nodes: scheduledNodes });
         }
         this.scheduleTriggers();
-        this.scheduleSessionCompletions();
+        this.notifySessionCompletionChange(canvas.nodes);
       } catch (error) { if (!stale()) this.runtimeError = String(error); }
       this.emit();
     })();
@@ -491,19 +573,29 @@ export class CanvasWorkflowController {
     const promptEditor = editorOnly ? draftNodeId : undefined;
     this.document = document;
     this.queuedWriteVersion++;
-    const initial = structuredClone(document);
+    const initial = document;
     const base = this.queuedDocument;
     this.queuedDocument = initial;
     const queuedDraft = this.queuedDraft;
-    if (authorizeEdit && draftNodeId && queuedDraft?.draft.nodeId === draftNodeId) {
+    if (authorizeEdit && draftNodeId && queuedDraft?.draft.nodeId === draftNodeId && !!queuedDraft.debounce === editorOnly) {
       queuedDraft.draft.document = initial;
+      queuedDraft.debounce?.();
       this.emit(false, promptEditor);
       return queuedDraft.result;
     }
     // Only successive prompt edits to the same card may share a pending write.
     // An in-flight save, a structural edit or a run checkpoint is a boundary.
+    queuedDraft?.release();
     const draft = authorizeEdit && draftNodeId ? { nodeId: draftNodeId, document: initial } : undefined;
+    let release = () => {}, debounce: (() => void) | undefined;
+    const delay = draft && editorOnly ? new Promise<void>(resolve => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      release = () => { clearTimeout(timer); resolve(); };
+      debounce = () => { clearTimeout(timer); timer = setTimeout(release, promptSaveDelay); };
+      debounce();
+    }) : undefined;
     const result = this.writing.then(async () => {
+      if (delay) await delay;
       if (this.queuedDraft?.draft === draft) this.queuedDraft = undefined;
       const snapshot = draft?.document ?? initial;
       if (this.discarded) return;
@@ -528,14 +620,19 @@ export class CanvasWorkflowController {
             mergeBase = latest.document; revision = latest.revision;
           }
         }
-        this.persistedDocument = structuredClone(merged);
+        const previous = this.persistedDocument;
+        this.persistedDocument = merged;
         // A successful native commit can still expose a conflict with a newer local edit.
         // Keep that edit's original base when reconciling with the committed document.
         writeBase = snapshot;
         this.document = mergeWorkflowChanges(snapshot, this.document, merged);
-        if (this.queuedDocument === snapshot) this.queuedDocument = structuredClone(merged);
+        if (this.queuedDocument === snapshot) this.queuedDocument = merged;
         this.failedWrite = undefined;
         this.runtimeError = "";
+        const hasCompletionTarget = this.hasSessionCompletionTargets();
+        const releasesBlockedRun = this.blockedSessionCompletion && workflowRuns(previous).some(run => workflowRunActive(run)
+          && !workflowRuns(merged).some(candidate => candidate.id === run.id && workflowRunActive(candidate)));
+        if (hasCompletionTarget && (sessionCompletionConfigChanged(previous, merged) || releasesBlockedRun)) this.notifySessionCompletionChange();
       } catch (error) {
         this.failedWrite = { base: writeBase, authorizeEdit: needsAuthorization, saveError: `工作流未保存：${String(error)}` };
         throw error;
@@ -544,7 +641,7 @@ export class CanvasWorkflowController {
         this.scheduleSessionCompletions(); this.scheduleTriggers();
       }
     });
-    this.queuedDraft = draft && { draft, result };
+    this.queuedDraft = draft && { draft, result, release, debounce };
     this.writing = result.catch(() => {});
     this.emit(false, promptEditor);
     return result;
@@ -554,13 +651,18 @@ export class CanvasWorkflowController {
     await this.waitForWrites();
   }
   private async waitForWrites() {
-    await this.writing;
+    const writing = this.writing;
+    const draft = this.queuedDraft;
+    this.queuedDraft = undefined;
+    draft?.release();
+    await writing;
     if (this.error) throw new Error(this.error);
   }
   async refreshExternalCards() {
     await this.load();
     if (!this.ready && this.error) throw new Error(this.error);
     // A refresh must not replace the merge base of an in-flight save/CAS retry.
+    this.queuedDraft?.release();
     this.queuedDraft = undefined;
     const version = this.queuedWriteVersion;
     const refresh = this.writing.then(async () => {
@@ -569,12 +671,14 @@ export class CanvasWorkflowController {
       if (this.discarded || version !== this.queuedWriteVersion || latest.revision <= this.revision) return;
       const document = mergeWorkflowChanges(this.failedWrite?.base ?? this.persistedDocument, this.document, latest.document, this.liveGenerationCheckpoint);
       const queued = mergeWorkflowChanges(this.failedWrite?.base ?? this.persistedDocument, this.queuedDocument, latest.document, this.liveGenerationCheckpoint);
+      const configChanged = sessionCompletionConfigChanged(this.document, document);
       this.document = document;
       this.persistedDocument = structuredClone(latest.document);
       this.revision = latest.revision;
       if (this.failedWrite) this.failedWrite.base = this.persistedDocument;
       // Rebase queued snapshots without treating unsaved live progress as persisted.
       this.queuedDocument = structuredClone(queued);
+      if (configChanged) this.notifySessionCompletionChange();
     });
     this.writing = refresh.catch(() => {});
     try { await refresh; }
@@ -586,6 +690,7 @@ export class CanvasWorkflowController {
   }
   async retrySave() {
     if (!this.ready) { await this.retryLoad(); return; }
+    this.queuedDraft?.release();
     await this.writing;
     await this.save(this.document);
   }
@@ -612,15 +717,19 @@ export class CanvasWorkflowController {
     };
     const before = this.document.nodes.filter(node => node.kind !== "text");
     const after = nodes.filter(node => node.kind !== "text");
+    const previousById = new Map(this.document.nodes.map(node => [node.id, node]));
+    const afterIds = new Set(after.map(node => node.id));
     const projectionOnly = after.every(node => {
-      const previous = before.find(candidate => candidate.id === node.id);
-      return previous && JSON.stringify(chatLayout(previous)) === JSON.stringify(chatLayout(node));
-    }) && before.every(node => after.some(candidate => candidate.id === node.id) || node.kind === "agent" && !!node.chatConversationId);
+      const previous = previousById.get(node.id);
+      return !!previous && previous.kind !== "text" && (previous === node || JSON.stringify(chatLayout(previous)) === JSON.stringify(chatLayout(node)));
+    }) && before.every(node => afterIds.has(node.id) || node.kind === "agent" && !!node.chatConversationId);
     const authorizeEdit = !projectionOnly && (before.length > 0 || after.length > 0);
     const nodeIds = new Set(nodes.map(node => node.id));
+    const locked = workflowLockedNodes(this.document);
+    for (const reservation of this.reservations.values()) for (const id of reservation.access) locked.add(id);
     const previousH3 = new Map(before.filter(node => node.kind === "comfy-video").map(node => [node.id, comfyVideoMode(node.comfyVideo)]));
     nodes = nodes.map(node => {
-      if (this.isLocked(node.id)) return node;
+      if (previousById.get(node.id)?.kind !== "trigger" && locked.has(node.id)) return node;
       const normalized = normalizeWorkflowLocalVideo(normalizeWorkflowInputSlots(node));
       if (normalized.kind !== "comfy-video" || previousH3.get(node.id) === comfyVideoMode(normalized.comfyVideo)) return normalized;
       const active = workflowExecutionInputs(normalized);
@@ -636,9 +745,10 @@ export class CanvasWorkflowController {
       try { assertWorkflowAcyclic(nodes, node.id, true); }
       catch { throw new WorkflowNodeError("参考素材连线会形成循环，请断开回路上的连线后再切换 H3 模式", node); }
     }
-    for (const node of this.document.nodes) if (this.isLocked(node.id)) {
-      const next = nodes.find(next => next.id === node.id);
-      if (JSON.stringify(node) === JSON.stringify(next)) continue;
+    const nextById = new Map(nodes.map(node => [node.id, node]));
+    for (const node of this.document.nodes) if (node.kind !== "trigger" && locked.has(node.id)) {
+      const next = nextById.get(node.id);
+      if (node === next || JSON.stringify(node) === JSON.stringify(next)) continue;
       if (next) {
         // The signal socket and winding key control future starts only.
         const definition = (card: WorkflowNode) => ({ ...card, trigger: undefined, inputs: { ...card.inputs, signal: undefined } });
@@ -650,7 +760,7 @@ export class CanvasWorkflowController {
     this.sessionCompletionFailures.clear();
     // Undoing a configuration edit must not replay an already consumed session.
     nodes = nodes.map(node => {
-      const previous = this.document.nodes.find(previous => previous.id === node.id);
+      const previous = previousById.get(node.id);
       const seen = previous?.completionSeen;
       if (node.triggerSchedule?.status === "armed") {
         const consumed = [...currentRuns, ...(history?.removedRuns ?? [])].some(run => run.scheduleId === triggerScheduleOccurrence(node.triggerSchedule!));
@@ -668,7 +778,7 @@ export class CanvasWorkflowController {
     // Undoing deletion restores its terminal history, retaining newer run states.
     const byId = new Map([...(history?.removedRuns ?? []).filter(run => !workflowRunActive(run)), ...currentRuns].map(run => [run.id, run]));
     const runOrder = new Set([...(history?.runOrder ?? []), ...currentRuns.map(run => run.id)]);
-    const deletedTriggers = new Set(this.document.nodes.filter(node => node.kind === "trigger" && !nodes.some(next => next.id === node.id)).map(node => node.id));
+    const deletedTriggers = new Set(this.document.nodes.filter(node => node.kind === "trigger" && !nodeIds.has(node.id)).map(node => node.id));
     const runs = [...runOrder].flatMap(id => byId.has(id) ? [byId.get(id)!] : [])
       .map(run => {
         if (!run.order.some(id => deletedTriggers.has(id)) && !deletedTriggers.has(run.startId)) return run;
@@ -677,14 +787,14 @@ export class CanvasWorkflowController {
         return { ...run, startId, order, scheduleId: startId === run.startId && !deletedTriggers.has(startId) ? run.scheduleId : undefined,
           lockedNodeIds: run.lockedNodeIds?.filter(id => !deletedTriggers.has(id)), writeNodeIds: run.writeNodeIds?.filter(id => !deletedTriggers.has(id)) };
       })
-      .filter(run => workflowRunActive(run) || run.order.every(id => nodes.some(node => node.id === id)))
+      .filter(run => workflowRunActive(run) || run.order.every(id => nodeIds.has(id)))
       .flatMap(run => {
         if (!run.triggerQueue?.length) return [run];
-        const triggerQueue = run.triggerQueue.filter(id => nodes.some(node => node.id === id));
+        const triggerQueue = run.triggerQueue.filter(id => nodeIds.has(id));
         if (triggerQueue.length === run.triggerQueue.length) return [run];
         if (run.order.length) return [{ ...run, triggerQueue }];
         if (triggerQueue.length) return [{ ...run, triggerQueue, startId: triggerQueue[0] }];
-        return run.scheduleId && !nodes.some(node => node.id === run.startId) ? []
+        return run.scheduleId && !nodeIds.has(run.startId) ? []
           : [{ ...run, triggerQueue, status: "stopped" as const }];
       });
     // Controlled inputs and undo need the edit synchronously; authorize each snapshot in the write queue.
@@ -702,7 +812,7 @@ export class CanvasWorkflowController {
       this.queuedDocument = structuredClone(result.document);
       await emit("creative://changed", { projectId: this.projectId }).catch(() => {});
       return result;
-    } finally { this.encapsulating = false; }
+    } finally { this.encapsulating = false; this.scheduleSessionCompletions(); }
   }
   async syncCanvasReferences(canvas: Parameters<typeof reconcileCanvasWorkflowReferences>[1]) {
     if (this.generationHandoffs.size) for (const [id, handoff] of this.generationHandoffs) {
@@ -715,7 +825,7 @@ export class CanvasWorkflowController {
     if (!this.ready) return;
     const nodes = reconcileCanvasWorkflowReferences(this.document.nodes, canvas).map(node => this.isLocked(node.id) ? this.document.nodes.find(current => current.id === node.id)! : node);
     if (JSON.stringify(nodes) !== JSON.stringify(this.document.nodes)) await this.edit(nodes);
-    void this.checkSessionCompletions();
+    this.notifySessionCompletionChange(canvas);
     if (!canvas.some(node => node.kind === "note" && node.hiddenAt == null && readCanvasNote(node).cells.flat().some(cell => cell.generation_ref))) return;
     await this.withResource("canvas", async () => {
       const snapshot = await api.projectCanvasGet(this.projectId);

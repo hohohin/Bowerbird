@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use tauri::State;
 use crate::{db::Database, error::{AppError, AppResult}};
 use crate::cloud::{AuthClient, EntitlementService};
-use crate::core::paths::LibraryPaths;
+use super::project_canvas::run_canvas_db;
 use crate::core::project_canvas::{NewCanvasNode, insert_node_tx, touch_canvas_tx};
 
 pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<()> {
@@ -447,6 +447,44 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
     Ok(assets)
 }
 
+// A prior saved document can predate the current validator. Read only the
+// ownership-bearing fields so saving it never needs to revalidate old runs.
+fn saved_workflow_assets(document: &Value) -> HashSet<&str> {
+    let mut assets = HashSet::new();
+    for node in document["nodes"].as_array().into_iter().flatten() {
+        let inputs = [&node["inputs"], &node["savedComfyR2V"]];
+        for binding in inputs.into_iter().filter_map(Value::as_object)
+            .flat_map(|ports| ports.values()).filter_map(Value::as_array).flatten()
+        {
+            assets.extend(binding["assetId"].as_str());
+            assets.extend(binding["videoFrame"]["assetId"].as_str());
+            if binding["groupId"].is_string() {
+                assets.extend(binding["assetIds"].as_array().into_iter().flatten().filter_map(Value::as_str));
+            }
+        }
+        for output in node["outputs"].as_object().into_iter().flat_map(|ports| ports.values()) {
+            if matches!(output["type"].as_str(), Some("text" | "image")) {
+                assets.extend(output["assetIds"].as_array().into_iter().flatten().filter_map(Value::as_str));
+            }
+        }
+    }
+    let runs = document["runs"].as_array().map(Vec::as_slice)
+        .unwrap_or_else(|| std::slice::from_ref(&document["run"]));
+    for run in runs {
+        for item in run["loop"]["items"].as_array().into_iter().flatten() {
+            assets.extend(item["assetIds"].as_array().into_iter().flatten().filter_map(Value::as_str));
+        }
+        for item in run["loop"]["completed"].as_array().into_iter().flatten() {
+            for ports in item["outputs"].as_object().into_iter().flat_map(|nodes| nodes.values()) {
+                for output in ports.as_object().into_iter().flat_map(|ports| ports.values()) {
+                    assets.extend(output["assetIds"].as_array().into_iter().flatten().filter_map(Value::as_str));
+                }
+            }
+        }
+    }
+    assets
+}
+
 fn ensure_workflow_revision(current: i64, expected: i64) -> AppResult<()> {
     if current != expected {
         return Err(AppError::Other("工作流已被其他窗口修改，请重新打开项目".into()));
@@ -456,10 +494,12 @@ fn ensure_workflow_revision(current: i64, expected: i64) -> AppResult<()> {
 
 impl Database {
     fn workflow_get(&self, project_id: &str) -> AppResult<WorkflowSnapshot> {
-        let value: Option<(i64, String)> = {
-            let conn = self.lock_conn()?;
-            conn.query_row("SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?
-        };
+        let value: Option<(i64, String)> = self.with_canvas_reader(|conn| {
+            Ok(conn.query_row(
+                "SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1",
+                [project_id], |r| Ok((r.get(0)?, r.get(1)?)),
+            ).optional()?)
+        })?;
         match value {
             Some((revision, raw)) => Ok(WorkflowSnapshot { revision, document: serde_json::from_str(&raw)? }),
             None => Ok(WorkflowSnapshot { revision: 0, document: json!({"schema_version":1,"nodes":[],"run":null}) }),
@@ -482,10 +522,12 @@ impl Database {
         }
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current: i64 = tx.query_row("SELECT revision FROM canvas_workflows WHERE project_id=?1", [project_id], |r| r.get(0)).optional()?.unwrap_or(0);
+        let (current, previous): (i64, Option<String>) = tx.query_row(
+            "SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1",
+            [project_id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?.unwrap_or((0, None));
         ensure_workflow_revision(current, revision)?;
-        let previous: Option<String> = tx.query_row("SELECT document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |row| row.get(0)).optional()?;
-        let previous = previous.map(|json| serde_json::from_str::<Value>(&json)).transpose()?.unwrap_or(Value::Null);
+        let previous = previous.as_deref().map(serde_json::from_str).transpose()?.unwrap_or(Value::Null);
         validate_schedule_claims(&previous, &document)?;
         // Conversation history keeps its native row. Its single visible Agent projection
         // owns placement and visibility, including undo of a removed card.
@@ -509,9 +551,15 @@ impl Database {
             touch_canvas_tx(&tx, project_id, now)?;
             insert_node_tx(&tx, card, now)?;
         }
-        for asset in assets {
-            // Missing assets remain explicit broken inputs; never resurrect deleted files.
-            tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) SELECT ?1,id,strftime('%s','now')*1000 FROM assets WHERE id=?2", params![project_id, asset])?;
+        let existing_assets = saved_workflow_assets(&previous);
+        let added: Vec<_> = assets.iter().filter(|asset| !existing_assets.contains(asset.as_str())).collect();
+        if !added.is_empty() {
+            // An unchanged reference must respect a later explicit project removal.
+            tx.execute(
+                "INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at)
+                 SELECT ?1,a.id,strftime('%s','now')*1000 FROM json_each(?2) wanted JOIN assets a ON a.id=wanted.value",
+                params![project_id, serde_json::to_string(&added)?],
+            )?;
         }
         tx.execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES (?1,?2,?3) ON CONFLICT(project_id) DO UPDATE SET revision=excluded.revision,document_json=excluded.document_json", params![project_id, revision + 1, document.to_string()])?;
         tx.commit()?;
@@ -520,31 +568,31 @@ impl Database {
 }
 
 #[tauri::command]
-pub async fn canvas_workflow_get(paths: State<'_, Arc<LibraryPaths>>, project_id: String) -> AppResult<WorkflowSnapshot> {
-    let path = paths.db.clone();
-    tokio::task::spawn_blocking(move || Database::open_read_only(&path)?.workflow_get(&project_id))
-        .await
-        .map_err(|error| AppError::Other(error.to_string()))?
+pub async fn canvas_workflow_get(db: State<'_, Arc<Database>>, project_id: String) -> AppResult<WorkflowSnapshot> {
+    run_canvas_db(db.inner(), move |db| db.workflow_get(&project_id)).await
 }
 #[tauri::command]
 pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value, created_content: Option<NewCanvasNode>) -> AppResult<i64> {
-    save_workflow_with_authorization(&db, &project_id, revision, document, created_content.as_ref(), || {
+    save_workflow_with_authorization(db.inner(), project_id, revision, document, created_content, || {
         require_pro(&auth, &entitlement)
     }).await
 }
 
 async fn save_workflow_with_authorization<F>(
-    db: &Database,
-    project_id: &str,
+    db: &Arc<Database>,
+    project_id: String,
     revision: i64,
     document: Value,
-    created_content: Option<&NewCanvasNode>,
+    created_content: Option<NewCanvasNode>,
     authorize: impl FnOnce() -> F,
 ) -> AppResult<i64>
 where
     F: Future<Output = AppResult<()>>,
 {
-    let before = db.workflow_get(project_id)?;
+    let before = run_canvas_db(db, {
+        let project_id = project_id.clone();
+        move |db| db.workflow_get(&project_id)
+    }).await?;
     ensure_workflow_revision(before.revision, revision)?;
     if created_content.is_some()
         || definition_changed(&before.document, &document)
@@ -552,7 +600,9 @@ where
     {
         authorize().await?;
     }
-    db.workflow_save_with_content(project_id, revision, document, created_content)
+    run_canvas_db(db, move |db| {
+        db.workflow_save_with_content(&project_id, revision, document, created_content.as_ref())
+    }).await
 }
 
 #[cfg(test)]
@@ -573,7 +623,7 @@ mod tests {
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
     #[tokio::test]
     async fn workflow_save_checks_revision_before_and_after_authorization() {
-        let db = Database::open_in_memory().unwrap();
+        let db = Arc::new(Database::open_in_memory().unwrap());
         db.migrate().unwrap();
         db.lock_conn().unwrap().execute(
             "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", [],
@@ -583,14 +633,14 @@ mod tests {
         let paid = json!({"schema_version":1,"nodes":[node("paid",json!({}))],"run":null});
 
         let calls = std::cell::Cell::new(0);
-        let stale = save_workflow_with_authorization(&db, "p", 0, paid.clone(), None, || async {
+        let stale = save_workflow_with_authorization(&db, "p".into(), 0, paid.clone(), None, || async {
             calls.set(calls.get() + 1);
             Ok(())
         }).await.unwrap_err();
         assert!(stale.to_string().contains("工作流已被其他窗口修改"));
         assert_eq!(calls.get(), 0);
 
-        let raced = save_workflow_with_authorization(&db, "p", 1, paid, None, || async {
+        let raced = save_workflow_with_authorization(&db, "p".into(), 1, paid, None, || async {
             calls.set(calls.get() + 1);
             assert_eq!(db.workflow_save("p", 1, empty.clone()).unwrap(), 2);
             Ok(())
@@ -600,6 +650,30 @@ mod tests {
         let saved = db.workflow_get("p").unwrap();
         assert_eq!(saved.revision, 2);
         assert_eq!(saved.document, empty);
+    }
+
+    #[test]
+    fn workflow_asset_delta_preserves_explicit_project_removal() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.lock_conn().unwrap().execute_batch(
+            "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1);
+             INSERT INTO assets(id,name,ext,created_at) VALUES('first','first','png',1),('second','second','png',1),('parked','parked','png',1);",
+        ).unwrap();
+        let mut video = node("paid", json!({"image":[{"assetId":"first"}]}));
+        video["generation"] = json!({"media":"video"});
+        video["savedComfyR2V"] = json!({"reference-image":[{"assetId":"parked"}]});
+        let first = json!({"schema_version":1,"nodes":[video],"run":null});
+        db.workflow_save("p", 0, first.clone()).unwrap();
+        db.lock_conn().unwrap().execute("DELETE FROM project_assets WHERE project_id='p' AND asset_id IN ('first','parked')", []).unwrap();
+        let mut added = first;
+        added["nodes"][0]["inputs"]["image"].as_array_mut().unwrap().push(json!({"assetId":"second"}));
+        db.workflow_save("p", 1, added).unwrap();
+        let conn = db.lock_conn().unwrap();
+        let ids = conn.prepare("SELECT asset_id FROM project_assets WHERE project_id='p' ORDER BY asset_id")
+            .unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ids, ["second"]);
     }
 
     #[test]

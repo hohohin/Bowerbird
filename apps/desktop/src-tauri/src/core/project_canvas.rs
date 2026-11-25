@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use crate::core::creative_session_contract::{
     edge_endpoints_are_valid, parse_node_payload, project_canvas_node_requires_thread,
     validate_node_kind_role, AgentGroupNodePayloadV1, AssetExecutionRefV1, AssetNodePayloadV1,
-    AssetSnapshotV1, CreativeEdgeKind, CreativeGroupRole, CreativeNodeKind, CreativeNodePayload,
-    CreativeNodeRole, CreativeThreadOrigin, PromptNodePayloadV1, PromptReferenceAssetV1,
+    AssetSnapshotV1, CanvasNoteType, CreativeEdgeKind, CreativeGroupRole, CreativeNodeKind, CreativeNodePayload,
+    CreativeNodeRole, CreativeThreadOrigin, NoteNodePayloadV1, PromptNodePayloadV1, PromptReferenceAssetV1,
     VisualProfileRefV1,
 };
 use crate::core::library::Asset;
@@ -69,7 +69,7 @@ fn document_asset_ids(source: &str) -> Vec<String> {
     ids
 }
 
-fn note_asset_ids(value: &serde_json::Value) -> std::collections::BTreeSet<String> {
+fn previous_note_asset_ids(value: &serde_json::Value) -> std::collections::BTreeSet<String> {
     let mut ids = std::collections::BTreeSet::new();
     if let Some(id) = value["artboard"]["base_asset_id"].as_str() {
         ids.insert(id.to_owned());
@@ -91,17 +91,30 @@ fn note_asset_ids(value: &serde_json::Value) -> std::collections::BTreeSet<Strin
     ids
 }
 
-fn record_image_container_assets(tx: &Transaction<'_>, project_id: &str, payload: &str, previous: Option<&str>, now: i64) -> AppResult<()> {
-    let value: serde_json::Value = serde_json::from_str(payload)?;
-    let mut ids = note_asset_ids(&value);
-    if ids.is_empty() { return Ok(()); }
-    if let Some(id) = value["artboard"]["base_asset_id"].as_str() {
+fn record_image_container_assets(
+    tx: &Transaction<'_>,
+    project_id: &str,
+    note: &NoteNodePayloadV1,
+    previous: Option<&str>,
+    now: i64,
+) -> AppResult<()> {
+    let mut ids = std::collections::BTreeSet::new();
+    if let Some(id) = note.artboard.as_ref().and_then(|artboard| artboard.base_asset_id.as_deref()) {
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)", [id], |row| row.get(0))?;
         if !exists { return Err(AppError::NotFound(format!("artboard base {id}"))); }
+        ids.insert(id.to_owned());
     }
+    match note.note_type {
+        Some(CanvasNoteType::Document) => ids.extend(document_asset_ids(&note.text)),
+        Some(CanvasNoteType::Images | CanvasNoteType::Text) => ids.extend(
+            note.cells.iter().flatten().flat_map(|cell| cell.image_refs.iter().map(|image| image.asset_id.clone()))
+        ),
+        _ => {}
+    }
+    if ids.is_empty() { return Ok(()); }
     // Saving an existing attachment must respect a later explicit project removal.
     if let Some(previous) = previous {
-        let existing = note_asset_ids(&serde_json::from_str(previous)?);
+        let existing = previous_note_asset_ids(&serde_json::from_str(previous)?);
         ids.retain(|id| !existing.contains(id));
     }
     for id in ids {
@@ -333,6 +346,26 @@ pub struct CanvasNodeLayoutUpdate {
     pub height: f64,
     pub z_index: i64,
     pub position_locked: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CanvasNodeBatchLayout {
+    pub node_id: String,
+    pub value: CanvasNodeLayoutUpdate,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CanvasGroupBatchCreate {
+    pub value: NewCanvasGroup,
+    pub node_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CanvasBatchCreated {
+    pub nodes: Vec<CanvasNode>,
+    pub groups: Vec<CanvasGroup>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -663,27 +696,12 @@ const THREAD_COLUMNS: &str = "id,project_id,title,origin,archived_at,created_at,
 // Older prompt snapshots predate conversation_id. Enrich reads from their exact
 // output assets so grouping survives a restart without rewriting saved nodes.
 pub(super) fn restore_canvas_conversations(conn: &rusqlite::Connection, project_id: &str, nodes: &mut [CanvasNode]) -> AppResult<()> {
-    for node in nodes.iter_mut() {
-        let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
-        let Some(fields) = payload.as_object_mut() else { continue; };
-        if fields.get("generation_gallery_key").and_then(serde_json::Value::as_str).is_some_and(|key| key.starts_with("manual:")) {
-            for key in ["generation_gallery_key", "workflow_generation_group", "generation_group_dissolved", "manual_gallery_node"] {
-                fields.remove(key);
-            }
-            node.payload_json = serde_json::to_string(&payload)?;
-        }
-    }
+    use serde_json::Value;
+    use std::collections::{HashMap, HashSet};
+
     let mut workflow_stmt = conn.prepare(&format!("WITH {} SELECT node_id,group_key FROM canvas_generation_groups WHERE project_id=?1", super::generation_gallery::WORKFLOW_GALLERY_CTE))?;
     let workflow_groups = workflow_stmt.query_map([project_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
-    for node in nodes.iter_mut() {
-        if let Some(group) = workflow_groups.get(&node.id) {
-            let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
-            let Some(fields) = payload.as_object_mut() else { continue; };
-            fields.insert("workflow_generation_group".into(), group.clone().into());
-            node.payload_json = serde_json::to_string(&payload)?;
-        }
-    }
     let mut stmt = conn.prepare("SELECT n.id,a.ext,json_extract(n.payload_json,'$.execution.job_id'),g.conversation_id FROM canvas_nodes n JOIN assets a ON a.id=n.asset_id LEFT JOIN generation_conversations g ON g.session_id=a.generation_session_id WHERE n.project_id=?1 AND n.kind='asset' AND n.role='output'")?;
     let mut outputs = std::collections::HashMap::new();
     let mut conversations = std::collections::HashMap::new();
@@ -696,45 +714,108 @@ pub(super) fn restore_canvas_conversations(conn: &rusqlite::Connection, project_
             conversations.insert(job, conversation);
         }
     }
-    for node in nodes.iter_mut() {
+    let has_gallery_edits: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM generation_gallery_separations)
+             OR EXISTS(SELECT 1 FROM generation_gallery_merges)",
+        [], |row| row.get(0),
+    )?;
+    let (merged, dissolved, asset_groups) = if has_gallery_edits {
+        // The global tables also contain catalog edits for other projects.
+        // Resolve only keys that can appear in this project's projections.
+        let source_keys = serde_json::to_string(&workflow_groups.values().cloned()
+            .chain(conversations.values().map(|id| format!("generation:{id}"))).collect::<Vec<_>>())?;
+        let eligible_sources = HashSet::<String>::from_iter(
+            conn.prepare_cached(
+                "SELECT value FROM json_each(?2)
+                 UNION SELECT 'node:'||id FROM canvas_nodes WHERE project_id=?1
+                 UNION SELECT 'generation:'||json_extract(payload_json,'$.conversation_id')
+                       FROM canvas_nodes WHERE project_id=?1 AND kind='prompt'
+                         AND json_type(payload_json,'$.conversation_id')='text'
+                 UNION SELECT 'generation:'||json_extract(payload_json,'$.job_id')
+                       FROM canvas_nodes WHERE project_id=?1 AND kind='prompt'
+                         AND json_type(payload_json,'$.job_id')='text'",
+            )?.query_map(params![project_id, source_keys], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        let source_keys = serde_json::to_string(&eligible_sources)?;
+        let merged = conn.prepare_cached(
+            "SELECT m.source_key,m.group_key FROM json_each(?1) candidate
+             JOIN generation_gallery_merges m ON m.source_key=candidate.value",
+        )?.query_map([source_keys], |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?)))?
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        let mut assets_stmt = conn.prepare(&format!("WITH {} SELECT n.id,{} FROM canvas_nodes n JOIN assets a ON a.id=n.asset_id WHERE n.project_id=?1 AND {}",
+            super::generation_gallery::WORKFLOW_GALLERY_CTE, super::catalog_browser::generation_resolved_group(), super::catalog_browser::gallery_eligible()))?;
+        let asset_groups = assets_stmt.query_map([project_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+        let visible_keys = serde_json::to_string(&eligible_sources.iter().chain(merged.values()).chain(asset_groups.values())
+            .collect::<HashSet<_>>())?;
+        let dissolved = conn.prepare_cached(
+            "SELECT s.group_key FROM json_each(?1) candidate
+             JOIN generation_gallery_separations s ON s.group_key=candidate.value",
+        )?.query_map([visible_keys], |row| row.get::<_, String>(0))?
+            .collect::<Result<HashSet<_>, _>>()?;
+        (merged, dissolved, asset_groups)
+    } else {
+        Default::default()
+    };
+    for node in nodes {
         node.output_is_video = outputs.get(&node.id).copied();
-    }
-    for node in nodes.iter_mut().filter(|node| node.kind == CreativeNodeKind::Prompt) {
-        let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
-        let Some(fields) = payload.as_object_mut() else { continue; };
-        if fields.get("conversation_id").and_then(serde_json::Value::as_str).is_some() { continue; }
-        if let Some(conversation) = fields.get("job_id").and_then(serde_json::Value::as_str).and_then(|job| conversations.get(job)) {
-            fields.insert("conversation_id".into(), conversation.clone().into());
-            node.payload_json = serde_json::to_string(&payload)?;
+        let workflow_group = workflow_groups.get(&node.id);
+        let selected_group = if merged.is_empty() { None } else { merged.get(&format!("node:{}", node.id)) };
+        let asset_group = asset_groups.get(&node.id);
+        // Most large notes have neither persisted gallery metadata nor a gallery projection.
+        if workflow_group.is_none() && selected_group.is_none() && asset_group.is_none()
+            && node.kind != CreativeNodeKind::Prompt
+            && !node.payload_json.contains("manual:") && !node.payload_json.contains("generation_gallery_key")
+        {
+            continue;
         }
-    }
-    let dissolved = conn.prepare("SELECT group_key FROM generation_gallery_separations")?.query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<std::collections::HashSet<_>, _>>()?;
-    let merged = conn.prepare("SELECT source_key,group_key FROM generation_gallery_merges")?.query_map([], |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?)))?
-        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
-    if dissolved.is_empty() && merged.is_empty() { return Ok(()); }
-    let mut assets_stmt = conn.prepare(&format!("WITH {} SELECT n.id,{} FROM canvas_nodes n JOIN assets a ON a.id=n.asset_id WHERE n.project_id=?1 AND {}",
-        super::generation_gallery::WORKFLOW_GALLERY_CTE, super::catalog_browser::generation_resolved_group(), super::catalog_browser::gallery_eligible()))?;
-    let asset_groups = assets_stmt.query_map([project_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
-        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
-    for node in nodes.iter_mut() {
-        let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
-        let selected_group = merged.get(&format!("node:{}",node.id));
-        let key = selected_group.cloned().or_else(|| asset_groups.get(&node.id).cloned()).or_else(|| {
-            (node.kind == CreativeNodeKind::Prompt).then(|| workflow_groups.get(&node.id).filter(|key| !key.starts_with("asset:")).cloned().or_else(||
-                payload["conversation_id"].as_str().or(payload["job_id"].as_str()).map(|id| format!("generation:{id}")))
-                .map(|key| merged.get(&key).cloned().unwrap_or(key))).flatten()
-        });
-        if let (Some(key), Some(fields)) = (key, payload.as_object_mut()) {
-            if dissolved.contains(&key) {
+        let mut payload: Value = serde_json::from_str(&node.payload_json)?;
+        let Some(fields) = payload.as_object_mut() else { continue; };
+        let mut dirty = false;
+        if fields.get("generation_gallery_key").and_then(Value::as_str).is_some_and(|key| key.starts_with("manual:")) {
+            for key in ["generation_gallery_key", "workflow_generation_group", "generation_group_dissolved", "manual_gallery_node"] {
+                fields.remove(key);
+            }
+            dirty = true;
+        }
+        if let Some(group) = workflow_group {
+            fields.insert("workflow_generation_group".into(), group.clone().into());
+            dirty = true;
+        }
+        if node.kind == CreativeNodeKind::Prompt && fields.get("conversation_id").and_then(Value::as_str).is_none() {
+            if let Some(conversation) = fields.get("job_id").and_then(Value::as_str).and_then(|job| conversations.get(job)) {
+                fields.insert("conversation_id".into(), conversation.clone().into());
+                dirty = true;
+            }
+        }
+        let prompt_group = if node.kind == CreativeNodeKind::Prompt && has_gallery_edits && selected_group.is_none() && asset_group.is_none() {
+            workflow_group.filter(|key| !key.starts_with("asset:")).cloned().or_else(|| {
+                fields.get("conversation_id").and_then(Value::as_str)
+                    .or_else(|| fields.get("job_id").and_then(Value::as_str))
+                    .map(|id| format!("generation:{id}"))
+            })
+        } else {
+            None
+        };
+        let key = selected_group.or(asset_group)
+            .or_else(|| prompt_group.as_ref().map(|group| merged.get(group).unwrap_or(group)));
+        if let Some(key) = key {
+            if dissolved.contains(key) {
                 fields.insert("generation_group_dissolved".into(), true.into());
-                fields.insert("generation_gallery_key".into(), key.into());
+                fields.insert("generation_gallery_key".into(), key.clone().into());
+                dirty = true;
             } else if key.starts_with("manual:") {
                 fields.insert("workflow_generation_group".into(), key.clone().into());
-                fields.insert("generation_gallery_key".into(), key.into());
-                if selected_group.is_some() { fields.insert("manual_gallery_node".into(), true.into()); }
+                fields.insert("generation_gallery_key".into(), key.clone().into());
+                if selected_group.is_some() {
+                    fields.insert("manual_gallery_node".into(), true.into());
+                }
                 fields.remove("generation_group_dissolved");
+                dirty = true;
             }
+        }
+        if dirty {
             node.payload_json = serde_json::to_string(&payload)?;
         }
     }
@@ -880,10 +961,7 @@ pub(crate) fn touch_canvas_tx(tx: &Transaction<'_>, project_id: &str, now: i64) 
     Ok(())
 }
 
-fn validate_new_node(value: &NewCanvasNode) -> AppResult<()> {
-    if value.kind == CreativeNodeKind::Note && serde_json::from_str::<serde_json::Value>(&value.payload_json)?["note_type"] == "chat" {
-        return Err(invalid("chat cards must be created by the chat runtime"));
-    }
+fn validate_new_node(value: &NewCanvasNode) -> AppResult<CreativeNodePayload> {
     required(&value.id, "node id")?;
     required(&value.project_id, "project id")?;
     validate_node_kind_role(&value.id, value.kind, value.role)
@@ -897,13 +975,17 @@ fn validate_new_node(value: &NewCanvasNode) -> AppResult<()> {
             value.id
         )));
     }
-    parse_node_payload(value.kind, &value.payload_json)
+    let payload = parse_node_payload(value.kind, &value.payload_json)
         .map_err(|error| invalid(error.to_string()))?;
-    validate_geometry(value.x, value.y, value.width, value.height)
+    if matches!(&payload, CreativeNodePayload::Note(note) if note.note_type == Some(CanvasNoteType::Chat)) {
+        return Err(invalid("chat cards must be created by the chat runtime"));
+    }
+    validate_geometry(value.x, value.y, value.width, value.height)?;
+    Ok(payload)
 }
 
 pub(crate) fn insert_node_tx(tx: &Transaction<'_>, value: &NewCanvasNode, now: i64) -> AppResult<CanvasNode> {
-    validate_new_node(value)?;
+    let payload = validate_new_node(value)?;
     if let Some(existing) = get_node_tx(tx, &value.id)? {
         let same = existing.project_id == value.project_id
             && existing.thread_id == value.thread_id
@@ -933,7 +1015,9 @@ pub(crate) fn insert_node_tx(tx: &Transaction<'_>, value: &NewCanvasNode, now: i
             params![value.project_id, asset_id, now],
         )?;
     }
-    if value.kind == CreativeNodeKind::Note { record_image_container_assets(tx, &value.project_id, &value.payload_json, None, now)?; }
+    if let CreativeNodePayload::Note(note) = &payload {
+        record_image_container_assets(tx, &value.project_id, note, None, now)?;
+    }
     tx.execute(
         "INSERT INTO canvas_nodes (id,project_id,thread_id,kind,asset_id,role,payload_json,x,y,width,height,z_index,position_locked,hidden_at,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,?14,?14)",
         params![value.id, value.project_id, value.thread_id, node_kind_sql(value.kind), value.asset_id, value.role.map(node_role_sql), value.payload_json, value.x, value.y, value.width, value.height, value.z_index, i64::from(value.position_locked), now],
@@ -1262,20 +1346,26 @@ fn place_prompt_near_inputs_tx(
         .iter()
         .map(|(_, y, _)| *y)
         .fold(f64::INFINITY, f64::min);
-    // Include room for the execution card to the right and use group bounds for members.
-    loop {
-        let bottom: Option<f64> = tx.query_row(
-            "SELECT MAX(y+height) FROM (
-                SELECT x,y,width,height FROM canvas_nodes WHERE project_id=?1 AND id<>?2 AND hidden_at IS NULL
-                  AND id NOT IN (SELECT value FROM json_each(?5))
-                  AND id NOT IN (SELECT node_id FROM canvas_group_items WHERE project_id=?1)
-                UNION ALL SELECT x,y,width,height FROM canvas_groups WHERE project_id=?1
-             ) WHERE x < ?3+620 AND x+width+32 > ?3 AND y < ?4+184 AND y+height+32 > ?4",
-            params![project_id,prompt_id,x,y,excluded], |row| row.get(0),
-        )?;
-        match bottom {
-            Some(bottom) => y = bottom + 40.0,
-            None => break,
+    // Walk down the occupied horizontal strip once. Each collision advances beyond
+    // its bottom, so a previously visited rectangle cannot block the new position.
+    let mut obstacles = tx.prepare_cached(
+        "SELECT y,y+height FROM (
+            SELECT x,y,width,height FROM canvas_nodes WHERE project_id=?1 AND id<>?2 AND hidden_at IS NULL
+              AND id NOT IN (SELECT value FROM json_each(?4))
+              AND id NOT IN (SELECT node_id FROM canvas_group_items WHERE project_id=?1)
+            UNION ALL SELECT x,y,width,height FROM canvas_groups WHERE project_id=?1
+         ) WHERE x < ?3+620 AND x+width+32 > ?3 ORDER BY y",
+    )?;
+    let free_y = obstacles.query_map(params![project_id, prompt_id, x, excluded], |row| {
+        Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?))
+    })?;
+    for obstacle in free_y {
+        let (top, bottom) = obstacle?;
+        if top >= y + 184.0 {
+            break;
+        }
+        if bottom + 32.0 > y {
+            y = bottom + 40.0;
         }
     }
     tx.execute(
@@ -1838,6 +1928,37 @@ impl Database {
         Ok(node)
     }
 
+    pub fn create_canvas_nodes_batch(
+        &self,
+        project_id: &str,
+        values: &[NewCanvasNode],
+        groups: &[CanvasGroupBatchCreate],
+    ) -> AppResult<CanvasBatchCreated> {
+        required(project_id, "project id")?;
+        if values.iter().any(|node| node.project_id != project_id)
+            || groups.iter().any(|group| group.value.project_id != project_id)
+        {
+            return Err(invalid("batch creation contains entries from another project"));
+        }
+        let now = Utc::now().timestamp();
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !values.is_empty() || !groups.is_empty() {
+            touch_canvas_tx(&tx, project_id, now)?;
+        }
+        let nodes = values.iter().map(|node| insert_node_tx(&tx, node, now))
+            .collect::<AppResult<Vec<_>>>()?;
+        let groups = groups.iter().map(|group| {
+            match replay_canvas_group_tx(&tx, &group.value, &group.node_ids)? {
+                Some(existing) => Ok(existing),
+                None => insert_canvas_group_tx(&tx, &group.value, &group.node_ids, now),
+            }
+        })
+            .collect::<AppResult<Vec<_>>>()?;
+        tx.commit()?;
+        Ok(CanvasBatchCreated { nodes, groups })
+    }
+
     pub fn get_canvas_node(&self, node_id: &str) -> AppResult<Option<CanvasNode>> {
         let conn = self.lock_conn()?;
         let sql = format!("SELECT {NODE_COLUMNS} FROM canvas_nodes WHERE id=?1");
@@ -1846,19 +1967,19 @@ impl Database {
 
     /// Read the addressed canvas instances without rebuilding gallery or conversation projections.
     pub fn visible_canvas_nodes(&self, project_id: &str, node_ids: &[String]) -> AppResult<Vec<CanvasNode>> {
-        let conn = self.lock_conn()?;
-        let sql = format!("SELECT {NODE_COLUMNS} FROM canvas_nodes WHERE id=?1 AND project_id=?2 AND hidden_at IS NULL");
-        let mut stmt = conn.prepare(&sql)?;
-        let mut seen = std::collections::HashSet::new();
-        let mut nodes = Vec::new();
-        for id in node_ids {
-            if seen.insert(id) {
-                if let Some(node) = stmt.query_row(params![id, project_id], node_from_row).optional()? {
-                    nodes.push(node);
-                }
-            }
-        }
-        Ok(nodes)
+        self.with_canvas_reader(|conn| {
+            let mut stmt = conn.prepare_cached(&format!(
+                "WITH wanted AS (
+                     SELECT value AS wanted_id, MIN(CAST(key AS INTEGER)) AS ordinal
+                     FROM json_each(?2) GROUP BY value
+                 )
+                 SELECT {NODE_COLUMNS} FROM wanted JOIN canvas_nodes n ON n.id=wanted.wanted_id
+                 WHERE n.project_id=?1 AND n.hidden_at IS NULL ORDER BY wanted.ordinal"
+            ))?;
+            let ids = serde_json::to_string(node_ids)?;
+            let matches = stmt.query_map(params![project_id, ids], node_from_row)?;
+            Ok(matches.collect::<Result<Vec<_>, _>>()?)
+        })
     }
 
     pub fn list_canvas_nodes(&self, project_id: &str) -> AppResult<Vec<CanvasNode>> {
@@ -1876,19 +1997,21 @@ impl Database {
     }
 
     pub fn update_canvas_note_payload(&self, node_id: &str, payload_json: &str) -> AppResult<CanvasNode> {
-        parse_node_payload(CreativeNodeKind::Note, payload_json)
-            .map_err(|error| invalid(error.to_string()))?;
+        let CreativeNodePayload::Note(note) = parse_node_payload(CreativeNodeKind::Note, payload_json)
+            .map_err(|error| invalid(error.to_string()))? else {
+                return Err(invalid("invalid note payload"));
+            };
         let now = Utc::now().timestamp();
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let existing = get_node_tx(&tx, node_id)?.ok_or_else(|| invalid("note not found"))?;
-        if node_is_execution_owned(&existing) || serde_json::from_str::<serde_json::Value>(payload_json)?["note_type"] == "chat" {
+        if node_is_execution_owned(&existing) || note.note_type == Some(CanvasNoteType::Chat) {
             return Err(invalid("chat cards are maintained by the chat runtime"));
         }
         if existing.kind != CreativeNodeKind::Note || existing.hidden_at.is_some() {
             return Err(invalid("only visible notes can be edited"));
         }
-        record_image_container_assets(&tx, &existing.project_id, payload_json, Some(&existing.payload_json), now)?;
+        record_image_container_assets(&tx, &existing.project_id, &note, Some(&existing.payload_json), now)?;
         tx.execute(
             "UPDATE canvas_nodes SET payload_json=?2,updated_at=?3 WHERE id=?1",
             params![node_id, payload_json, now],
@@ -1911,19 +2034,54 @@ impl Database {
         let Some(existing) = get_node_tx(&tx, node_id)? else {
             return Ok(None);
         };
-        if existing.hidden_at.is_some() {
-            return Err(invalid(format!(
-                "hidden canvas node {node_id} cannot be moved"
-            )));
-        }
-        tx.execute(
-            "UPDATE canvas_nodes SET x=?2,y=?3,width=?4,height=?5,z_index=?6,position_locked=?7,updated_at=?8 WHERE id=?1",
-            params![node_id, value.x, value.y, value.width, value.height, value.z_index, i64::from(value.position_locked), now],
-        )?;
+        update_canvas_node_layout_tx(&tx, &existing, value, now)?;
         touch_canvas_tx(&tx, &existing.project_id, now)?;
         let updated = get_node_tx(&tx, node_id)?;
         tx.commit()?;
         Ok(updated)
+    }
+
+    pub fn update_canvas_nodes_batch(
+        &self,
+        project_id: &str,
+        updates: &[CanvasNodeBatchLayout],
+        groups: &[CanvasGroup],
+    ) -> AppResult<()> {
+        required(project_id, "project id")?;
+        for update in updates {
+            validate_geometry(update.value.x, update.value.y, update.value.width, update.value.height)?;
+        }
+        for group in groups {
+            if group.project_id != project_id {
+                return Err(invalid("batch layout contains a group from another project"));
+            }
+            validate_geometry(group.x, group.y, group.width, group.height)?;
+            required(&group.name, "group name")?;
+        }
+        let now = Utc::now().timestamp();
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut changed = false;
+        for update in updates {
+            let existing = get_node_tx(&tx, &update.node_id)?
+                .ok_or_else(|| AppError::NotFound(format!("canvas node {}", update.node_id)))?;
+            if existing.project_id != project_id {
+                return Err(invalid("batch layout contains a node from another project"));
+            }
+            update_canvas_node_layout_tx(&tx, &existing, &update.value, now)?;
+            changed = true;
+        }
+        for group in groups {
+            if !update_canvas_group_tx(&tx, group, now)? {
+                return Err(AppError::NotFound(format!("canvas group {} in project {project_id}", group.id)));
+            }
+            changed = true;
+        }
+        if changed {
+            touch_canvas_tx(&tx, project_id, now)?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn restore_canvas_node(
@@ -1982,24 +2140,11 @@ impl Database {
         value: &NewCanvasGroup,
         node_ids: &[String],
     ) -> AppResult<CanvasGroup> {
-        required(&value.id, "group id")?;
-        required(&value.project_id, "project id")?;
-        required(&value.name, "group name")?;
-        validate_geometry(value.x, value.y, value.width, value.height)?;
         let now = Utc::now().timestamp();
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         touch_canvas_tx(&tx, &value.project_id, now)?;
-        tx.execute(
-            "INSERT INTO canvas_groups (id,project_id,name,role,x,y,width,height,z_index,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
-            params![value.id, value.project_id, value.name.trim(), value.role.map(group_role_sql), value.x, value.y, value.width, value.height, value.z_index, now],
-        )?;
-        set_group_items_tx(&tx, &value.project_id, &value.id, node_ids)?;
-        let group = tx.query_row(
-            &format!("SELECT {GROUP_COLUMNS} FROM canvas_groups WHERE id=?1"),
-            [&value.id],
-            group_from_row,
-        )?;
+        let group = insert_canvas_group_tx(&tx, value, node_ids, now)?;
         tx.commit()?;
         Ok(group)
     }
@@ -2063,15 +2208,12 @@ impl Database {
         let now = Utc::now().timestamp();
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let changed = tx.execute(
-            "UPDATE canvas_groups SET name=?3,role=?4,x=?5,y=?6,width=?7,height=?8,z_index=?9,updated_at=?10 WHERE id=?1 AND project_id=?2",
-            params![value.id, value.project_id, value.name.trim(), value.role.map(group_role_sql), value.x, value.y, value.width, value.height, value.z_index, now],
-        )?;
-        if changed > 0 {
+        let changed = update_canvas_group_tx(&tx, value, now)?;
+        if changed {
             touch_canvas_tx(&tx, &value.project_id, now)?;
         }
         tx.commit()?;
-        Ok(changed > 0)
+        Ok(changed)
     }
 
     pub fn delete_canvas_group(&self, group_id: &str) -> AppResult<bool> {
@@ -2207,11 +2349,12 @@ impl Database {
     }
 
     pub fn project_canvas_snapshot(&self, project_id: &str) -> AppResult<ProjectCanvasSnapshot> {
-        let mut conn = self.lock_conn()?;
-        let tx = conn.transaction()?;
-        let snapshot = project_canvas_snapshot_tx(&tx, project_id)?;
-        tx.commit()?;
-        Ok(snapshot)
+        self.with_canvas_reader(|conn| {
+            let tx = conn.transaction()?;
+            let snapshot = project_canvas_snapshot_tx(&tx, project_id)?;
+            tx.commit()?;
+            Ok(snapshot)
+        })
     }
 
     /// Provider 启动前的项目画板事实投影。执行身份与 thread 分离，稳定键重放时只更新 payload，
@@ -2294,7 +2437,7 @@ impl Database {
                 rect.x
             } else { rect.x + rect.width + 64.0 };
             placement::near(placement::Rect { x, y: rect.y, width: 260.0, height: 148.0 },
-                &placement::obstacles(&tx, &value.project_id, &workflow, &excluded)?, x)
+                &placement::obstacles_in_snapshot(&existing_canvas, &workflow, &excluded, None), x)
         } else { (max_right + 72.0, 88.0) };
         let new_prompt = get_node_tx(&tx, &prompt_node_id)?.is_none();
         let mut reference_assets = Vec::new();
@@ -2651,16 +2794,16 @@ impl Database {
         let owner = placement::generation_source(&workflow, job_id, &prompt_node_id);
         let source = placement::source(&workflow, job_id, false).map(placement::workflow_rect);
         let mut excluded = vec![prompt_node_id.as_str()];
-        let snapshot = owner.filter(|node| matches!(node["kind"].as_str(), Some("generation" | "comfy-video")))
+        let snapshot = project_canvas_snapshot_tx(&tx, project_id)?;
+        let first_gallery = owner.filter(|node| matches!(node["kind"].as_str(), Some("generation" | "comfy-video")))
             .filter(|node| node["activeSessionNodeId"].as_str().is_none_or(|id| id == prompt_node_id))
             .filter(|_| !assets.is_empty())
-            .map(|_| project_canvas_snapshot_tx(&tx, project_id)).transpose()?;
-        let first_gallery = owner.zip(snapshot.as_ref()).and_then(|(node, snapshot)| {
-            if !placement::generation_workflow_can_replace(node, &workflow, snapshot) { return None; }
+            .and_then(|node| {
+            if !placement::generation_workflow_can_replace(node, &workflow, &snapshot) { return None; }
             let output_ids: std::collections::HashSet<_> = assets.iter()
                 .map(|asset| projection_id("gen-output", job_id, turn_key, &asset.id)).collect();
             let already_delivered = snapshot.nodes.iter().any(|entry| output_ids.contains(&entry.id));
-            let (anchor, has_product) = placement::generation_workflow_history(node, snapshot);
+            let (anchor, has_product) = placement::generation_workflow_history(node, &snapshot);
             let video = node["kind"] == "comfy-video" || node["generation"]["media"] == "video";
             (!already_delivered && !has_product).then_some((node, if video { prompt_node_id.as_str() } else {
                 anchor.map_or(prompt_node_id.as_str(), |anchor| anchor.id.as_str())
@@ -2670,7 +2813,7 @@ impl Database {
             excluded.extend(node["id"].as_str());
             excluded.push(anchor);
         }
-        let mut occupied = placement::obstacles(&tx, project_id, &workflow, &excluded)?;
+        let mut occupied = placement::obstacles_in_snapshot(&snapshot, &workflow, &excluded, None);
         let sizes: Vec<_> = assets.iter().map(|asset| (190.0, asset_node_height(&asset_snapshot(asset)))).collect();
         let slots = placement::grid(&sizes);
         let start = if let Some((node, anchor, video)) = first_gallery {
@@ -3352,6 +3495,73 @@ impl Database {
     }
 }
 
+fn update_canvas_node_layout_tx(
+    tx: &Transaction<'_>, existing: &CanvasNode, value: &CanvasNodeLayoutUpdate, now: i64,
+) -> AppResult<()> {
+    let node_id = &existing.id;
+    if existing.hidden_at.is_some() {
+        return Err(invalid(format!(
+            "hidden canvas node {node_id} cannot be moved"
+        )));
+    }
+    tx.execute(
+        "UPDATE canvas_nodes SET x=?2,y=?3,width=?4,height=?5,z_index=?6,position_locked=?7,updated_at=?8 WHERE id=?1",
+        params![node_id, value.x, value.y, value.width, value.height, value.z_index, i64::from(value.position_locked), now],
+    )?;
+    Ok(())
+}
+
+fn replay_canvas_group_tx(
+    tx: &Transaction<'_>, value: &NewCanvasGroup, node_ids: &[String],
+) -> AppResult<Option<CanvasGroup>> {
+    let Some(group) = tx.query_row(
+        &format!("SELECT {GROUP_COLUMNS} FROM canvas_groups WHERE id=?1"),
+        [&value.id], group_from_row,
+    ).optional()? else { return Ok(None); };
+    let shape_matches = group.project_id == value.project_id
+        && group.name == value.name.trim()
+        && group.role == value.role
+        && (group.x, group.y, group.width, group.height, group.z_index)
+            == (value.x, value.y, value.width, value.height, value.z_index);
+    if shape_matches {
+        let mut members = tx.prepare_cached("SELECT node_id FROM canvas_group_items WHERE group_id=?1 ORDER BY ordinal")?;
+        let matches = members.query_map([&value.id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if matches == node_ids {
+            return Ok(Some(group));
+        }
+    }
+    Err(invalid(format!("stable group id {} replayed with different content", value.id)))
+}
+
+fn insert_canvas_group_tx(
+    tx: &Transaction<'_>, value: &NewCanvasGroup, node_ids: &[String], now: i64,
+) -> AppResult<CanvasGroup> {
+    required(&value.id, "group id")?;
+    required(&value.project_id, "project id")?;
+    required(&value.name, "group name")?;
+    validate_geometry(value.x, value.y, value.width, value.height)?;
+    tx.execute(
+        "INSERT INTO canvas_groups (id,project_id,name,role,x,y,width,height,z_index,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
+        params![value.id, value.project_id, value.name.trim(), value.role.map(group_role_sql), value.x, value.y, value.width, value.height, value.z_index, now],
+    )?;
+    set_group_items_tx(tx, &value.project_id, &value.id, node_ids)?;
+    let group = tx.query_row(
+        &format!("SELECT {GROUP_COLUMNS} FROM canvas_groups WHERE id=?1"),
+        [&value.id],
+        group_from_row,
+    )?;
+    Ok(group)
+}
+
+fn update_canvas_group_tx(tx: &Transaction<'_>, value: &CanvasGroup, now: i64) -> AppResult<bool> {
+    let changed = tx.execute(
+        "UPDATE canvas_groups SET name=?3,role=?4,x=?5,y=?6,width=?7,height=?8,z_index=?9,updated_at=?10 WHERE id=?1 AND project_id=?2",
+        params![value.id, value.project_id, value.name.trim(), value.role.map(group_role_sql), value.x, value.y, value.width, value.height, value.z_index, now],
+    )?;
+    Ok(changed > 0)
+}
+
 fn set_group_items_tx(
     tx: &Transaction<'_>,
     project_id: &str,
@@ -3362,30 +3572,25 @@ fn set_group_items_tx(
     if node_ids.iter().any(|node_id| !seen.insert(node_id)) {
         return Err(invalid("group node list contains duplicates"));
     }
-    for node_id in node_ids {
-        let node_project = tx
-            .query_row(
-                "SELECT project_id FROM canvas_nodes WHERE id=?1",
-                [node_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        if node_project.as_deref() != Some(project_id) {
-            return Err(invalid(format!(
-                "node {node_id} does not belong to group project"
-            )));
-        }
+    let ids = serde_json::to_string(node_ids)?;
+    let invalid_member = tx.prepare_cached(
+        "SELECT requested.value FROM json_each(?2) requested
+         LEFT JOIN canvas_nodes n ON n.id=requested.value AND n.project_id=?1
+         WHERE n.id IS NULL LIMIT 1",
+    )?.query_row(params![project_id, ids], |row| row.get::<_, String>(0)).optional()?;
+    if let Some(id) = invalid_member {
+        return Err(invalid(format!("node {id} does not belong to group project")));
     }
     tx.execute(
         "DELETE FROM canvas_group_items WHERE project_id=?1 AND group_id=?2",
         params![project_id, group_id],
     )?;
     let mut items = Vec::with_capacity(node_ids.len());
+    let mut insert = tx.prepare_cached(
+        "INSERT INTO canvas_group_items (project_id,group_id,node_id,ordinal) VALUES (?1,?2,?3,?4)",
+    )?;
     for (ordinal, node_id) in node_ids.iter().enumerate() {
-        tx.execute(
-            "INSERT INTO canvas_group_items (project_id,group_id,node_id,ordinal) VALUES (?1,?2,?3,?4)",
-            params![project_id, group_id, node_id, ordinal as i64],
-        )?;
+        insert.execute(params![project_id, group_id, node_id, ordinal as i64])?;
         items.push(CanvasGroupItem {
             project_id: project_id.to_string(),
             group_id: group_id.to_string(),
@@ -3461,6 +3666,72 @@ mod tests {
 
         assert!(db.get_project("p").unwrap().unwrap().last_opened_at > 1);
         assert_eq!(db.get_project_canvas("p").unwrap(), Some(canvas));
+    }
+
+    fn batch_group(project_id: &str, id: &str, members: &[&str]) -> CanvasGroupBatchCreate {
+        CanvasGroupBatchCreate {
+            value: NewCanvasGroup {
+                id: id.into(), project_id: project_id.into(), name: id.into(), role: None,
+                x: 3.0, y: 6.0, width: 100.0, height: 100.0, z_index: 1,
+            },
+            node_ids: members.iter().map(|id| (*id).into()).collect(),
+        }
+    }
+
+    #[test]
+    fn batch_create_rolls_back_and_exact_replays_include_groups() {
+        let db = db();
+        materialize(&db, "p");
+        materialize(&db, "other");
+        db.create_canvas_node(&note("other", "foreign")).unwrap();
+        let values = [note("p", "first"), note("p", "second")];
+        let invalid = [batch_group("p", "group", &["first", "foreign"])];
+        assert!(db.create_canvas_nodes_batch("p", &values, &invalid).is_err());
+        assert!(db.list_canvas_nodes("p").unwrap().is_empty());
+        assert!(db.list_canvas_groups("p").unwrap().is_empty());
+
+        let valid = [batch_group("p", "group", &["second", "first"])];
+        let created = db.create_canvas_nodes_batch("p", &values, &valid).unwrap();
+        assert_eq!(created.nodes.len(), 2);
+        assert_eq!(created.groups.len(), 1);
+        let replay = db.create_canvas_nodes_batch("p", &values, &valid).unwrap();
+        assert_eq!(created.nodes, replay.nodes);
+        assert_eq!(created.groups, replay.groups);
+
+        let changed = [batch_group("p", "group", &["first", "second"])];
+        assert!(db.create_canvas_nodes_batch("p", &[note("p", "late")], &changed).is_err());
+        assert!(db.get_canvas_node("late").unwrap().is_none());
+        let members = db.list_canvas_group_items("p").unwrap();
+        assert_eq!(members.iter().map(|item| item.node_id.as_str()).collect::<Vec<_>>(), ["second", "first"]);
+    }
+
+    #[test]
+    fn batch_layout_rolls_back_on_hidden_missing_and_cross_project_entries() {
+        let db = db();
+        materialize(&db, "p");
+        materialize(&db, "other");
+        for (project, id) in [("p", "first"), ("p", "hidden"), ("other", "foreign")] {
+            db.create_canvas_node(&note(project, id)).unwrap();
+        }
+        db.lock_conn().unwrap().execute("UPDATE canvas_nodes SET hidden_at=1 WHERE id='hidden'", []).unwrap();
+        let layout = |id: &str| CanvasNodeBatchLayout {
+            node_id: id.into(),
+            value: CanvasNodeLayoutUpdate {
+                x: 200.0, y: 300.0, width: 400.0, height: 500.0, z_index: 6, position_locked: true,
+            },
+        };
+        let original = db.get_canvas_node("first").unwrap().unwrap();
+        for id in ["hidden", "missing", "foreign"] {
+            assert!(db.update_canvas_nodes_batch("p", &[layout("first"), layout(id)], &[]).is_err());
+            assert_eq!(db.get_canvas_node("first").unwrap(), Some(original.clone()));
+        }
+        let group = batch_group("other", "foreign-group", &[]);
+        let mut group = db.create_canvas_group_with_items(&group.value, &group.node_ids).unwrap();
+        group.project_id = "p".into(); // The stored row still belongs to the other project.
+        assert!(db.update_canvas_nodes_batch("p", &[layout("first")], &[group]).is_err());
+        assert_eq!(db.get_canvas_node("first").unwrap(), Some(original));
+        db.update_canvas_nodes_batch("p", &[layout("first")], &[]).unwrap();
+        assert_eq!(db.get_canvas_node("first").unwrap().unwrap().x, 200.0);
     }
 
     #[test]

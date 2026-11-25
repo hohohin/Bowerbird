@@ -5,6 +5,17 @@ import { newWorkflowNode, workflowConnectionError, workflowOrder, workflowInputV
 const node = (id, kind = 'skill') => ({ ...newWorkflowNode(kind, 0, 0, 'codex'), id });
 const mentionText = node => { node.prompt = '@[text]'; node.promptReferences = [{ id: 'text', type: 'text', input: node.inputs.text[0], label: '文本' }]; };
 
+test('topological ties preserve downstream discovery order within each wave', () => {
+  const start = node('start', 'trigger');
+  const signal = [{ nodeId: start.id, portId: 'signal' }];
+  const first = { ...node('first'), inputs: { signal } };
+  const second = { ...node('second'), inputs: { signal } };
+  const viaSecond = { ...node('via-second'), inputs: { signal, text: [{ nodeId: second.id, portId: 'text' }] } };
+  const viaFirst = { ...node('via-first'), inputs: { signal, text: [{ nodeId: first.id, portId: 'text' }] } };
+  assert.deepEqual(workflowOrder([start, first, second, viaSecond, viaFirst], start.id),
+    ['start', 'first', 'second', 'via-second', 'via-first']);
+});
+
 test('latest-row bindings retain container dependencies and reject cycles through every writer', () => {
   for (const [port, cellId] of [['text', '*latest'], ['image', '*latest-image']]) {
     const input = { canvasNodeId: 'table', cellId };

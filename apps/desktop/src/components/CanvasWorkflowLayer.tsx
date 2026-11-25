@@ -23,7 +23,7 @@ import { comfyVideoMode, DEFAULT_COMFY_VIDEO } from "../lib/comfyVideo";
 import { startComposerLocalVideo } from "../lib/composerLocalVideo";
 import { activeCanvasNameCounts, assignCanvasCardNames, canvasCardNameError } from "../lib/canvasCardNames";
 import { CanvasCardName } from "./CanvasCardName";
-import { CanvasConnectionHandle } from "./CanvasConnectionHandle";
+import { CanvasConnectionDefinitions, CanvasConnectionHandle } from "./CanvasConnectionHandle";
 import { ContextMenu, ContextSubmenu } from "./ContextMenu";
 import { automaticValueMedia, canvasAutomaticOutputs, workflowAssetMedia, workflowSourceMediaLabel } from "../lib/workflowCanvasCapabilities";
 import { planAutomaticConnection, contentCardAcceptsMedia, type AutomaticOutput } from "../lib/workflowAutoConnect";
@@ -39,7 +39,7 @@ import { canvasDocumentHeight, expandCanvasSections, readCanvasNote } from "../l
 import { contentInputPort } from "../lib/canvasContentInput";
 import { contentTableRows } from "../lib/contentTable";
 import { canvasInputAssetIds, canvasInputValue, canvasWorkflowInputState, canvasSessionImages, workflowBindingAssetIds, workflowGenerationResultAnchor, hiddenWorkflowSessionIds, workflowSessionIds, completedCanvasSessions, type WorkflowGenerationActivity } from "../lib/canvasSessionOutputs";
-import { generationProgressLabel } from "../lib/generationProgress";
+import { GenerationJobProgress } from "./GenerationJobFeedback";
 import { useStore } from "../store";
 import { canvasWirePath as path, dragWire, type DragOffset } from "../lib/canvasDragPreview";
 import { useWorkflowPortGeometry, type WorkflowPortTarget } from "../lib/useWorkflowPortGeometry";
@@ -157,6 +157,7 @@ interface Props {
   provisional?: boolean;
   diagnosticTarget?: HTMLElement | null;
   getZoom: () => number;
+  settledZoom?: number;
   opening: boolean;
   entryCardIds: ReadonlySet<string> | null;
   deferredCandidateIds: ReadonlySet<string> | null;
@@ -228,9 +229,10 @@ function connectionForType(source: Connection, type?: WorkflowPort["type"]): Con
   return ["*latest", "*latest-image"].includes(source.cellId ?? "") && (type === "text" || type === "image")
     ? { ...source, cellId: type === "image" ? "*latest-image" : "*latest", type } : source;
 }
-export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, opening, entryCardIds, deferredCandidateIds, materials, graphNodes, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, generationCardOrigins, generationActivities, activeGenerationIds, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, onConnectCollapsedGeneration, onUndoGenerationConnection, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
+export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, settledZoom, opening, entryCardIds, deferredCandidateIds, materials, graphNodes, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, generationCardOrigins, generationActivities, activeGenerationIds, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, onConnectCollapsedGeneration, onUndoGenerationConnection, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
+  const [runtimeRevision, updateRuntimeRevision] = useState(0);
   const pendingCards = useRef(new Map<string, PendingConnectionCard>());
   const activeController = useRef<typeof controller | null>(controller);
   const currentSelection = useRef(selectedIds); currentSelection.current = selectedIds;
@@ -290,8 +292,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     defaultProvider: state.defaultProvider, codexHealth: state.codexHealth, dreaminaHealth: state.dreaminaHealth,
     cloudAuth: state.cloudAuth, cloudEntitlement: state.cloudEntitlement, openVisualProfile: state.openVisualProfile }), shallow);
   const document = controller.document;
-  const genJobs = useStore(state => state.genJobs);
-  const chatSummaries = useProjectChatSummaries(projectId);
+  const chatSummaries = useProjectChatSummaries(projectId, true);
   const activeVideoJobs = useStore(state => Object.values(state.genJobs).filter(job => job.media === "video" && job.running).map(job => job.id), shallow);
   const h3AutoOptimize = useStore(state => state.settings?.h3_auto_optimize_prompt === true);
   const quote = useSnapshot(chatQuote.store), dsh = useSnapshot(chatDshStatus.store);
@@ -350,29 +351,6 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     }
     return result;
   }, [document.nodes, conversationCards]);
-  const portTargets: WorkflowPortTarget[] = [];
-  const addPort = (id: string | undefined, kind: WorkflowPortTarget["kind"], port: string | undefined, image = false) => {
-    const node = id && graphById.get(id);
-    if (node && node.kind === "note" && port !== undefined) portTargets.push({ node, kind, port, image });
-  };
-  const sourcePort = (binding: WorkflowInput) => {
-    if (binding.canvasNodeId && binding.cellId) addPort(binding.canvasNodeId, "cell", binding.cellId);
-    if (binding.canvasNodeId) addPort(binding.canvasNodeId, "output", binding.cellId === "*latest-image" ? "*latest" : binding.cellId);
-    const producer = binding.nodeId ? nodeById.get(binding.nodeId) : undefined;
-    if (producer?.textTarget) addPort(producer.textTarget.nodeId, "output", producer.textTarget.image ? "*" : "*text");
-  };
-  for (const node of document.nodes) for (const [port, inputs] of Object.entries(node.inputs)) {
-    for (const binding of inputs) sourcePort(binding);
-    if (inputs.length && node.textTarget) {
-      const target = graphById.get(node.textTarget.nodeId);
-      if (target && node.textTarget.cellId) addPort(target.id, "cell", node.textTarget.cellId);
-      if (target) addPort(target.id, "input", contentInputPort(readCanvasNote(target), node.textTarget), port === "image");
-    }
-  }
-  for (const target of conversationCards?.embedded.values() ?? []) addPort(target.nodeId, "cell", target.cellId);
-  if (connection) sourcePort(connection);
-  if (automatic?.scope) addPort(automatic.id, "cell", automatic.scope);
-  if (automatic) addPort(automatic.id, automatic.side === "output" ? "output" : "input", "*auto");
   const nameCards = useMemo(() => [
     ...document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) })),
     ...graphNodes.map(node => ({ id: node.id, title: node.kind === "note" ? (readCanvasNote(node).artboard ? "画板" : { text: "内容卡片", images: "内容卡片", document: "文本卡片", bubble: "气泡", section: "分区" }[readCanvasNote(node).note_type] ?? "内容卡片") : node.kind === "asset" ? materialById.get(node.id)?.audio ? "音频卡片" : materialById.get(node.id)?.video ? "视频卡片" : "图片卡片" : "会话卡片" })),
@@ -528,32 +506,63 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     }
     return result;
   }, [document.nodes, providerIssues]);
-  const loopPreviews = new Map<string, { items?: WorkflowLoopItem[]; notice: string }>();
-  const currentRows = new Map<string, { source: CanvasNode; first: string; last: string; index: number; total: number }>();
-  for (const node of document.nodes.filter(node => node.kind === "loop")) {
-    try {
-      const rows: { first?: string; last?: string }[] = [];
-      const items = node.loopMode === "rows"
-        ? workflowLoopRows(node, document.nodes, graphNodes, (first, last) => rows.push({ first, last }))
-        : workflowLoopItems({ ...node, inputs: { ...node.inputs,
-        image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) ?? [],
-      } }, document.nodes, graphNodes);
-      loopPreviews.set(node.id, { items, notice: "" });
-      const sourceId = node.inputs.text?.[0]?.canvasNodeId;
-      const source = sourceId && graphById.get(sourceId);
-      const run = workflowNodeRun(document, node.id);
-      const loop = run?.loop?.nodeId === node.id ? run.loop : undefined;
-      const index = loop ? loop.index : (node.loopStartItem ?? 1) - 1;
-      const { first, last } = rows[index] ?? {};
-      if (source && first && last && (!loop || (run?.status !== "done" && loop.items &&
-        JSON.stringify(loop.items[index]) === JSON.stringify(items[index])))) {
-        currentRows.set(node.id, { source, first, last, index, total: loop?.items?.length ?? items.length });
-        addPort(source.id, "cell", first);
-        addPort(source.id, "cell", last);
+  const { loopPreviews, currentRows } = useMemo(() => {
+    const loopPreviews = new Map<string, { items?: WorkflowLoopItem[]; notice: string }>();
+    const currentRows = new Map<string, { source: CanvasNode; first: string; last: string; index: number; total: number }>();
+    for (const node of document.nodes.filter(node => node.kind === "loop")) {
+      try {
+        const rows: { first?: string; last?: string }[] = [];
+        const items = node.loopMode === "rows"
+          ? workflowLoopRows(node, document.nodes, graphNodes, (first, last) => rows.push({ first, last }))
+          : workflowLoopItems({ ...node, inputs: { ...node.inputs,
+          image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) ?? [],
+        } }, document.nodes, graphNodes);
+        loopPreviews.set(node.id, { items, notice: "" });
+        const sourceId = node.inputs.text?.[0]?.canvasNodeId;
+        const source = sourceId && graphById.get(sourceId);
+        const run = workflowNodeRun(document, node.id);
+        const loop = run?.loop?.nodeId === node.id ? run.loop : undefined;
+        const index = loop ? loop.index : (node.loopStartItem ?? 1) - 1;
+        const { first, last } = rows[index] ?? {};
+        if (source && first && last && (!loop || (run?.status !== "done" && loop.items &&
+          JSON.stringify(loop.items[index]) === JSON.stringify(items[index])))) {
+          currentRows.set(node.id, { source, first, last, index, total: loop?.items?.length ?? items.length });
+        }
+      } catch (error) { loopPreviews.set(node.id, { notice: userErrorMessage(error, "暂时无法预览循环内容，请检查输入后重试。") }); }
+    }
+    return { loopPreviews, currentRows };
+  }, [document, graphNodes, graphById, inputImages]);
+  const portTargets = useMemo(() => {
+    const targets: WorkflowPortTarget[] = [];
+    const addPort = (id: string | undefined, kind: WorkflowPortTarget["kind"], port: string | undefined, image = false) => {
+      const node = id && graphById.get(id);
+      if (node && node.kind === "note" && port !== undefined) targets.push({ node, kind, port, image });
+    };
+    const sourcePort = (binding: WorkflowInput) => {
+      if (binding.canvasNodeId && binding.cellId) addPort(binding.canvasNodeId, "cell", binding.cellId);
+      if (binding.canvasNodeId) addPort(binding.canvasNodeId, "output", binding.cellId === "*latest-image" ? "*latest" : binding.cellId);
+      const producer = binding.nodeId ? nodeById.get(binding.nodeId) : undefined;
+      if (producer?.textTarget) addPort(producer.textTarget.nodeId, "output", producer.textTarget.image ? "*" : "*text");
+    };
+    for (const node of document.nodes) for (const [port, inputs] of Object.entries(node.inputs)) {
+      for (const binding of inputs) sourcePort(binding);
+      if (inputs.length && node.textTarget) {
+        const target = graphById.get(node.textTarget.nodeId);
+        if (target && node.textTarget.cellId) addPort(target.id, "cell", node.textTarget.cellId);
+        if (target) addPort(target.id, "input", contentInputPort(readCanvasNote(target), node.textTarget), port === "image");
       }
-    } catch (error) { loopPreviews.set(node.id, { notice: userErrorMessage(error, "暂时无法预览循环内容，请检查输入后重试。") }); }
-  }
-  const portRect = useWorkflowPortGeometry(wireElement, portTargets, getZoom);
+    }
+    for (const target of conversationCards?.embedded.values() ?? []) addPort(target.nodeId, "cell", target.cellId);
+    if (connection) sourcePort(connection);
+    if (automatic?.scope) addPort(automatic.id, "cell", automatic.scope);
+    if (automatic) addPort(automatic.id, automatic.side === "output" ? "output" : "input", "*auto");
+    for (const { source, first, last } of currentRows.values()) {
+      addPort(source.id, "cell", first);
+      addPort(source.id, "cell", last);
+    }
+    return targets;
+  }, [document.nodes, graphById, nodeById, conversationCards, connection, automatic, currentRows]);
+  const portRect = useWorkflowPortGeometry(wireElement, portTargets, getZoom, settledZoom);
   const frames = new Map<string, { owner: string; x: number; y: number; width: number; height: number; index: number; total: number }>();
   for (const [id, row] of currentRows) {
     const first = portRect(row.source, "cell", row.first);
@@ -680,7 +689,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     }
   }
   useEffect(() => {
-    const refresh = () => { redraw(value => value + 1); nodesChanged.current(); };
+    const refresh = () => { updateRuntimeRevision(value => value + 1); nodesChanged.current(); };
     return controller.subscribe((urgent, promptEditor) => {
       const focused = window.document.activeElement;
       if (promptEditor && focused?.matches(".comfy-video-prompt") && focused.closest<HTMLElement>("[data-workflow-card]")?.dataset.workflowCard === promptEditor) return;
@@ -796,8 +805,9 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     ...Object.values(node.outputs).flatMap(output => output.assetIds ?? []),
   ]), ...graphNodes.filter(node => node.kind === "asset" && node.role === "output").flatMap(node => node.assetId ? [node.assetId] : [])])].sort().join("|");
   useEffect(() => {
+    if (!assetKey) { setAssets(previous => previous.length ? [] : previous); return; }
     let current = true;
-    void api.getAssetsByIds(assetKey ? assetKey.split("|") : []).then(value => { if (current) setAssets(value); }).catch(() => {});
+    void api.getAssetsByIds(assetKey.split("|")).then(value => { if (current) setAssets(value); }).catch(() => {});
     return () => { current = false; };
   }, [assetKey]);
 
@@ -1604,7 +1614,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       window.removeEventListener("blur", reset);
     };
   }, [projectId, resetConnection]);
-  useImperativeHandle(ref, () => ({
+  const currentHandle = useRef<WorkflowLayerHandle>(null!);
+  currentHandle.current = {
     async startLocalVideo(request, point) {
       await ensureMaterialized();
       const node = await startComposerLocalVideo(controller, request, point, edit);
@@ -1676,7 +1687,25 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       if (changed) { controller.document = { ...controller.document, nodes }; redraw(value => value + 1); }
       if (persist && nodes.some(node => positions.has(node.id))) handle(controller.save());
     },
-  }));
+  };
+  useImperativeHandle(ref, () => ({
+    get startLocalVideo() { return currentHandle.current.startLocalVideo; },
+    get templates() { return currentHandle.current.templates; },
+    get saveTemplate() { return currentHandle.current.saveTemplate; },
+    get inputText() { return currentHandle.current.inputText; },
+    get connectSelection() { return currentHandle.current.connectSelection; },
+    get connectCell() { return currentHandle.current.connectCell; },
+    get bindRecording() { return currentHandle.current.bindRecording; },
+    get add() { return currentHandle.current.add; },
+    get openCardMenu() { return currentHandle.current.openCardMenu; },
+    get createImageCard() { return currentHandle.current.createImageCard; },
+    get arm() { return currentHandle.current.arm; },
+    get cancelPlacement() { return currentHandle.current.cancelPlacement; },
+    get isConnecting() { return currentHandle.current.isConnecting; },
+    get bounds() { return currentHandle.current.bounds; },
+    get isLocked() { return currentHandle.current.isLocked; },
+    get position() { return currentHandle.current.position; },
+  }), []);
 
   function wireSelected(id: string | undefined) {
     if (!id) return false;
@@ -1789,7 +1818,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       ghostElement.current.style.top = `${cursor.current.y + 16}px`;
     }
   };
-  useLayoutEffect(() => updateCursor.current());
+  useLayoutEffect(() => updateCursor.current(), [connection, automatic, connectionMenu, armed, toBoardPoint, document.nodes, graphNodes, materials]);
 
   function automaticButton(id: string, side: "input" | "output", disabled = false) {
     return <CanvasConnectionHandle side={side} disabled={disabled || panReady} active={automatic?.id === id && automatic.side === side}
@@ -1869,7 +1898,16 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   }
   const statusLabels = { pending: "等待上游", running: "执行中", waiting: "等待继续", done: "已完成", failed: "失败" };
   const entryContext = useMemo(() => ({}), [document, graphNodes, materials, assets, selectedIds, providerIssues, generationActivities, activeGenerationIds, peekCard]);
-  const stagedCardContext = useCanvasEntryCardContext(entryContext, opening);
+  const editingContext = useMemo(() => ({}), [
+    entryContext, activeVideoJobs, armed, automatic, cardNames, chatSummaries, collapsedAnchorOwners, connection, connectionHover,
+    conversationCards, generationCardOrigins, h3AutoOptimize, panReady, pendingAgentCards, pinnedCardOffsets, provisional,
+    renderedNames, runtimeRevision, serviceIssues, state, voiceIssue,
+  ]);
+  const stagedCardContext = useCanvasEntryCardContext(entryContext, opening, editingContext);
+  const sessionOutputsBySessionId = useMemo(() => {
+    const ids = hiddenWorkflowSessionIds(document.nodes);
+    return new Map(graphNodes.filter(session => ids.has(session.id)).map(session => [session.id, canvasSessionImages(session, graphNodes)]));
+  }, [document.nodes, graphNodes]);
   const automaticWires = new Set<string>();
   return <>
     {visibleGraphNodes.filter(node => cardMounted(node.id) && node.hiddenAt == null && (node.kind !== "asset" || materialById.has(node.id)) && !sessionIds.has(node.id) && !conversationCards?.hiddenIds.has(node.id)).map(node => {
@@ -1884,6 +1922,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     {materials.filter(item => item.groupId && cardMounted(item.id)).map(item => nameEditor(item.groupId!, { left: item.x, top: item.y - 28, maxWidth: item.width }))}
     {disconnectMenu && <WorkflowDisconnectMenu {...disconnectMenu} choices={disconnectChoices(disconnectMenu)} assets={assets} onClose={() => setDisconnectMenu(null)} />}
     {Array.from(frames, ([id, frame]) => <WorkflowLoopFrame key={id} {...frame} />)}
+    <CanvasConnectionDefinitions />
     <svg ref={wireElement} className="workflow-wires">
       {document.nodes.filter(node => workflowNodeMounted(node) && !collapsedAnchor(node.id) && (node.kind === "agent" || node.kind === "generation" && node.generation?.media !== "video")).flatMap(node => (node.sessionNodeIds ?? []).map(id => {
         const current = node.kind === "generation" && node.outputs.image?.nodeIds?.includes(id)
@@ -1899,8 +1938,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       {document.nodes.filter(node => workflowNodeMounted(node) && !collapsedAnchor(node.id) && (node.kind === "generation" || node.kind === "comfy-video")).flatMap(node => {
         const hiddenSessions = hiddenWorkflowSessionIds([node]);
         if (!hiddenSessions.size) return [];
-        return graphNodes.filter(session => hiddenSessions.has(session.id)).flatMap(session =>
-          canvasSessionImages(session, graphNodes).flatMap(output => {
+        return [...hiddenSessions].flatMap(id =>
+          (sessionOutputsBySessionId.get(id) ?? []).flatMap(output => {
             const anchorId = conversationCards?.aliases.get(output.id) ?? output.id;
             const visible = materialById.get(anchorId) ?? conversationCards?.cards.get(anchorId)?.anchor;
             if (!visible || !cardMounted(visible.id) || output.hiddenAt != null || conversationCards?.hiddenIds.has(anchorId)) return [];
@@ -2164,7 +2203,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const h3Detail = h3Status === generatingStatus
         ? localVideo
           ? h3VideoPhase ? userErrorMessage(h3VideoPhase, "等待本机进度") : ""
-          : imageActivity.jobId ? generationProgressLabel(genJobs[imageActivity.jobId]) : ""
+          : ""
         : h3Status === "正在优化提示词" && step?.detail === "提示词优化排队中" ? "排队中" : "";
       const optimizationActions = h3 && <H3OptimizationActions nodeId={node.id} runs={workflowRuns(document)} disabled={busy || !original.trim()}
         draft={draft} stale={!!draft && h3DraftStale(node, draft)} seconds={localVideo ? draft?.seconds ?? (node.comfyVideo ?? DEFAULT_COMFY_VIDEO).seconds : undefined}
@@ -2479,9 +2518,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
               <span className="workflow-h3-status-copy">
                 <span>{h3Status}</span>
                 {h3Detail && !["生成视频", "正在生成图像", h3Status].includes(h3Detail) && <small>{h3Detail}</small>}
+                {!localVideo && h3Status === generatingStatus && imageActivity.jobId && <GenerationJobProgress jobId={imageActivity.jobId} detailFor={h3Status} />}
               </span>
               {h3Progress && <ComfyGenerationProgress progress={h3Progress} />}
-            </span> : (!hasAgentMessages || agentChat?.status !== "idle") && <span role={imageActivity.running ? "status" : undefined}>{imageActivity.running ? generationProgressLabel(imageActivity.jobId ? genJobs[imageActivity.jobId] : undefined) : agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount) : node.kind === "trigger" && (queuedTrigger || triggerExecuting) ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>}
+            </span> : (!hasAgentMessages || agentChat?.status !== "idle") && <span role={imageActivity.running ? "status" : undefined}>{imageActivity.running ? <GenerationJobProgress jobId={imageActivity.jobId} /> : agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount) : node.kind === "trigger" && (queuedTrigger || triggerExecuting) ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>}
             {starting && node.kind !== "agent" ? <button title="取消启动" onClick={() => controller.cancelStarting(node.id)}><Square size={13} />停止</button> : imageActivity.running && imageActivity.jobId && !controller.isLocked(node.id) ? <button type="button" aria-label="停止生成" onClick={() => useStore.getState().cancelGeneration(imageActivity.jobId)}><Square size={13} />停止</button> : activeWorkflow ? <>
               {retryDelivery && <button onClick={() => handle(controller.continue(activeWorkflow.id))}>重试写入内容卡</button>}
               {continueWorkflow && <button aria-label="继续工作流" onClick={() => handle(controller.continue(activeWorkflow.id))}><Play size={13} />继续</button>}

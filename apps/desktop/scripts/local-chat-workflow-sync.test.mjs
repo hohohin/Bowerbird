@@ -44,7 +44,7 @@ function fixture(initial = doc([node('original')]), options = {}) {
       if (readGate) { readGate.entered(); await readGate.promise; }
       if (failRead) throw new Error('synthetic read failed');
       return snapshot;
-    }, projectCanvasGet: async () => ({ nodes: [] }), canvasWorkflowAuthorize: async () => {}, projectThreadCreate: async () => {},
+    }, projectCanvasGet: options.projectCanvasGet ?? (async () => ({ nodes: [] })), canvasWorkflowAuthorize: async () => {}, projectThreadCreate: async () => {},
     getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.png` })),
     canvasWorkflowSave: async (_id, revision, document) => {
       if (gate) await gate;
@@ -55,7 +55,8 @@ function fixture(initial = doc([node('original')]), options = {}) {
       saved = { revision: revision + 1, document: clone(document) }; writes.push(saved.document); return saved.revision;
     },
   };
-  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, TextEncoder, AbortController, setTimeout: options.setTimeout ?? setTimeout, clearTimeout });
+  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, TextEncoder, AbortController, setTimeout: options.setTimeout ?? setTimeout,
+    clearTimeout: options.clearTimeout ?? clearTimeout });
   function load(path) {
     if (modules.has(path)) return modules.get(path).exports;
     const module = { exports: {} }; modules.set(path, module);
@@ -83,8 +84,11 @@ function fixture(initial = doc([node('original')]), options = {}) {
       if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined, agentOutputTargets: () => [] };
       if (specifier === './canvasSessionOutputs') return { completedCanvasSessions: () => [], reconcileCanvasWorkflowReferences: nodes => nodes,
         canvasSessionCompletionLookup: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompletionLookup(...args),
+        canvasSessionCompleted: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompleted(...args),
+        canvasSessionCompletionStatus: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompletionStatus(...args),
+        submittedTurnState: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).submittedTurnState(...args),
         workflowGenerationActivity: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).workflowGenerationActivity(...args) };
-      if (['./comfyVideo', './comfyVideo.ts', './genProviders', './genProviders.ts', './canvasNodePayload', './canvasNodePayload.ts', './projectNodeIds'].includes(specifier)) {
+      if (['./comfyVideo', './comfyVideo.ts', './genProviders', './genProviders.ts', './canvasNodePayload', './canvasNodePayload.ts', './projectNodeIds', './canvasConversationCards'].includes(specifier)) {
         return load(resolve(lib, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       }
       if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts'].includes(specifier)) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
@@ -320,6 +324,87 @@ test('an old video executor cannot release the new execution lock after stop tim
   cancel.resolve({ status: 'cancelled', message: '迟到的停止回执' });
   await newExecution;
   assert.equal(c.document.run.steps[h3.id].jobId, 'original-video');
+});
+
+test('editor drafts stay responsive and flush together before a durable boundary', async () => {
+  const h3 = { ...node('h3'), kind: 'comfy-video' };
+  const f = fixture(doc([h3])), c = f.controller;
+  await c.load();
+  const draft = prompt => c.edit([{ ...h3, prompt }], undefined, h3.id, true);
+  const first = draft('首'), second = draft('首次'), third = draft('首次编辑');
+  await new Promise(setImmediate);
+  assert.equal(c.document.nodes[0].prompt, '首次编辑');
+  assert.equal(f.writes.length, 0);
+  await c.flush();
+  await Promise.all([first, second, third]);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.saved().document.nodes[0].prompt, '首次编辑');
+});
+
+test('completion scheduling reads no idle snapshots and falls back only while an original turn is pending', async () => {
+  const nativePrompt = (id, status, jobId = 'ordinary-job') => ({ id, projectId: 'p', kind: 'prompt', createdAt: 1, hiddenAt: null,
+    payloadJson: JSON.stringify({ job_id: jobId, turn_key: id, status }) });
+  const result = (turn, jobId = 'ordinary-job') => ({ id: `output-${turn}`, projectId: 'p', kind: 'asset', createdAt: 2, hiddenAt: null, role: 'output', assetId: `asset-${turn}`,
+    payloadJson: JSON.stringify({ execution: { job_id: jobId, turn_key: turn } }) });
+  const old = nativePrompt('previous', 'done');
+  const receiver = { ...node('recipient'), kind: 'trigger', triggerMode: 'completion', triggerCount: 2,
+    inputs: { completion: [{ canvasNodeId: old.id, cellId: 'image' }] } };
+  let nodes = [old, result(old.id)], reads = 0, currentTime = 0, id = 0;
+  const timers = new Map();
+  const f = fixture(doc([receiver]), {
+    projectCanvasGet: async () => { reads++; return { nodes }; },
+    setTimeout(callback, delay) { timers.set(++id, { callback, at: currentTime + delay }); return id; },
+    clearTimeout(timer) { timers.delete(timer); },
+  });
+  const advance = async duration => {
+    const end = currentTime + duration;
+    while (true) {
+      const next = [...timers].filter(([, t]) => t.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next) break;
+      const [timer, { at, callback }] = next;
+      currentTime = at; timers.delete(timer); callback();
+      await new Promise(setImmediate);
+    }
+    currentTime = end;
+  };
+  const c = f.controller;
+  const claimed = [];
+  c.startRun = async (triggerId, _single, sessionId) => {
+    claimed.push(sessionId);
+    await c.save({ ...c.document, nodes: c.document.nodes.map(n => n.id === triggerId ? { ...n, triggerCount: n.triggerCount - 1,
+      completionSeen: [...(n.completionSeen ?? []), sessionId] } : n) });
+  };
+  await c.load();
+  assert.equal(c.ready, true, c.error);
+  await advance(0);
+  c.setCanvasActive(false);
+  const afterLoad = reads;
+  await advance(30_000);
+  assert.equal(reads, afterLoad, 'idle project schedules no canvas IPC');
+  assert.deepEqual(claimed, [], 'loading never replays the historical turn');
+
+  nodes = [...nodes, nativePrompt('continued', 'done')];
+  c.notifySessionCompletionChange();
+  await advance(0);
+  assert.deepEqual(claimed, [], 'terminal event before result projection waits');
+  assert.equal(c.pendingSessionCompletion, true, 'the unresolved projected turn schedules a fallback');
+  assert.equal(timers.size, 1);
+  nodes = [...nodes, result('continued')];
+  await advance(1500);
+  assert.deepEqual(claimed, ['continued'], 'fallback still observes a pending continuation after leaving the project');
+  const afterDelivery = reads;
+  await advance(30_000);
+  assert.equal(reads, afterDelivery, 'finished follow-up leaves no recurring read');
+
+  nodes = [...nodes, nativePrompt('workflow-turn', 'running', 'workflow-job')];
+  await c.save({ ...c.document, nodes: c.document.nodes.map(n => ({ ...n, inputs: { completion: [
+    { nodeId: 'workflow', portId: 'image', pendingCompletionSession: 'workflow-turn' },
+  ] } })) });
+  await advance(0);
+  nodes = [...nodes.filter(n => n.id !== 'workflow-turn'), nativePrompt('workflow-turn', 'done', 'workflow-job'), result('workflow-turn', 'workflow-job')];
+  c.notifySessionCompletionChange();
+  await advance(0);
+  assert.deepEqual(claimed, ['continued', 'workflow-turn'], 'a fresh terminal event dispatches the original submitted workflow turn without waiting for the timer');
 });
 
 test('refresh and subsequent save retain remote card names without starting a run', async () => {

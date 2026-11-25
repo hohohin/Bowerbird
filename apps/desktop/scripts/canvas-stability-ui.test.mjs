@@ -13,7 +13,7 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
-  const original = page.locator('[data-canvas-node-id="old"] img');
+  const original = page.locator('[data-canvas-node-id="old"] img[data-canvas-media-loaded="true"]');
   await original.waitFor();
   const previousSrc = await original.getAttribute('src');
   await page.evaluate(async () => {
@@ -35,8 +35,9 @@ try {
   await page.waitForFunction(() => typeof window.finishOldRefresh === 'function');
   assert.equal(await page.evaluate(() => window.refreshes.reads), 1, 'a burst performs one snapshot read');
   await page.evaluate(() => window.emitFixtureEvent('external-files://changed', null));
-  await page.waitForFunction(src => document.querySelector('[data-canvas-node-id="old"] img')?.getAttribute('src') !== src, previousSrc);
+  await page.waitForFunction(() => decodeURIComponent(document.querySelector('[data-canvas-node-id="old"] img')?.getAttribute('src') ?? '').includes('width="192"'));
   const currentSrc = await original.getAttribute('src');
+  assert.notEqual(currentSrc, previousSrc);
   assert.match(decodeURIComponent(currentSrc), /width="192"/);
   await page.evaluate(async () => {
     window.finishOldRefresh();
@@ -46,6 +47,27 @@ try {
   assert.equal(await original.getAttribute('src'), currentSrc, 'an older file refresh cannot replace the current preview');
   assert.deepEqual(await page.evaluate(() => window.refreshes), { reads: 2, result: 2 });
   assert.deepEqual(errors, []);
+
+  const previews = await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const { requestCanvasImagePreview } = await import('/src/lib/canvasImagePreview.ts');
+    const calls = [];
+    let finishCold;
+    api.canvasImagePreview = async path => {
+      calls.push(path);
+      if (path === 'cold.png') await new Promise(resolve => { finishCold = resolve; });
+      return `preview-${path}`;
+    };
+    const cold = requestCanvasImagePreview('cold.png', 512);
+    const duplicate = requestCanvasImagePreview('cold.png', 512);
+    requestCanvasImagePreview('cancelled.png', 512).release();
+    const warm = requestCanvasImagePreview('warm.png', 512);
+    const warmFirst = await Promise.race([warm.promise, new Promise(resolve => setTimeout(() => resolve(null), 500))]);
+    finishCold?.();
+    await cold.promise;
+    return { warmFirst, calls, shared: cold.promise === duplicate.promise };
+  });
+  assert.deepEqual(previews, { warmFirst: 'preview-warm.png', calls: ['cold.png', 'warm.png'], shared: true });
 
   const strict = await browser.newPage();
   strict.on('pageerror', error => errors.push(error.message));

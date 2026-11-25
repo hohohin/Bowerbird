@@ -177,6 +177,15 @@ test("moving a marquee selection preserves its internal layout", () => {
   );
 });
 
+test("zero movement reuses the original selection and card placement allows exact interval boundaries", () => {
+  const nodes = [{ id: "a", x: 16, y: 16 }];
+  assert.equal(translateCanvasSelection(nodes, new Set(["a"]), 0, 0), nodes);
+  const card = { x: 0, y: 0, width: 100, height: 100 };
+  const viewport = { x: 0, y: 0, width: 90, height: 100 };
+  const obstacles = [{ x: 0, y: 0, width: 100, height: 100 }, { x: 296, y: 0, width: 100, height: 100 }];
+  assert.deepEqual(canvasPlacementForNewCard(card, viewport, { x: 0, y: 0 }, 0.2, obstacles), { x: 148, y: 0 });
+});
+
 test("confirmed internal grouping creates a folder at the stationary target", () => {
   const nodes = [
     { kind: "asset", id: "fixed", asset: { id: "a" }, x: 20, y: 30, width: 100, height: 90, order: 1 },

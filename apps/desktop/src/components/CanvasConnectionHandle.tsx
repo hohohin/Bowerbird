@@ -1,4 +1,4 @@
-import { forwardRef, memo, useCallback, useEffect, useId, useRef, type ButtonHTMLAttributes, type RefObject, type PointerEvent } from "react";
+import { forwardRef, memo, useCallback, useEffect, useRef, type ButtonHTMLAttributes, type RefObject, type PointerEvent } from "react";
 import "./CanvasConnectionHandle.css";
 
 export interface CanvasConnectionHandleProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -6,12 +6,23 @@ export interface CanvasConnectionHandleProps extends ButtonHTMLAttributes<HTMLBu
   active?: boolean;
 }
 
-type HandleController = { follow: (event: globalThis.PointerEvent, rect: DOMRect) => void; reset: () => void; press: (event: PointerEvent<HTMLButtonElement>) => void };
+type HandleController = { follow: (event: globalThis.PointerEvent, rect: DOMRect, width: number) => void; reset: () => void; press: (event: PointerEvent<HTMLButtonElement>) => void };
 const handles = new Map<HTMLButtonElement, { current: HandleController }>();
+const widths = new WeakMap<Element, number>();
+let sizes: ResizeObserver | undefined;
+let motionQuery: MediaQueryList | undefined;
+let hoverFrame = 0;
+let hoverEvent: globalThis.PointerEvent | undefined;
 let hovered: HTMLButtonElement | null = null;
 function resetHovered() {
   if (hovered) { hovered.removeAttribute("data-connection-hover"); handles.get(hovered)?.current.reset(); }
   hovered = null;
+}
+function cancelHover() {
+  cancelAnimationFrame(hoverFrame);
+  hoverFrame = 0;
+  hoverEvent = undefined;
+  resetHovered();
 }
 function nearestHandle(event: globalThis.PointerEvent) {
   // Existing wires can cross a socket; the socket's hot zone wins there.
@@ -29,16 +40,23 @@ function nearestHandle(event: globalThis.PointerEvent) {
   return nearest;
 }
 function delegatedMove(event: globalThis.PointerEvent) {
-  const nearest = nearestHandle(event);
-  if (hovered !== nearest?.element) resetHovered();
-  if (!nearest) return;
-  hovered = nearest.element;
-  hovered.setAttribute("data-connection-hover", "true");
-  handles.get(hovered)?.current.follow(event, nearest.rect);
+  hoverEvent = event;
+  if (!hoverFrame) hoverFrame = requestAnimationFrame(() => {
+    hoverFrame = 0;
+    const sample = hoverEvent;
+    hoverEvent = undefined;
+    if (!sample) return;
+    const nearest = nearestHandle(sample);
+    if (hovered !== nearest?.element) resetHovered();
+    if (!nearest) return;
+    hovered = nearest.element;
+    hovered.setAttribute("data-connection-hover", "true");
+    handles.get(hovered)?.current.follow(sample, nearest.rect, widths.get(hovered) ?? 0);
+  });
 }
 function delegatedDown(event: globalThis.PointerEvent) {
   const nearest = nearestHandle(event);
-  resetHovered();
+  cancelHover();
   if (!nearest || event.button !== 0 || (event.target as Element).closest(".canvas-connection-handle") === nearest.element) return;
   event.preventDefault();
   event.stopPropagation();
@@ -57,43 +75,60 @@ function delegatedDown(event: globalThis.PointerEvent) {
 }
 function registerHandle(element: HTMLButtonElement, controller: { current: HandleController }) {
   if (!handles.size) {
+    motionQuery ??= window.matchMedia("(prefers-reduced-motion: reduce)");
+    sizes = new ResizeObserver(entries => {
+      for (const { target, borderBoxSize, contentRect } of entries) widths.set(target, borderBoxSize[0]?.inlineSize ?? contentRect.width);
+    });
     document.addEventListener("pointermove", delegatedMove, true);
     document.addEventListener("pointerdown", delegatedDown, true);
-    document.addEventListener("pointercancel", resetHovered, true);
-    window.addEventListener("blur", resetHovered);
+    document.addEventListener("pointercancel", cancelHover, true);
+    window.addEventListener("blur", cancelHover);
   }
   handles.set(element, controller);
+  sizes?.observe(element);
 }
 function unregisterHandle(element: HTMLButtonElement) {
   if (hovered === element) resetHovered();
   handles.delete(element);
+  sizes?.unobserve(element);
+  widths.delete(element);
   if (!handles.size) {
+    sizes?.disconnect();
+    sizes = undefined;
+    cancelHover();
     document.removeEventListener("pointermove", delegatedMove, true);
     document.removeEventListener("pointerdown", delegatedDown, true);
-    document.removeEventListener("pointercancel", resetHovered, true);
-    window.removeEventListener("blur", resetHovered);
+    document.removeEventListener("pointercancel", cancelHover, true);
+    window.removeEventListener("blur", cancelHover);
   }
 }
 
+export const CanvasConnectionDefinitions = memo(function CanvasConnectionDefinitions() {
+  return <svg width="0" height="0" aria-hidden="true" focusable="false" style={{ position: "absolute" }}>
+    <defs>
+      <pattern id="canvas-connection-hatch" width="2" height="2" patternUnits="userSpaceOnUse">
+        <path d="M-1 1l2-2M0 2l2-2M1 3l2-2" stroke="white" strokeWidth=".5" />
+      </pattern>
+      <mask id="canvas-connection-hatch-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="28" height="28">
+        <rect width="28" height="28" fill="url(#canvas-connection-hatch)" />
+      </mask>
+    </defs>
+  </svg>;
+});
+
 const ConnectionGlyph = memo(function ConnectionGlyph({ glyphRef }: { glyphRef: RefObject<HTMLSpanElement> }) {
-  const hatchId = `connection-hatch-${useId().replaceAll(":", "")}`;
   return <span ref={glyphRef} className="canvas-connection-glyph" aria-hidden="true">
     <svg width="28" height="28" viewBox="0 0 28 28" focusable="false">
-      <defs>
-        <pattern id={hatchId} width="2" height="2" patternUnits="userSpaceOnUse">
-          <path d="M-1 1l2-2M0 2l2-2M1 3l2-2" stroke="currentColor" strokeWidth=".5" />
-        </pattern>
-      </defs>
       <rect x="1.5" y="1.5" width="25" height="25" stroke="currentColor" strokeWidth=".6" opacity=".35" />
       <path d="M1.5 7v14M26.5 7v14" stroke="currentColor" strokeWidth="1" />
       <path d="M.5.5h2v2h-2zM25.5.5h2v2h-2zM.5 25.5h2v2h-2zM25.5 25.5h2v2h-2z" fill="currentColor" />
-      <path d="M12.25 5h3.5v7.25H23v3.5h-7.25V23h-3.5v-7.25H5v-3.5h7.25z" fill={`url(#${hatchId})`} />
+      <path d="M12.25 5h3.5v7.25H23v3.5h-7.25V23h-3.5v-7.25H5v-3.5h7.25z" fill="currentColor" mask="url(#canvas-connection-hatch-mask)" />
     </svg>
   </span>;
 });
 
 /** The hit area stays still; only the small visible socket follows the pointer. */
-export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnectionHandleProps>(function CanvasConnectionHandle({
+export const CanvasConnectionHandle = memo(forwardRef<HTMLButtonElement, CanvasConnectionHandleProps>(function CanvasConnectionHandle({
   side, active = false, className = "", disabled, onPointerEnter, onPointerMove, onPointerLeave,
   onPointerDown, onPointerUp, onPointerCancel, onBlur, children: _children, ...props
 }, forwardedRef) {
@@ -109,11 +144,11 @@ export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnec
       glyph.current?.style.setProperty("--connection-magnet-y", `${offset.current.y}px`);
     });
   }
-  function follow(event: globalThis.PointerEvent, rect: DOMRect) {
-    if (disabled || active || event.buttons || event.pointerType === "touch" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) { move(); return; }
+  function follow(event: globalThis.PointerEvent, rect: DOMRect, width: number) {
+    if (disabled || active || event.buttons || event.pointerType === "touch" || motionQuery?.matches) { move(); return; }
     // The pointer and hit rect are in screen pixels; translate the glyph in canvas units.
-    if (!button.current || rect.width <= 0) return;
-    const unitsPerPixel = button.current.offsetWidth / rect.width;
+    if (!button.current || rect.width <= 0 || width <= 0) return;
+    const unitsPerPixel = width / rect.width;
     const x = (event.clientX - rect.left - rect.width / 2) * unitsPerPixel;
     const y = (event.clientY - rect.top - rect.height / 2) * unitsPerPixel;
     const distance = Math.hypot(x, y);
@@ -148,4 +183,4 @@ export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnec
     onBlur={event => { move(); onBlur?.(event); }}>
     <ConnectionGlyph glyphRef={glyph} />
   </button>;
-});
+}));

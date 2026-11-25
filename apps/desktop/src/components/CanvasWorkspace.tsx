@@ -1,7 +1,7 @@
 import { DimensionBadge } from "./DimensionBadge";
 import { replicationAnalysisNote } from "../lib/replicationAnalysisNote";
 import { optimizeComposerLocalVideo } from "../lib/composerLocalVideo";
-import { generationProgressLabel } from "../lib/generationProgress";
+import { GenerationJobPreview, GenerationJobProgress } from "./GenerationJobFeedback";
 import { originalDeletionEpoch, originalDeletionFor, subscribeOriginalDeletionCommits, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { dismissNotices, readDismissedNotices, subscribeDismissedNotices } from "../lib/dismissedNotices";
 import { userErrorMessage } from "../lib/userError";
@@ -189,6 +189,7 @@ import {
   mergeCanvasNodesIntoFolder,
   snapCanvasRect,
   prepareCanvasSnapAnchors,
+  type CanvasSnapAnchor,
   snapCanvasRectPrepared,
   type PreparedCanvasSnapAnchors,
   translateCanvasSelection,
@@ -274,6 +275,8 @@ interface CanvasMarqueePress {
   crossedThreshold?: boolean;
   additive: boolean;
   baseSelection: Set<string>;
+  anchors?: CanvasSnapAnchor[];
+  sectionIds?: Set<string>;
 }
 
 type CanvasUndoEntry =
@@ -525,7 +528,7 @@ export function CanvasWorkspace({
   const [h3ChatEditor, setH3ChatEditor] = useState<{ projectId: string; chatId: string; apply: (text: string) => Promise<void> } | null>(null);
   const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
   const [composerDraftRevision, setComposerDraftRevision] = useState(0);
-  const chatSummaries = useProjectChatSummaries(projectId);
+  const chatSummaries = useProjectChatSummaries(projectId, true);
   useEffect(() => {
     setSelectedChatId(null);
     setChatHistoryOpen(false);
@@ -742,7 +745,6 @@ export function CanvasWorkspace({
   const cameraSettleRef = useRef<ReturnType<typeof setTimeout>>();
   const snapSizeObserverRef = useRef<ResizeObserver | null>(null);
   const cellHitCacheRef = useRef<ReturnType<typeof createCanvasCellHitCache> | null>(null);
-  const cellNodeIndexRef = useRef<{ nodes: ProjectGraphNode[]; index: Map<string, ProjectGraphNode> }>();
   const lastImportPointRef = useRef<{ projectId: string; x: number; y: number } | null>(null);
   const nodesRef = useRef(nodes);
   // Mutations publish this ref synchronously, even while their React render is pending.
@@ -1022,14 +1024,14 @@ export function CanvasWorkspace({
     const newest = images[images.length - 1];
     return (selection?.newest === newest?.id && images.find(image => image.id === selection?.selected)) || newest;
   }
-  const selectedConversationOutputs = new Map([...conversationCards.cards].flatMap(([id, card]) => {
+  const selectedConversationOutputs = useMemo(() => new Map([...conversationCards.cards].flatMap(([id, card]) => {
     const selected = selectedConversationImage(id, conversationImages(id));
     const output = selected && (card.allOutputs.find(item => item.id === selected.id) ?? card.allOutputs.find(item => item.assetId === selected.assetId));
     const embedded = output && conversationCards.embedded.get(output.id);
     if (!output) return [];
     const source = { id: output.id, video: isVideoPath(selected?.storePath) };
     return [[id, source] as const, ...(embedded ? [[JSON.stringify([embedded.nodeId, embedded.cellId]), source] as const] : [])];
-  }));
+  })), [conversationCards, conversationImageSelection, conversationImagesById]);
   const imageOnlyConversationIds = useMemo(() => new Set([...conversationCards.cards].flatMap(([id, card]) => {
     const summary = promptNodeSummary(card.latest);
     const running = genJobs[summary.jobId]?.running ?? ["running", "querying", "queued"].includes(summary.status);
@@ -1115,7 +1117,7 @@ export function CanvasWorkspace({
     paintWindow.current = window;
     return () => { window.dispose(); paintWindow.current = null; };
   }, [manyCanvasCards, projectId, loading, viewMode]);
-  useLayoutEffect(paintCamera);
+  useLayoutEffect(paintCamera, [pan.x, pan.y, zoom, projectId, loading, viewMode, manyCanvasCards, entryCardIds]);
   useEffect(() => () => {
     clearTimeout(cameraSettleRef.current);
     clearDragProjection(nodeDragRef.current); clearDragProjection(graphNodeDragRef.current);
@@ -1167,8 +1169,7 @@ export function CanvasWorkspace({
     graphNodesRef.current = graph;
     setGraphNodes(graph);
     pushGeometryUndo(preMaterials, preGraph);
-    persistGeometries(materials.filter(node => orders.has(node.id)));
-    for (const node of graph) if (node.kind !== "asset" && orders.has(node.id)) persistGraphNodeGeometry(node);
+    persistGeometries(materials.filter(node => orders.has(node.id)), graph.filter(node => node.kind !== "asset" && orders.has(node.id)));
   });
   useEffect(() => {
     window.addEventListener(CANVAS_LAYER_STEP_EVENT, changeLayers);
@@ -1254,10 +1255,6 @@ export function CanvasWorkspace({
     cameraFrame.cancel();
     paintCamera();
     mediaZoomHandle.current?.(zoomRef.current);
-    if (stageRef.current) {
-      stageRef.current.style.backgroundPosition = `${panRef.current.x}px ${panRef.current.y}px`;
-      stageRef.current.style.backgroundSize = `${72 * zoomRef.current}px ${72 * zoomRef.current}px`;
-    }
     scheduleViewSave();
   }
 
@@ -1374,7 +1371,8 @@ export function CanvasWorkspace({
     const inputs = assetNodes.map((node) => newProjectCanvasAssetNode(draft.id, node));
     const materializedNow = await ensureMaterialized(draft, inputs);
     if (!materializedNow) {
-      for (const input of inputs) await api.projectCanvasNodeCreate(input);
+      if (inputs.length === 1) await api.projectCanvasNodeCreate(inputs[0]);
+      else await api.projectCanvasNodesBatchCreate(draft.id, inputs);
     }
   }
 
@@ -1418,22 +1416,24 @@ export function CanvasWorkspace({
     });
   }
 
-  function persistGeometries(movedNodes: readonly CanvasNode[]) {
-    if (movedNodes.length === 0) return;
+  function persistGeometries(materials: readonly CanvasNode[], graph: readonly ProjectGraphNode[] = []) {
+    if (!materials.length && !graph.length) return;
     const draft = activeCanvasRef.current;
     void enqueueWrite(async () => {
       await ensureMaterialized(draft);
-      for (const node of movedNodes) {
-        if (node.kind === "asset") {
-          await api.projectCanvasNodeUpdate(node.id, projectCanvasNodeLayoutUpdate(node));
-          continue;
-        }
-        const persisted = groupsRef.current.get(node.id);
-        if (!persisted) continue;
-        const updated = projectCanvasGroupUpdate(persisted, node);
-        await api.projectCanvasGroupUpdate(updated);
-        groupsRef.current.set(node.id, updated);
+      const updates = materials.flatMap(node => node.kind === "asset" ? [{ nodeId: node.id, value: projectCanvasNodeLayoutUpdate(node) }] : []);
+      for (const node of graph) {
+        const { x, y, width, height, zIndex, positionLocked } = node;
+        updates.push({ nodeId: node.id, value: { x, y, width, height, zIndex, positionLocked } });
       }
+      const groups = materials.flatMap(node => {
+        const persisted = node.kind === "folder" ? groupsRef.current.get(node.id) : undefined;
+        return node.kind === "folder" && persisted ? [projectCanvasGroupUpdate(persisted, node)] : [];
+      });
+      if (updates.length + groups.length > 1) await api.projectCanvasNodesBatchUpdate(draft.id, updates, groups);
+      else if (updates.length) await api.projectCanvasNodeUpdate(updates[0].nodeId, updates[0].value);
+      else if (groups.length) await api.projectCanvasGroupUpdate(groups[0]);
+      for (const group of groups) groupsRef.current.set(group.id, group);
     });
   }
 
@@ -2706,22 +2706,19 @@ export function CanvasWorkspace({
     // A wheel event may have advanced the live camera before its scheduled paint.
     cameraFrame.flush();
     const point = toBoardPoint(clientX, clientY);
-    if (!graphNodesRef.current.some(node => {
-      if (node.kind !== "note" || node.hiddenAt != null || point.x < node.x || point.y < node.y) return false;
-      const bounds = nodeRect(node);
-      return point.x < node.x + bounds.width && point.y < node.y + bounds.height;
-    })) return null;
-    const cache = cellHitCacheRef.current ??= createCanvasCellHitCache(stage, toBoardPoint, () => zoomRef.current);
-    if (cellNodeIndexRef.current?.nodes !== graphNodesRef.current) {
-      cellNodeIndexRef.current = { nodes: graphNodesRef.current, index: new Map(graphNodesRef.current.map(node => [node.id, node])) };
-    }
     let target: { targetId: string; cellId: string; order: number; rect: CanvasRect } | null = null;
-    for (const entry of cache.get(fresh)) {
-      const card = cellNodeIndexRef.current.index.get(entry.targetId);
-      if (!card || card.kind !== "note" || card.hiddenAt != null || workflowRef.current?.isLocked(card.id)) continue;
-      const rect = entry.rect;
-      if (point.x < rect.x || point.x >= rect.x + rect.width || point.y < rect.y || point.y >= rect.y + rect.height) continue;
-      if (!target || card.zIndex > target.order) target = { targetId: card.id, cellId: entry.cellId, order: card.zIndex, rect };
+    for (const card of graphNodesRef.current) {
+      if (card.kind !== "note" || card.hiddenAt != null || point.x < card.x || point.y < card.y || target && card.zIndex <= target.order) continue;
+      const bounds = nodeRect(card);
+      if (point.x >= card.x + bounds.width || point.y >= card.y + bounds.height || workflowRef.current?.isLocked(card.id)) continue;
+      const element = stage.querySelector<HTMLElement>(`.canvas-note[data-canvas-node-id="${CSS.escape(card.id)}"]`);
+      if (!element) continue;
+      const cache = cellHitCacheRef.current ??= createCanvasCellHitCache(toBoardPoint, () => zoomRef.current);
+      for (const { rect, cellId } of cache.get(element, fresh)) {
+        if (point.x < rect.x || point.x >= rect.x + rect.width || point.y < rect.y || point.y >= rect.y + rect.height) continue;
+        target = { targetId: card.id, cellId, order: card.zIndex, rect };
+        break;
+      }
     }
     return target;
   }
@@ -2770,21 +2767,16 @@ export function CanvasWorkspace({
     if (additions.length === 0) return;
     const next = [...current];
     const created: CanvasAssetNode[] = [];
-    const target = findCanvasHoverTarget(
-      point,
-      next.map((node) => ({ id: node.id, order: node.order, rect: nodeRect(node), node })),
-    )?.node;
+    const candidates = current.map(node => ({ id: node.id, order: node.order, rect: nodeRect(node), node }));
+    const target = findCanvasHoverTarget(point, candidates)?.node;
+    const ordered = [...prepareCanvasSnapAnchors(candidates).ordered];
     let order = next.reduce((max, node) => Math.max(max, node.order), 0) + 1;
     additions.forEach((asset, index) => {
       const size = assetNodeSize(asset);
       const raw = target && index === 0
         ? { x: target.x + target.width, y: target.y, ...size }
         : { x: point.x - size.width / 2 + index * 22, y: point.y - size.height / 2 + index * 22, ...size };
-      const snapped = snapCanvasRect(
-        raw,
-        next.map((node) => ({ id: node.id, order: node.order, rect: nodeRect(node) })),
-        { enabled: snapEnabledRef.current, zoom: zoomRef.current },
-      );
+      const snapped = snapCanvasRectPrepared(raw, { ordered }, { enabled: snapEnabledRef.current, zoom: zoomRef.current });
       const node: CanvasAssetNode = {
         kind: "asset",
         id: asset.id,
@@ -2796,6 +2788,7 @@ export function CanvasWorkspace({
         order: order++,
       };
       next.push(node);
+      ordered.push({ id: node.id, order: node.order, rect: nodeRect(node) });
       created.push(node);
     });
     commitNodes(next);
@@ -3144,10 +3137,7 @@ export function CanvasWorkspace({
     setGraphNodes(graph);
     pushGeometryUndo(beforeMaterials, beforeGraph, beforeWorkflow);
     setSelectedCanvasNodeIds(new Set(positions.keys()));
-    persistGeometries(next.filter((node) => positions.has(node.id)));
-    for (const node of graph) {
-      if (positions.has(node.id) && node.kind !== "asset") persistGraphNodeGeometry(node);
-    }
+    persistGeometries(next.filter(node => positions.has(node.id)), graph.filter(node => node.kind !== "asset" && positions.has(node.id)));
   }
 
   useEffect(() => {
@@ -3585,18 +3575,7 @@ export function CanvasWorkspace({
   }
 
   function persistGraphNodeGeometry(node: ProjectGraphNode) {
-    const draft = activeCanvasRef.current;
-    void enqueueWrite(async () => {
-      await ensureMaterialized(draft);
-      await api.projectCanvasNodeUpdate(node.id, {
-        x: node.x,
-        y: node.y,
-        width: node.width,
-        height: node.height,
-        zIndex: node.zIndex,
-        positionLocked: node.positionLocked,
-      });
-    });
+    persistGeometries([], [node]);
   }
 
   function endGraphNodeDrag(event: PointerEvent<HTMLElement>, cancelled = false) {
@@ -3634,8 +3613,8 @@ export function CanvasWorkspace({
       const moved = persistMovedWorkflowCards(drag.selectedIds);
       pushGeometryUndo(drag.initialMaterialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)),
         drag.initialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)), drag.initialWorkflow.filter(node => moved.has(node.id)));
-      for (const selected of graphNodesRef.current.filter((candidate) => drag.selectedIds.has(candidate.id) && candidate.kind !== "asset" && candidate.hiddenAt == null)) persistGraphNodeGeometry(selected);
-      persistGeometries(nodesRef.current.filter((candidate) => drag.selectedIds.has(candidate.id)));
+      persistGeometries(nodesRef.current.filter(node => drag.selectedIds.has(node.id)),
+        graphNodesRef.current.filter(node => node.kind !== "asset" && node.hiddenAt == null && drag.selectedIds.has(node.id)));
     }
     graphNodeDragRef.current = null;
     if (drag.moved && peekedCard && drag.selectedIds.has(peekedCard.anchorId)) closePeekAfterLeave();
@@ -4418,8 +4397,8 @@ export function CanvasWorkspace({
       const moved = persistMovedWorkflowCards(drag.selectedIds);
       pushGeometryUndo(drag.initialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)),
         drag.initialGraphNodes.filter((candidate) => drag.selectedIds.has(candidate.id)), drag.initialWorkflow.filter(node => moved.has(node.id)));
-      persistGeometries(nodesRef.current.filter((node) => drag.selectedIds.has(node.id)));
-      for (const selected of graphNodesRef.current.filter((node) => drag.selectedIds.has(node.id) && node.kind !== "asset" && node.hiddenAt == null)) persistGraphNodeGeometry(selected);
+      persistGeometries(nodesRef.current.filter(node => drag.selectedIds.has(node.id)),
+        graphNodesRef.current.filter(node => node.kind !== "asset" && node.hiddenAt == null && drag.selectedIds.has(node.id)));
     }
     nodeDragRef.current = null;
     if (drag.moved && peekedCard && drag.selectedIds.has(peekedCard.anchorId)) closePeekAfterLeave();
@@ -4786,11 +4765,11 @@ export function CanvasWorkspace({
         overlay.style.width = `${selection.width * zoom}px`;
         overlay.style.height = `${selection.height * zoom}px`;
       }
-      const sectionIds = new Set(graphNodesRef.current.filter(node => node.kind === "note"
+      const sections = marqueePress.sectionIds ??= new Set(graphNodesRef.current.filter(node => node.kind === "note"
         && readCanvasNote(node).note_type === "section").map(node => node.id));
       const selected = canvasNodeIdsInRect(
         selection,
-        selectionAnchors().filter(anchor => !sectionIds.has(anchor.id) || canvasSectionMembers(selection, [anchor]).length > 0),
+        (marqueePress.anchors ??= selectionAnchors()).filter(anchor => !sections.has(anchor.id) || canvasSectionMembers(selection, [anchor]).length > 0),
       );
       const next = new Set(
         marqueePress.additive ? [...marqueePress.baseSelection, ...selected] : selected,
@@ -5030,8 +5009,15 @@ export function CanvasWorkspace({
         await ensureMaterialized(draft);
         // Retry a partial write using the same identities, never create a second copy.
         const existing = await api.projectCanvasGet(draft.id);
-        for (const node of cloned.nodes) if (!existing.nodes.some(item => item.id === node.id)) await api.projectCanvasNodeCreate(node);
-        for (const group of cloned.groups) if (!existing.groups.some(item => item.id === group.id)) await api.projectCanvasGroupCreate(group, cloned.items.filter(item => item.groupId === group.id).map(item => item.nodeId));
+        const nodeIds = new Set(existing.nodes.map(item => item.id));
+        const groupIds = new Set(existing.groups.map(item => item.id));
+        const nodesToCreate = cloned.nodes.filter(node => !nodeIds.has(node.id));
+        const groupsToCreate = cloned.groups.filter(group => !groupIds.has(group.id)).map(value => ({
+          value, nodeIds: cloned.items.filter(item => item.groupId === value.id).map(item => item.nodeId),
+        }));
+        if (nodesToCreate.length || groupsToCreate.length) {
+          await api.projectCanvasNodesBatchCreate(draft.id, nodesToCreate, groupsToCreate);
+        }
         if (ids.length) {
           if (controller.document.nodes.some(node => ids.includes(node.id))) {
             if (controller.error) await controller.retrySave();
@@ -5171,7 +5157,8 @@ export function CanvasWorkspace({
       }
     }
     const promptId = node.kind === "agent_group"
-      ? [...agentPromptGroupMap(graphNodesRef.current, graphEdges)].find(([, group]) => group.id === node.id)?.[0]
+      ? graphNodesRef.current === graphNodes ? promptByAgentGroupId.get(node.id)
+        : [...agentPromptGroupMap(graphNodesRef.current, graphEdges)].find(([, group]) => group.id === node.id)?.[0]
       : node.id;
     const prompt = graphNodesRef.current.find((candidate) => candidate.id === promptId);
     if (!prompt) return;
@@ -5333,7 +5320,9 @@ export function CanvasWorkspace({
         for (const node of entry.after) for (const id of node.kind === "asset" ? [node.id] : node.assets.map(asset => asset.id)) {
           if (!retained.has(id)) await api.projectCanvasNodeRemove(id);
         }
-        for (const node of assetNodes) await api.projectCanvasNodeUpdate(node.id, projectCanvasNodeLayoutUpdate(node));
+        if (assetNodes.length) {
+          await api.projectCanvasNodesBatchUpdate(entry.projectId, assetNodes.map(node => ({ nodeId: node.id, value: projectCanvasNodeLayoutUpdate(node) })));
+        }
         for (const node of entry.before) if (node.kind === "folder") {
           const original = entry.groups.get(node.id);
           const group = await api.projectCanvasGroupCreate(original ? projectCanvasGroupUpdate(original, node) : newProjectCanvasGroup(entry.projectId, node), node.assets.map(asset => asset.id));
@@ -5397,8 +5386,8 @@ export function CanvasWorkspace({
       });
       graphNodesRef.current = next;
       setGraphNodes(next);
-      persistGeometries(nodesRef.current.filter((node) => materialBefore.has(node.id)));
-      for (const node of next) if (node.kind !== "asset" && graphBefore.has(node.id)) persistGraphNodeGeometry(node);
+      persistGeometries(nodesRef.current.filter(node => materialBefore.has(node.id)),
+        next.filter(node => node.kind !== "asset" && graphBefore.has(node.id)));
       // 分区几何恢复后按还原范围重新圈定成员；等 DOM 提交后再取实际显示尺寸。
       window.requestAnimationFrame(() => {
         if (activeCanvasRef.current.id !== entry.projectId) return;
@@ -5576,6 +5565,11 @@ export function CanvasWorkspace({
   );
   const activeGraphNodes = activeGraph.nodes;
   const agentPromptGroups = useMemo(() => agentPromptGroupMap(graphNodes, graphEdges), [graphNodes, graphEdges]);
+  const promptByAgentGroupId = useMemo(() => {
+    const prompts = new Map<string, string>();
+    for (const [promptId, group] of agentPromptGroups) if (!prompts.has(group.id)) prompts.set(group.id, promptId);
+    return prompts;
+  }, [agentPromptGroups]);
   const liveGraphNodes = useMemo(
     () => projectGraphNodesWithLiveLayout(activeGraphNodes.filter((node) => !agentPromptGroups.has(node.id) && !containedOutputIds.has(node.id) && !workflowHistoryIds.has(node.id) && !conversationCards.hiddenIds.has(node.id)), shownMaterials),
     [activeGraphNodes, agentPromptGroups, shownMaterials, containedOutputIds, workflowHistoryIds, conversationCards],
@@ -5789,7 +5783,6 @@ export function CanvasWorkspace({
   const deferredCandidateIds = entryCandidates.current;
   const cardMounted = (id: string) => entryCardIds === null || entryCardIds.has(id) || (!!deferredCandidateIds && !deferredCandidateIds.has(id));
   const entryCardContext = useMemo(() => ({}), [graphNodes, visibleMaterials, workflowInteractive, genJobs]);
-  const stagedCardContext = useCanvasEntryCardContext(entryCardContext, opening);
   const lookupPromptReferences = useMemo(() => canvasPromptReferenceLookup(shownGraph, graphEdges), [shownGraph, graphEdges]);
   const promptReferences = useMemo(() => {
     const cache = new Map<string, ReturnType<typeof lookupPromptReferences>>();
@@ -5883,9 +5876,9 @@ export function CanvasWorkspace({
         const reference = changed.get(node.id);
         return reference && node.kind === "asset" ? { ...node, x: reference.x, y: reference.y } : node;
       }));
-      if (moved.x !== target.x || moved.y !== target.y) persistGraphNodeGeometry(moved);
+      const repositioned = moved.x !== target.x || moved.y !== target.y ? [moved, ...references] : references;
+      persistGeometries([], repositioned);
       for (const reference of references) {
-        persistGraphNodeGeometry(reference);
         // Agent launch and visible Run card can arrive in separate snapshots.
         if (target.id.startsWith("agent-prompt:")) pendingNewReferencesRef.current.set(reference.id, reference);
         else pendingNewReferencesRef.current.delete(reference.id);
@@ -6002,6 +5995,14 @@ export function CanvasWorkspace({
     scopedInspectorOpen,
   ]);
   const inspectorEditing = activeSessionKind === "generation" && genEditing === "edit";
+  const materialByNodeOrAssetId = useMemo(() => {
+    const index = new Map<string, CanvasNode>();
+    for (const node of nodes) {
+      const ids = node.kind === "asset" ? [node.id, node.asset.id] : [node.id, ...node.assets.map(asset => asset.id)];
+      for (const id of ids) if (!index.has(id)) index.set(id, node);
+    }
+    return index;
+  }, [nodes]);
   const drawableEdges = useMemo(
     () => {
       // Non-library annotation references and deleted assets remain in execution
@@ -6125,6 +6126,15 @@ export function CanvasWorkspace({
     ? Object.values(genJobs).find(job => job.turns.some(turn => turn.images.includes(lightboxPath)))
     : undefined;
   const lightboxOrigin = canvasLightbox?.canvasNodeId ? generationOrigin(canvasLightbox.canvasNodeId) : undefined;
+
+  const editingCardContext = useMemo(() => ({}), [
+    entryCardContext, activeDragId, assetById, boardOpen, captionedIds, chatSummaries, cloudAgentRuns, concealedNodeIds,
+    conversationCards, conversationImageSelection, conversationImagesById, dismissed, drawingTool, expandedFolderIds,
+    focusedNodeId, folderDropTargetId, genEditing, generationActivities, generationCardProjection, graphEdges, hoverReady, hoverTargetId,
+    imageOnlyConversationIds, layerWorkspaceIds, lookupPromptReferences, mediaFilter, nodes, pan, pinnedWorkflowCards, projectId,
+    quickRevision, selectedCanvasNodeIds, showAssetNames, smartFilter, supersededTaskIds, workflowForegroundZ, workflowRevision, writerFailureKeys, zoom,
+  ]);
+  const stagedCardContext = useCanvasEntryCardContext(entryCardContext, opening, editingCardContext);
 
   if (loadFailed) {
     return (
@@ -6541,7 +6551,7 @@ export function CanvasWorkspace({
             style={{ transform: `translate3d(${panRef.current.x}px, ${panRef.current.y}px, 0) scale(${zoomRef.current})`,
               "--canvas-workflow-foreground-z": workflowForegroundZ } as CSSProperties}
           >
-            {projectId && workflowInteractive && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} getZoom={readCanvasZoom} opening={opening} entryCardIds={entryCardIds} deferredCandidateIds={deferredCandidateIds} graphNodes={nonChatGraphNodes} visibleGraphNodeIds={visibleGraphNodeIds} conversationCards={conversationCards} selectedConversationOutputs={selectedConversationOutputs} imageOnlyConversationIds={imageOnlyConversationIds} sessionHeights={sessionHeights} generationCardAnchors={generationCardProjection.anchors} pinnedCardOffsets={pinnedCardOffsets}
+            {projectId && workflowInteractive && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} getZoom={readCanvasZoom} settledZoom={zoom} opening={opening} entryCardIds={entryCardIds} deferredCandidateIds={deferredCandidateIds} graphNodes={nonChatGraphNodes} visibleGraphNodeIds={visibleGraphNodeIds} conversationCards={conversationCards} selectedConversationOutputs={selectedConversationOutputs} imageOnlyConversationIds={imageOnlyConversationIds} sessionHeights={sessionHeights} generationCardAnchors={generationCardProjection.anchors} pinnedCardOffsets={pinnedCardOffsets}
               generationCardOrigins={generationCardProjection.origins}
               peekCard={peekedCard && peekAnchorPoint ? { ...peekedCard, point: peekAnchorPoint } : undefined}
               generationActivities={generationActivities} activeGenerationIds={activeGenerationIds}
@@ -6642,7 +6652,7 @@ export function CanvasWorkspace({
                     return <><button type="button" className={`canvas-cell-generation ${running ? "canvas-card-running" : ""} ${showFailure ? "is-failed" : ""}`}
                       data-cell-generation={cell.generation_ref?.session_node_id} aria-label="查看单元格生成会话" aria-busy={!!running}
                       onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); if (session) openWorkflowGeneration(session); }}>
-                      <span><strong>生成会话</strong><small>{summary?.provider} · {running ? generationProgressLabel(summary ? genJobs[summary.jobId] : undefined) : failureKey ? showFailure ? "生成失败" : "查看详情" : summary?.status === "done" ? "等待结果图片" : summary?.status === "cancelled" ? "已取消" : "等待生成"}</small></span>
+                      <span><strong>生成会话</strong><small>{summary?.provider} · {running ? <GenerationJobProgress jobId={summary?.jobId} /> : failureKey ? showFailure ? "生成失败" : "查看详情" : summary?.status === "done" ? "等待结果图片" : summary?.status === "cancelled" ? "已取消" : "等待生成"}</small></span>
                       <p>{summary?.text ?? "生成会话已不可用"}</p>
                     </button>{showFailure && dismissFailureButton(failureKey)}</>;
                   }}
@@ -6659,8 +6669,8 @@ export function CanvasWorkspace({
             </div>}
             <svg className="canvas-graph-edges" aria-hidden="true">
               {drawableEdges.map(({ edge, from, to }) => {
-                const fromMaterial = nodes.find(node => node.id === from.id || (node.kind === "folder" && node.assets.some(asset => asset.id === from.id)));
-                const toMaterial = nodes.find(node => node.id === to.id || (node.kind === "folder" && node.assets.some(asset => asset.id === to.id)));
+                const fromMaterial = materialByNodeOrAssetId.get(from.id);
+                const toMaterial = materialByNodeOrAssetId.get(to.id);
                 if (!cardMounted(fromMaterial?.id ?? from.id) || !cardMounted(toMaterial?.id ?? to.id)) return null;
                 const x1 = from.x + (fromMaterial ? nodeRect(fromMaterial).width : from.width);
                 const y1 = from.y + (fromMaterial ? nodeRect(fromMaterial).height : nodeRect(from).height) / 2;
@@ -6705,8 +6715,6 @@ export function CanvasWorkspace({
               const openConversation = () => openWorkflowGeneration(latest, node.id);
               const summary = promptNodeSummary(latest);
               const running = genJobs[summary.jobId]?.running ?? ["running", "querying", "queued"].includes(summary.status);
-              const preview = genJobs[summary.jobId]?.preview;
-              const previewUrl = running && preview?.turnKey === summary.turnKey ? preview.dataUrl : null;
               const failureKey = !running && summary.status === "failed" ? generationFailureKey(latest, summary) : null;
               const acknowledged = !!failureKey && dismissed.has(failureKey);
               return (
@@ -6722,7 +6730,7 @@ export function CanvasWorkspace({
                   aria-label={imageOnly ? `${selectedConversationImage(node.id, images)?.name ?? "生成图片"}，${selectedVideo ? "点击播放视频" : boardOpen || genEditing ? "单击预览，双击添加引用" : "点击预览图片"}` : undefined}
                   className={`canvas-prompt-node ${imageOnly ? "is-image-only" : ""} ${conversation?.outputs.length ? "has-conversation-images" : ""} ${running ? "canvas-card-running" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${acknowledged ? "" : `is-${summary.status}`} ${focusedNodeId === node.id ? "is-focused" : ""} ${activeDragId === node.id || (activeDragId != null && selectedCanvasNodeIds.has(node.id)) ? "is-moving" : ""} ${supersededTaskIds.has(latest.id) ? "is-superseded" : ""}`}
                   onContextMenu={(event) => {
-                    const material = imageOnly && shownImage ? nodes.find(item => item.kind === "asset" && item.asset.id === shownImage.id) : undefined;
+                    const material = imageOnly && shownImage ? materialByNodeOrAssetId.get(shownImage.id) : undefined;
                     if (material?.kind === "asset") openCanvasAssetContextMenu(event, { ...material, id: node.id }, material.asset);
                     else openCanvasNodeMenu(event, node.id, latest);
                   }}
@@ -6754,11 +6762,11 @@ export function CanvasWorkspace({
                     event.currentTarget.click();
                   }}
                 >
-                  {!imageOnly && <div><span>{conversation?.outputs.length ? "生成会话" : "生成指令"}</span><small>{summary.provider} · <span role={running ? "status" : undefined}>{running ? generationProgressLabel(genJobs[summary.jobId]) : acknowledged ? "查看详情" : generationStatusLabel(summary.status)}</span></small>{failureKey && !acknowledged && dismissFailureButton(failureKey)}</div>}
-                  {imageOnly && running && <span className="canvas-generation-stage" role="status">{generationProgressLabel(genJobs[summary.jobId])}</span>}
+                  {!imageOnly && <div><span>{conversation?.outputs.length ? "生成会话" : "生成指令"}</span><small>{summary.provider} · <span role={running ? "status" : undefined}>{running ? <GenerationJobProgress jobId={summary.jobId} /> : acknowledged ? "查看详情" : generationStatusLabel(summary.status)}</span></small>{failureKey && !acknowledged && dismissFailureButton(failureKey)}</div>}
+                  {imageOnly && running && <span className="canvas-generation-stage" role="status">{<GenerationJobProgress jobId={summary.jobId} />}</span>}
                   {imageOnly && renderGenerationImageActions(node.id, shownImage)}
-                  {!imageOnly && previewUrl && <img src={previewUrl} alt="本轮生成预览" draggable={false} className="mx-auto block max-h-[230px] max-w-full object-contain" />}
-                  {(imageOnly || !previewUrl) && conversation && <CanvasConversationImages images={images} imageOnly={imageOnly}
+                  <GenerationJobPreview jobId={running && !imageOnly ? summary.jobId : undefined} turnKey={summary.turnKey}>
+                  {conversation && <CanvasConversationImages images={images} imageOnly={imageOnly}
                     selectedId={selectedConversationImage(node.id, images)?.id}
                     onSelect={selected => { cancelConversationImageClick(); setConversationImageSelection(previous => ({ ...previous, [node.id]: { newest: images[images.length - 1].id, selected } })); }} onPointerDown={event => {
                     cancelConversationImageClick();
@@ -6783,7 +6791,7 @@ export function CanvasWorkspace({
                         if (path) setCanvasLightbox({ images: [path], index: 0 });
                       } else if (imageOnly) openConversation();
                       else {
-                        const material = nodes.find(item => item.kind === "asset" && item.asset.id === asset.id);
+                        const material = materialByNodeOrAssetId.get(asset.id);
                         if (material?.kind === "asset") activateCanvasMaterial(material);
                       }
                     };
@@ -6797,9 +6805,11 @@ export function CanvasWorkspace({
                     if (path) setCanvasLightbox({ images: [path], assetIds: [asset.assetId], index: 0 });
                   }} onContextMenu={(event, asset) => {
                     cancelConversationImageClick();
-                    const material = nodes.find(item => item.kind === "asset" && item.asset.id === asset.id);
+                    const material = materialByNodeOrAssetId.get(asset.id);
                     if (material?.kind === "asset") openCanvasAssetContextMenu(event, { ...material, id: node.id }, material.asset);
                   }} />}
+                  {!imageOnly && <section className="canvas-prompt-content"><ReadonlyPrompt prompt={summary.text} references={promptReferences(latest)} /></section>}
+                  </GenerationJobPreview>
                   {imageOnly && failureKey && <span className={`canvas-conversation-failure${acknowledged ? " is-acknowledged" : ""}`}><button type="button"
                     onPointerDown={event => { event.stopPropagation(); cancelConversationImageClick(); }}
                     onClick={event => { event.stopPropagation(); if (!consumeSuppressedNodeClick(event)) openConversation(); }}>{acknowledged ? "查看会话详情" : "本轮生成失败 · 查看详情"}</button>{!acknowledged && dismissFailureButton(failureKey)}</span>}
@@ -6812,7 +6822,6 @@ export function CanvasWorkspace({
                       const width = Math.max(96, 32 / ratio, start.width + change);
                       return { width, height: width * ratio };
                     }} onResize={(size, finished, cancelled) => resizeCanvasGraphNode(node.id, size, finished, cancelled)} />}
-                  {!imageOnly && !previewUrl && <section className="canvas-prompt-content"><ReadonlyPrompt prompt={summary.text} references={promptReferences(latest)} /></section>}
                 </div>
               );
             })}

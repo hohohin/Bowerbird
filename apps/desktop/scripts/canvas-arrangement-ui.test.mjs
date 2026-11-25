@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "vite";
-const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || "playwright");
+const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || "../../html-renderer/node_modules/playwright/index.mjs");
 const server = await createServer({ server: { host: "127.0.0.1", port: 1448, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
@@ -38,15 +38,14 @@ try {
   await page.reload();
   await node("prompt").waitFor();
   const before = await page.evaluate(() => window.snapshot());
-  await node("old").click({ button: "right", position: { x: 35, y: 35 } });
-  assert.equal(await page.getByRole("menuitem", { name: "整理", exact: true }).count(), 0, "single image hides arrange");
-  await page.keyboard.press("Escape");
+  await arrange("obstacle");
+  assert.deepEqual(await page.evaluate(() => window.snapshot()), before, "arranging an isolated image leaves all cards in place");
   await node("old").click({ modifiers: ["Control"], position: { x: 35, y: 35 } });
   await node("prompt").click({ modifiers: ["Control"], position: { x: 35, y: 35 } });
   await arrange("old");
   const selected = await page.locator("[data-canvas-node-id].is-selected").evaluateAll(elements => elements.map(e => e.dataset.canvasNodeId).sort());
   assert.deepEqual(selected, ["old", "prompt", "output", "agent", "agent-output"].sort());
-  await page.waitForFunction(() => window.calls.filter(c => c.command === "project_canvas_node_update").length >= 5);
+  await page.waitForFunction(() => window.calls.some(c => c.command === "project_canvas_nodes_batch_update" && c.args.updates.length === 5));
   const after = await page.evaluate(() => window.snapshot());
   assert.deepEqual(after.nodes.find(n => n.id === "obstacle"), before.nodes.find(n => n.id === "obstacle"));
   assert.deepEqual(after.nodes.find(n => n.id === "agent-prompt"), before.nodes.find(n => n.id === "agent-prompt"));
@@ -58,18 +57,17 @@ try {
     assert.ok(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y, `${a.id} overlaps ${b.id}`);
   }
   await arrange("prompt");
-  await page.waitForFunction(() => window.calls.filter(c => c.command === "project_canvas_node_update").length >= 10);
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "project_canvas_nodes_batch_update").length === 2);
   assert.deepEqual((await page.evaluate(() => window.snapshot())).nodes, after.nodes);
   await page.evaluate(() => window.save());
   await page.reload();
   await node("old").waitFor();
   assert.deepEqual((await page.evaluate(() => window.snapshot())).nodes, after.nodes);
-  // A single result has no arrange action and does not pull in its upstream nodes.
+  // An isolated result does not pull its upstream nodes into an arrangement.
   await node("agent-output").click({ modifiers: ["Control"], position: { x: 35, y: 35 } });
-  await node("agent-output").click({ button: "right", position: { x: 35, y: 35 } });
-  assert.equal(await page.getByRole("menuitem", { name: "整理", exact: true }).count(), 0);
+  await arrange("agent-output");
   assert.deepEqual(await page.locator("[data-canvas-node-id].is-selected").evaluateAll(elements => elements.map(e => e.dataset.canvasNodeId)), ["agent-output"]);
-  await page.keyboard.press("Escape");
+  assert.deepEqual((await page.evaluate(() => window.snapshot())).nodes, after.nodes);
   await page.evaluate(() => {
     const snapshot = window.snapshot();
     const old = snapshot.nodes.find(n => n.id === "old");
@@ -85,8 +83,8 @@ try {
   await page.getByRole("menu", { name: "画板节点菜单" }).getByRole("menuitem", { name: "整理", exact: true }).click();
   assert.deepEqual(await page.locator("[data-canvas-node-id].is-selected").evaluateAll(elements => elements.map(e => e.dataset.canvasNodeId).sort()),
     ["folder", "prompt", "output", "agent", "agent-output"].sort());
-  await page.waitForFunction(() => window.calls.some(c => c.command === "project_canvas_group_update")
-    && window.calls.filter(c => c.command === "project_canvas_node_update").length >= 4);
+  await page.waitForFunction(() => window.calls.some(c => c.command === "project_canvas_nodes_batch_update"
+    && c.args.groups.length === 1 && c.args.updates.length === 4));
   const grouped = await page.evaluate(() => window.snapshot());
   await page.evaluate(() => window.save());
   await page.reload();

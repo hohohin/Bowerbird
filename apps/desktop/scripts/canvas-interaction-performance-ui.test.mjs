@@ -59,6 +59,60 @@ async function collect(label, events) {
   const stats = await page.evaluate(() => { const result = window.interactionStats; window.interactionStats = null; return result; });
   samples.push({ label, inputEvents: events, ...stats });
 }
+async function checkBackgroundStreams() {
+  await page.evaluate(async () => {
+    const { useLocalChatStore } = await import('/src/lib/localChatStore.ts');
+    const chat = { id: 'background-chat', projectId: 'p', threadId: 't', nodeId: 'background-chat-node',
+      title: '后台对话', provider: 'codex-local', status: 'running', turnCount: 1, revision: 1, updatedAt: 1,
+      createdAt: 1, preview: '', error: null, messages: [], actions: [] };
+    const job = { id: 'background-image', projectId: 'p', provider: 'codex', running: true, streaming: '',
+      turns: [{ turnKey: 'streaming', images: [] }] };
+    window.store.setState(state => ({ genJobs: { ...state.genJobs, [job.id]: job } }));
+    useLocalChatStore.getState().applyConversation(chat);
+    window.emitBackgroundStreams = () => {
+      for (let index = 0; index < 24; index++) {
+        window.store.getState().applyGenChunk({ kind: 'delta', job_id: job.id, text: '生成片段' });
+        window.store.getState().applyGenChunk({ kind: 'progress', job_id: job.id, stage: 'generating', turn_key: 'streaming' });
+        useLocalChatStore.getState().applyConversation({ ...chat, revision: index + 2, preview: `片段 ${index}` });
+      }
+    };
+  });
+  await resetStats();
+  await page.evaluate(() => window.interactionFlush(() => window.emitBackgroundStreams()));
+  await collect('background-streams', 72);
+  const stats = samples.at(-1);
+  assert.equal(stats.workspaceRenders, 0, 'unrelated generation and chat streams do not redraw 300 cards');
+  assert.equal(stats.workflowRenders, 0, 'unrelated streams do not redraw the workflow or its SVG wires');
+}
+async function checkBatchWrites() {
+  await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html?batch');
+  await material.waitFor();
+  await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
+  await page.waitForFunction(() => document.querySelectorAll('.canvas-plane [data-canvas-node]').length === 50);
+  const stage = await page.locator('.canvas-stage').boundingBox();
+  const start = { x: stage.x + 78, y: stage.y + 75 };
+  assert.equal(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.matches('.canvas-stage'), start), true, 'marquee starts on a blank part of the canvas');
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(stage.x + 1490, stage.y + 720, { steps: 12 });
+  await page.mouse.up();
+  assert.equal(await page.locator('.canvas-plane [data-canvas-node].is-selected').count(), 50);
+  const before = await snapshot();
+  const box = await material.boundingBox();
+  await page.mouse.move(box.x + 16, box.y + 18);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 43, box.y + 45, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForFunction(() => window.calls.some(call => call.command === 'project_canvas_nodes_batch_update'));
+  const writes = await page.evaluate(() => window.calls.filter(call => ['project_canvas_node_update', 'project_canvas_nodes_batch_update'].includes(call.command)));
+  assert.equal(writes.length, 1, 'the 50-node move writes once');
+  assert.equal(writes[0].args.updates.length, 50);
+  assert.equal(new Set(writes[0].args.updates.map(update => update.nodeId)).size, 50);
+  assert.ok((await snapshot()).canvas.nodes.every((node, index) => Math.abs(node.x - before.canvas.nodes[index].x - 90) < 0.01));
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction(() => window.calls.filter(call => call.command === 'project_canvas_nodes_batch_update').length === 2);
+  assert.deepEqual((await snapshot()).canvas.nodes, before.canvas.nodes);
+}
 async function burstWheel(ctrlKey, delta, count = 48) {
   await page.evaluate(async ({ ctrlKey, delta, count }) => {
     const stage = document.querySelector('.canvas-stage');
@@ -143,6 +197,7 @@ async function checkGeometry() {
   await material.waitFor(); await workflow.waitFor(); await waitForMountedBoard(300);
   assert.equal(await page.locator('.canvas-plane [data-canvas-node]').count(), 300);
   assert.equal(await page.locator('[data-workflow-target]').count(), 200);
+  if (!baseline) await checkBackgroundStreams();
   const initial = await snapshot();
   await resetStats(); await burstWheel(false, 1); await collect('pan', 48);
   await page.waitForFunction(() => Math.abs(window.snapshot().view.panX + 48) < .01);
@@ -263,6 +318,7 @@ async function checkGeometry() {
   assert.equal(routeFlush.called, true);
   assert.ok(Math.abs(routeFlush.after.panX - routeFlush.before.panX + 37) < .01 && Math.abs(routeFlush.after.panY - routeFlush.before.panY + 11) < .01,
     'Route barrier persists the freshest wheel view before camera settling');
+  if (!baseline) await checkBatchWrites();
   assert.deepEqual(errors, []);
   const report = { mode: baseline ? 'before' : 'after', measuredAt: new Date().toISOString(), environment: 'Chrome headless, Vite development, synthetic IPC, 300 mixed cards and 200 workflow input wires',
     method: '48 synthetic input events in four groups of 12; flushSync wraps each dispatch, then two real animation frames allow scheduled work. React still coalesces some native-event commits. Counts describe a deterministic stress fixture, not native event cadence or FPS.',
@@ -415,7 +471,8 @@ async function checkMotion() {
   console.log(JSON.stringify(report, null, 2));
 }
 try {
-  if (process.argv.includes('--motion')) await checkMotion();
+  if (process.argv.includes('--batch-writes')) { await checkBatchWrites(); console.log('PASS 50-node batch move and batch undo'); }
+  else if (process.argv.includes('--motion')) await checkMotion();
   else if (process.argv.includes('--typing')) await checkTyping();
   else await checkGeometry();
 } catch (error) {

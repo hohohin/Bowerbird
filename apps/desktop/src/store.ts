@@ -150,6 +150,12 @@ export type GenEditingMode = "edit" | "revise";
 export type BoardAssetRequest =
   ({ kind: "pick"; assetId: string } | { kind: "inject"; asset: PromptedAsset })
   & { routeRevision: number; generationJobId: string | null };
+type GenJobStream = Pick<GenJob, "streaming" | "progress" | "preview"> & { turnKey?: string };
+
+export function genJobWithStream(job: GenJob | undefined, stream: GenJobStream | undefined) {
+  if (!job || !stream || job.turns[job.turns.length - 1]?.turnKey !== stream.turnKey) return job;
+  return { ...job, streaming: stream.streaming, progress: stream.progress, preview: stream.preview };
+}
 
 export interface CreativeGenerationContext {
   projectId: string;
@@ -438,6 +444,7 @@ interface State {
   setAgentApprovalMode: (run: Pick<CloudAgentRunRecord, "projectId" | "threadId">, mode: AgentApprovalMode) => void;
   activeCloudAgentRunId: string | null;
   genJobs: Record<string, GenJob>; // 所有生成会话（首轮创建，续轮追加 turn）
+  genJobStreams: Record<string, GenJobStream>;
   genJobOrder: string[]; // job 创建顺序（侧栏 Status 任务列表稳定排序）
   activeJobId: string | null; // 当前查看/操作的 job（续轮/复用/取消/重试基于它）
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
@@ -686,18 +693,30 @@ export const useStore = create<State>((set, get) => {
   // （如后端事件到达但前端无此 job —— 理论不发生，稳健处理）。extra 随本次 set 一并合并。
   function updateJob(id: string, fn: (j: GenJob) => GenJob, extra: Partial<State> = {}) {
     set((s) => {
-      const prev = s.genJobs[id];
+      const prev = genJobWithStream(s.genJobs[id], s.genJobStreams[id]);
       if (!prev) return {};
       let next = fn(prev);
       if (next.preview && (!next.running || next.preview.turnKey !== next.turns[next.turns.length - 1]?.turnKey)) {
         next = { ...next, preview: undefined };
       }
       const genJobs = { ...s.genJobs, [id]: next };
+      const genJobStreams = { ...s.genJobStreams };
+      delete genJobStreams[id];
       return {
-        genJobs,
+        genJobs, genJobStreams,
         generating: Object.values(genJobs).some((j) => j.running),
         ...extra,
       };
+    });
+  }
+  function updateJobStream(id: string, fn: (j: GenJob) => GenJob) {
+    set(state => {
+      const job = genJobWithStream(state.genJobs[id], state.genJobStreams[id]);
+      if (!job) return state;
+      const next = fn(job);
+      if (next === job) return state;
+      const { streaming, progress, preview } = next;
+      return { genJobStreams: { ...state.genJobStreams, [id]: { streaming, progress, preview, turnKey: job.turns[job.turns.length - 1]?.turnKey } } };
     });
   }
   // 把一次生成失败落到指定 job：
@@ -1742,6 +1761,7 @@ export const useStore = create<State>((set, get) => {
   cloudAgentRunOrder: [],
   activeCloudAgentRunId: null,
   genJobs: {},
+  genJobStreams: {},
   genJobOrder: [],
   activeJobId: null,
   genUnread: false,
@@ -1832,11 +1852,13 @@ export const useStore = create<State>((set, get) => {
       if (!s.genJobs[id]) return s;
       const genJobs = { ...s.genJobs };
       delete genJobs[id];
+      const genJobStreams = { ...s.genJobStreams };
+      delete genJobStreams[id];
       const genJobOrder = s.genJobOrder.filter((x) => x !== id);
       const activeJobId =
         s.activeJobId === id ? (genJobOrder.length > 0 ? genJobOrder[genJobOrder.length - 1] : null) : s.activeJobId;
       const generating = Object.values(genJobs).some((x) => x.running);
-      return { genJobs, genJobOrder, activeJobId, generating };
+      return { genJobs, genJobStreams, genJobOrder, activeJobId, generating };
     });
   },
   loadGenJobs: async (jobId) => {
@@ -2261,7 +2283,7 @@ export const useStore = create<State>((set, get) => {
   },
   applyGenChunk: (c) => {
     if (c.kind === "preview") {
-      updateJob(c.job_id, job => {
+      updateJobStream(c.job_id, job => {
         if (!job.running || !c.turn_key || job.turns[job.turns.length - 1]?.turnKey !== c.turn_key
           || !["codex", "codex-cli", "default"].includes(job.provider)) return job;
         return { ...job, preview: { turnKey: c.turn_key, dataUrl: c.data_url } };
@@ -2269,7 +2291,7 @@ export const useStore = create<State>((set, get) => {
       return;
     }
     if (c.kind === "progress") {
-      updateJob(c.job_id, job => applyGenerationProgress(job, { stage: c.stage, queue_position: c.queue_position, queue_length: c.queue_length, turnKey: c.turn_key }));
+      updateJobStream(c.job_id, job => applyGenerationProgress(job, { stage: c.stage, queue_position: c.queue_position, queue_length: c.queue_length, turnKey: c.turn_key }));
       return;
     }
     if (c.kind === "started") {
@@ -2322,7 +2344,9 @@ export const useStore = create<State>((set, get) => {
       set((s) => {
         if (s.genJobs[rid]) {
           const existing = s.genJobs[rid];
-          return { genJobs: { ...s.genJobs, [rid]: { ...existing, running: true, streaming: "", progress: undefined,
+          const genJobStreams = { ...s.genJobStreams };
+          delete genJobStreams[rid];
+          return { genJobStreams, genJobs: { ...s.genJobs, [rid]: { ...existing, running: true, streaming: "", progress: undefined, preview: undefined,
             media: c.media ?? existing.media, videoOptions: c.video_options ?? existing.videoOptions,
             submitId: c.submit_id ?? existing.submitId, remoteStatus: "querying" as const,
             turns: existing.turns.map((turn, index) => index === existing.turns.length - 1 ? { ...turn, submitId: c.submit_id ?? turn.submitId, error: null } : turn),
@@ -2369,7 +2393,7 @@ export const useStore = create<State>((set, get) => {
     const id = c.job_id;
     if (!id) return; // 无 job_id 的事件忽略（理论不发生）
     if (c.kind === "delta") {
-      updateJob(id, (j) => ({ ...j, streaming: j.streaming + c.text }));
+      updateJobStream(id, (j) => ({ ...j, streaming: j.streaming + c.text }));
     } else if (c.kind === "done") {
       const imgs = c.images ?? [];
       const completedJob = get().genJobs[id];

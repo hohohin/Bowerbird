@@ -478,7 +478,7 @@ pub(super) fn readable_image_path(paths: &LibraryPaths, db: &Database, path: &st
     crate::core::external_files::compatible_image(paths, &registered_image_path(paths, db, path)?)
 }
 
-fn registered_image_path(paths: &LibraryPaths, db: &Database, path: &str) -> Result<PathBuf, AppError> {
+pub(super) fn registered_image_path(paths: &LibraryPaths, db: &Database, path: &str) -> Result<PathBuf, AppError> {
     let p = Path::new(path);
     if !p.is_file() {
         return Err(AppError::Other(format!("文件不存在: {path}")));
