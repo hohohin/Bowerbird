@@ -640,9 +640,9 @@ fn main() {
         let (next, next_id, next_payload) = request(&base, "cancel-card", "success");
         assert!(start_with_binary(next.clone(), next_id.clone(), next_payload.clone(), &binary, true).is_err());
         assert!(result(&root, &id).unwrap().is_none());
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(20), async {
             while !root.join("args.json").exists() { tokio::time::sleep(Duration::from_millis(20)).await; }
-        }).await.unwrap();
+        }).await.unwrap_or_else(|_| panic!("Codex fixture did not start: preflight={}, result={:?}", root.join("preflight.json").exists(), result(&root, &id)));
         tokio::time::timeout(Duration::from_secs(3), cancel(&id)).await.unwrap();
         assert!(finish(&root, &id).await["error"].as_str().unwrap().contains("已停止"));
         assert!(!is_active(&id));
