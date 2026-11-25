@@ -68,4 +68,45 @@ export async function verifyLibraryShotJobs(q, rival, migrationDir) {
   await q("set role authenticated");
   try { await assert.rejects(c("claim",null),e=>e.code==="42501"); } finally {await q("reset role");}
   console.log("library shots: fractional FIFO reserve/refund, exact balances, gates, owner and lease fences, frozen replay, usage receipt, unknown lookup and audited refund passed");
+  await q(readFileSync(join(migrationDir,"0104_library_shot_pilot.sql"),"utf8"));
+  const other = randomUUID();
+  const catalog = async (subject, global=false) =>
+    q("select pricing_version,short_milli,long_milli from library_shot_price($1,$2)",[subject,global]);
+  const activate = (params) => q("update service_costs set parameters=$1 where service='library_video_shot_analysis'",[params]);
+  const rates = {pricing_ready:true,short_milli:54,long_milli:134};
+  const pilot = {...rates,pilot_only:true,pilot_user_id:user};
+  const quote = [{pricing_version:20261124,short_milli:54,long_milli:134}];
+  assert.deepEqual(await catalog(other),[]);
+  assert.deepEqual(await catalog(other,true),quote);
+  await activate(pilot);
+  for (const global of [false,true]) {
+    assert.deepEqual(await catalog(user,global),quote);
+    assert.deepEqual(await catalog(other,global),[]);
+    const forged = () => q("select begin_library_shot($1,$2,$3,$3,$4,54,20261124,$5,40000,1000000000,100)",
+      [other,key(),source,{start_ms:0,end_ms:3000,user_id:user,pilot_only:true},global]);
+    await assert.rejects(forged,e=>e.detail==="price_unavailable");
+  }
+  for (const role of ["anon","authenticated"]) {
+    await q("set role "+role);
+    try {
+      assert.equal((await q("select count(*)::int as n from service_costs where service='library_video_shot_analysis'"))[0].n,0);
+      await assert.rejects(catalog(user),e=>e.code==="42501");
+    } finally { await q("reset role"); }
+  }
+  const pilotFirst = key(), pilotNext = key();
+  const [sameA,sameB]=await Promise.all([start(pilotFirst,54,3000,false),start(pilotFirst,54,3000,false,rival)]);
+  assert.equal(sameA.id,sameB.id);
+  const another=await start(pilotNext,134,60000,false);
+  assert.notEqual(another.hold_id,sameA.hold_id);
+  await assert.rejects(q("select begin_library_shot($1,$2,$3,$3,$4,54,20261124,false,0,1000000000,100)",
+    [user,key(),source,{start_ms:0,end_ms:3000}]),e=>e.detail==="price_unavailable");
+  await activate({...rates,pilot_user_id:user});
+  assert.deepEqual(await catalog(user,true),[]);
+  assert.deepEqual(await catalog(other,true),[]);
+  await q("update service_costs set active=false where service='library_video_shot_analysis'");
+  assert.equal((await start(pilotFirst,54,3000,false)).hold_id,sameA.hold_id);
+  assert.equal((await start(pilotNext,134,60000,false)).hold_id,another.hold_id);
+  assert.equal((await start(id,54,3000,false)).status,"succeeded");
+  await assert.rejects(start(key(),54,3000,true),e=>e.detail==="price_unavailable");
+  console.log("library shot private pilot: isolated rates, hidden catalog, service-only ACLs, verified subject, mock/closed refusal, repeat jobs and frozen old keys passed");
 }

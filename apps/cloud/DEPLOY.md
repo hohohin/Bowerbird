@@ -1,5 +1,11 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 逐镜分析单账号试价候选
+
+在既有关闭态 0103 上，先应用 `0104_library_shot_pilot.sql`，再把 `_shared/library-shot-edge.ts` 定向合入现役 `understand-proxy`。迁移本身不分配账号。原件、Worker、其他 Edge 和 Secrets 沿用现役配置。上线前核对登记的测试账号与可用 Bcoin、Cloud 当日成本额度和真实模型配置。生产账号标识只用于受限配置，不写入仓库。
+
+运营启用时原子设置该服务行 `active=true`、`pricing_ready=true`、`pilot_only=true` 和唯一 `pilot_user_id`，同时保留已核准的两档价格与定价版本。数据库对报价和建单共用已鉴权主体判断，试价行对匿名及普通登录账号的表查询均不可见。注册测试账号可以多次使用，每镜沿用既有余额、速率和成本保护。关闭新试单仅将该行设为 inactive 且 `pricing_ready=false`，保留私有标记、旧任务及其原价恢复。进入将来的公开报价需独立确认，清除私有配置后再开启公开门控。
+
 ## 素材库分镜复刻已关闭态部署
 
 2026-11-25 北京时间 10:43:47，生产理解 Worker 已切换。数据库为 `0103_library_video_shots`，`entitlement` v51、`understand-proxy` v57、`understand-worker` v35 的生产包已逐文件读回。逐镜服务目录 `active=false`、`pricing_ready=false`。核验结果和回退位置见[生产部署回执](../../project_logs/2026-11-25-library-shot-deployment.md)。

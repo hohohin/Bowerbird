@@ -5,14 +5,14 @@ import { libraryVisualVideoKey, parseLibraryVisualVideo } from "./library-visual
 import { uploadedVisualMatches } from "./library-visual-edge.ts";
 import { checkTextAcceptance, usageParameters } from "./text-job-upload.ts";
 
-const service = "library_video_shot_analysis";
-const enabled = () => Deno.env.get("LIBRARY_SHOT_ENABLED") === "true" && Deno.env.get("BOWERBIRD_CLOUD_MOCK") === "false";
+const publicEnabled = () => Deno.env.get("LIBRARY_SHOT_ENABLED") === "true";
+const realProvider = () => Deno.env.get("BOWERBIRD_CLOUD_MOCK") === "false";
 const positive = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n > 0;
 const keyValid = (s: unknown): s is string => typeof s === "string" && /^library-shot:[a-zA-Z0-9:._-]{3,187}$/.test(s);
 const uuid = (v: unknown): v is string =>
   typeof v === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(v);
 
-export async function quoteLibraryShots(admin: SupabaseClient, shots: unknown) {
+export async function quoteLibraryShots(admin: SupabaseClient, userId: string, shots: unknown) {
   if (!Array.isArray(shots) || !shots.length || shots.length > 2000) {
     throw new ApiError("invalid_request", "请选择待分析镜头");
   }
@@ -27,21 +27,17 @@ export async function quoteLibraryShots(admin: SupabaseClient, shots: unknown) {
     seen.add(s.start_ms + "-" + s.end_ms);
   }
   const closed = { available: false, pricing_version: null, lines: [], total_milli: null };
-  if (!enabled()) return closed;
-  const { data, error } = await admin.from("service_costs").select("active,pricing_version,parameters").eq(
-    "service",
-    service,
-  ).maybeSingle();
+  if (!realProvider()) return closed;
+  const { data, error } = await admin.rpc("library_shot_price", {
+    p_user_id: userId, p_public_enabled: publicEnabled(),
+  }).maybeSingle<{ pricing_version: number; short_milli: number; long_milli: number }>();
   if (error) throw new ApiError("internal_error", "镜头报价读取失败", true);
-  const rates = data?.parameters;
-  if (
-    !data?.active || rates?.pricing_ready !== true || !positive(rates.short_milli) || rates.short_milli > 999 ||
-    !positive(rates.long_milli) || rates.long_milli > 999 || !positive(data.pricing_version)
-  ) return closed;
+  if (!data || !positive(data.short_milli) || data.short_milli > 999 ||
+      !positive(data.long_milli) || data.long_milli > 999 || !positive(data.pricing_version)) return closed;
   const lines = shots.map(({ start_ms, end_ms }) => ({
     start_ms,
     end_ms,
-    amount_milli: end_ms - start_ms <= 15000 ? rates.short_milli : rates.long_milli,
+    amount_milli: end_ms - start_ms <= 15000 ? data.short_milli : data.long_milli,
   }));
   return {
     available: true,
@@ -109,7 +105,7 @@ export async function libraryShotAction(
   raw: Record<string, unknown>,
   cors: HeadersInit,
 ) {
-  if (raw.action === "library-shot-quote") return jsonResponse(await quoteLibraryShots(admin, raw.shots), 200, cors);
+  if (raw.action === "library-shot-quote") return jsonResponse(await quoteLibraryShots(admin, userId, raw.shots), 200, cors);
   if (raw.action === "library-shot-prepare") {
     if (
       !keyValid(raw.idempotency_key) || typeof raw.source_sha256 !== "string" ||
@@ -124,6 +120,7 @@ export async function libraryShotAction(
       throw new ApiError("invalid_request", "镜头代理格式、大小或时长无效");
     }
     const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(video)));
+    const usage = usageParameters();
     const { data, error } = await admin.rpc("begin_library_shot", {
       p_user_id: userId,
       p_key: raw.idempotency_key,
@@ -132,8 +129,9 @@ export async function libraryShotAction(
       p_video: video,
       p_expected_milli: raw.expected_milli,
       p_pricing_version: raw.pricing_version,
-      p_enabled: enabled(),
-      ...usageParameters(),
+      p_enabled: publicEnabled(),
+      ...usage,
+      p_unit_cost_micros: realProvider() ? usage.p_unit_cost_micros : 0,
     });
     if (error?.details === "stale_quote") {
       throw new ApiError("invalid_request", "镜头报价已变更，请重新确认", false, 409);
