@@ -244,15 +244,19 @@ test("actual background fetch abort has no upload and is reported as a read time
 test("20 tabs share one authenticated heartbeat and receive the browser-wide cooldown", async () => {
   const fixture = backgroundFixture(() => { throw new Error("heartbeat does not read images"); });
   const ping = { type: "collect_heartbeat" };
-  const results = await Promise.all(Array.from({length:20}, (_, index) => fixture.message(ping, index + 1)));
+  const heartbeats = Array.from({length:20}, (_, index) => fixture.message(ping, index + 1));
+  fixture.time(300);
+  const results = await Promise.all(heartbeats);
   assert.equal(fixture.proofCount(), 1);
   assert.equal(fixture.sockets.length, 1);
   assert.deepEqual(fixture.pings, [{ type: "ping", extension_version: "1.2.3" }]);
   assert.ok(results.every(result => result.ok && result.retryAfterMs === 15000));
-  fixture.time(14999);
+  fixture.time(15000);
+  assert.equal((await fixture.message(ping)).retryAfterMs, 300);
+  fixture.time(15299);
   assert.equal((await fixture.message(ping)).retryAfterMs, 1);
   assert.equal(fixture.proofCount(), 1);
-  fixture.time(15000);
+  fixture.time(15300);
   assert.equal((await fixture.message(ping)).retryAfterMs, 15000);
   assert.equal(fixture.proofCount(), 2);
 });

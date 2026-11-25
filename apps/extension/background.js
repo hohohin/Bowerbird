@@ -12,11 +12,13 @@ let pairingCodeQueue = Promise.resolve();
 function heartbeat() {
   const now = performance.now();
   if (!heartbeatInFlight && now >= nextHeartbeatAt) {
-    nextHeartbeatAt = now + HEARTBEAT_INTERVAL_MS;
     heartbeatInFlight = S.checkVideoSupport()
       .catch(() => ({ ok: false }))
       .then(result => { lastHeartbeat = result; return result; })
-      .finally(() => { heartbeatInFlight = undefined; });
+      .finally(() => {
+        nextHeartbeatAt = performance.now() + HEARTBEAT_INTERVAL_MS;
+        heartbeatInFlight = undefined;
+      });
   }
   const result = heartbeatInFlight || Promise.resolve(lastHeartbeat);
   return result.then(value => ({

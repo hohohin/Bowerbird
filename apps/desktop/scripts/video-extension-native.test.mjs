@@ -130,6 +130,7 @@ try {
   assert.equal(large.ok, true, JSON.stringify(large));
   assert.equal(frames, 200);
   assert.equal(maxFrame, chunkSize);
+  const largeTransfer = { frames, maxFrame };
   const picture = await request({ type: 'save_image', url: `${origin}/image`, pageUrl: `${origin}/picture-source` });
   assert.equal(picture.ok, true, JSON.stringify(picture)); assert.notEqual(picture.asset_id, video.asset_id);
   const heicPicture = await request({ type: 'save_image', url: `${origin}/heic`, pageUrl: `${origin}/heic-source` });
@@ -223,7 +224,7 @@ try {
   const playback = await page.evaluate(async () => { const video = document.querySelector('video'); await video.play(); return { width: video.videoWidth, height: video.videoHeight }; });
   await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1);
   assert.equal(playback.width, saved.width); assert.equal(playback.height, saved.height);
-  await writeFile(`${root}/verification.json`, JSON.stringify({ video, duplicate, legacy, large, largeSize, frames, maxFrame, picture, heicPicture, ordered, connectionEvents: result.connection_events, invalid, conflicting, playback, root }, null, 2));
+  await writeFile(`${root}/verification.json`, JSON.stringify({ video, duplicate, legacy, large, largeSize, ...largeTransfer, picture, heicPicture, ordered, connectionEvents: result.connection_events, invalid, conflicting, playback, root }, null, 2));
   console.log('PASS extension background -> native WS -> isolated SQLite/media -> playback; 200 MiB stream, 1 MiB frames, legacy upload, interrupted staging cleanup and dedup');
   console.log(root);
 } finally {
