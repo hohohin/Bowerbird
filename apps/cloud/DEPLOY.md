@@ -1,6 +1,8 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
-## 素材库分镜复刻关闭态候选
+## 素材库分镜复刻已关闭态部署
+
+2026-11-25 北京时间 10:43:47，生产理解 Worker 已切换。数据库为 `0103_library_video_shots`，`entitlement` v51、`understand-proxy` v57、`understand-worker` v35 的生产包已逐文件读回。逐镜服务目录 `active=false`、`pricing_ready=false`。核验结果和回退位置见[生产部署回执](../../project_logs/2026-11-25-library-shot-deployment.md)。
 
 逐镜视觉理解使用 `library_video_shot_analysis`。2026-11-24 用户已确认上游账单。按已实测模型 `doubao-seed-2-1-lite-260915` 的 1.6 倍口径，单镜不超过 15 秒为 0.054 Bcoin，超过 15 秒至 60 秒为 0.134 Bcoin。每镜使用 1 fps 无声视频并一次返回三项结果。批量确认使用各待分析区间的合计，停止后仅已受理的镜头具有预留。整币消费者继续使用原有的整币分配及签名字段。本服务的余额和交易可通过 `entitlement.balances_milli` 和 `recent_transactions[].amount_milli` 核对，每千单位为一个 Bcoin。
 
@@ -13,7 +15,7 @@
 
 分镜迁移独立于整段画面描述 0100、0101 以及分层生图 0102。部署工具应定向执行分镜迁移并核实实际履历，避免一并推送或登记未执行的并行迁移。Worker 先领取原理解任务，空闲且消费者声明对应能力时才尝试独立视觉队列。缺少可选队列 RPC 或表时保留原领取和清理响应。缺少精确余额视图的旧库继续返回原权益字段。三层入口仍需 0103 和全部新组件就绪后才准入。
 
-隔离验证入口为 `apps/cloud/scripts/text-job-upload-db.test.mjs <PG-bin> <pg-driver> --library-shots`、Deno 的 `library-shot-edge_test.ts` 与 `understand-worker/library-migration-compat_test.ts`、理解 Worker 的 `library-visual.test.ts`。此节记录待部署范围。
+隔离验证入口为 `apps/cloud/scripts/text-job-upload-db.test.mjs <PG-bin> <pg-driver> --library-shots`、Deno 的 `library-shot-edge_test.ts` 与 `understand-worker/library-migration-compat_test.ts`、理解 Worker 的 `library-visual.test.ts`。
 
 ## 素材库画面分析关闭态候选
 
