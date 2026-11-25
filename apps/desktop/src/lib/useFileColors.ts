@@ -10,17 +10,27 @@ export const FILE_COLORS = [
 ] as const;
 
 export function useFileColors(entries: LocalFileEntry[], enabled: boolean, revision: number) {
-  const cache = useRef(new Map<string, string[]>());
+  const cache = useRef(new Map<string, { version: LocalFileEntry["version"]; keys: string[] }>());
   const [colors, setColors] = useState(new Map<string, string[]>());
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(0);
   const [retry, setRetry] = useState(0);
-  useEffect(() => { cache.current = new Map(); setColors(new Map()); }, [entries, revision, retry]);
+  // Searching/filtering and retrying must not discard successful reads. A directory
+  // refresh starts a new snapshot; version checks also cover updated tag results.
+  useEffect(() => { cache.current = new Map(); }, [revision]);
   useEffect(() => {
+    const current = cache.current;
+    const known = new Map<string, string[]>();
+    const queue = entries.filter(entry => {
+      if (entry.directory) return false;
+      const cached = current.get(entry.path);
+      if (!cached || cached.version !== entry.version) return true;
+      known.set(entry.path, cached.keys);
+      return false;
+    });
+    setColors(known);
     if (!enabled) { setPending(false); return; }
     let alive = true, index = 0;
-    const current = cache.current;
-    const queue = entries.filter(entry => !entry.directory && !current.has(entry.path));
     setPending(queue.length > 0); setFailed(0);
     async function worker() {
       while (alive && index < queue.length) {
@@ -28,7 +38,8 @@ export function useFileColors(entries: LocalFileEntry[], enabled: boolean, revis
         try {
           const keys = await invoke<string[]>("file_colors", { path: entry.path });
           if (!alive) return;
-          current.set(entry.path, keys); setColors(new Map(current));
+          current.set(entry.path, { version: entry.version, keys });
+          known.set(entry.path, keys); setColors(new Map(known));
         } catch { if (alive) setFailed(value => value + 1); }
       }
     }

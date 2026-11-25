@@ -51,6 +51,7 @@ w.__TAURI_INTERNALS__ = {
   convertFileSrc: (path: string) => path,
   invoke: async (command: string, args: any = {}) => {
     if (command === "plugin:event|listen") return args.handler;
+    if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, url: null, transfers: [] };
     if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
     w.calls.push({ command, args });
     if (command === "preview_asset_originals") return w.assets.filter((asset: Asset) => args.assetIds.includes(asset.id)).map((asset: Asset) => ({ asset_id: asset.id, name: asset.name, path: asset.store_path, fingerprint: "fixture-original" }));

@@ -31,6 +31,7 @@ async function payload(){
   assert.equal(value.mediaKind,'video');return data;
 }
 async function drop(selector){
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const data=await payload();
   const point=await page.locator(selector).evaluate(element=>{
     const rect=element.getBoundingClientRect(),clientX=Math.floor(rect.left+rect.width*.5),clientY=Math.floor(rect.top+rect.height*.45);

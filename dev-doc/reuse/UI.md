@@ -179,6 +179,12 @@ H3 图片卡和视频卡在原文框下复用 `H3OptimizationActions` 和 `H3Pro
 
 - **解散组合：** [GenerationGroupMenuItem.tsx](../../apps/desktop/src/components/GenerationGroupMenuItem.tsx) 由素材菜单与画板会话菜单共用，仅由真实展示组提供 target；复用 `dissolveGenerationGroup`，不改生成执行身份。本机 `generation_gallery` 保存显示偏好，catalog／文件夹查询和画板快照统一读取，避免各视图各存一份开关。
 
+## 素材拖出到其他应用的反馈
+
+- **入口：** [externalDrag.ts](../../apps/desktop/src/lib/externalDrag.ts) 的 `startExternalDrag` 共用原生会话、body 模糊层、两帧绘制等待和取消清理；`externalDragHud.tsx` 与 `externalDrag.css` 提供源位置投影及操作提示。
+- **调用方：** `FileMediaCard` 在素材库原生拖动阈值后调用并传入源媒体矩形；`CanvasWorkspace` 在 600ms 长按后传 `source: canvas`、矩形及项目取消信号。
+- **边界：** 两种来源共用视觉，只有画布来源拦截同窗投递；素材库保留集合／画板投递，草稿图层不进入原生外拖；新增 `useLibraryDragHold` 同样排除 `[data-draft-library]`，700ms 长按后仍复用内部图层拖入。复用前必须先登记 `dragPayload` 身份；原件由后台解析，HUD 不承担文件传输。原生验收范围见 [素材拖出](../EXTERNAL-DRAG.md)。
+
 ## 在新创作入口保留统一编辑框与参数
 
 - **共用表面与动效：** [IndustrialCanvas.css](../../apps/desktop/src/components/IndustrialCanvas.css) 的 `.creation-dock.composer-glass` 控制无框全息布局、左轨投影标签和内容自适应高度；[ComposerProjection.tsx](../../apps/desktop/src/components/creation/ComposerProjection.tsx) 仅负责鼠标穿透的局部渐隐上弧线、羽化中线贴合弧线并叠加椭圆衰减的 mask、呼吸方点及三层小叉视差（无竖直侧边）；2026-11-08 接入确认的轮廓光膜：同一组件内定义独立 ID 的深浅色 SVG 轮廓滤镜，由共用 CSS 的 backdrop-filter 直接读取真实后景，替代 14.4px 模糊并叠加 24% 斜向眩光，不复制素材或画板内容；左轨内移与标签独立 6px 磨砂由共用 CSS 控制；`collapsed` 复用静态弧面，配合 54px 单行入口，从自身 DOM 父节点定位宿主并在 layout effect 中完成首帧前测量，观察尺寸／主题／可见性并在收起、隐藏和减少动态时停刷；投影高度排除入场平移，避免激活后底部露缝。底部间距共用 `CreationBoard.css` 的 `--composer-bottom-gap`（常规 12px／窄窗口 8px），素材库多选避让保留。[useTerminalCaret.ts](../../apps/desktop/src/components/creation/useTerminalCaret.ts) 使用 `useCreationEditor` 返回的 `viewRef` 与原生选区绘制窄块光标，不更改编辑器文档或选择。项目继续使用 `TacticalSelect` 与 `library-project-menu`；品牌与参数沿原选择器。独立 `.composer-references` 展示条已暂时移除；图片仅通过正文的引用 chip 呈现，继续复用 `BoardChipPreview`，顺序、删除与发送仍走编辑器。无添加素材按钮，Tab／双击维持原路径。`CreationBoard` 仅在真实收起后播放展开动画，模式切换仍由 `CreativeComposer` 保留独立草稿但不重播整框动效；输入区与发送控件共用 `--composer-end-inset` 对齐右缘。宽度继续使用 `CreationBoard.css` 的 68%／1080px 上限；`LibraryComposer.css` 负责主屏贴底与多选避让。轮廓像素／真实后景移动／双主题／减少透明效果验收见 `composer-contour-ui.test.mjs` 与 [实装记录](../../project_logs/2026-11-08-composer-contour.md)；既有验证入口 `composer-mode-continuity-ui.test.mjs`、`composer-projection-ui.test.mjs`、`composer-hud-ui.test.mjs`、`composer-header-ui.test.mjs` 与 `library-creation-parity-ui.test.mjs`，见 [记录](../../project_logs/2026-11-04-composer-projection.md)。

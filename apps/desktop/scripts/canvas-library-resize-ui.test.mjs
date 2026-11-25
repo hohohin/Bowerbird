@@ -29,7 +29,7 @@ async function selectSource(name) {
 async function settle() {
   await panel.evaluate(async el => {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    await Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {})));
+    await Promise.all(el.getAnimations({ subtree: true }).filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime)).map(animation => animation.finished.catch(() => {})));
   });
 }
 async function dragTo(width) {
@@ -116,9 +116,9 @@ async function assertCanvasInteractive() {
   await page.mouse.wheel(0, 80);
   await page.waitForFunction(value => document.querySelector('.canvas-plane').style.transform !== value, panned);
   const scrolled = await transform();
-  await page.keyboard.down('Control');
+  await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
   await page.mouse.wheel(0, -80);
-  await page.keyboard.up('Control');
+  await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
   await page.waitForFunction(value => document.querySelector('.canvas-plane').style.transform !== value, scrolled);
   assert.equal(await panel.getAttribute('aria-hidden'), 'false', 'canvas interactions leave the library open');
 }
@@ -146,9 +146,11 @@ try {
   await settle();
   assert.ok(await panel.evaluate(el => {
     const workspace = el.parentElement;
-    return ['::before', '::after'].every(pseudo => getComputedStyle(workspace, pseudo).content === 'none')
-      && getComputedStyle(el).boxShadow === 'none';
-  }), 'industrial drawer has no shadow or edge blur layers');
+    return ['::before', '::after'].every(pseudo => {
+      const style = getComputedStyle(workspace, pseudo);
+      return style.content === 'none' || (style.pointerEvents === 'none' && style.filter === 'none');
+    }) && getComputedStyle(el).backdropFilter === 'none';
+  }), 'industrial drawer decorations do not intercept input or blur the canvas');
   const fullWidth = (await panel.boundingBox()).width;
   const fullColumns = await assertGrid();
   await dragTo(620);
@@ -172,9 +174,9 @@ try {
   await assertGrid();
   const node = page.locator('[data-canvas-node-id="old"]');
   const original = await node.boundingBox();
-  await page.keyboard.down('Control');
+  await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
   await page.mouse.click(original.x + original.width - 25, original.y + 50);
-  await page.keyboard.up('Control');
+  await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
   assert.ok(await node.evaluate(el => el.classList.contains('is-selected')));
   await page.mouse.move(original.x + original.width - 25, original.y + 50);
   await page.mouse.down();
@@ -188,7 +190,7 @@ try {
     return data.getData('text/plain');
   });
   assert.ok(copied.includes('existing'), 'focused canvas selection can be copied while drawer is open');
-  await page.keyboard.press('Control+z');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
   await page.waitForFunction(x => Math.abs(document.querySelector('[data-canvas-node-id="old"]').getBoundingClientRect().x - x) < 1, original.x);
   await assertCanvasInteractive();
   await page.mouse.click(1100, 650, { button: 'right' });

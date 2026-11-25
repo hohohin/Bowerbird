@@ -4,6 +4,10 @@
 
 本地开发与打包见 [Windows](../Windows/README.md) 和 [macOS](../macOS/README.md)。早期 README 中的发版与跨端交接原文保存在 [平台历史记录](../project_logs/2026-11-22-desktop-platform-history.md)。
 
+## Apple Silicon 26.11.2403 R2 测试包交接（2026-11-24）
+
+经本轮确认，仅交付 ARM 本地签名测试包供另一终端统一发布。源码 `ac3d2e6a` 含 `dev@0d044e83`，SQLite 0062。原 Mac updater 签名已验，DMG 使用本地证书，未经 Apple 公证。R2 独立测试目录的 7 个对象均已完整回读。公网 ARM、Intel、Windows 的现役版本分别在交接期间复核为 26.10.801、26.10.1501、26.11.2402。[测试清单](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/testing/26.11.2403-aarch64-a3d3c340767d/darwin-aarch64-26.11.2403.json) · [安装包](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/testing/26.11.2403-aarch64-a3d3c340767d/Bowerbird_26.11.2403_aarch64-updater-installer.dmg) · [校验和](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/testing/26.11.2403-aarch64-a3d3c340767d/SHA256SUMS) · [Mac 验收与包哈希](../macOS/RELEASE-READINESS.md#安装包与更新归档)
+
 ## Windows 全量放行的手工验收
 
 用备用 Windows 设备或隔离虚拟机。准备专用 Bowerbird 账号、至少 1,000 张图片的脱敏旧库副本、一份已连接文件夹和一个可拔插的测试外盘。旧库至少有一个保存过且含图片与连线的项目画板、一条历史任务，若已有在途任务也记下状态。先备份测试数据并记录旧版号、库和外盘路径、样本素材数、项目及任务标识。验证公开版本可用 26.11.1901 → 26.11.2003，实际全量候选另按其冻结版本复验。
@@ -62,6 +66,12 @@ macOS 的双架构回执单独维护。[macOS 全量发布验收](../macOS/RELEA
 - **Tauri updater。** 在对应冻结版本工作区保留最终安装包及相邻的 `.sig`，运行 `node Windows/update-manifest.mjs --inspect $Installer`，用客户端内置更新公钥验签。留存版本、`windows-x86_64`、安装包 SHA-256、验签结果和清单对应签名字段。公网读回按批准的分发流程复验最终字节，核对下载包 SHA-256 和清单签名。[本机验签入口](../Windows/update-manifest.mjs)
 
 自 2026-11-21 起，Windows 官网发布按用户授权在缺少 Authenticode 时继续，保留 Tauri 更新签名和公网安装包完整回读验签。下文可信发布者签名验收用于接入该能力时。
+
+## Windows 26.11.2501 发布候选（2026-11-25）
+
+从远端 dev 的 81b8f53e8 创建隔离构建，版本提交 b7829f326。H3 与声音环境安装和诊断、工作流编辑恢复及折叠生成卡移除已随包构建。TypeScript、Vite 生产构建、3 组界面回归通过。首次原生测试 1464 通过、64 忽略、1 项 Codex 取消用例等待子进程启动超时。用同一冻结源码单独复跑该用例通过。第二次全量运行停滞于该用例，终止隔离测试副本。
+
+本地 NSIS 安装包通过版本、x64 架构和 Tauri 更新签名校验，SHA-256 为 `4bf8ded562a43d8a8955039d273abb67ecf174b07351c5b7b6c3d152263df96e`。按既有授权跳过 Authenticode。对象存储 TLS 握手中断，生产 SSH 在密钥交换前关闭连接，CDN 上传与官网、自动更新切换待完成。构建及测试日志位于 `.tmp/release-windows-26.11.2501/`。
 
 ## Windows 26.11.2403 已公开发布（2026-11-24）
 

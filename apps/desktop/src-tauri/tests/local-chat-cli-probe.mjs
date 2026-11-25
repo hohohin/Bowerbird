@@ -21,10 +21,10 @@ for(const m of block.match(/for feature in \[([\s\S]*?)\]/)[1].matchAll(/"([^"]+
 assert.equal(productionConfig['features.code_mode_host'],true,'production must enable the code-mode-only tool transport');
 assert.equal(productionConfig['features.code_mode'],false,'ordinary models keep their direct tool route');
 assert.equal(productionConfig['agents.enabled'],false,'code-mode model metadata must not enable delegation');
-const toolSpec=JSON.parse(await readFile(new URL('../../../cloud/supabase/functions/_shared/chat-card-tool.json',import.meta.url),'utf8'));
+const toolSpec=JSON.parse(await readFile(new URL('../src/commands/local_chat_card_tool.json',import.meta.url),'utf8'));
 assert.ok(Number(source.match(/const CARD_TOOL_VERSION: i64 = (\d+);/)[1])>=3,'section schema changes require provider-thread migration');
 const versionTwoToolSpec=structuredClone(toolSpec);
-versionTwoToolSpec.description='Create native generation, local H3, content, trigger and loop cards without executing them.';
+versionTwoToolSpec.description='Create native generation, content, trigger and loop cards without executing them.';
 delete versionTwoToolSpec.inputSchema.properties.sections;
 const legacyToolSpec=structuredClone(versionTwoToolSpec);
 legacyToolSpec.description='Create native generation, content, trigger and loop cards without executing them.';
@@ -34,9 +34,9 @@ legacyToolSpec.inputSchema.properties.connections.items.properties.input.enum=['
 assert.ok(!JSON.stringify(legacyToolSpec).includes('comfy-video'));
 const legacyToolArgs={cards:[{id:'ideas',kind:'content',title:'离线内容卡',rows:[['第一行'],['第二行']]},{id:'image',kind:'generation',title:'离线生成卡',prompt:'按当前行绘制',mediaType:'image'},{id:'repeat',kind:'loop',title:'逐行循环',mode:'rows',source:'ideas',body:['image']},{id:'start',kind:'trigger',title:'开始'}],connections:[{from:'start',to:'repeat',output:'signal',input:'signal'}]};
 const versionTwoToolArgs=structuredClone(legacyToolArgs);
-versionTwoToolArgs.cards.splice(2,0,{id:'h3',kind:'comfy-video',title:'本地 H3',prompt:'由首帧运动至尾帧',seconds:8,ratio:'auto',resolution:0.8,lastFrameAlias:'image1'});
+versionTwoToolArgs.cards.splice(2,0,{id:'h3',kind:'generation',title:'普通视频',prompt:'由首帧运动至尾帧',mediaType:'video',ratio:'9:16'});
 versionTwoToolArgs.cards.find(card=>card.kind==='loop').body.push('h3');
-versionTwoToolArgs.connections.push({from:'image',to:'h3',output:'image',input:'first-frame'});
+versionTwoToolArgs.connections.push({from:'image',to:'h3',output:'image',input:'image'});
 const toolArgs={...structuredClone(versionTwoToolArgs),sections:[{id:'visuals',title:'画面与视频',members:['image','h3']},{id:'sequence',title:'内容与循环',members:['ideas','repeat','start']}]};
 function argsForRound(round){return round===8?legacyToolArgs:round===11?versionTwoToolArgs:toolArgs;}
 const catalog=JSON.parse(await readFile(new URL('./fixtures/local-chat-code-mode-model.json',import.meta.url),'utf8'));
@@ -79,7 +79,7 @@ try{
         assert.ok(!toolText.includes('"name":"collaboration"'),'delegation must not be advertised');
         if(round!==3&&!output){
           assert.ok(route==='code-mode'?toolText.includes('create_canvas_cards(args'):(body.tools??[]).some(item=>item.name===toolSpec.name),`dynamic tool missing in ${route} round ${round}`);
-          assert.equal(toolText.includes('comfy-video'),round!==8,'only migrated tool schemas expose local H3');
+          assert.equal(toolText.includes('comfy-video'),false,'Mac tool schema keeps H3 deferred');
           assert.equal(toolText.includes('sections'),![8,11].includes(round),'only the current tool schema exposes sections');
           const currentArgs=argsForRound(round);
           const hostScript=`const toolNames=ALL_TOOLS.map(t=>t.name).sort(); if(JSON.stringify(toolNames)!==JSON.stringify(['apply_patch','clock__curr_time','create_canvas_cards']))throw new Error('unexpected nested tool catalog'); text({isolation:{process:typeof process,require:typeof require,fetch:typeof fetch,toolNames}}); text(await tools.create_canvas_cards(${JSON.stringify(currentArgs)}));`;
@@ -136,8 +136,8 @@ try{
         if(round===0)failedThread=providerThread;
         if(round===1&&route==='code-mode')assert.equal(providerThread,failedThread,'the failed production-style thread resumes without migration');
         if(round===4)assert.notEqual(providerThread,legacyThread,'legacy upgrade creates a tool-enabled provider thread');
-        if(round===9)assert.notEqual(providerThread,versionOneThread,'v1 upgrade creates a provider thread with the H3 and section schema');
-        if(round===12)assert.notEqual(providerThread,versionTwoThread,'v2 H3 upgrade creates a provider thread with the section schema');
+        if(round===9)assert.notEqual(providerThread,versionOneThread,'v1 upgrade creates a provider thread with the video and section schema');
+        if(round===12)assert.notEqual(providerThread,versionTwoThread,'v2 upgrade creates a provider thread with the section schema');
         const historyRound=round===4?3:round===9?8:round===12?11:undefined;
         const input=[...(historyRound===undefined?[]:[{type:'text',text:`同一应用对话的历史文字，仅供上下文参考，不重做过去请求：${JSON.stringify([{role:'user',text:`这是离线测试第 ${historyRound} 轮`},{role:'assistant',text:`离线回复 ${historyRound}`}])}`,text_elements:[]}]),{type:'text',text:`这是离线测试第 ${round} 轮`,text_elements:[]}];
         const requestStart=requests.length;
@@ -159,8 +159,8 @@ try{
         if(round===3)assert.ok(!JSON.stringify([requests[requestStart].tools??[],requests[requestStart].input.filter(item=>item.type==='additional_tools')]).includes('create_canvas_cards'),'legacy pure-chat thread has no card tool');
         if(round>=4&&round<=7)assert.ok(roundInput.includes('离线回复 3'),'upgraded transcript persists');
         if(round===5)assert.ok(roundInput.includes(`batch-${route}-4`),'upgraded tool result persists');
-        if(round===9||round===10){assert.ok(roundInput.includes('离线回复 8'),'v1 public transcript persists after H3 and section upgrade');assert.ok(!roundInput.includes(`batch-${route}-8`),'old v1 tool result is not replayed as fresh creation authority');}
-        if(round===10)assert.ok(roundInput.includes(`batch-${route}-9`),'H3 result survives a resumed CLI process');
+        if(round===9||round===10){assert.ok(roundInput.includes('离线回复 8'),'v1 public transcript persists after video and section upgrade');assert.ok(!roundInput.includes(`batch-${route}-8`),'old v1 tool result is not replayed as fresh creation authority');}
+        if(round===10)assert.ok(roundInput.includes(`batch-${route}-9`),'video result survives a resumed CLI process');
         if(round>=12){assert.ok(roundInput.includes('离线回复 11'),'v2 public transcript persists after section upgrade');assert.ok(!roundInput.includes(`batch-${route}-11`),'old v2 tool result is not replayed as fresh creation authority');}
         if(round===13){assert.ok(roundInput.includes(`batch-${route}-12`),'section result survives a resumed CLI process');for(const section of toolArgs.sections)assert.ok(roundInput.includes(`saved-12-${section.id}`),'resumed transcript retains every section receipt');}
         evidence.rounds.push({route,round,threadId:providerThread,requests:requests.length-requestStart});
@@ -171,7 +171,7 @@ try{
       for(const body of requests){const text=JSON.stringify(body);for(const marker of ['PRIVATE_AGENT_INSTRUCTION','PRIVATE_SKILL_CATALOG','PRIVATE_SKILL_BODY'])assert.ok(!text.includes(marker),`${marker} leaked`);}
     }finally{server.close();}
   }
-  console.log(JSON.stringify({ok:true,modelRequests:evidence.requests.length,toolCalls:evidence.calls.length,directCalls:true,codeModeHostCalls:true,h3Calls:true,sectionCalls:true,versionOneH3Upgrade:true,versionTwoSectionUpgrade:true,sectionReceiptsResumed:true,disabledHostReproduced:true,sameThreadRecovered:true,dynamicToolsPersisted:true,legacyUpgrade:true,delegationRejected:true,mcpStarted:false,root},null,2));
+  console.log(JSON.stringify({ok:true,modelRequests:evidence.requests.length,toolCalls:evidence.calls.length,directCalls:true,codeModeHostCalls:true,videoCalls:true,sectionCalls:true,versionOneToolUpgrade:true,versionTwoSectionUpgrade:true,sectionReceiptsResumed:true,disabledHostReproduced:true,sameThreadRecovered:true,dynamicToolsPersisted:true,legacyUpgrade:true,delegationRejected:true,mcpStarted:false,root},null,2));
 }finally{
   activeChild?.kill();await writeFile(path.join(root,'evidence.json'),JSON.stringify(evidence,null,2));
 }

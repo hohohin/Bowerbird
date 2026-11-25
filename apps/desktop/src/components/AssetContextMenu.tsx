@@ -249,6 +249,11 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
           navigate: host.navigate, reuseEmbeddedPrompt: host.reusePrompt });
         break;
       }
+      case "edit-draft":
+        host.navigate();
+        store.openDraftEditor({ assetId, projectId, canvasNodeId: canvas?.primaryNodeId ?? (canvas?.nodeIds.length === 1 ? canvas.nodeIds[0] : undefined) });
+        close();
+        break;
       case "layers": host.navigate(); store.openLayerEditor(assetId); break;
       case "history": close(); host.navigate(); void store.viewGenerationHistory(assetId); break;
       case "assign": setAssignCollectionIds({ ids: targetIds, onComplete }); close(); break;

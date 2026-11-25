@@ -2508,7 +2508,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       <div className="workflow-diagnostic-buttons"><button onClick={() => locateIssue(issue.nodeId)}>定位出错卡片</button>
         {deliveryRunIds.has(issue.runId ?? "") && <button onClick={() => handle(controller.continue(issue.runId))}>重试写入内容卡</button>}
         {issueSourceId && (document.nodes.some(node => node.id === issueSourceId) || graphNodes.some(node => node.id === issueSourceId && node.hiddenAt == null)) && <button onClick={() => locateIssue(issueSourceId)}>定位来源</button>}
-        <button onClick={() => handle((document.nodes.find(n => n.id === issue.nodeId)?.kind === "comfy-video" ? copyComfyDiagnostic(workflowDiagnosticReport(issue)) : navigator.clipboard.writeText(workflowDiagnosticReport(issue))).then(() => notifySuccess("诊断信息已复制")))}>复制诊断信息</button>
+        <button onClick={() => handle((document.nodes.some(node => node.id === issue.nodeId && (node.kind === "comfy-video" || isH3ImageCard(node))) ? copyComfyDiagnostic(workflowDiagnosticReport(issue)) : navigator.clipboard.writeText(workflowDiagnosticReport(issue))).then(() => notifySuccess("诊断信息已复制")))}>复制诊断信息</button>
       </div>
       <details><summary>诊断详情</summary><pre>{workflowDiagnosticReport(issue)}</pre></details>
     </section>, diagnosticTarget)}

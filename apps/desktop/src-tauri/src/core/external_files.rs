@@ -124,6 +124,8 @@ fn preview_key_with_metadata(path: &Path, metadata: &fs::Metadata, #[cfg(windows
         metadata.len(),
         metadata.modified()?
     );
+    #[cfg(target_os = "macos")]
+    if crate::media::heic::is_path(path) { key.push_str(":heic-color-v2"); }
     if video_path(path) {
         use std::fmt::Write;
         #[cfg(unix)]
@@ -325,6 +327,7 @@ pub fn preview_with_index(paths: &LibraryPaths, db: Option<&Database>, path: &Pa
         // Historical thumbnails remain usable after moving files. Validate content
         // once on a cache miss; subsequent browsing only checks metadata/cache.
         let is_video = video_path(&path);
+        let color_managed_heic = cfg!(target_os = "macos") && crate::media::heic::is_path(&path);
         let indexed: Option<(String, String, Option<String>)> = if let Some(db) = db {
             db.conn.lock().unwrap().query_row(
                 "SELECT a.thumb_path,COALESCE(e.fingerprint,f.sha256),a.connected_scan_key FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path=?1 AND a.thumb_path IS NOT NULL AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL LIMIT 1",
@@ -332,7 +335,7 @@ pub fn preview_with_index(paths: &LibraryPaths, db: Option<&Database>, path: &Pa
         } else { None };
         let reused = if let Some((thumb, expected, indexed_key)) = indexed {
             if Path::new(&thumb).is_file() && (indexed_key.as_deref() == Some(hash.as_str())
-                || (!is_video && indexed_key.is_none() && fingerprint(&path)? == expected)) {
+                || (!is_video && !color_managed_heic && indexed_key.is_none() && fingerprint(&path)? == expected)) {
                 fs::copy(thumb, &temporary)?; true
             } else { false }
         } else { false };
@@ -341,6 +344,8 @@ pub fn preview_with_index(paths: &LibraryPaths, db: Option<&Database>, path: &Pa
             // Already rendered by the library or Windows; do not decode the original again.
         } else if is_video {
             video_meta = crate::media::thumb::generate_video_with_meta(&path, &temporary, 480, db.is_some())?;
+        } else if color_managed_heic {
+            crate::media::heic::thumbnail(&compatible_image(paths, &path)?, &temporary, 480)?;
         } else {
             crate::media::thumb::generate(&compatible_image(paths, &path)?, &temporary, 480)?;
         }

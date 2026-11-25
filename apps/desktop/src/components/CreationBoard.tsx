@@ -1126,7 +1126,7 @@ export function CreationBoard({
         ref={dockRef}
         onPointerDown={(e) => {
           if (e.target instanceof Element && !e.target.closest(".composer-profile")) setProfileOpen(false);
-          if (!(e.target instanceof Element && e.target.closest(".creation-exit-tab, .composer-expand"))) {
+          if (!(e.target instanceof Element && e.target.closest(".creation-exit-tab, .composer-expand, .library-composer-target"))) {
             setCollapsed(false);
           }
         }}
@@ -1134,7 +1134,7 @@ export function CreationBoard({
           if (e.target === e.currentTarget) focus();
         }}
         onFocusCapture={event => {
-          if (!(event.target instanceof Element && event.target.closest(".composer-expand"))) setCollapsed(false);
+          if (!(event.target instanceof Element && event.target.closest(".composer-expand, .library-composer-target"))) setCollapsed(false);
         }}
         onBlurCapture={(e) => {
           const modelMenu = e.relatedTarget instanceof Element ? e.relatedTarget.closest(".model-select-menu, .composer-local-frames, .comfy-environment-panel, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;

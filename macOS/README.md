@@ -2,6 +2,8 @@
 
 Apple Silicon 与 Intel 按各自架构开发运行和构建 DMG。公开通道、版本和回滚见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)，签名公证及真机回执见 [发布验收](RELEASE-READINESS.md)。
 
+此前 Mac 分支接收记录见 [11 月 19 日](DEV-SYNC-2026-11-19.md)、[11 月 6 日](DEV-SYNC-2026-11-06.md) 和本目录下按日期保存的同步记录。
+
 ## 环境要求
 
 1. 安装 Xcode Command Line Tools：

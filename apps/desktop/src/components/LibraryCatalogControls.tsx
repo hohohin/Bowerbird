@@ -9,8 +9,8 @@ import { LibraryFloatingControls } from "./LibraryFloatingControls";
 import { LibraryMediaSwitch } from "./LibraryMediaSwitch";
 
 /** All library views share controls, overflow and bounded color preparation. */
-export function LibraryCatalogControls({ filter, onColorChange, onColorsPrepared, onSearchStart, onStartSelection, children }: {
-  filter: CatalogFilter; onColorChange: (color: string | null) => void;
+export function LibraryCatalogControls({ filter, onColorChange, onColorsPrepared, onSearchStart, onStartSelection, fixedMedia = false, children }: {
+  fixedMedia?: boolean; filter: CatalogFilter; onColorChange: (color: string | null) => void;
   onColorsPrepared: () => void; onSearchStart: () => void; onStartSelection: () => void; children?: ReactNode;
 }) {
   const mode = useLibraryModeStore();
@@ -122,7 +122,7 @@ export function LibraryCatalogControls({ filter, onColorChange, onColorsPrepared
       }}><X size={14} aria-hidden="true"/></button>}
     </div>}
   </div><LibraryFloatingControls>
-    <LibraryMediaSwitch/>
+    {!fixedMedia && <LibraryMediaSwitch/>}
     {(filter.media === "all" || filter.media === "images" || filter.media === "videos") && <GeneratedImageFilter floating value={generated} onChange={mode.getState().setGeneratedFilter}/>}
     {filter.media === "images" && <FileColorFilter open={open} onOpenChange={setOpen} color={filter.color} onColorChange={onColorChange}
       palette={{ colors: new Map(), ...progress, retry: () => setRetry(value => value + 1) }}/>}

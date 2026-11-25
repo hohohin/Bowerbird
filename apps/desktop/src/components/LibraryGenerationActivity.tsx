@@ -2,7 +2,7 @@ import { ArrowUpRight, Check, ChevronDown, CircleAlert, LoaderCircle } from "luc
 import { useStore } from "../store";
 import { useLocalChatStore } from "../lib/localChatStore";
 import { libraryGenerationTasks, type LibraryActivityTask } from "../lib/libraryGenerationActivity";
-import { openLibraryActivityTask, useLibraryGenerationRuntime } from "../lib/libraryGenerationRuntime";
+import { openLibraryActivityTask } from "../lib/libraryGenerationRuntime";
 import "./LibraryGenerationActivity.css";
 
 function ActivitySummary({ running, unread }: { running: number; unread: boolean }) {
@@ -39,8 +39,7 @@ export function LibraryGenerationActivity({ extraTasks = [], onOpenExtra }: {
   const runs = useStore(state => state.cloudAgentRuns);
   const unread = useStore(state => state.projectUnreadThreads);
   const chats = useLocalChatStore(state => state.summaries);
-  const localVideoTasks = useLibraryGenerationRuntime(state => state.tasks);
-  const tasks = libraryGenerationTasks({ projects, jobs: Object.values(jobs), runs: Object.values(runs), chats: Object.values(chats), extraTasks: [...Object.values(localVideoTasks), ...extraTasks] });
+  const tasks = libraryGenerationTasks({ projects, jobs: Object.values(jobs), runs: Object.values(runs), chats: Object.values(chats), extraTasks });
   const running = tasks.filter(task => task.status === "running").length;
   const hasUnread = tasks.some(task => unread[task.projectId]?.includes(task.threadId));
   return <details className="library-generation-activity">

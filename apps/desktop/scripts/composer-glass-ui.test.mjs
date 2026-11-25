@@ -33,6 +33,15 @@ try {
   assert.equal(await dock.getByRole('button', { name: '选择 Agent 模式' }).count(), 0, 'unentitled accounts do not gain an Agent entry');
   await dock.getByRole('button', { name: '展开创作描述' }).click();
   assert.equal(await page.evaluate(() => window.store.getState().boardOpen), true, 'expand focuses the writing area and enters creation');
+  const picker = dock.locator('.composer-mode-picker');
+  await picker.hover();
+  assert.notEqual(await picker.evaluate(el => el.style.getPropertyValue('--glass-light-x')), '', 'pointer lights the hovered glass surface');
+  await page.mouse.move(0, 0);
+  assert.equal(await picker.evaluate(el => el.style.getPropertyValue('--glass-light-x')), '', 'lighting resets when leaving the glass');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await picker.hover();
+  assert.equal(await picker.evaluate(el => el.style.getPropertyValue('--glass-light-x')), '', 'reduced motion disables pointer lighting');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await editor.fill('为产品设计一张自然、安静的海报。\n第二行保持留白。');
   const content = await editor.innerText();
   await dock.getByRole('button', { name: '退出创作模式', exact: true }).click();
@@ -185,7 +194,11 @@ try {
   await dock.getByRole('button', { name: '视频', exact: true }).click();
   await dock.getByLabel('视频分辨率').selectOption('1080p');
   await dock.getByLabel('视频时长（秒）').fill('8');
-  assert.equal(await editor.innerText(), referenced, 'mode changes retain the prompt and references');
+  assert.equal((await editor.innerText()).trim(), '', 'video mode starts with its independent draft');
+  await dock.getByRole('button', { name: '图片', exact: true }).click();
+  assert.equal(await editor.innerText(), referenced, 'image mode restores its prompt and references');
+  await dock.getByRole('button', { name: '视频', exact: true }).click();
+  assert.equal(await dock.getByLabel('视频时长（秒）').inputValue(), '8', 'video parameters stay with the video draft');
   for (const label of ['视频分辨率','视频生成模式','视频时长（秒）']) {
     assert.equal(await dock.locator('.composer-toolbar').getByLabel(label, { exact: true }).isVisible(), true);
   }
@@ -298,6 +311,8 @@ try {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] });
   assert.equal(await dock.evaluate(el => getComputedStyle(el).backdropFilter), 'none');
+  assert.equal(await dock.evaluate(el => getComputedStyle(el, '::before').content), 'none');
+  assert.equal(await dock.evaluate(el => getComputedStyle(el).backgroundImage), 'none', 'reduced transparency uses a solid writing surface');
   await cdp.send('Emulation.setEmulatedMedia', { features: [] });
   await page.emulateMedia({ forcedColors: 'active' });
   assert.equal(await dock.evaluate(el => getComputedStyle(el).backdropFilter), 'none');

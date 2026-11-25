@@ -122,6 +122,7 @@ fn candidates(root: &Path, recursive: bool) -> AppResult<(Vec<Candidate>, Vec<It
 }
 
 pub(super) fn path_key(path: &Path) -> String {
+    let path = super::paths::expand_macos_system_alias(path);
     let value = path.to_string_lossy().replace('\\', "/");
     let value = value.strip_prefix("//?/UNC/").map(|v| format!("//{v}")).unwrap_or_else(|| value.strip_prefix("//?/").unwrap_or(&value).to_owned());
     if cfg!(windows) { value.to_lowercase() } else { value }
