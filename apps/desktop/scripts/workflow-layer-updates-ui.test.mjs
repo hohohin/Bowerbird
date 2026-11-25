@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 const cache = '.tmp/workflow-layer-updates-vite';
-const server = await createServer({ configFile: false, cacheDir: cache, optimizeDeps: { include: ['react', 'react-dom/client', 'react-dom', 'zustand/shallow'] },
+const server = await createServer({ configFile: false, cacheDir: cache, resolve: { alias: { '@': resolve('src') } },
+  optimizeDeps: { include: ['react', 'react-dom/client', 'react-dom', 'zustand/shallow'] },
   server: { host: '127.0.0.1', port: 17937, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 let browser;
@@ -22,6 +24,7 @@ try {
       import('/src/components/CanvasWorkflowLayer.tsx'), import('/src/lib/canvasWorkflowRuntime.ts'), import('/src/lib/canvasWorkflow.ts'), import('/src/store.ts'),
     ]);
     const controller = canvasWorkflowController('updates');
+    await controller.load(true);
     const node = newWorkflowNode('trigger', 400, 50, '');
     controller.document = { ...controller.document, nodes: [node] };
     window.workflowNodeId = node.id;
@@ -32,7 +35,8 @@ try {
     const root = createRoot(document.getElementById('root'));
     flushSync(() => root.render(React.createElement(React.Profiler, { id: 'workflow', onRender: () => window.layerCommits++ },
       React.createElement('div', { className: 'canvas-plane', style: { position: 'relative', width: 1000, height: 600 } },
-        React.createElement(CanvasWorkflowLayer, { ref, projectId: 'updates', provisional: true, materials, graphNodes: [], selectedIds: new Set(), panReady: false,
+        React.createElement(CanvasWorkflowLayer, { ref, projectId: 'updates', provisional: true, materials, graphNodes: [], entryCardIds: null,
+          activeGenerationIds: new Set(), generationActivities: new Map(), selectedIds: new Set(), panReady: false,
           onSelect: noop, onNodesChanged: noop, onEdited: noop, onOpenGeneration: noop, onOpenAgent: noop, onDragStart: noop, onDragMove: noop,
           onDragEnd: noop, onNodeMenu: noop, onRemove: noop, ensureMaterialized: async () => {}, toBoardPoint: (x, y) => ({ x, y }), onPlaced: noop })))));
     window.changeUnrelated = () => { for (let i = 0; i < 30; i++) useStore.setState({ searchQuery: `unrelated-${i}` }); };
