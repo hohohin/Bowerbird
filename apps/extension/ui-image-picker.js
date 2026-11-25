@@ -2,6 +2,7 @@
   "use strict";
 
   const SMALL_IMAGE_EDGE = 200;
+  const ALTERNATE_IMAGE_SOURCES = new Set(["srcset", "picture", "lazy", "lazy-srcset"]);
   const BUTTON_STYLE = "border:0;padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit;color:#fff;background:#3a3f4f";
   const PICKER_ID = "__bowerbird_confirm";
 
@@ -14,7 +15,7 @@
     card.style.cssText = "padding:12px 14px;border-radius:10px;background:#1f2330;color:#fff;font:13px -apple-system,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.4)";
 
     const title = document.createElement("strong");
-    title.textContent = batch.label.replace(/，全部采集？$/, "");
+    title.textContent = batch.label.replace(/，(?:全部采集|继续)？$/, "");
     title.style.fontSize = "14px";
 
     const controls = document.createElement("div");
@@ -76,8 +77,10 @@
       let visible = 0;
       for (const entry of tiles) {
         const { item, tile, checkbox, image } = entry;
-        const width = item.width || image.naturalWidth;
-        const height = item.height || image.naturalHeight;
+        // An alternate URL may point to the full-size image instead of the page's placeholder.
+        const useCandidateSize = !ALTERNATE_IMAGE_SOURCES.has(item.candidate_source);
+        const width = image.naturalWidth || (useCandidateSize ? item.width : 0);
+        const height = image.naturalHeight || (useCandidateSize ? item.height : 0);
         const small = (width > 0 && width < SMALL_IMAGE_EDGE) || (height > 0 && height < SMALL_IMAGE_EDGE);
         entry.visible = !hideSmall.checked || !small;
         tile.style.display = entry.visible ? "flex" : "none";
@@ -111,6 +114,7 @@
     });
     onUserAction(cancel, "click", onCancel);
     onUserAction(collect, "click", () => onCollect(tiles.filter(entry => entry.visible && entry.selected).map(entry => entry.item)));
+    card.addEventListener("click", event => { if (!event.isTrusted) event.preventDefault(); }, true);
     card.addEventListener("mousedown", event => event.stopPropagation());
     card.append(title, controls, grid, empty, actions);
     update();

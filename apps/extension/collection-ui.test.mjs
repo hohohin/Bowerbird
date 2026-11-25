@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { dropData } from "./trusted-drag-fixture.mjs";
 import { injectContent } from "./isolated-content-fixture.mjs";
-import { readFile } from "node:fs/promises";
 import { chromium } from "../html-renderer/node_modules/playwright/index.mjs";
 
 // Isolated browser only: every network request and desktop receipt is a fixture.
@@ -10,12 +9,22 @@ try {
   const page = await browser.newPage({ viewport: { width: 900, height: 650 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("**/*", (route) => route.fulfill({
-    contentType: route.request().url().endsWith(".svg") ? "image/svg+xml" : "text/html",
-    body: route.request().url().endsWith(".svg")
-      ? '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="green"/></svg>'
-      : '<!doctype html><title>Extension isolated collection fixture</title><img id="remote" src="/remote.svg" alt="remote"><img id="blob" alt="blob"><img id="data" alt="data">',
-  }));
+  await page.route("**/*", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith(".svg")) {
+      if (path === "/selection-unavailable.svg") return route.fulfill({ status: 404, body: "" });
+      const width = ["/selection-narrow.svg", "/selection-placeholder.svg"].includes(path) ? 100 : path.startsWith("/selection-") ? 320 : 64;
+      const height = path === "/selection-short.svg" ? 100 : path.startsWith("/selection-") ? 240 : 64;
+      return route.fulfill({
+        contentType: "image/svg+xml",
+        body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="green"/></svg>`,
+      });
+    }
+    return route.fulfill({
+      contentType: "text/html",
+      body: '<!doctype html><title>Extension isolated collection fixture</title><img id="remote" src="/remote.svg" alt="remote"><img id="blob" alt="blob"><img id="data" alt="data">',
+    });
+  });
   await page.goto("https://fixture.example/page");
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: "https://fixture.example" });
   await page.evaluate(async () => {
@@ -295,6 +304,85 @@ try {
   await page.evaluate(() => window.fixture.action());
   await menu.waitFor();
 
+  async function installCaptureRecorder() {
+    await page.evaluate(() => {
+      window.captures = [];
+      window.chrome = { runtime: {
+        getURL: () => "",
+        sendMessage: (message, callback) => {
+          if (message.type === "save_image") window.captures.push(message);
+          callback({ ok: true });
+        },
+      } };
+    });
+    await injectContent(page);
+  }
+
+  const picker = page.getByRole("dialog", { name: "选择要采集的图片" });
+  async function openImagePicker() {
+    await button.click();
+    await menu.getByRole("menuitem", { name: "采集本页图片", exact: true }).click();
+    await picker.waitFor();
+  }
+
+  const selectionUrl = "https://fixture.example/selection";
+  await page.route(selectionUrl, route => route.fulfill({
+    contentType: "text/html",
+    body: '<!doctype html><img src="/selection-a.svg" alt=""><img src="/selection-narrow.svg" alt=""><img src="/selection-b.svg" alt=""><img src="/selection-short.svg" alt=""><img src="/selection-placeholder.svg" data-src="/selection-c.svg" alt=""><img src="/selection-placeholder.svg" data-src="/selection-unavailable.svg" alt="">',
+  }));
+  await page.setViewportSize({ width: 375, height: 650 });
+  await page.goto(selectionUrl);
+  await page.evaluate(() => Promise.all(Array.from(document.images).map(image => image.decode())));
+  await installCaptureRecorder();
+  await openImagePicker();
+  assert.equal(await picker.evaluate(el => el.getRootNode().activeElement === el), true);
+  const choose = picker.getByRole("button", { name: "采集", exact: true });
+  const filter = picker.getByRole("checkbox", { name: "过滤小图", exact: true });
+  const counts = picker.getByRole("status");
+  const item = name => picker.locator(`label:has(img[src$="/selection-${name}.svg"]) input`);
+  assert.equal(await counts.textContent(), "已选 6 / 6");
+  await item("a").evaluate(el => el.click());
+  assert.equal(await item("a").isChecked(), true, "a scripted checkbox activation cannot change selection");
+  await choose.evaluate(el => el.click());
+  assert.equal(await page.evaluate(() => window.captures.length), 0);
+  await picker.getByRole("button", { name: "取消", exact: true }).click();
+  await picker.waitFor({ state: "hidden" });
+  assert.equal(await button.evaluate(el => el.getRootNode().activeElement === el), true);
+  await openImagePicker();
+  await page.keyboard.press("Escape");
+  await picker.waitFor({ state: "hidden" });
+  assert.equal(await button.evaluate(el => el.getRootNode().activeElement === el), true);
+  assert.equal(await page.evaluate(() => window.captures.length), 0);
+
+  await openImagePicker();
+  await picker.getByRole("button", { name: "全不选", exact: true }).click();
+  assert.equal(await counts.textContent(), "已选 0 / 6");
+  assert.equal(await choose.isDisabled(), true);
+  await picker.getByRole("button", { name: "全选", exact: true }).click();
+  await filter.check();
+  assert.equal(await item("narrow").isVisible(), false, "width below 200px is small");
+  assert.equal(await item("short").isVisible(), false, "height below 200px is small");
+  const fullPreview = picker.locator('img[src$="/selection-c.svg"]');
+  await fullPreview.evaluate(image => image.decode());
+  assert.equal(await fullPreview.evaluate(image => image.naturalWidth), 320);
+  assert.equal(await item("c").isVisible(), true, "use actual preview dimensions instead of the small placeholder");
+  assert.equal(await item("unavailable").isVisible(), true, "keep an alternate image with unknown dimensions");
+  assert.equal(await counts.textContent(), "已选 4 / 4");
+  await item("b").uncheck();
+  await item("unavailable").uncheck();
+  await filter.uncheck();
+  assert.equal(await counts.textContent(), "已选 4 / 6");
+  await filter.check();
+  assert.equal(await item("b").isChecked(), false);
+  assert.equal(await counts.textContent(), "已选 2 / 4");
+  assert.equal(await page.evaluate(() => window.captures.length), 0);
+  await choose.click();
+  await status.filter({ hasText: /已保存 2 张（共 2 张）/ }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.captures.map(item => [item.url, item.pageUrl])), [
+    ["https://fixture.example/selection-a.svg", selectionUrl],
+    ["https://fixture.example/selection-c.svg", selectionUrl],
+  ]);
+
   const noteUrl = "https://www.xiaohongshu.com/explore/fixture-note";
   const images = Array.from({ length: 105 }, (_, index) => ({ urlDefault: `https://cdn.fixture.example/${index}.svg` }));
   const state = { note: { noteDetailMap: { "fixture-note": { note: { title: "图文夹具", imageList: images } } } } };
@@ -302,30 +390,20 @@ try {
     contentType: "text/html",
     body: `<!doctype html><script>window.__INITIAL_STATE__=${JSON.stringify(state)}</script>`,
   }));
+  await page.setViewportSize({ width: 900, height: 650 });
   await page.goto(noteUrl);
-  await page.evaluate(() => {
-    window.captures = [];
-    window.chrome = { runtime: {
-      getURL: () => "",
-      sendMessage: (message, callback) => {
-        if (message.type === "save_image") window.captures.push(message);
-        callback({ ok: true });
-      },
-    } };
-  });
-  await injectContent(page);
-  await button.click();
-  await menu.getByRole("menuitem", { name: "采集本页图片", exact: true }).click();
-  const confirmation = page.locator("#__bowerbird_confirm");
-  assert.match(await confirmation.innerText(), /发现 105 张图片，本次最多采集前 100 张/);
+  await installCaptureRecorder();
+  await openImagePicker();
+  assert.match(await picker.innerText(), /发现 105 张图片，本次最多采集前 100 张/);
+  assert.equal(await picker.getByRole("status").textContent(), "已选 100 / 100");
   assert.equal(await page.evaluate(() => window.captures.length), 0);
-  await confirmation.getByRole("button", { name: "采集", exact: true }).click();
+  await choose.click();
   await status.filter({ hasText: /已保存 100 张/ }).waitFor();
   const captures = await page.evaluate(() => window.captures.map(item => [item.url, item.pageUrl]));
   assert.deepEqual(captures, images.slice(0,100).map(item => [item.urlDefault, noteUrl]));
 
   assert.deepEqual(errors, []);
-  console.log("PASS: isolated Chromium capture UI, hostile CSS, Shadow DOM Alt-click, stop/retry, hostname settings, proportional position, ordered XHS limit");
+  console.log("PASS: isolated Chromium image picker and selection, hostile CSS, Shadow DOM Alt-click, stop/retry, hostname settings, proportional position, ordered XHS limit");
 } finally {
   await browser.close();
 }

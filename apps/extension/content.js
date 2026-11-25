@@ -130,7 +130,7 @@
     try {
       const siteBatch = await site.collectImages();
       const batch = S.limitBatch(siteBatch?.items.length ? siteBatch : makeGenericBatch(collectGenericCandidates()));
-      if (batch.items.length) showConfirm(batch);
+      if (batch.items.length) showImagePicker(batch);
       else panels.showToast("未发现可采集素材", false);
     } catch (error) {
       panels.showToast(S.failureMessage({ error: String(error) }), false, 12000);
@@ -191,53 +191,20 @@
     }
   }
 
-  function showConfirm(batch) {
+  function showImagePicker(batch) {
     panels.closeSettings();
     hideConfirm();
-    const card = document.createElement("div");
-    card.id = "__bowerbird_confirm";
-    card.style.cssText = [
-      "position:fixed",
-      "padding:12px 14px",
-      "border-radius:10px",
-      "background:#1f2330",
-      "color:#fff",
-      "font:13px -apple-system,sans-serif",
-      "box-shadow:0 4px 16px rgba(0,0,0,0.4)",
-      "z-index:2147483647",
-    ].join(";");
-    const label = document.createElement("div");
-    label.textContent = batch.label;
-    label.style.marginBottom = "10px";
-    const actions = document.createElement("div");
-    actions.style.cssText = "display:flex;gap:8px;justify-content:flex-end";
-    const baseBtnStyle =
-      "border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font:13px -apple-system,sans-serif";
-    const cancel = document.createElement("button");
-    cancel.textContent = "取消";
-    cancel.style.cssText = baseBtnStyle + ";background:#3a3f4f;color:#fff";
-    const ok = document.createElement("button");
-    ok.textContent = "采集";
-    ok.style.cssText = baseBtnStyle + ";background:#7c9cff;color:#000;font-weight:600";
-    actions.append(cancel, ok);
-    card.append(label, actions);
-    overlay.mount(card);
-
-    const close = () => {
-      card.remove();
-      overlay.scheduleCollapse();
-    };
-    const timer = setTimeout(close, 15000);
-    cancel.onclick = () => {
-      clearTimeout(timer);
-      close();
-    };
-    onUserAction(ok, "click", () => {
-      clearTimeout(timer);
-      close();
-      saveBatch(batch);
+    const card = globalThis.BowerbirdImagePicker.create(batch, {
+      onUserAction,
+      onCancel: () => {
+        hideConfirm();
+        btn.focus();
+        overlay.scheduleCollapse();
+      },
+      onCollect: items => { void saveBatch({ ...batch, items }); },
     });
-    card.addEventListener("mousedown", (e) => e.stopPropagation());
+    overlay.mount(card);
+    card.focus();
   }
 
   async function uploadLocalBytes(bytes, metadata) {
