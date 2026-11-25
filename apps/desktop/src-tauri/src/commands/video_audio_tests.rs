@@ -33,8 +33,18 @@ fn audio_extract_reuses_current_source_per_project_and_repairs_missing_results()
     let asset = ingest::ingest_generated(&paths, &db, &original, None, "test").unwrap();
     let source = asset.store_path.as_deref().unwrap();
     let first = extract(&db, &paths, source, "first", Some("p")).unwrap();
-    let second = extract(&db, &paths, source, "second", Some("p")).unwrap();
+    assert_eq!(
+        db.remove_assets_from_project("p", std::slice::from_ref(&first.id), false)
+            .unwrap(),
+        1
+    );
+    let (restored, changed) = super::extract(&db, &paths, &asset.id, "restored", Some("p")).unwrap();
+    assert_eq!(restored.id, first.id);
+    assert!(changed, "restored membership must refresh the library");
+    assert_eq!(db.count_assets(Some("p")).unwrap(), 1);
+    let (second, changed) = super::extract(&db, &paths, &asset.id, "second", Some("p")).unwrap();
     assert_eq!(first.id, second.id, "different operations reuse one WAV");
+    assert!(!changed, "an unchanged cache hit does not refresh the library");
     assert!(
         extract(&db, &paths, source, "second", None).is_err(),
         "cache hits still claim the operation destination"
@@ -92,12 +102,13 @@ fn audio_extract_reuses_current_source_per_project_and_repairs_missing_results()
         new.id
     );
     assert_eq!(
-        extract(&db, &paths, source, "legacy", Some("p"))
-            .unwrap()
-            .id,
-        new.id,
-        "an exact legacy operation remains replayable"
+        db.remove_assets_from_project("p", std::slice::from_ref(&new.id), false)
+            .unwrap(),
+        1
     );
+    let (legacy, changed) = super::extract(&db, &paths, &asset.id, "legacy", Some("p")).unwrap();
+    assert_eq!(legacy.id, new.id, "an exact legacy operation remains replayable");
+    assert!(changed, "legacy replay restores removed membership too");
     assert!(extract(&db, &paths, source, "legacy", None).is_err());
 }
 

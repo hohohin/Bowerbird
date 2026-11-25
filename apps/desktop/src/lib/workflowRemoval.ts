@@ -4,6 +4,7 @@ import type { CanvasWorkflowController } from "./canvasWorkflowRuntime";
 /** Content cells keep their stored value when their hidden input writer is disconnected. */
 export function removeWorkflowNodes(nodes: WorkflowNode[], removedIds: Iterable<string> = []): WorkflowNode[] {
   const removed = new Set(removedIds);
+  const knownIds = new Set(nodes.map(node => node.id));
   const remainingInputs = (inputs: WorkflowNode["inputs"]) => Object.fromEntries(Object.entries(inputs)
     .map(([port, bindings]) => [port, bindings.filter(binding => !binding.nodeId || !removed.has(binding.nodeId))]));
   let remaining = nodes;
@@ -11,6 +12,8 @@ export function removeWorkflowNodes(nodes: WorkflowNode[], removedIds: Iterable<
   for (;;) {
     remaining = remaining.filter(node => !removed.has(node.id)).map(node => ({ ...node,
       inputs: remainingInputs(node.inputs),
+      ...(node.savedComfyAudio && { savedComfyAudio: node.savedComfyAudio.filter(binding =>
+        !binding.nodeId || (!removed.has(binding.nodeId) && (!binding.videoAudio || knownIds.has(binding.nodeId)))) }),
       ...(node.savedComfyR2V && { savedComfyR2V: remainingInputs(node.savedComfyR2V) }),
     }));
     const emptyWriters = remaining.filter(node => node.kind === "text" && node.textTarget && !Object.values(node.inputs).flat().length);

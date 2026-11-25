@@ -41,7 +41,7 @@ pub async fn extract_video_audio(
     operation_id: String,
     project_id: Option<String>,
 ) -> AppResult<Asset> {
-    let (asset, created) = extract_queued(
+    let (asset, changed) = extract_queued(
         db.inner().clone(),
         paths.inner().clone(),
         source_path,
@@ -54,7 +54,7 @@ pub async fn extract_video_audio(
             .allow_file(path)
             .map_err(|e| AppError::Other(e.to_string()))?;
     }
-    if created {
+    if changed {
         let _ = app.emit("library://assets-changed", ());
     }
     Ok(asset)
@@ -185,6 +185,16 @@ fn existing_audio(db: &Database, id: &str) -> AppResult<Option<Asset>> {
     }))
 }
 
+fn restore_project_membership(conn: &Connection, project: Option<&str>, asset_id: &str) -> AppResult<bool> {
+    let Some(project) = project else {
+        return Ok(false);
+    };
+    Ok(conn.execute(
+        "INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,strftime('%s','now'))",
+        params![project, asset_id],
+    )? != 0)
+}
+
 fn source_changed() -> AppError {
     AppError::Other("提取期间视频已变化，请重新打开视频后重试".into())
 }
@@ -228,7 +238,8 @@ fn extract(
     // They cannot prove a cache match for any other operation.
     if let Some(previous) = previous.filter(|previous| !previous.has_stamp) {
         if let Some(asset) = existing_audio(db, &previous.asset_id)? {
-            return Ok((asset, false));
+            let changed = restore_project_membership(&db.conn.lock().unwrap(), project, &asset.id)?;
+            return Ok((asset, changed));
         }
     }
     let path = db.resolve_asset_original(id)?;
@@ -269,8 +280,9 @@ fn extract(
             {
                 write_record(&tx, &record, &asset.id, "video_audio_operation", &payload)?;
             }
+            let changed = restore_project_membership(&tx, project, &asset.id)?;
             tx.commit()?;
-            return Ok((asset, false));
+            return Ok((asset, changed));
         }
     }
     let scratch = Scratch(

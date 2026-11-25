@@ -29,5 +29,49 @@ try {
   await page.waitForFunction(async()=>{const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');return !canvasWorkflowController('p').error;});
   const repaired=await page.evaluate(async()=>{const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const {api}=await import('/src/lib/api.ts');return {memory:canvasWorkflowController('p').document,saved:(await api.canvasWorkflowGet('p')).document};});
   assert.deepEqual(repaired.saved,repaired.memory);assert.equal(repaired.saved.nodes.length,1);assert.equal(repaired.saved.nodes[0].prompt,'保留尚未保存的需求');
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const { newWorkflowNode, selectWorkflowVideoProvider } = await import('/src/lib/canvasWorkflow.ts');
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const save = api.canvasWorkflowSave;
+    api.canvasWorkflowSave = async (p, r, document) => {
+      if (document.nodes.some(node => node.savedComfyAudio?.some(input => input.videoAudio && input.nodeId
+        && !document.nodes.some(source => source.id === input.nodeId)))) throw Error('工作流数据无效');
+      return save(p, r, document);
+    };
+    const producer = { ...newWorkflowNode('comfy-video', 420, 60, ''), id: 'video-producer' };
+    const receiver = { ...newWorkflowNode('comfy-video', 820, 60, ''), id: 'video-receiver', inputs: {
+      'reference-audio': [{ nodeId: producer.id, portId: 'image', videoAudio: {} }],
+    } };
+    const parked = selectWorkflowVideoProvider(receiver, 'jimeng');
+    if (!parked.savedComfyAudio?.length) throw Error('Expected the reference to be parked');
+    const c = canvasWorkflowController('p');
+    await c.edit([producer, parked]);
+    window.parkedVideoWorkflow = [producer, parked];
+  });
+  await page.locator('[data-workflow-card="video-producer"]').getByRole('button', { name: '删除卡片', exact: true }).click();
+  const savedAudioInputs = () => page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    return (await api.canvasWorkflowGet('p')).document.nodes.map(node => [node.id, node.savedComfyAudio ?? []]);
+  });
+  await page.waitForFunction(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { api } = await import('/src/lib/api.ts');
+    const c = canvasWorkflowController('p');
+    return c.error || !(await api.canvasWorkflowGet('p')).document.nodes.some(node => node.id === 'video-producer');
+  });
+  assert.deepEqual(await savedAudioInputs(), [['video-receiver', []]], 'deleting the upstream card saves without the parked binding');
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(window.parkedVideoWorkflow);
+    try { await c.edit([window.parkedVideoWorkflow[1]]); } catch {}
+  });
+  await page.getByRole('button', { name: '重试保存', exact: true }).click();
+  await page.waitForFunction(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    return !canvasWorkflowController('p').error;
+  });
+  assert.deepEqual(await savedAudioInputs(), [['video-receiver', []]], 'retry repairs an already-rejected deletion');
   console.log('workflow removal: strict writer validation, content preserved, failed-queue repair and newer edits persisted');
 }finally{await browser.close();await server.close();}

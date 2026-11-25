@@ -34,6 +34,7 @@ import { canvasWirePath as path, type DragOffset } from "../lib/canvasDragPrevie
 import { useWorkflowPortGeometry, type WorkflowPortTarget } from "../lib/useWorkflowPortGeometry";
 import { WorkflowCardItem, type WorkflowCardContext } from "./WorkflowCardItem";
 import { WorkflowWireLayer } from "./WorkflowWireLayer";
+import { renderCanvasCards, useCanvasEntryCardContext } from "./CanvasEntryCard";
 import { singleVideoOutput, useWorkflowConnectionGesture } from "./useWorkflowConnectionGesture";
 import { comfyCheckKey, WindingKey } from "./workflowCardPresentation";
 import { useLatestCallback } from "../lib/useCanvasFrame";
@@ -149,9 +150,10 @@ function connectionForType(source: Connection, type?: WorkflowPort["type"]): Con
   return ["*latest", "*latest-image"].includes(source.cellId ?? "") && (type === "text" || type === "image")
     ? { ...source, cellId: type === "image" ? "*latest-image" : "*latest", type } : source;
 }
-export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, entryCardIds, deferredCandidateIds, materials, graphNodes, knownAssets, loadAssets = api.getAssetsByIds, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, generationActivities, activeGenerationIds, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
+export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, opening = false, entryCardIds, deferredCandidateIds, materials, graphNodes, knownAssets, loadAssets = api.getAssetsByIds, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, generationActivities, activeGenerationIds, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
+  const [controllerRevision, setControllerRevision] = useState(0);
   const pendingCards = useRef(new Map<string, PendingConnectionCard>());
   const activeController = useRef<typeof controller | null>(controller);
   const currentSelection = useRef(selectedIds); currentSelection.current = selectedIds;
@@ -612,7 +614,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     }
   }
   useEffect(() => {
-    const refresh = () => { redraw(value => value + 1); nodesChanged.current(); };
+    const refresh = () => { setControllerRevision(value => value + 1); nodesChanged.current(); };
     return controller.subscribe((urgent, promptEditor) => {
       const focused = window.document.activeElement;
       if (promptEditor && focused?.matches(".comfy-video-prompt") && focused.closest<HTMLElement>("[data-workflow-card]")?.dataset.workflowCard === promptEditor) return;
@@ -1730,6 +1732,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     cardRetryLoop, cardRunCard, setAgentOpen, setArmed, setKeyHover, setStaleReview,
     setTemplateLibrary, setVoiceIssue, cardShowProgress, sourceImages, cardSourceLabel, cardWorkflowCardRef,
   ]);
+  const entryCardContext = useMemo(() => ({}), [cardContext, controllerRevision, generationActivities, selectedIds,
+    pinnedCardOffsets, peekCard, chatsByCard, chatSummaries, armed, panReady, automatic, keyHover, staleReview,
+    pendingAgentCards, activeVideoJobs, flowIssues, providerIssues, loopPreviews]);
+  const stagedCardContext = useCanvasEntryCardContext(entryCardContext, opening);
   return <>
     {visibleGraphNodes.filter(node => cardMounted(node.id) && node.hiddenAt == null && (node.kind !== "asset" || materialById.has(node.id)) && !sessionIds.has(node.id) && !conversationCards?.hiddenIds.has(node.id)).map(node => {
       if (node.kind === "prompt" && collapsedAnchorOwners.has(node.id)) return null;
@@ -1762,15 +1768,15 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     {materials.filter(material => cardMounted(material.id)).map(material => <div key={material.id} data-workflow-material={material.id} className={`workflow-material-hotspot ${hoveredMaterial === material.id ? "is-hovered" : ""} ${selectedIds.has(material.id) ? "is-selected" : ""}`} style={{ left: material.x, top: material.y, width: material.width, height: material.height }}>
       {automaticButton(material.id, "output")}
     </div>)}
-    {renderedNodes.filter(node => node.kind !== "text" && (activeGenerationIds.has(node.id) || (peekCard?.nodeId === node.id
-      ? cardMounted(peekCard.anchorId) : cardMounted(node.id) && !collapsedAnchor(node.id)))).map(node => {
+    {renderCanvasCards(renderedNodes.filter(node => node.kind !== "text" && (activeGenerationIds.has(node.id) || (peekCard?.nodeId === node.id
+      ? cardMounted(peekCard.anchorId) : cardMounted(node.id) && !collapsedAnchor(node.id)))), stagedCardContext, node => {
       const run = workflowNodeRun(document, node.id);
       const failure = controller.cardFailure(node.id, run);
       const peek = peekCard?.nodeId === node.id ? peekCard : undefined;
       const { x, y } = peek ? { x: peek.point.x - workflowCardWidth(node) - 12, y: peek.point.y } : displayPoint(node);
       const agentChat = node.kind === "agent" ? (node.chatConversationId ? chatSummaries[node.chatConversationId] : chatsByCard.get(node.id)) : undefined;
       const videoJobId = run?.steps[node.id]?.jobId;
-      return <WorkflowCardItem key={node.id} context={cardContext} node={node} run={run} creating={!nodeById.has(node.id)}
+      return <WorkflowCardItem context={cardContext} node={node} run={run} creating={!nodeById.has(node.id)}
         starting={controller.startingAction(node.id)} locked={controller.isLocked(node.id)}
         removableLocalVideo={node.kind === "comfy-video" && controller.canDiscardLocalVideo(node.id)}
         imageActivity={generationActivities.get(node.id) ?? IDLE_GENERATION} agentChat={agentChat} selected={selectedIds.has(node.id)}
