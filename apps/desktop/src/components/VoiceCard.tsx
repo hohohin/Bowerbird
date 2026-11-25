@@ -54,6 +54,7 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
   }, [sampleKey]);
   const source = useVoiceAsset(referenceIds.length === 1 ? referenceIds[0] : undefined, assets);
   const recording = source && isAudioPath(source.store_path) ? source : undefined;
+  const waitingForVideoAudio = !referenceIds.length && node.inputs.image?.some(input => input.nodeId && input.videoAudio);
   const clip = recording && voiceCardClip(settings, recording);
   const sample = settings.sampleText ?? defaultVoiceSample;
   const key = recording && voiceCardPreviewKey(settings, recording);
@@ -117,7 +118,7 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
       {recording && clip && <VoiceReferenceTrim key={recording.id} asset={recording} start={clip.start} end={clip.end} disabled={locked}
         onChange={range => patch({ voice: { ...settings, clip: { ...clip, ...range } } })} />}
       <div className={recording ? "voice-card-row" : "voice-card-drop"}>
-        {!recording && <><AudioLines size={20} /><span>{referenceIds.length ? "请选择一段音频" : "拖入参考录音"}</span></>}
+        {!recording && <><AudioLines size={20} /><span>{waitingForVideoAudio ? "视频音频 · 等待上游素材" : referenceIds.length ? "请选择一段音频" : "拖入参考录音"}</span></>}
         <div className="voice-card-actions"><button disabled={locked} onClick={() => void act(async () => {
           const path = await open({ multiple: false, filters: [{ name: "参考录音", extensions: ["wav","mp3","flac","m4a","ogg"] }] });
           if (typeof path !== "string") return;

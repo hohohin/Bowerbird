@@ -14,7 +14,7 @@ import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { workflowAssetMedia, workflowSourceMediaLabel } from "../lib/workflowCanvasCapabilities";
 import { readCanvasNote } from "../lib/canvasNotes";
 import { agentOutputWriters } from "../lib/workflowAgentOutputs";
-import { workflowReferenceMatchesInput, workflowImageContainer, workflowInputValues, workflowReferenceToken, workflowFrameLabel, isWorkflowGenerationResult, rebindGenerationReferences, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
+import { workflowReferenceMatchesInput, workflowImageContainer, workflowInputValues, workflowReferenceToken, workflowFrameLabel, workflowVideoAudioLabel, isWorkflowGenerationResult, rebindGenerationReferences, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode } from "../lib/types";
 
 const schema = new Schema({ nodes: {
@@ -27,8 +27,10 @@ const schema = new Schema({ nodes: {
 const serialize = (doc: PMNode) => doc.textBetween(0, doc.content.size, "\n", node => node.type.name === "reference" ? workflowReferenceToken(node.attrs.id) : "");
 interface Candidate { reference: Omit<WorkflowPromptReference, "id">; preview: string; assetIds?: string[]; unavailable?: boolean }
 
-export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disabled, readCurrentPrompt, onChange, action, fitContent = false }: {
+export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disabled, knownAssets, loadAssets = api.getAssetsByIds, readCurrentPrompt, onChange, action, fitContent = false }: {
   node: WorkflowNode; nodes: WorkflowNode[]; graphNodes: CanvasNode[]; disabled: boolean;
+  knownAssets?: ReadonlyMap<string, Asset>;
+  loadAssets?: (ids: string[]) => Promise<Asset[]>;
   action?: ReactNode;
   fitContent?: boolean;
   cardNames?: Record<string, string>;
@@ -44,7 +46,11 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
     "data-placeholder": node.kind === "agent" && node.skill === "hyperframes" ? "描述视频内容、时长和风格…" : hasAutomaticInput ? "输入创作要求…" : node.kind === "planner" ? "按 @ 引用输入，例如：保留 @原图 的版式，将产品替换为 @产品参考…" : node.kind === "agent" ? "填写要求，已连接图文会自动发送；可按 @ 指定用途…" : "输入创作要求，按 @ 引入收到的图片或文字…" }), [node.kind, node.skill, hasAutomaticInput]);
   const host = useRef<HTMLDivElement>(null), view = useRef<EditorView | null>(null);
   const [menu, setMenu] = useState<{ pos: number; left: number; top: number } | null>(null);
-  const [assets, setAssets] = useState<Asset[]>([]);
+  const [loadedAssets, setLoadedAssets] = useState<{ loader: typeof loadAssets; assets: Asset[] }>();
+  const assetById = useMemo(() => {
+    const loadedById = new Map(loadedAssets?.loader === loadAssets ? loadedAssets.assets.map(asset => [asset.id, asset]) : []);
+    return { get: (id: string) => knownAssets?.get(id) ?? loadedById.get(id) };
+  }, [knownAssets, loadedAssets, loadAssets]);
   // Image candidates also supply inline chip thumbnails. Text previews are only displayed in the @ menu.
   const showTextCandidates = !!menu && !disabled;
   const inputCandidates = useMemo(() => (["text", "image"] as const).flatMap(type => (node.inputs[type] ?? []).flatMap((input, index): Candidate[] => {
@@ -56,7 +62,11 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
       reference: { type, input, slot, label: `图片来源 ${number}` },
       preview: `${workflowFrameLabel(input.videoFrame)} · 运行时从上游视频获取`,
     }];
-    const mediaLabel = (ids: string[] = []) => workflowSourceMediaLabel(ids, assets, source);
+    if (input.nodeId && input.videoAudio && source) return [{
+      reference: { type, input, slot, label: `音频来源 ${number}` },
+      preview: `${workflowVideoAudioLabel()} · 运行时从上游视频获取`,
+    }];
+    const mediaLabel = (ids: string[] = []) => input.videoAudio ? "音频" : workflowSourceMediaLabel(ids, assetById, source);
     if (canvasWorkflowInputState(input, graphNodes, nodes) === "missing") return [{
       reference: { type, input, slot, label: `${type === "text" ? "文本" : "素材来源"} ${number}` },
       preview: "来源卡片或单元格已删除，请重新连接", unavailable: true,
@@ -79,7 +89,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
       const pendingSource = type === "text" && (source || graphNodes.some(card => card.id === input.canvasNodeId && card.hiddenAt == null));
       return [{ reference: { type, input, slot, label: `${type === "text" ? "文本" : mediaLabel() + "来源"} ${number}` }, preview: "等待上游内容", unavailable: !(pendingSource || (type === "image" && workflowImageContainer(input))) }];
     }
-  })), [node.inputs, nodes, graphNodes, usesPipes, showTextCandidates, assets]);
+  })), [node.inputs, nodes, graphNodes, usesPipes, showTextCandidates, assetById]);
   const outputCandidates: Candidate[] = node.kind === "agent" ? agentOutputWriters(node, nodes).map(writer => {
     const target = writer.textTarget!;
     const card = graphNodes.find(card => card.id === target.nodeId && card.hiddenAt == null);
@@ -99,14 +109,16 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
   const referenceAssetId = (ref?: Omit<WorkflowPromptReference, "id">) => ref?.direction === "output" ? undefined : ref && (ref.slot !== undefined || workflowImageContainer(ref.input))
     ? inputCandidates.find(candidate => candidate.reference.type === ref.type && workflowReferenceMatchesInput(ref, candidate.reference.input))?.assetIds?.[0]
     : ref?.assetId;
-  const assetKey = [...new Set([...candidates.flatMap(c => c.assetIds ?? (c.reference.assetId ? [c.reference.assetId] : [])), ...(node.promptReferences ?? []).map(referenceAssetId)].filter((id): id is string => !!id))].sort().join("|");
+  const assetKey = [...new Set([...candidates.flatMap(c => c.assetIds ?? (c.reference.assetId ? [c.reference.assetId] : [])), ...(node.promptReferences ?? []).map(referenceAssetId)]
+    .filter((id): id is string => !!id && !knownAssets?.has(id)))].sort().join("|");
   useEffect(() => {
+    if (!assetKey) { setLoadedAssets(undefined); return; }
     let alive = true;
-    void api.getAssetsByIds(assetKey ? assetKey.split("|") : []).then(assets => { if (alive) setAssets(assets); }).catch(() => {});
+    void loadAssets(assetKey.split("|")).then(assets => { if (alive) setLoadedAssets({ loader: loadAssets, assets }); }).catch(() => {});
     return () => { alive = false; };
-  }, [assetKey]);
+  }, [assetKey, loadAssets]);
   const imageSrc = (id?: string) => {
-    const asset = assets.find(asset => asset.id === id);
+    const asset = id ? assetById.get(id) : undefined;
     const media = workflowAssetMedia(asset);
     if (!asset || !media || media === "audio") return "";
     const path = media === "video"
@@ -179,7 +191,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
       if (thumb !== item.attrs.thumb || label !== item.attrs.label) tr.setNodeMarkup(pos, undefined, { ...item.attrs, thumb, label });
     });
     if (tr.docChanged) editor.updateState(editor.state.apply(tr.setMeta("addToHistory", false)));
-  }, [assets, candidates, node.promptReferences]);
+  }, [assetById, candidates, node.promptReferences]);
   function insert(candidate: Candidate) {
     const editor = view.current; if (!editor || !menu || candidate.unavailable) return;
     const reference = { ...candidate.reference, id: crypto.randomUUID() };
@@ -196,7 +208,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
         {index === inputCandidates.length && outputCandidates.length > 0 && <strong>输出位置</strong>}
         <button role="option" aria-selected={false} disabled={candidate.unavailable} onMouseDown={event => event.preventDefault()} onClick={() => insert(candidate)}>
         {candidate.reference.type === "image" && imageSrc(referenceAssetId(candidate.reference)) && <img src={imageSrc(referenceAssetId(candidate.reference))} alt="" />}
-        <span><b>{candidate.reference.label}</b><small>{candidate.preview || assets.find(asset => asset.id === candidate.reference.assetId)?.name}</small></span>
+        <span><b>{candidate.reference.label}</b><small>{candidate.preview || assetById.get(candidate.reference.assetId ?? "")?.name}</small></span>
       </button></Fragment>)}
     </div>, window.document.body)}</>;
 }

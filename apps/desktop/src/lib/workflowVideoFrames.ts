@@ -14,7 +14,7 @@ type VideoFramePosition = NonNullable<WorkflowInput["videoFrame"]>["position"];
 export function videoFrameOutputPreview(output: AutomaticOutput, position: VideoFramePosition): AutomaticOutput {
   const assetId = output.binding.assetId;
   if (!assetId && !(output.binding.nodeId && output.binding.portId)) throw new Error("视频来源尚无可用文件");
-  return { ...output, media: "image", binding: { ...output.binding, videoFrame: assetId ? { position, assetId } : { position } } };
+  return { ...output, media: "image", binding: { ...output.binding, videoAudio: undefined, videoFrame: assetId ? { position, assetId } : { position } } };
 }
 
 export async function materializeVideoFrameOutput(projectId: string, output: AutomaticOutput, position: VideoFramePosition,
@@ -23,7 +23,7 @@ export async function materializeVideoFrameOutput(projectId: string, output: Aut
   const id = output.binding.assetId;
   if (!id) throw new Error("视频来源尚无可用文件");
   const assetId = await saveBoundaryFrame(projectId, id, position, isCurrent);
-  return { ...plan, binding: { ...plan.binding, videoFrame: { position, assetId } } };
+  return { ...plan, binding: { ...plan.binding, videoAudio: undefined, videoFrame: { position, assetId } } };
 }
 
 async function saveBoundaryFrame(projectId: string, videoId: string, position: VideoFramePosition, isCurrent: () => boolean) {

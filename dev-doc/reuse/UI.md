@@ -16,6 +16,8 @@
 
 工作流模板预览与首次运行前的 Agent 详情共用 `workflowPromptPreview` 将提示词内的引用标记显示为对应名称。[工作流提示词](../../apps/desktop/src/lib/canvasWorkflow.ts)
 
+画板和工作流卡片共用 [JobProgressText](../../apps/desktop/src/components/JobProgressText.tsx)。进度文字按任务 ID 单独订阅。卡片宿主根据会话身份、运行状态和已交付结果更新布局。
+
 画板视频卡的提示词框复用 `fitContent`。H3 使用 [CanvasTextarea](../../apps/desktop/src/components/CanvasTextarea.tsx)，初始高度为 64px。即梦和 Cloud 使用 [WorkflowPromptEditor](../../apps/desktop/src/components/WorkflowPromptEditor.tsx)，初始高度为四行。输入区随正文增减，在高度上限内使用共用悬浮滚动条。
 
 手动组图复用 [GenerationGroupMenuItem.tsx](../../apps/desktop/src/components/GenerationGroupMenuItem.tsx) 的 `MergeGenerationGroupMenuItem`（图片多选）和 `GenerationGroupMenuItem`（解散）。调用为 `AssetContextMenu` 与 `CanvasWorkspace`，显示继续共用 `GenerationGroupControls`／`CanvasConversationImages`。普通图片创作框的「并入上个生成」是显式选择，不复用模型会话作为展示别名；实现见 [显式合组](../CANVAS-WORKFLOW.md#2026-11-11显式抽卡与手动合组源码待发布)。

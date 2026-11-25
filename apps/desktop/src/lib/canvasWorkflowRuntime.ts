@@ -4,21 +4,24 @@ import { mergeWorkflowChanges } from "./workflowExternalChanges";
 import { cloudChatEndedMessage, cloudTextRunError } from "./userError";
 import { activeTriggerSchedule, advanceTriggerSchedule, triggerScheduleOccurrence, workflowTriggerMode } from "./workflowTriggerSchedule";
 import { normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflowCompletionTriggers, h3CardDraft, h3DraftForResult, h3OriginalPrompt, h3PromptPatch, isH3ImageCard } from "./canvasWorkflow";
-import { resolveDynamicVideoFrame, resolveVideoCardOutputs } from "./workflowVideoFrames";
-import { automaticInputMedia, planAutomaticConnection, contentCardAcceptsMedia, type AutomaticOutput } from "./workflowAutoConnect";
+import { resolveVideoCardOutputs } from "./workflowVideoFrames";
+import { prepareWorkflowMediaInputs } from "./canvasWorkflowMediaInputs";
+import { executeAgentCard, executeComfyVideoCard, executeGenerationCard, executeLoopCard, executeVoiceCard, runWorkflowComfyVideo,
+  type WorkflowCardExecution, type WorkflowCardStart as CardStart, type WorkflowImageSessionInput } from "./canvasWorkflowCardExecutors";
+import { planAutomaticConnection, contentCardAcceptsMedia, type AutomaticOutput } from "./workflowAutoConnect";
 import { isAudioPath } from "./audioMedia";
 import { voiceApi } from "./voice";
-import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey, type VoiceCardRequest } from "./voiceCard";
+import { defaultVoiceSample } from "./voiceCard";
 import { api } from "./api";
 import type { Asset, CanvasNode, GenJob, ProjectCanvasSnapshot } from "./types";
 import { firstWorkflowVideoOutputPoint, placeWorkflowOutput } from "./canvasOutputPlacement";
 import { assetPayloadJson, canvasAssetNodeSize, createCanvasAssetSnapshot } from "./creativeCanvas";
-import { DEFAULT_VIDEO_OPTIONS, isVideoPath, resolveVideoOptions, videoInputError } from "./videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, isVideoPath } from "./videoGeneration";
 import { profileExtractionIssue, profileInputKey, workflowGenerationProvider, workflowProviderIssue } from "./workflowProviderIssue";
 import { selectedChatOptions, chatProviderAccessIssue } from "./chatCapabilities";
 import { generationProviderIssue } from "./generationAvailability";
 import { autoRatioFromReferences } from "../components/creation/ratios";
-import { workflowLoopScope, workflowLoopRows, workflowLoopOutputs, workflowLoopItems, validateLoopItems, validateLoopStart } from "./workflowLoop";
+import { workflowLoopScope, workflowLoopRows, workflowLoopOutputs, workflowLoopItems, validateLoopStart } from "./workflowLoop";
 import { WorkflowPlannerRuntime } from "./workflowPlannerRuntime";
 import { emit } from "@tauri-apps/api/event";
 import { useStore } from "../store";
@@ -37,67 +40,24 @@ import { createdChatTurnCards, terminalDshTurnFailure, workflowAgentMessage, wor
 import { contentTableRows } from "./contentTable";
 import { cloudAgentProfilePrompt } from "./workflowAgentProfile";
 
-import { agentOutputTargets, agentTextWriters, agentWriterValue, routeAgentOutputs } from "./workflowAgentOutputs";
+import { agentOutputTargets, agentWriterValue } from "./workflowAgentOutputs";
 import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots, workflowBindingKey, workflowDisconnectId, filterDisconnectedReferences, generationReferencePreviewOrder, h3RunReferences, workflowCompletionOutput, workflowCompletionTarget, workflowConnectionError } from "./canvasWorkflow";
 import { readDismissedNotices, dismissNotices } from "./dismissedNotices";
-import { ConfirmedDshTurnFailure, WorkflowInputError, WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
+import { ConfirmedDshTurnFailure, WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import { describeBrandImage } from "./describeBrandImage";
-import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoElapsed, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, h3R2VInputError, type ComfyVideoInput, type ComfyVideoStatus } from "./comfyVideo";
+import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoMode, DEFAULT_COMFY_VIDEO, h3R2VInputError, type ComfyVideoInput } from "./comfyVideo";
 import { H3_IMAGE, isCloudProvider } from "./genProviders";
 import { imageOptimizationText, restoreImageOptimization, restoreH3VideoAudioReference, restoreH3R2VReferences, h3R2VPromptReferences, cleanH3OptimizedPrompt, h3OptimizationInstruction, type H3R2VPromptReferences } from "./h3PromptOptimization";
 import { compileAgentPrompt, compileGenerationPrompt, renderGenerationDraft, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowExecutionInputs, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowNodeRun, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, H3_VIDEO_AUDIO_PORT, H3_R2V_INPUT_PORTS, WORKFLOW_SKILLS,
   type CanvasWorkflow, type H3ImageGenerationInput, type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
 
+export { filterAutomaticMediaValues } from "./canvasWorkflowMediaInputs";
+
 const controllers = new Map<string, CanvasWorkflowController>();
 const r2vPorts = Object.values(H3_R2V_INPUT_PORTS);
 
-/** Filter new automatic bindings using actual asset metadata, before legacy frame conversion. */
-export async function filterAutomaticMediaValues(node: WorkflowNode, values: Record<string, WorkflowValue[]>, nodes: readonly WorkflowNode[] = []) {
-  const inputs = generationInputNode(node, nodes).inputs;
-  const isAudioPort = (port: string) => node.kind === "comfy-video" && port === H3_VIDEO_AUDIO_PORT;
-  const isR2VPort = (port: string) => node.kind === "comfy-video" && r2vPorts.some(id => id === port);
-  const ids = [...new Set(Object.entries(values).flatMap(([port, items]) => items.flatMap((value, index) =>
-    isAudioPort(port) || isR2VPort(port) || inputs[port]?.[index]?.mediaFilter ? value.assetIds ?? [] : [])))];
-  if (!ids.length) return;
-  const assets = new Map((await api.getAssetsByIds(ids)).map(asset => [asset.id, asset]));
-  for (const [port, items] of Object.entries(values)) for (const [index, source] of items.entries()) {
-    const binding = inputs[port]?.[index];
-    const filter = binding?.mediaFilter;
-    const audioPort = isAudioPort(port);
-    if (!binding || !filter && !audioPort && !isR2VPort(port)) continue;
-    const value = items[index] = structuredClone(source);
-    const supported = automaticInputMedia(node, port);
-    const accepted = filter?.filter(media => supported.includes(media)) ?? supported;
-    value.assetIds = value.assetIds?.filter(id => {
-      const asset = assets.get(id);
-      if (audioPort && !asset?.store_path) throw new WorkflowInputError("参考录音已缺失，请检查来源连接", node, binding);
-      if (!asset?.store_path) throw new WorkflowNodeError("输入素材已丢失，请检查来源卡片", node);
-      const media = isAudioPath(asset.store_path) ? "audio" : isVideoPath(asset.store_path) ? "video" : "image";
-      return accepted.includes(media);
-    });
-    if (audioPort && !value.nodeIds?.length && value.assetIds?.length !== 1) {
-      throw new WorkflowInputError("请连接一段可用的本地录音", node, binding);
-    }
-    // A rejected media type may occur before a ranked image in the same container.
-    if (binding.referenceRanks && value.assetIds?.length !== source.assetIds?.length) {
-      const kept = new Set(value.assetIds);
-      value.referenceRanks = source.assetIds?.flatMap((id, i) => kept.has(id) ? [binding.referenceRanks![i] ?? -1] : []);
-    }
-    const excludedTokens = new Set(value.imageRefs?.filter(ref => !value.assetIds?.includes(ref.asset_id)).map(ref => ref.token));
-    value.imageRefs = value.imageRefs?.filter(ref => value.assetIds?.includes(ref.asset_id));
-    if (excludedTokens.size) {
-      const removeExcluded = (text: string) => text.replace(/@图片\d+/g, token => excludedTokens.has(token) ? "" : token);
-      if (value.text !== undefined) value.text = removeExcluded(value.text);
-      if (value.table) value.table = { ...value.table, rows: value.table.rows.map(row => row.map(removeExcluded)), ...(value.table.columns ? { columns: value.table.columns.map(removeExcluded) } : {}) };
-    }
-    if (value.type === "image" && !value.assetIds?.length && !value.nodeIds?.length && !isR2VPort(port)) {
-      throw new WorkflowNodeError("来源卡片没有当前任务可用的素材，请检查来源或任务模式", node);
-    }
-  }
-}
 const scheduleSessionStartedAt = Date.now();
-type CardStart = { kind: "run" | "optimize"; current: () => boolean; cancel: () => void; release: () => void };
 export function canvasWorkflowController(projectId: string) {
   let controller = controllers.get(projectId);
   if (!controller) { controller = new CanvasWorkflowController(projectId); controllers.set(projectId, controller); }
@@ -829,7 +789,7 @@ export class CanvasWorkflowController {
         // A new reader leaves existing source definitions intact. Writes still
         // block data connections, and extracting a frame requires an idle source.
         if (trigger?.kind !== "trigger" && output.type !== "signal" && [sourceId, input.nodeId, ...workflowInputProducers(nodes, input)]
-          .some(id => id && (input.videoFrame ? this.isLocked(id) : this.isWriteLocked(id)))) throw new Error("来源卡片正在使用");
+          .some(id => id && (input.videoFrame || input.videoAudio && !input.nodeId ? this.isLocked(id) : this.isWriteLocked(id)))) throw new Error("来源卡片正在使用");
       }
       const signalOnly = outputs.length > 0 && outputs.every(output => output.type === "signal");
       const connectionId = options.connectionId ?? crypto.randomUUID();
@@ -1913,91 +1873,6 @@ export class CanvasWorkflowController {
     });
   }
 
-  private async runVoice(runId: string, node: WorkflowNode, halted: () => boolean, values?: Record<string, WorkflowValue[]>) {
-    const run = this.run(runId);
-    const voice = node.voice ?? {};
-    let request: VoiceCardRequest | undefined = run.steps[node.id].voiceRequest;
-    const recovering = !!request;
-    if (!request) {
-      const environment = await voiceApi.environment();
-      if (environment.phase !== "ready") throw new Error(environment.message);
-      const key = crypto.randomUUID();
-      let text = [...(values?.text ?? []).map(value => value.text), node.prompt].filter(Boolean).join("\n").trim();
-      let preview: Parameters<typeof voiceApi.start>[3];
-      request = { key };
-      if (!voice.id) {
-        if (run.order.length !== 1) throw new Error("请先为角色声音卡片选择声音");
-        const ids = (values?.image ?? []).flatMap(value => value.assetIds ?? []);
-        if (ids.length !== 1) throw new Error("请选择一段参考录音");
-        const [asset] = await api.getAssetsByIds(ids);
-        if (!asset || !isAudioPath(asset.store_path)) throw new Error("请选择音频素材作为参考录音");
-        const clip = voiceCardClip(voice, asset);
-        text = (voice.sampleText ?? defaultVoiceSample).trim();
-        request.previewKey = voiceCardPreviewKey(voice, asset);
-        preview = { assetId: asset.id, start: clip.start, end: clip.end, transcript: clip.transcript, draftKey: request.previewKey };
-      }
-      if (!text) throw new Error(voice.id ? "请输入配音台词" : "请输入试听台词");
-      if (halted()) return;
-      await this.step(runId, node.id, { status: "running", voiceRequest: request, detail: voice.id ? "正在生成配音" : "正在生成试听" });
-      if (halted()) return;
-      let jobId: string;
-      try { jobId = await voiceApi.start(this.projectId, text, voice.id ?? null, preview, key); }
-      catch (error) {
-        const snapshot = await voiceApi.snapshot(this.projectId).catch(() => null);
-        if (!snapshot) {
-          if (!halted()) await this.step(runId, node.id, { status: "waiting", error: "提交状态待确认，点击继续以查询原任务" });
-          return;
-        }
-        const original = snapshot.jobs.find(item => item.request_key === key);
-        if (!original) throw error;
-        jobId = original.id;
-      }
-      if (halted()) { await voiceApi.cancel(jobId); return; }
-      request = { ...request, jobId };
-      await this.step(runId, node.id, { voiceRequest: request });
-    }
-    let retrySave = recovering;
-    while (!halted()) {
-      if (run.accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("请登录原账号后继续取回配音");
-      let snapshot: Awaited<ReturnType<typeof voiceApi.snapshot>>;
-      try { snapshot = await voiceApi.snapshot(this.projectId); }
-      catch (error) {
-        if (!halted()) await this.step(runId, node.id, { status: "waiting", error: `配音查询中断，可继续查询原任务。${String(error)}` });
-        return;
-      }
-      if (halted()) return;
-      const identity: VoiceCardRequest = request;
-      const job = snapshot.jobs.find(item => item.id === identity.jobId || item.request_key === identity.key);
-      if (!job) { await this.step(runId, node.id, { status: "waiting", error: "尚未找到原配音任务，可继续查询" }); return; }
-      if (!request.jobId) {
-        request = { ...request, jobId: job.id };
-        await this.step(runId, node.id, { voiceRequest: request });
-      }
-      if (job.status === "succeeded") {
-        const asset = snapshot.assets.find(item => item.id === job.asset_id);
-        if (!asset) throw new Error("配音素材已移除");
-        if (!request.previewKey) {
-          try { await this.deliverMediaAsset(this.run(runId), node, asset, halted, `workflow-voice:${job.id}`); }
-          catch (error) {
-            if (!halted()) await this.step(runId, node.id, { status: "waiting", error: `配音已保存，点击继续添加到画板。${String(error)}` });
-            return;
-          }
-        }
-        if (halted()) return;
-        await this.step(runId, node.id, { voiceRequest: { ...request, assetId: asset.id } });
-        await this.finish(runId, node, request.previewKey ? {} : { image: { type: "image", assetIds: [asset.id] } });
-        return;
-      }
-      if (job.recoverable) {
-        if (retrySave) { retrySave = false; await voiceApi.recover(job.id); continue; }
-        await this.step(runId, node.id, { status: "waiting", error: "音频已生成，点击继续以重试保存" });
-        return;
-      }
-      if (job.status !== "running") throw new Error(job.message);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-  }
-
   async restoreComfyPrompt(nodeId: string, runId: string, source: "original" | "result") {
     const node = this.document.nodes.find(node => node.id === nodeId);
     const step = workflowRuns(this.document).find(run => run.id === runId)?.steps[nodeId];
@@ -2245,10 +2120,7 @@ export class CanvasWorkflowController {
     });
   }
 
-  private async runWorkflowImageSession(runId: string, node: WorkflowNode, halted: () => boolean, input?: {
-    prompt: string; rawPrompt: string; references: Asset[]; ratio: string | null; visualProfileId: string | null; referenceNodeIds: (string | null)[];
-    generationRunInput?: WorkflowStep["generationRunInput"];
-  }) {
+  private async runWorkflowImageSession(runId: string, node: WorkflowNode, halted: () => boolean, input?: WorkflowImageSessionInput) {
     const id = node.id, step = this.run(runId).steps[id];
     let { jobId, turnKey } = step;
     if (!jobId) {
@@ -2283,97 +2155,33 @@ export class CanvasWorkflowController {
     await this.finish(runId, node, { image: { type: "image", nodeIds: [`gen-prompt:${jobId}:${turnKey}:0`] } });
   }
 
-  private async runComfyVideo(runId: string, node: WorkflowNode, halted: () => boolean, input?: ComfyVideoInput, start?: CardStart, generationRunInput?: WorkflowStep["generationRunInput"]) {
-    const id = node.id, step = this.run(runId).steps[id], accountId = this.run(runId).accountId;
-    const optimizedForThisRun = !!(step.comfyAutoGeneration?.input && step.comfyOptimization?.result);
-    let jobId = step.jobId;
-    let result: ComfyVideoStatus;
-    let terminalFailure = false;
-    const prepare = async (endpoint: string, mode: import("./comfyVideo").ComfyVideoMode, recovery?: { installation?: string | null }) => {
-      let environment = await comfyEnvironment(recovery ? "recover" : "prepare", endpoint, undefined, recovery?.installation ?? undefined, mode);
-      while (!halted()) {
-        if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后重新运行");
-        if (environment.phase === "ready") return environment.endpoint;
-        if (environment.phase !== "starting" && environment.phase !== "installing") throw new Error(environment.message);
-        this.progress(runId, id, environment.message);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        if (halted()) break;
-        environment = await comfyEnvironment("status", endpoint, undefined, undefined, mode);
-      }
-      return null;
+  private cardExecution(): WorkflowCardExecution {
+    const controller = this;
+    return {
+      projectId: this.projectId,
+      get document() { return controller.document; },
+      run: id => this.run(id),
+      save: document => this.save(document),
+      saveRun: (run, nodes) => this.saveRun(run, nodes),
+      step: (run, node, patch) => this.step(run, node, patch),
+      progress: (run, node, detail, videoProgress) => this.progress(run, node, detail, videoProgress),
+      finish: (run, node, outputs, ports) => this.finish(run, node, outputs, ports),
+      isStopped: id => this.stopped.has(id),
+      stopBeforeDispatch: run => this.stopBeforeDispatch(run),
+      resolveInputGenerations: (run, node, values, halted) => this.resolveInputGenerations(run, node, values, halted),
+      deliverMediaAsset: (run, node, asset, halted, resultId) => this.deliverMediaAsset(run, node, asset, halted, resultId),
+      chatResult: (run, node, step, assets, halted) => this.chatResult(run, node, step, assets, halted),
+      localDsResult: (run, node, step, paths, halted) => this.localDsResult(run, node, step, paths, halted),
+      writeAgentText: (run, node, value, writers, halted) => this.writeAgentText(run, node, value, writers, halted),
+      writeAgentResult: (run, node, value, hasWriters, halted) => this.writeAgentResult(run, node, value, hasWriters, halted),
+      runComfyAutoGeneration: (run, node, halted, input, start, text, preview) => this.runComfyAutoGeneration(run, node, halted, input, start, text, preview),
+      runComfyAutoImage: (run, node, halted, input, start) => this.runComfyAutoImage(run, node, halted, input, start),
+      runWorkflowImageSession: (run, node, halted, input) => this.runWorkflowImageSession(run, node, halted, input),
     };
-    try {
-      if (!jobId) {
-        if (step.status !== "pending" && !optimizedForThisRun) {
-          throw new Error("上次提交状态未知，请核对本机 ComfyUI 队列");
-        }
-        if (!input) throw new Error("缺少本地视频输入");
-        this.progress(runId, id, "正在准备本机环境…");
-        const endpoint = await prepare(input.endpoint, comfyVideoMode(input));
-        if (!endpoint || halted()) return;
-        input = { ...input, endpoint };
-        jobId = crypto.randomUUID();
-        await this.step(runId, id, { status: "running", jobId, error: undefined, detail: "正在提交本机视频工作流",
-          generationRunInput: generationRunInput ?? step.generationRunInput });
-        if (halted()) return;
-        if (start && !start.current()) { await this.stopBeforeDispatch(runId); return; }
-        if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) {
-          await this.step(runId, id, { status: "pending", jobId: undefined, error: "账号已切换，请登录原账号后继续生成。" });
-          return;
-        }
-        start?.release();
-        result = await comfyVideo("start", this.projectId, jobId, input);
-      } else {
-        await this.step(runId, id, { status: "running", error: undefined });
-        result = await comfyVideo("status", this.projectId, jobId);
-      }
-      let restarted = false;
-      while (!halted()) {
-        if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) {
-          await this.step(runId, id, { status: "waiting", error: "请登录原账号后继续取回视频" }); return;
-        }
-        if (result.status === "offline") {
-          if (restarted || !result.originalService) throw new Error("本机视频服务仍无法连接，原任务记录已保留。");
-          restarted = true;
-          const [original, mode, installation] = result.originalService;
-          const endpoint = await prepare(original, mode, { installation });
-          if (!endpoint || halted()) return;
-          if (endpoint !== original) throw new Error("原任务使用的本机视频服务暂不可用。");
-          result = await comfyVideo("status", this.projectId, jobId);
-          if (result.status === "unknown") {
-            terminalFailure = true;
-            throw new Error("本机视频服务已恢复，未找到上次任务的结果。可以点击运行重新生成。");
-          }
-          continue;
-        }
-        if (result.status === "done" && result.asset) {
-          await this.deliverMediaAsset(this.run(runId), node, result.asset, halted);
-          if (halted()) return;
-          await this.step(runId, id, { detail: comfyVideoElapsed(result.elapsedMs) ? `视频已生成 · 用时 ${comfyVideoElapsed(result.elapsedMs)}` : "视频已生成", error: undefined, comfyProgress: undefined });
-          await this.finish(runId, node, { image: { type: "image", assetIds: [result.asset.id] } });
-          await emit("creative://changed", { projectId: this.projectId }); return;
-        }
-        if (result.status === "failed") { terminalFailure = true; throw new Error(result.message); }
-        if (result.status === "cancelled") {
-          await this.step(runId, id, { comfyCancelled: true, comfyProgress: undefined });
-          terminalFailure = true; throw new Error(result.message);
-        }
-        if (result.status === "unknown") { await this.step(runId, id, { status: "waiting", error: result.message }); return; }
-        this.progress(runId, id, result.message, result.progress ?? undefined);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        if (halted()) return;
-        result = await comfyVideo("status", this.projectId, jobId);
-      }
-    } catch (error) {
-      if (halted()) return;
-      if (!jobId && optimizedForThisRun) {
-        await this.step(runId, id, { status: "waiting", detail: "提示词已优化，等待本机生成", error: `${String(error)}。继续时会沿用本次优化结果。` });
-        return;
-      }
-      if (terminalFailure || !jobId) throw error;
-      // Preserve the durable identity on all transport errors. Continue never submits anew.
-      await this.step(runId, id, { status: "waiting", comfyProgress: undefined, error: `${String(error)}。可继续查询原任务，或点击停止取消本机生成。` });
-    }
+  }
+
+  private async runComfyVideo(runId: string, node: WorkflowNode, halted: () => boolean, input?: ComfyVideoInput, start?: CardStart, generationRunInput?: WorkflowStep["generationRunInput"]) {
+    return runWorkflowComfyVideo(this.cardExecution(), runId, node, halted, input, start, generationRunInput);
   }
 
   async recoverComfyVideo(runId: string, nodeId?: string) {
@@ -2424,15 +2232,9 @@ export class CanvasWorkflowController {
     this.executionDrains.set(runId, new Promise<void>(resolve => { drained = resolve; }));
     const failures = new Map<string, unknown>();
     const halted = () => this.stopped.has(runId) || failures.size > 0;
-    const prepareMediaInputs = async (node: WorkflowNode, inputs: WorkflowNode["inputs"], values: Record<string, WorkflowValue[]>) => {
-      for (const [port, items] of Object.entries(values)) for (const [index, value] of items.entries()) {
-        const binding = inputs[port]?.[index];
-        if (!binding?.nodeId || !binding.videoFrame) continue;
-        if (halted()) return;
-        items[index] = await resolveDynamicVideoFrame(this.projectId, node, binding, value, halted);
-      }
-      if (!halted()) await filterAutomaticMediaValues(node, values, this.document.nodes);
-    };
+    const prepareMediaInputs = (node: WorkflowNode, inputs: WorkflowNode["inputs"], values: Record<string, WorkflowValue[]>) =>
+      prepareWorkflowMediaInputs(this.projectId, node, inputs, values, () => this.document.nodes, halted);
+    const execution = this.cardExecution();
     const active = new Map<string, Promise<void>>();
     const attempted = new Set<string>();
     const execute = async (id: string) => {
@@ -2443,7 +2245,7 @@ export class CanvasWorkflowController {
       const storedNode = step.comfyAutoGeneration ? { ...current, prompt: h3OriginalPrompt(current) } : current;
       const node = storedNode.kind === "trigger" ? { ...storedNode, inputs: {} } : storedNode.kind === "comfy-video" ? generationInputNode(storedNode) : storedNode;
       if (step.status === "done" || halted()) return;
-      if (node.kind === "voice" && step.voiceRequest) { await this.runVoice(runId, node, halted); return; }
+      if (node.kind === "voice" && step.voiceRequest) { await executeVoiceCard(execution, runId, node, halted); return; }
       this.progress(runId, id, node.kind === "generation" ? `生成${node.generation?.media === "video" ? "视频" : "图片"}，等待会话结果` : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
       if (node.kind === "comfy-video" && step.jobId) { await this.runComfyVideo(runId, node, halted); return; }
       if (node.kind === "comfy-video" && step.comfyAutoGeneration?.input) {
@@ -2490,24 +2292,7 @@ export class CanvasWorkflowController {
         refreshedLatest = true;
       }
       if (node.kind === "loop") {
-        const run = this.run(runId), loop = run.loop;
-        if (!loop || loop.nodeId !== id) throw new WorkflowNodeError("请从循环卡片启动完整流程", node);
-        let sourceItems = loop.items;
-        if (!sourceItems && node.loopMode !== "rows" && node.loopMode !== "count") {
-          const values = structuredClone(workflowInputValues(this.document.nodes, node, readCell));
-          const pending = values.image.filter(value => value.nodeIds?.length);
-          if (pending.length && !await this.resolveInputGenerations(runId, node, pending, halted)) return;
-        if (pending.length && accountId !== undefined && accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
-          await prepareMediaInputs(node, node.inputs, values);
-          if (halted()) return;
-          await resolveVideoCardOutputs(node, values, canvas?.nodes ?? [], this.projectId, halted);
-          if (halted()) return;
-          sourceItems = validateLoopItems(values.image.flatMap(value => value.assetIds ?? []).map(assetId => ({ text: "", assetIds: [assetId] })), node);
-        }
-        const items = validateLoopStart(sourceItems ?? workflowLoopItems(node, this.document.nodes, canvas?.nodes ?? [], readCell), loop.index, node);
-        const current = this.run(runId);
-        await this.saveRun({ ...current, loop: { ...loop, items }, steps: { ...current.steps, [id]: { status: "done", detail: `第 ${loop.index + 1} / ${items.length} 项` } } },
-          this.document.nodes.map(candidate => candidate.id === id ? { ...candidate, outputs: workflowLoopOutputs(items[loop.index], loop.index) } : candidate));
+        await executeLoopCard(execution, { runId, node, halted, accountId, canvas, readCell, prepareMediaInputs });
         return;
       }
       if (node.kind === "director3d") {
@@ -2536,8 +2321,13 @@ export class CanvasWorkflowController {
         : undefined;
       const inputNode: WorkflowNode = step.localAgentSkill === "hyperframes" ? { ...node, skill: "hyperframes", agentTransport: "codex-cli" } : node;
       const r2vImagePort = H3_R2V_INPUT_PORTS.image;
+      const r2vAudioPort = H3_R2V_INPUT_PORTS.audio;
       const frameSources = localVideoMode === "r2v" ? connectedNode.inputs[r2vImagePort]?.map((input, index) =>
         input.nodeId && input.videoFrame ? values[r2vImagePort]?.[index] : undefined) : undefined;
+      const audioSources = localVideoMode === "r2v" ? connectedNode.inputs[r2vAudioPort]?.map((input, index) =>
+        input.nodeId && input.videoAudio ? values[r2vAudioPort]?.[index] : undefined) : undefined;
+      const voiceReference = node.kind === "voice" ? connectedNode.inputs.image?.[0] : undefined;
+      const voiceSourceVideoId = voiceReference?.nodeId && voiceReference.videoAudio ? values.image?.[0]?.assetIds?.[0] : undefined;
       await prepareMediaInputs(inputNode, connectedNode.inputs, values);
       if (halted()) return;
       if ((node.kind === "generation" || node.kind === "comfy-video") && Object.values(connectedNode.inputs).some(port => port.some(input => input.excludedAssetIds?.length))) {
@@ -2545,8 +2335,9 @@ export class CanvasWorkflowController {
       }
       if (localVideoMode === "r2v") generationRunInput = { prompt: node.prompt, references: h3RunReferences({ ...values,
         [r2vImagePort]: (values[r2vImagePort] ?? []).map((value, index) => value.assetIds?.length ? frameSources?.[index] ?? value : value),
+        [r2vAudioPort]: (values[r2vAudioPort] ?? []).map((value, index) => value.assetIds?.length ? audioSources?.[index] ?? value : value),
       }, localVideoMode) };
-      if (node.kind === "voice") { await this.runVoice(runId, node, halted, values); return; }
+      if (node.kind === "voice") { await executeVoiceCard(execution, runId, node, halted, values, voiceSourceVideoId); return; }
       if (node.kind === "instruction") {
         const count = (values.image ?? []).flatMap(value => value.assetIds ?? []).length;
         if (node.action === "describe" ? count < 1 : count !== 1) throw new Error("指令卡片的输入图片数量不符合要求");
@@ -2778,153 +2569,12 @@ export class CanvasWorkflowController {
           await this.finish(runId, node, { image: { type: "image", assetIds: products } }, []);
         });
       } else if (node.kind === "agent") {
-        const snapshot = step.agentInput ?? { ...agentInput!, visualProfile: agentVisualProfile };
-        if (!step.agentInput) await this.step(runId, id, { agentInput: snapshot });
-        if (!snapshot.prompt.trim()) throw new WorkflowNodeError("Agent 要求不能为空", node);
-        if (outputTargets.length && !step.agentOutputTargets) await this.step(runId, id, { agentOutputTargets: outputTargets });
-        let outputs: Record<string, WorkflowValue>;
-        if (!step.localDsRequestId && !step.agentRunId) {
-          const result = await this.chatResult(runId, node, step, orderedAssets, halted);
-          if (!result) return;
-          outputs = result;
-        } else if (step.localDsRequestId) {
-          const result = await this.localDsResult(runId, node, step, orderedAssets.map(asset => asset.store_path!), halted);
-          if (!result) return;
-          outputs = result;
-        } else {
-        const agentRunId = step.agentRunId!; // Legacy accepted Cloud runs are read only; new turns use localChat.
-        let result;
-        while (!this.stopped.has(runId)) {
-          const current = await api.cloudAgentGet(agentRunId);
-          useStore.getState().openCloudAgentRun(current, { navigate: false });
-          if (["failed", "cancelled"].includes(current.status)) {
-            const code = current.snapshot.run.error_code;
-            const message = code === "unified_agent_text_result_invalid" ? "模型没有返回有效的完整改写文本" : code === "unified_agent_input_invalid" ? "云端未识别文本改写输入，请检查 Worker 版本" : current.snapshot.run.safe_message || "文本改写未完成";
-            throw new Error(`${message}（Cloud DSH 任务 ${agentRunId}${code ? `，${code}` : ""}）`);
-          }
-          if (current.status === "succeeded") { result = current; break; }
-          if (current.status.startsWith("awaiting_")) throw new Error("云端未按文本改写模式执行，请检查 Cloud DSH 服务版本");
-          this.progress(runId, id, current.status === "queued" ? "Cloud DSH 文本改写排队中" : "Cloud DSH 正在修改文本");
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-        if (this.stopped.has(runId) || !result) return;
-        const payload = result.snapshot.events.find(event => event.type === "text.result")?.display_payload;
-        if (payload?.schemaVersion !== 1 || typeof payload.text !== "string" || !payload.text.trim()) throw new Error("Cloud DSH 未返回有效的改写文本，请检查任务结果或服务版本");
-        outputs = { text: agentResultValue(payload.text) };
-        }
-        outputs = routeAgentOutputs(outputs, outputTargets, orderedAssets.map(asset => asset.id));
-        const writers = agentTextWriters(node, this.document.nodes);
-        if (!outputTargets.length) {
-          // A wired content card is the result's home: write it now so an early stop still
-          // leaves the text on the board, and never add a second "Agent 结果" card beside it.
-          if (writers.length) await this.writeAgentText(runId, node, outputs.text ?? { type: "text", text: "" }, writers, halted);
-          else await this.writeAgentResult(runId, node, outputs.text ?? { type: "text", text: "" }, false, halted);
-        }
-        if (halted()) return;
-        await this.finish(runId, node, outputs);
-        await emit("creative://changed", { projectId: this.projectId });
+        await executeAgentCard(execution, { runId, node, step, halted, agentInput, agentVisualProfile, outputTargets, orderedAssets });
       } else if (node.kind === "comfy-video") {
-        const account = useStore.getState();
-        if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("本地 H3 视频需要有效的 Pro／Studio 权益或测试账号资格");
-        const first = (values["first-frame"] ?? []).flatMap(value => value.assetIds ?? []);
-        const last = (values["last-frame"] ?? []).flatMap(value => value.assetIds ?? []);
-        const audioBindings = localVideoMode === "r2v" ? [] : node.inputs[H3_VIDEO_AUDIO_PORT] ?? [];
-        const audio = (values[H3_VIDEO_AUDIO_PORT] ?? []).flatMap(value => value.assetIds ?? []);
-        if (audioBindings.length && (audioBindings.length !== 1 || audio.length !== 1)) {
-          throw new WorkflowInputError("请连接一段可用的本地录音", node, audioBindings[0]);
-        }
-        const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
-        const mode = comfyVideoMode(options);
-        const referenceVideos = mode === "r2v" ? (values[H3_R2V_INPUT_PORTS.video] ?? []).flatMap(value => value.assetIds ?? []) : undefined;
-        const referenceAudios = mode === "r2v" ? (values[H3_R2V_INPUT_PORTS.audio] ?? []).flatMap(value => value.assetIds ?? []) : undefined;
-        const referenceError = mode === "r2v" && h3R2VInputError(referenceImages?.length ?? 0, referenceVideos?.length ?? 0, referenceAudios?.length ?? 0);
-        if (referenceError) throw new WorkflowNodeError(referenceError, node);
-        if (mode === "frames" && (first.length !== 1 || last.length > 1)) throw new Error("请连接一张首帧，尾帧最多一张");
-        if (mode === "reference" && first.length !== 1) throw new Error("单图模式需要连接一张参考图");
-        const localPrompt = mode === "reference" && audio.length && !prompt.includes("<Audio 1>") ? `${prompt}\n<Audio 1>` : prompt;
-        if (!prompt || localPrompt.length > 16000) throw new Error("请填写 1–16000 字提示词");
-        if (!Number.isFinite(options.seconds) || options.seconds < 1 || options.seconds > 15) throw new Error("视频时长需为 1–15 秒");
-        const input: ComfyVideoInput = { ...options, firstFrame: mode === "text" || mode === "r2v" ? "" : first[0], lastFrame: mode === "frames" ? last[0] : undefined, prompt: localPrompt,
-          ...(mode === "r2v" ? { referenceImages, referenceVideos, referenceAudios } : audio.length ? { audioAssetId: audio[0] } : {}) };
-        if (step.comfyAutoGeneration) await this.runComfyAutoGeneration(runId, node, halted, input, start, linkedText, generationRunInput);
-        else await this.runComfyVideo(runId, node, halted, input, start, generationRunInput);
+        await executeComfyVideoCard(execution, { runId, node, step, halted, start, values, localVideoMode, referenceImages, prompt, linkedText, generationRunInput });
       } else if (node.kind === "generation") {
-        const generation = video ? { ...node.generation, media: "video" as const, videoOptions: resolveVideoOptions(node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS, orderedAssets) } : undefined;
-        const provider = workflowGenerationProvider(node);
-        if (!step.jobId) {
-          const issue = workflowProviderIssue(node, useStore.getState());
-          if (issue) throw new WorkflowNodeError(issue.message, node);
-        }
-        const ratio = generation ? generation.ratio ?? "16:9" : node.ratio;
-        const sessionOutput = !video && (!step.jobId || !!step.generationSubmission);
-        if (sessionOutput) {
-          if (!step.jobId) {
-            if (step.status !== "pending") throw new Error("无法确认上次提交状态，请检查任务中心");
-            const origins = new Map<string, string>();
-            for (const [port, bindings] of Object.entries(connectedNode.inputs)) for (const [index, binding] of bindings.entries()) {
-              const sourceId = binding.assetNodeId ?? binding.canvasNodeId;
-              if (sourceId && values[port]?.[index]?.assetIds?.length) {
-                canvas ??= await api.projectCanvasGet(this.projectId);
-                if (halted()) return;
-                const source = canvas?.nodes.find(candidate => candidate.id === sourceId && candidate.kind === "asset" && candidate.hiddenAt == null);
-                if (source?.assetId && values[port][index].assetIds?.includes(source.assetId) && !origins.has(source.assetId)) {
-                  origins.set(source.assetId, source.id);
-                }
-              }
-            }
-            // Explicit null keeps a reference in the request and history without projecting a canvas node.
-            const referenceNodeIds = orderedAssets.map(asset => origins.get(asset.id) ?? null);
-            if (step.comfyAutoGeneration) {
-              if (prompt.length > 16000) throw new Error("自动优化支持 1–16000 字提示词");
-              const environment = await comfyEnvironment("detect", H3_IMAGE_ENDPOINT, undefined, undefined, orderedAssets.length ? "edit" : "image");
-              if (halted()) return;
-              if (!comfyEnvironmentReady(environment)) throw new WorkflowNodeError(environment.message || "本地 H3 图片环境尚未就绪。", node);
-              const imageInput = { assetIds, referenceNodeIds, ratio, visualProfileId, promptParts: generated?.promptParts };
-              const input = { prompt: node.prompt, referenceCount: orderedAssets.length, ratio: ratio?.trim() || "auto" };
-              await this.step(runId, id, { generationRunInput, comfyAutoGeneration: { imageInput },
-                comfyOptimization: { input, instruction: h3OptimizationInstruction(input), createdAt: Date.now(),
-                  inputBindings: JSON.stringify([node.inputs, node.promptReferences]) } });
-              if (!halted()) await this.runComfyAutoImage(runId, node, halted, imageInput, start);
-            } else {
-              await this.runWorkflowImageSession(runId, node, halted, { prompt, rawPrompt: prompt, references: orderedAssets, ratio, visualProfileId, referenceNodeIds, generationRunInput });
-            }
-          } else {
-            await this.runWorkflowImageSession(runId, node, halted);
-          }
-          return;
-        }
-        let paths: string[] = [];
-        if (step.jobId) {
-          const previous = (await api.recentGenSessions(500)).find(job => job.id === step.jobId);
-          if (!previous || previous.status !== "done") {
-            if (previous?.status === "failed") throw new Error(previous.error || "生成失败");
-            await this.step(runId, id, { status: "waiting", error: "原任务尚未完成，请稍后继续取回" }); return;
-          }
-          const turn = step.turnKey ? previous.turns.find(turn => turn.turn_key === step.turnKey) : previous.turns[0];
-          paths = turn?.images ?? [];
-        } else {
-          if (step.status !== "pending") throw new Error("无法确认上次提交状态，请检查任务中心");
-          if (generation) {
-            const error = videoInputError(generation.videoOptions, orderedAssets, ratio, provider);
-            if (error) throw new Error(error);
-          }
-          const identity = { jobId: crypto.randomUUID(), turnKey: crypto.randomUUID() };
-          const sessionNodeId = `gen-prompt:${identity.jobId}:${identity.turnKey}:0`;
-          await this.save({ ...this.document, nodes: this.document.nodes.map(candidate => candidate.id === id
-            ? { ...candidate, activeSessionNodeId: sessionNodeId, sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate) });
-          await this.step(runId, id, { status: "running", jobId: identity.jobId, turnKey: identity.turnKey, generationRunInput });
-          const result = await useStore.getState().startGeneration(prompt, orderedAssets, ratio, provider, prompt,
-            undefined, undefined, undefined, visualProfileId, { projectId: this.projectId, threadId: this.run(runId).threadId }, false, generation, identity);
-          if (!result.accepted) throw new Error(result.error || "生成未完成");
-          const turns = useStore.getState().genJobs[identity.jobId]?.turns ?? [];
-          paths = (turns.find(turn => turn.turnKey === identity.turnKey) ?? (turns.length === 1 && !turns[0].turnKey ? turns[0] : undefined))?.images ?? [];
-        }
-        if (this.stopped.has(runId)) return;
-        const outputAssetIds = await Promise.all(paths.map(path => api.localAgentFindAssetId(path)));
-        if (!outputAssetIds.length || outputAssetIds.some(id => !id)) {
-          await this.step(runId, id, { status: "waiting", error: "本次生成产物尚未入库，请稍后继续取回" }); return;
-        }
-        await this.finish(runId, node, { image: { type: "image", assetIds: [...new Set(outputAssetIds as string[])] } });
+        await executeGenerationCard(execution, { runId, node, step, halted, start, canvas, connectedNode,
+          values, video, orderedAssets, generationRunInput, assetIds, prompt, visualProfileId, generated });
       } else {
         if (!step.agentRunId) {
           if (step.status !== "pending") throw new Error("技能提交状态未知，请先检查 Agent 任务记录");

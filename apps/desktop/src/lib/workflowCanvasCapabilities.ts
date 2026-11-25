@@ -18,11 +18,14 @@ export function workflowAssetMedia(asset?: Pick<Asset, "store_path" | "ext">): A
   }
 }
 
-export function workflowSourceMediaLabel(assetIds: readonly string[], assets: readonly Asset[], source?: WorkflowNode) {
+type WorkflowAssets = readonly Asset[] | Pick<ReadonlyMap<string, Asset>, "get">;
+const assetWithId = (assets: WorkflowAssets, id: string) => "get" in assets ? assets.get(id) : assets.find(asset => asset.id === id);
+
+export function workflowSourceMediaLabel(assetIds: readonly string[], assets: WorkflowAssets, source?: WorkflowNode) {
   if (assetIds.length) {
     let kind: AutomaticMedia | undefined;
     for (const id of assetIds) {
-      const media = workflowAssetMedia(assets.find(asset => asset.id === id));
+      const media = workflowAssetMedia(assetWithId(assets, id));
       if (!media || (kind && kind !== media)) return "素材";
       kind = media;
     }
@@ -34,12 +37,12 @@ export function workflowSourceMediaLabel(assetIds: readonly string[], assets: re
   return "素材";
 }
 
-export function automaticValueMedia(value: WorkflowValue | undefined, assets: Asset[], pending = false): AutomaticMedia[] | undefined {
+export function automaticValueMedia(value: WorkflowValue | undefined, assets: WorkflowAssets, pending = false): AutomaticMedia[] | undefined {
   // Partial metadata and future outputs cannot prove that a connection is incompatible.
   if (pending || value?.nodeIds?.length || !value?.assetIds?.length) return;
   const media: AutomaticMedia[] = [];
   for (const id of value.assetIds) {
-    const asset = assets.find(asset => asset.id === id);
+    const asset = assetWithId(assets, id);
     const path = asset?.store_path || (asset?.ext ? `asset.${asset.ext}` : undefined);
     if (!path) return;
     const type = isVideoPath(path) ? "video" : isAudioPath(path) ? "audio" : "image";
@@ -48,7 +51,7 @@ export function automaticValueMedia(value: WorkflowValue | undefined, assets: As
   return media;
 }
 
-export function canvasAutomaticOutputs(id: string, nodes: WorkflowNode[], canvas: CanvasNode[], materials: Material[], assets: Asset[], latest = false): AutomaticOutput[] {
+export function canvasAutomaticOutputs(id: string, nodes: WorkflowNode[], canvas: CanvasNode[], materials: Material[], assets: WorkflowAssets, latest = false): AutomaticOutput[] {
   const workflow = nodes.find(node => node.id === id);
   if (workflow) return workflowOutputs(workflow).filter(port => port.type !== "session" && port.type !== "signal"
     && (port.id !== "iteration" || workflowOutputs(workflow).length === 1)).map(port => ({

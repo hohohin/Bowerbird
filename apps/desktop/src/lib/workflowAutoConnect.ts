@@ -61,8 +61,9 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
     const producer = nodes.find(node => node.id === source.nodeId);
     if (source.nodeId && (!producer || !workflowOutputs(producer).some(port => port.id === source.portId && port.type === output.type)))
       return fail("来源卡片或输出已不存在");
-    if (source.videoFrame && producer && !workflowProducesVideo(producer)) return fail("来源卡片已不再输出视频");
-    const knownMedia: AutomaticMedia[] | undefined = source.videoFrame ? ["image"] : output.media ? (Array.isArray(output.media) ? output.media : [output.media])
+    if ((source.videoFrame || source.videoAudio) && producer && !workflowProducesVideo(producer)) return fail("来源卡片已不再输出视频");
+    if (source.videoAudio && target.kind === "trigger") return fail("此输入只接收完成信号");
+    const knownMedia: AutomaticMedia[] | undefined = source.videoAudio ? ["audio"] : source.videoFrame ? ["image"] : output.media ? (Array.isArray(output.media) ? output.media : [output.media])
       : producer?.kind === "voice" ? ["audio"] : producer && output.type === "image" && workflowProducesVideo(producer) ? ["video"] : undefined;
     if (output.selectionWireId && knownMedia?.some(media => !acceptedMedia.includes(media))) return fail("此卡片无法接收全部选中的素材类型");
     if (target.kind !== "trigger" && output.type === "image" && knownMedia && !knownMedia.some(media => acceptedMedia.includes(media))) {
@@ -112,7 +113,7 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
       }
       const { mediaFilter: _sourceMedia, ...identity } = source;
       const binding = { ...identity, ...(output.selectionWireId && { autoConnect: output.selectionWireId }),
-        ...(["text", "image"].includes(port.type) ? { mediaFilter: automaticInputMedia(target, port.id) } : {}) };
+        ...(["text", "image"].includes(port.type) ? { mediaFilter: source.videoAudio ? ["audio" as const] : automaticInputMedia(target, port.id) } : {}) };
       inputs[port.id] = [...(inputs[port.id] ?? []), binding];
       bindings.push({ inputId: port.id, binding });
     }

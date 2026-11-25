@@ -30,8 +30,7 @@ export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
 export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; referenceRanks?: number[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[]; deliveries?: Record<string, { nodeId: string; cellId: string; append: boolean; value: WorkflowValue }> }
 export interface WorkflowPort { id: string; label: string; type: WorkflowPortType }
-export interface WorkflowInput { dimension?: { id?: string | null; title: string; body: string }; slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[];
-  videoFrame?: { position: "first" | "last"; assetId?: string };
+interface WorkflowInputFields { dimension?: { id?: string | null; title: string; body: string }; slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[];
   /** A submitted image was still rendering when this completion listener was added. */
   pendingCompletionSession?: string;
   /** Per-member position in this generation card's reference strip, set by dragging. */
@@ -39,6 +38,10 @@ export interface WorkflowInput { dimension?: { id?: string | null; title: string
   excludedAssetIds?: string[];
   h3TailOnly?: boolean;
 }
+export type WorkflowInput = WorkflowInputFields & (
+  { videoFrame?: { position: "first" | "last"; assetId?: string }; videoAudio?: never }
+  | { videoFrame?: never; videoAudio: { assetId?: string } }
+);
 export interface WorkflowPromptReference { slot?: number; id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string; direction?: "output" }
 export interface WorkflowNode {
   /** Duration of the library shot before rounding to a supported generation length. */
@@ -289,6 +292,8 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
 export const workflowProducesVideo = (node: WorkflowNode) => node.kind === "comfy-video" || node.kind === "director3d"
   || node.kind === "generation" && node.generation?.media === "video" || node.kind === "agent" && node.skill === "hyperframes";
 export const workflowFrameLabel = (frame: NonNullable<WorkflowInput["videoFrame"]>) => frame.position === "first" ? "首帧画面" : "尾帧画面";
+export const workflowVideoAudioLabel = () => "视频音频";
+export const workflowInputAssetId = (input: WorkflowInput) => input.videoAudio?.assetId ?? input.videoFrame?.assetId ?? input.assetId;
 export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "director3d") return [{id:"image",label:"MP4",type:"image"}];
   if (node.kind === "voice") return node.voice?.id ? [{ id: "image", label: "配音", type: "image" }] : [];
@@ -481,7 +486,8 @@ export function workflowDisconnectId(input: WorkflowInput) {
 
 export const workflowBindingKey = (input: WorkflowInput) => JSON.stringify([input.nodeId, input.portId, input.assetId, input.groupId, input.canvasNodeId, input.cellId, input.assetNodeId,
   ...(input.dimension ? [input.dimension.id ?? input.dimension.title] : []),
-  ...(input.videoFrame ? [{ videoFrame: input.videoFrame.position }] : [])]);
+  ...(input.videoFrame ? [{ videoFrame: input.videoFrame.position }] : []),
+  ...(input.videoAudio ? [{ videoAudio: true }] : [])]);
 /** An upstream card, folder or native cell owns the reference; its current images may change. */
 export const workflowImageContainer = (input: WorkflowInput) => !!(input.nodeId || input.groupId || input.canvasNodeId);
 export function activePromptReferences(node: WorkflowNode) {
@@ -813,7 +819,8 @@ export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, c
         if (!input.assetIds?.length) throw new Error(media === "图片" ? "文件夹中没有可用图片，请添加图片后重新运行" : `文件夹中没有可用${media}`);
         return { type: "image", assetIds: input.assetIds };
       }
-      if (input.assetId && port.type === "image") return { type: "image", assetIds: [input.videoFrame?.assetId ?? input.assetId] };
+      const assetId = workflowInputAssetId(input);
+      if (assetId && port.type === "image") return { type: "image", assetIds: [assetId] };
         if (input.canvasNodeId && (port.type === "text" || port.type === "image")) {
         const text = cellText?.(input.canvasNodeId, input.cellId ?? "");
         if (text === undefined) throw new Error("来源卡片或单元格不存在，请检查来源连接");
@@ -834,7 +841,7 @@ export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, c
       const value = source?.kind === "agent" && input.portId === "image" && source.outputs.session?.nodeIds?.length
         ? { ...stored, type: "image" as const, nodeIds: [...new Set([...(stored?.nodeIds ?? []), ...source.outputs.session.nodeIds])] } : stored;
       if (!value || value.type !== port.type) throw new Error(`${port.label}输入尚无有效结果，请先运行上游`);
-      return input.videoFrame ? { ...value } : value;
+      return input.videoFrame || input.videoAudio ? { ...value } : value;
       } catch (error) {
         const ref = activePromptReferences(node).find(ref => ref.type === port.type && workflowReferenceMatchesInput(ref, input));
         throw new WorkflowInputError(`${ref ? `@${ref.label}：` : `${port.label}输入：`}${error instanceof Error ? error.message : String(error)}`, node, input, ref?.label);

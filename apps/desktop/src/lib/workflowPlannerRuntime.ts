@@ -1,7 +1,7 @@
 import { api } from "./api";
 import { canvasInputValue, canvasWorkflowInputState } from "./canvasSessionOutputs";
 import { readCanvasNote } from "./canvasNotes";
-import { activePromptReferences, workflowReferenceMatchesInput, workflowOutputs, workflowRuns, workflowTitle, type CanvasWorkflow, type WorkflowNode } from "./canvasWorkflow";
+import { activePromptReferences, workflowInputAssetId, workflowReferenceMatchesInput, workflowOutputs, workflowRuns, workflowTitle, type CanvasWorkflow, type WorkflowNode } from "./canvasWorkflow";
 import { buildWorkflowPlan, canResumeWorkflowPlanning, canUndoWorkflowPlan, compilePlanningPrompt, plannerContextKey, planningContract, planningSnapshotKey, samePlanningContext, type PlanningSource, type WorkflowPlanningState } from "./workflowPlanner";
 
 interface Host {
@@ -72,7 +72,8 @@ export class WorkflowPlannerRuntime {
           const node = canvas.nodes.find(node => node.id === item.nodeId && node.hiddenAt == null);
           return node?.assetId ? [node.assetId] : [];
         });
-        const ids = input.assetId ? [input.videoFrame?.assetId ?? input.assetId] : input.assetIds ?? [];
+        const assetId = workflowInputAssetId(input);
+        const ids = assetId ? [assetId] : input.assetIds ?? [];
         const assets = await api.getAssetsByIds(ids);
         if (!assets.length || assets.length !== ids.length) throw new Error("连接的图片来源已失效");
         label = assets.map(asset => asset.name).join("、").slice(0, 300); preview = `${assets.length} 张图片（未进行视觉分析）`;

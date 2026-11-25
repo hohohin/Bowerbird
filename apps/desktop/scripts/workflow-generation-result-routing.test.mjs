@@ -300,8 +300,127 @@ try {
   assert.equal(await editCard.count(), 1, 'the pinned card remains until the board receives its result');
   await page.evaluate(() => { window.save(); window.emitChange(); });
   await editCard.waitFor({ state: 'detached' });
+  const audio = await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const { newWorkflowNode, workflowBindingKey } = await import('/src/lib/canvasWorkflow.ts');
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { DEFAULT_VIDEO_OPTIONS } = await import('/src/lib/videoGeneration.ts');
+    const { publishGeneration } = await import('/scripts/fixtures/canvas-reference/generation.ts');
+    const c = canvasWorkflowController('p');
+    const card = (id, x) => ({ ...newWorkflowNode('generation', x, 100, 'jimeng'), id, prompt: id,
+      generation: { media: 'video', videoChannel: 'jimeng', ratio: '16:9', videoOptions: DEFAULT_VIDEO_OPTIONS } });
+    const producer = card('audio-source', 40);
+    const receiver = card('audio-receiver', 690);
+    await c.save({ ...c.document, nodes: [producer, receiver], run: null, runs: [] });
+    await c.connectAutomatic([{ binding: { nodeId: producer.id, portId: 'image', videoAudio: {} }, type: 'image', media: 'audio' }],
+      { nodeId: receiver.id });
+    const storedBinding = () => c.document.nodes.find(node => node.id === receiver.id).inputs.image[0];
+    const before = structuredClone(storedBinding());
+    const assets = new Map();
+    const getAssets = api.getAssetsByIds;
+    api.getAssetsByIds = async ids => [...await getAssets(ids.filter(id => !assets.has(id))), ...ids.flatMap(id => assets.get(id) ?? [])];
+    api.localAgentFindAssetId = async path => path.split('/').pop();
+    const addAsset = (path, ext) => {
+      const id = path.split('/').pop();
+      const asset = { id, name: id, ext, duration: 5, width: 320, height: 180, store_path: path };
+      assets.set(id, asset);
+      return asset;
+    };
+    const extracted = [], delivered = [];
+    let turn = 0, noAudio = false;
+    api.extractVideoAudio = async (path, _operationId, projectId) => {
+      extracted.push([path, projectId]);
+      if (noAudio) throw '视频没有可提取的音轨，请选择带声音的视频';
+      return addAsset(path.replace('.mp4', '.wav'), 'wav');
+    };
+    window.store.setState({
+      startGeneration: async (...args) => {
+        const { jobId, turnKey } = args[12];
+        const path = args[0] === producer.id ? `/fixture/current-video-${++turn}.mp4` : `/fixture/derived-video-${turn}.mp4`;
+        if (args[0] === receiver.id) delivered.push(args[1].map(asset => asset.store_path));
+        addAsset(path, 'mp4');
+        await publishGeneration(args, [path]);
+        window.store.setState({ genJobs: { [jobId]: { turns: [{ turnKey, images: [path] }] } } });
+        return { accepted: true };
+      },
+    });
+    for (let i = 0; i < 2; i++) {
+      await c.start(producer.id);
+      if (c.document.run.status !== 'done') throw Error(JSON.stringify(c.issue));
+    }
+    noAudio = true;
+    await c.start(receiver.id, true);
+    const issue = c.issue;
+    const after = storedBinding();
+
+    const voiceCard = { ...newWorkflowNode('voice', 690, 100, ''), id: 'audio-preview', voice: { sampleText: '试听视频声音' } };
+    const calls = [];
+    window.store.setState(state => ({
+      cloudAuth: { ...state.cloudAuth, logged_in: true, user_id: 'test' },
+      cloudEntitlement: { ...state.cloudEntitlement, user_id: 'test', tier: 'pro', offline_state: 'fresh' },
+    }));
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === 'voice_environment') return { phase: 'ready' };
+      if (command === 'voice_start') {
+        const id = "spoken-" + (calls.length + 1);
+        calls.push({ id, args, asset: addAsset("/fixture/" + id + ".wav", 'wav') });
+        return id;
+      }
+      if (command === 'voice_snapshot') return { config: {}, voices: [], jobs: calls.map(({ id, args, asset }) => ({
+        id, request_key: args.requestKey, status: 'succeeded', asset_id: asset.id, purpose: args.preview ? 'preview' : 'speech',
+      })), assets: calls.map(({ asset }) => asset) };
+      return invoke(command, args);
+    };
+    noAudio = false;
+    await c.save({ ...c.document, nodes: [producer, voiceCard], run: null, runs: [] });
+    await c.connectAutomatic([{ binding: { nodeId: producer.id, portId: 'image', videoAudio: {} }, type: 'image', media: 'audio' }],
+      { nodeId: voiceCard.id });
+    const waitForVoice = async (ready, message) => {
+      for (let i = 0; i < 100; i++) {
+        const card = document.querySelector('[data-workflow-card="audio-preview"]');
+        if (card && ready(card)) return;
+        await new Promise(resolve => setTimeout(resolve, 35));
+      }
+      throw new Error(message);
+    };
+    const voiceWaveform = '[data-audio-preview][data-asset-id="spoken-1.wav"]';
+    await waitForVoice(card => card.textContent.includes('等待上游素材'), 'voice card marks the pending video audio source');
+    await c.start(producer.id);
+    if (c.document.run.status !== 'done') throw Error(JSON.stringify(c.issue));
+    const preview = c.document.run.steps[voiceCard.id].voiceRequest;
+    const previewOutputs = c.document.nodes.find(node => node.id === voiceCard.id).outputs;
+    await waitForVoice(card => card.querySelector(voiceWaveform), 'voice card shows the generated audition waveform');
+    await c.start(producer.id, true);
+    if (c.document.run.status !== 'done') throw Error(JSON.stringify(c.issue));
+    await waitForVoice(card => card.textContent.includes('等待上游素材') && !card.querySelector(voiceWaveform), 'replacement video hides the old audition');
+
+    const fixed = { ...voiceCard, voice: { id: 'selected-voice' }, prompt: '正式台词' };
+    await c.save({ ...c.document, nodes: [fixed], run: null, runs: [] });
+    await c.start(fixed.id, true);
+    if (c.document.run.status !== 'done') throw Error(JSON.stringify(c.issue));
+    return { before, after, extracted, delivered, preview, previewOutputs, voiceCalls: calls.map(({ args }) => args),
+      issue: { code: issue?.code, message: issue?.message, sameSource: issue?.source && workflowBindingKey(issue.source) === workflowBindingKey(before) } };
+  });
+  assert.deepEqual(audio.before.videoAudio, {});
+  assert.deepEqual(audio.after, audio.before, 'the two runs and failure keep the dynamic reference');
+  assert.deepEqual(audio.extracted, [['/fixture/current-video-1.mp4', 'p'], ['/fixture/current-video-2.mp4', 'p'], ['/fixture/current-video-2.mp4', 'p'], ['/fixture/current-video-3.mp4', 'p']]);
+  assert.deepEqual(audio.delivered, [['/fixture/current-video-1.wav'], ['/fixture/current-video-2.wav']]);
+  assert.equal(audio.issue.code, 'INPUT_UNAVAILABLE');
+  assert.match(audio.issue.message, /视频没有可提取的音轨/);
+  assert.equal(audio.issue.sameSource, true);
+  assert.equal(audio.voiceCalls.length, 2);
+  assert.equal(audio.voiceCalls[0].preview.assetId, 'current-video-3.wav');
+  assert.equal(audio.voiceCalls[0].voiceId, null);
+  assert.equal(audio.voiceCalls[0].text, '试听视频声音');
+  assert.equal(audio.preview.assetId, 'spoken-1.wav');
+  assert.deepEqual(audio.preview.videoAudio, { sourceAssetId: 'current-video-3.mp4', assetId: 'current-video-3.wav' });
+  assert.deepEqual(audio.previewOutputs, {}, 'preview stays in the voice card');
+  assert.equal(audio.voiceCalls[1].preview, null);
+  assert.equal(audio.voiceCalls[1].voiceId, 'selected-voice');
+  assert.equal(audio.voiceCalls[1].text, '正式台词');
   assert.deepEqual(errors, []);
-  console.log('PASS new + and saved direct inputs, image/video result wires, video material Peek drag/resize/undo at zoom, whole video delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');
+  console.log('PASS new + and saved direct inputs, image/video result wires, video material Peek drag/resize/undo at zoom, whole video and derived audio delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');
 } finally {
   await browser.close();
   await server.close();

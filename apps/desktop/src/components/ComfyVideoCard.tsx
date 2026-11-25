@@ -13,7 +13,7 @@ import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError } from "../lib/notify";
 import type { Asset } from "../lib/types";
-import { H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowFrameLabel, type WorkflowNode } from "../lib/canvasWorkflow";
+import { H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowFrameLabel, workflowVideoAudioLabel, type WorkflowInput, type WorkflowNode } from "../lib/canvasWorkflow";
 import { workflowAssetMedia } from "../lib/workflowCanvasCapabilities";
 import { isVideoAsset, isVideoPath } from "../lib/videoGeneration";
 import "./ComfyVideoCard.css";
@@ -237,10 +237,11 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   </>;
 }
 
-export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, disabled, assets, inputImages, readCurrentPrompt, onChange, optimizationActions }: {
+export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, disabled, assetById, inputImages, videoAudioSourceName, readCurrentPrompt, onChange, optimizationActions }: {
   prompt: string; onPromptChange: (prompt: string) => void;
-  optimizationActions?: React.ReactNode; modelControl: React.ReactNode; node: WorkflowNode; disabled: boolean; assets: Asset[];
-  inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput, media?: keyof typeof H3_R2V_INPUT_PORTS) => string[];
+  optimizationActions?: React.ReactNode; modelControl: React.ReactNode; node: WorkflowNode; disabled: boolean; assetById: ReadonlyMap<string, Asset>;
+  inputImages: (input: WorkflowInput, media?: keyof typeof H3_R2V_INPUT_PORTS) => string[];
+  videoAudioSourceName: (input: WorkflowInput) => string;
   onChange: (patch: Partial<WorkflowNode>) => void;
   readCurrentPrompt: () => string;
 }) {
@@ -249,7 +250,7 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
   const ports = mode === "frames" ? ["first-frame", "last-frame"] : mode === "reference" ? ["first-frame"] : [];
   const audioBindings = node.inputs[H3_VIDEO_AUDIO_PORT] ?? [];
   const audioIds = audioBindings.flatMap(input => inputImages(input));
-  const audio = assets.find(asset => audioIds.includes(asset.id) && isAudioAsset(asset));
+  const audio = audioIds.map(id => assetById.get(id)).find(asset => asset && isAudioAsset(asset));
   const latestCard = useRef({ node, disabled, onChange });
   const audioDrop = useRef(0);
   latestCard.current = { node, disabled, onChange };
@@ -262,7 +263,7 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
     const current = () => drop === audioDrop.current && !latestCard.current.disabled && comfyVideoMode(latestCard.current.node.comfyVideo) !== "r2v"
       && latestCard.current.node.inputs[H3_VIDEO_AUDIO_PORT] === previous;
     try {
-      const asset = assets.find(item => item.id === ids[0]) ?? (await api.getAssetsByIds(ids))[0];
+      const asset = assetById.get(ids[0]) ?? (await api.getAssetsByIds(ids))[0];
       if (!current()) return;
       if (!asset || !isAudioAsset(asset)) { notifyError(null, "请拖入一段音频"); return; }
       latestCard.current.onChange({ inputs: { ...latestCard.current.node.inputs, [H3_VIDEO_AUDIO_PORT]: [{ assetId: asset.id }] } });
@@ -315,7 +316,7 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
       const label = mode === "reference" ? "参考图" : index ? "尾帧" : "首帧";
       const bindings = node.inputs[port] ?? [];
       const ids = bindings.flatMap(input => inputImages(input));
-      const asset = assets.find(asset => asset.id === ids[0]);
+      const asset = assetById.get(ids[0]);
       const video = isVideoAsset(asset);
       const originalImage = video ? undefined : asset?.store_path;
       const cover = isVideoPath(asset?.thumb_path) ? undefined : asset?.thumb_path;
@@ -351,7 +352,7 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
       {R2V_GROUPS.map(({ media, label, Icon, tag }) => {
         const port = H3_R2V_INPUT_PORTS[media], bindings = node.inputs[port] ?? [];
         const resolved = bindings.map(input => inputImages(input, media));
-        const counts = resolved.map((ids, i) => bindings[i].nodeId && bindings[i].videoFrame ? 1 : ids.length);
+        const counts = resolved.map((ids, i) => bindings[i].nodeId && (bindings[i].videoFrame || bindings[i].videoAudio) ? 1 : ids.length);
         const count = counts.reduce((sum, size) => sum + size, 0);
         const showTags = media !== "audio" || !node.inputs[H3_R2V_INPUT_PORTS.video]?.length;
         let nextIndex = 1;
@@ -366,7 +367,8 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
             <span className="comfy-audio-source">{bindings.length ? `${count} / ${H3_R2V_LIMITS[media]}` : `拖入或连接 · 最多 ${H3_R2V_LIMITS[media]} 个`}</span></div>
           {bindings.map((binding, index) => {
             const ids = resolved[index];
-            const name = ids.map(id => assets.find(asset => asset.id === id)?.name ?? "素材").join("、") || "等待上游素材";
+            const name = binding.videoAudio ? `${workflowVideoAudioLabel()} · ${videoAudioSourceName(binding)}`
+              : ids.map(id => assetById.get(id)?.name ?? "素材").join("、") || "等待上游素材";
             const tags = Array.from({ length: counts[index] }, () => `<${tag} ${nextIndex++}>`).join(" ");
             return <div className="comfy-audio-row comfy-r2v-source" key={index}>
               {showTags && tags && <small title={tags}>{tags}</small>}
@@ -398,7 +400,8 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
         <AudioLines size={14} aria-hidden="true" />
         <span>{H3_AUDIO_LABEL}</span>
         <span className="comfy-audio-source" title={audio?.name}>
-          {audio?.name ?? (audioBindings.length ? "等待读取音频" : "（可选，如角色声音）")}
+          {audioBindings[0]?.videoAudio ? `${workflowVideoAudioLabel()} · ${videoAudioSourceName(audioBindings[0])}`
+            : audio?.name ?? (audioBindings.length ? "等待读取音频" : "（可选，如角色声音）")}
         </span>
         {audioBindings.length > 0 && <button type="button" aria-label="断开参考音频" title="断开参考音频"
           disabled={disabled} onPointerDown={event => event.stopPropagation()}

@@ -20,6 +20,11 @@ const workflow = assets.map((asset, index) => {
     provider: "codex", inputs: { image: [{ assetId: asset.id, assetNodeId: material.id }], text: [{ canvasNodeId: `content-${index}`, cellId: `cell-${index}` }] },
     outputs: {}, outputPorts: [], trigger: false };
 });
+if (new URLSearchParams(location.search).has("progress")) {
+  const first = Object.assign(workflow[0], { kind: "generation", activeSessionNodeId: "progress-session", sessionNodeIds: ["progress-session"] });
+  nodes.push({ ...base, id: "progress-session", kind: "prompt", assetId: null, role: null, x: 250, y: 650,
+    payloadJson: JSON.stringify({ schema_version: 1, status: "running", job_id: "progress-job", turn_key: "turn", provider: first.provider }) });
+}
 sessionStorage.setItem("reference-drafts", JSON.stringify(assets));
 sessionStorage.setItem("reference-fixture", JSON.stringify({ canvas: { projectId: "p", draftJson: "{}", createdAt: 1, updatedAt: 1 }, nodes,
   edges: [], groups: [], groupItems: [], threads: [{ id: "t", projectId: "p", title: "交互性能", archivedAt: null }], executionLinks: [],
@@ -27,7 +32,7 @@ sessionStorage.setItem("reference-fixture", JSON.stringify({ canvas: { projectId
 sessionStorage.setItem("workflow-p", JSON.stringify({ revision: 0, document: { schema_version: 1, nodes: workflow, run: null } }));
 localStorage.setItem("bowerbird.canvasSnapEnabled", "false");
 w.interactionStats = null;
-w.resetInteractionStats = () => { w.interactionStats = { workspaceRenders: 0, workspaceCommits: 0, workflowRenders: 0, workflowCommits: 0, globalNodeQueries: 0, portQueries: 0, rectReads: 0, portRectReads: 0, stageRectReads: 0 }; };
+w.resetInteractionStats = () => { w.interactionStats = { workspaceRenders: 0, workspaceCommits: 0, workflowRenders: 0, workflowCommits: 0, cardRenders: {}, globalNodeQueries: 0, portQueries: 0, rectReads: 0, portRectReads: 0, stageRectReads: 0 }; };
 for (const prototype of [Document.prototype, Element.prototype]) {
   const query = prototype.querySelectorAll;
   prototype.querySelectorAll = function(selector: string) {

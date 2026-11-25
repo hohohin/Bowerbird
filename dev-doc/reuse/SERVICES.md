@@ -104,7 +104,7 @@ H3 视频三模式共用可选录音素材 ID 与既有媒体连线，`comfy_vid
 
 ## 接入已有本地文件或保存新收到的媒体
 
-视频音轨：`api.extractVideoAudio` → `commands/video_audio.rs::extract_video_audio`，复用 `media::tools`、`media::audio`、`ingest_generated` 和项目文件路径。仅已登记视频，固定第一音轨 PCM WAV；操作身份记录在 analyses，原视频保持。前端 `createVideoAudioExport` 冻结目标与重试状态；画板沿 `videoCollectionCanvas.ts::saveMediaAssetToCanvas` 的通用 Asset 投递接口（原 `saveCollectedVideoToCanvas` 保留别名），持久化仍由 `CanvasWorkspace` 负责，不直接绕过写入队列。
+视频音轨沿 `api.extractVideoAudio` 调用 [video_audio.rs](../../apps/desktop/src-tauri/src/commands/video_audio.rs)。复用本机 FFmpeg、音频解码、素材入库和项目文件路径。仅接受已登记视频，输出第一音轨的 PCM WAV。提取按项目、源素材及原件大小和修改时间复用仍有文件的资产。素材详情的 `createVideoAudioExport` 冻结目标与重试状态，经 `videoCollectionCanvas.ts::saveMediaAssetToCanvas` 交付独立画板实例。工作流的 [视频音频引用](../CANVAS-WORKFLOW.md) 沿用同一提取入口和画板连线保存流程。
 
 - **用途／关键词**：导入、单文件收集、收集箱、原位连接、原件、生成结果、去重、项目归属。
 - **入口**：桌面文件选择沿 `api.importFiles` → [commands/library.rs](../../apps/desktop/src-tauri/src/commands/library.rs) 的 `import_files`；默认调用 [ingest.rs](../../apps/desktop/src-tauri/src/core/ingest.rs) 的 `ingest_file`（已有原件连接），显式 `collect=true` 调用 [file_intake.rs](../../apps/desktop/src-tauri/src/core/file_intake.rs) 的 `collect`（单独收集到共享收集箱，已连接／受管路径原位复用）。没有路径的 HTML 文件沿 [commands/media_import.rs](../../apps/desktop/src-tauri/src/commands/media_import.rs) 的 `video_import_begin/append/finish/cancel` 兼容命令分块接收，完成后走同一 `collect`。`ingest_new_file` 仍专用于临时来源首次持久保存；生成结果沿上一项收尾函数调用 `ingest_generated`，再委托 `ingest_generated_with_visibility`。

@@ -24,6 +24,13 @@ const server = await createServer({ root, cacheDir: '.tmp/canvas-interaction-per
     if (target.startsWith(path.dirname(frozen) + path.sep) && !target.startsWith(frozen + path.sep)) return this.resolve(slash(path.join(root, path.relative(path.dirname(frozen), target))), importer, { skipSelf: true });
   },
   transform(code, id) {
+    if (slash(id).endsWith('/WorkflowCardItem.tsx')) {
+      const marker = '  const displayed = { x, y };';
+      if (!code.includes(marker)) throw new Error('Missing workflow card render instrumentation anchor');
+      return code.replace(marker, `  const renderCounts = (window as any).interactionStats?.cardRenders;
+  if (renderCounts) renderCounts[node.id] = (renderCounts[node.id] ?? 0) + 1;
+${marker}`);
+    }
     if (slash(id).endsWith('/canvasDragPreview.ts')) renderedSourceHashes.dragPreview = createHash('sha256').update(code).digest('hex');
     if (slash(id).endsWith('/canvasPaintWindow.ts')) renderedSourceHashes.paintWindow = createHash('sha256').update(code).digest('hex');
     const kind = /\/CanvasWorkspace\.tsx$/.test(slash(id)) ? 'workspace' : /\/CanvasWorkflowLayer\.tsx$/.test(slash(id)) ? 'workflow' : null;
@@ -137,6 +144,48 @@ async function checkTyping() {
     console.log(JSON.stringify(result));
   }
   assert.deepEqual(errors, []);
+}
+async function checkWorkflowProgress() {
+  await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html?progress');
+  await page.waitForFunction(() => document.querySelectorAll('[data-workflow-card]').length === 100);
+  await page.evaluate(() => {
+    const current = window.store.getState().assets;
+    const assets = [...current, ...Array.from({ length: 600 - current.length }, (_, index) => ({ ...current[0], id: `extra-${index}` }))];
+    const job = { id: 'progress-job', projectId: 'p', running: true, provider: 'codex',
+      turns: [{ turnKey: 'turn', images: [] }], streaming: '', lastPrompt: '', sessionId: null, createdAt: Date.now() };
+    window.interactionFlush(() => window.store.setState({ assets, genJobs: { [job.id]: job } }));
+  });
+  await workflow.locator('[role="status"]').waitFor();
+  await resetStats();
+  const syncTimings = await page.evaluate(async () => {
+    const job = window.store.getState().genJobs['progress-job'];
+    const timings = [];
+    for (let index = 1; index <= 20; index++) {
+      const progress = { stage: 'queued', turnKey: 'turn', queue_position: index, queue_length: 30 };
+      const start = performance.now();
+      window.interactionFlush(() => window.store.setState({ genJobs: { [job.id]: { ...job, progress } } }));
+      timings.push(performance.now() - start);
+      if (index % 5 === 0) await new Promise(requestAnimationFrame);
+    }
+    return timings.sort((a, b) => a - b);
+  });
+  await workflow.getByText('排队中 · 队列位置 20 / 30', { exact: true }).waitFor();
+  await collect('generation-progress', 20);
+  const progress = samples.at(-1);
+  assert.deepEqual(progress.cardRenders, {}, 'progress text leaves all card bodies eligible to skip render');
+  assert.equal(progress.workspaceRenders, 0);
+  assert.equal(progress.workflowRenders, 0);
+
+  await resetStats();
+  const other = page.locator('[data-workflow-card="workflow-1"]');
+  const box = await other.boundingBox();
+  await page.mouse.click(box.x + 4, box.y + 12);
+  await other.and(page.locator('.is-selected')).waitFor();
+  await collect('card-selection', 1);
+  const selection = samples.at(-1);
+  assert.deepEqual(Object.keys(selection.cardRenders), ['workflow-1'], 'selection rerenders only the selected workflow card');
+  assert.deepEqual(errors, []);
+  console.log(JSON.stringify({ workflowCards: 100, assets: 600, medianSyncProgressMs: syncTimings[10], progress, selection }));
 }
 async function checkGeometry() {
   await page.goto('http://127.0.0.1:1628/scripts/fixtures/canvas-interaction-performance/preview.html');
@@ -416,6 +465,7 @@ async function checkMotion() {
 }
 try {
   if (process.argv.includes('--motion')) await checkMotion();
+  else if (process.argv.includes('--progress')) await checkWorkflowProgress();
   else if (process.argv.includes('--typing')) await checkTyping();
   else await checkGeometry();
 } catch (error) {

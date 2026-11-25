@@ -7,12 +7,12 @@ import type { WorkflowLoopItem } from "../lib/canvasWorkflow";
 import type { Asset } from "../lib/types";
 import { contentTableRows } from "../lib/contentTable";
 
-export const loopItemDescription = (item: WorkflowLoopItem, assets: Asset[]) =>
+export const loopItemDescription = (item: WorkflowLoopItem, assetById: ReadonlyMap<string, Asset>) =>
   (item.table ? contentTableRows(item.table).map(row => row.filter(Boolean).join(" · ")).join(" / ").trim() : item.text.trim())
-  || item.assetIds.map(id => assets.find(asset => asset.id === id)?.name || "图片").join("、");
+  || item.assetIds.map(id => assetById.get(id)?.name || "图片").join("、");
 
-export function WorkflowLoopStartSelect({ id, items, assets, value, disabled, notice, rounds, onChange }: {
-  id: string; items: WorkflowLoopItem[]; assets: Asset[]; value: number; disabled: boolean; notice: string;
+export function WorkflowLoopStartSelect({ id, items, assetById, value, disabled, notice, rounds, onChange }: {
+  id: string; items: WorkflowLoopItem[]; assetById: ReadonlyMap<string, Asset>; value: number; disabled: boolean; notice: string;
   rounds?: boolean;
   onChange: (value: number) => void;
 }) {
@@ -20,16 +20,16 @@ export function WorkflowLoopStartSelect({ id, items, assets, value, disabled, no
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const selected = items[value - 1];
-  const description = (item: WorkflowLoopItem) => loopItemDescription(item, assets);
+  const description = (item: WorkflowLoopItem) => loopItemDescription(item, assetById);
   const unit = rounds ? "轮" : "项";
   const imageSrc = (id: string) => {
-    const asset = assets.find(asset => asset.id === id);
+    const asset = assetById.get(id);
     const path = asset && canvasAssetMediaPath({ thumbPath: asset.thumb_path ?? null, storePath: asset.store_path ?? null });
     return path ? path.startsWith("data:") ? path : convertFileSrc(path) : "";
   };
   const preview = (item: WorkflowLoopItem) => <>
     {!!item.assetIds.length && <span className="workflow-loop-thumbs">{item.assetIds.slice(0, 3).map((id, index) => imageSrc(id)
-      ? <img key={`${id}-${index}`} src={imageSrc(id)} alt={assets.find(asset => asset.id === id)?.name || "图片"} />
+      ? <img key={`${id}-${index}`} src={imageSrc(id)} alt={assetById.get(id)?.name || "图片"} />
       : <ImageIcon key={`${id}-${index}`} size={24} aria-hidden="true" />)}{item.assetIds.length > 3 && <small>+{item.assetIds.length - 3}</small>}</span>}
     <span className="workflow-loop-item-text">{description(item)}</span>
   </>;
