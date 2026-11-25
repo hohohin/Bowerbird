@@ -137,6 +137,7 @@ try {
   assert.equal(await button("安装或更新教程").getAttribute("aria-expanded"), "true", "a new connection leaves the user's open instructions intact");
   await page.evaluate(() => window.setConnection(false));
   await dialog().getByText("未连接", { exact: true }).waitFor();
+  await dialog().getByText("请保持 Bowerbird 运行，并让至少一个浏览器窗口显示普通网页。", { exact: true }).waitFor();
   const checks = (await calls("extension_status")).length;
   await page.evaluate(() => { window.connected = true; });
   await button("重新检测").click();
@@ -149,13 +150,18 @@ try {
   assert.equal(await button("正在检测…").isDisabled(), true);
   await page.evaluate(async () => { await window.setConnection(false); await window.setConnection(true); window.holdStatus = false; window.resolveStatus(false); });
   await dialog().getByText("已连接", { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => window.store.getState().extensionConnected), true, "a late query snapshot cannot overwrite a newer heartbeat");
+  assert.equal(await page.evaluate(() => window.store.getState().extensionConnected), true, "a late query snapshot cannot overwrite a newer connection event");
   await page.evaluate(() => { window.holdStatus = true; window.resolveStatus = null; });
   await button("重新检测").click();
   await page.waitForFunction(() => typeof window.resolveStatus === "function");
-  await page.evaluate(async () => { await window.setConnection(true); window.holdStatus = false; window.resolveStatus(false); });
+  await page.evaluate(async () => {
+    await window.emit("collect://extension-connected", { reported: "0.5.2", expected: "0.5.3", update_required: true });
+    window.holdStatus = false;
+    window.resolveStatus(false);
+  });
   await dialog().getByText("已连接", { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => window.store.getState().extensionConnected), true, "a repeated true heartbeat is newer evidence even when the store boolean stays unchanged");
+  await dialog().getByText(/已连接 0\.5\.2插件/).waitFor();
+  assert.equal(await page.evaluate(() => window.store.getState().extensionConnected), true, "a newer version event beats a late query even when the connection stays online");
   await button("关闭").click();
   await lastVisible(true);
 
@@ -229,7 +235,7 @@ try {
   const code = "abcdefghijklmnopabcdefghijklmnop." + "01".repeat(32);
   await pair.fill(code);
   await button("确认配对").click();
-  await dialog().getByText("配对已保存。请刷新采集网页以检查连接。").waitFor();
+  await dialog().getByText("配对已保存。请刷新采集网页，并保持该浏览器窗口可见。").waitFor();
   assert.equal((await calls("pair_extension")).at(-1).args.code, code);
   assert.deepEqual(errors, []);
   console.log("PASS extension entry, connection/recheck, Chrome/Edge/path copy and late-result isolation, failure recovery, focus/Escape, native visibility without navigation, and narrow light/dark layouts.");

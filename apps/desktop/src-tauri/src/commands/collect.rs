@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::collect::ws_server::{ExtensionConnection, ExtensionStatus};
 use crate::error::AppError;
@@ -42,8 +42,5 @@ pub async fn extension_folder_path(app: AppHandle) -> Result<String, AppError> {
 #[tauri::command]
 pub fn pair_extension(webview: tauri::Webview, status: State<'_, ExtensionStatus>, code: String) -> Result<(), AppError> {
     if webview.label() != "main" { return Err(AppError::Other("请在桌面浏览器插件设置中配对".into())); }
-    status.pairing.replace(&code).map_err(AppError::Other)?;
-    status.clear();
-    let _ = webview.emit("collect://extension-disconnected", ());
-    Ok(())
+    status.replace_pairing(webview.app_handle(), &code).map_err(AppError::Other)
 }

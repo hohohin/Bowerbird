@@ -119,18 +119,17 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
         setStatusError(null);
       }
     });
-    const recordConnection = (value: boolean, reportedVersion?: ExtensionVersion | null) => {
+    const recordConnection = (value: boolean, reportedVersion: ExtensionVersion | null) => {
       if (!active) return;
-      // Repeated heartbeats are newer evidence even when the boolean stays the same.
+      // A version change may arrive while the connection stays online.
       connectionRevision.current += 1;
       useStore.getState().setExtensionConnected(value);
-      if (!value) setVersion(null);
-      else if (reportedVersion) setVersion(reportedVersion);
+      setVersion(reportedVersion);
       setStatusError(null);
     };
     void Promise.allSettled([
       listen<ExtensionVersion | null>("collect://extension-connected", event => recordConnection(true, event.payload)),
-      listen("collect://extension-disconnected", () => recordConnection(false)),
+      listen<null>("collect://extension-disconnected", () => recordConnection(false, null)),
     ].map(registration => registration.then(unlisten => {
       if (active) unlisteners.push(unlisten);
       else unlisten();
@@ -182,7 +181,7 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
     : statusError ? "可继续查看安装教程，稍后再检查连接。"
     : updateAvailable ? `已连接${version.reported ? ` ${version.reported}` : "旧版"}插件。请在扩展管理页重新加载 ${version.expected}，再刷新采集网页。若插件未更新，请使用下方教程中的插件目录。`
     : connected ? "已收到浏览器插件的连接信号，可以开始采集。"
-    : "未连接不代表未安装。请保持应用运行，并在浏览器中打开或刷新一个普通网页。";
+    : "请保持 Bowerbird 运行，并让至少一个浏览器窗口显示普通网页。";
 
   return <>
     <ModalShell title="浏览器插件" eyebrow="Browser collection" description="在 Chrome 或 Edge 中采集网页图片和视频。" width="lg" className="extension-setup" preventClose={zoom !== null} onClose={onClose}
@@ -203,7 +202,7 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
         try {
           await api.pairExtension(pairCode.trim());
           setPairCode("");
-          setPairMessage("配对已保存。请刷新采集网页以检查连接。");
+          setPairMessage("配对已保存。请刷新采集网页，并保持该浏览器窗口可见。");
         } catch (error) { setPairMessage(userErrorMessage(error, "配对未完成，请检查配对码后重试。")); }
         finally { setPairing(false); }
       }}>
@@ -260,7 +259,7 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
             </li>
             <li className="setup-card">
               <h3><span>4</span>刷新网页并检查连接</h3>
-              <p>保持 Bowerbird 运行，打开或刷新普通网页，页面会出现 Bowerbird 按钮。浏览器新标签页和扩展管理页不支持采集。</p>
+              <p>保持 Bowerbird 运行，打开或刷新普通网页，并保持该浏览器窗口可见。页面会出现 Bowerbird 按钮。浏览器新标签页和扩展管理页不支持采集。</p>
               <p>返回这里查看连接状态；连接变化可能需要等待片刻，也可以点击「重新检测」。</p>
               <Shot src={guide4} alt="网页中的 Bowerbird 按钮" onZoom={() => setZoom(guide4)} />
             </li>

@@ -225,15 +225,24 @@
       const response = await fetch(candidate.url, { signal: controller.signal });
       if (!response.ok) return { ok: false, error: `页面读取图片失败：HTTP ${response.status}` };
       if (Number(response.headers.get("content-length")) > S.MAX_INLINE_BYTES) return { ok: false, code: "too_large" };
-      const contentType = response.headers.get("content-type") || "";
-      const bytes = await response.arrayBuffer();
-      if (signal?.aborted) return { ok: false, code: "cancelled" };
-      return uploadLocalBytes(bytes, {
+      let contentType = response.headers.get("content-type") || "";
+      let fileName = "page-image";
+      let bytes = new Uint8Array(await response.arrayBuffer());
+      controller.signal.throwIfAborted();
+      if (bytes.byteLength > S.MAX_INLINE_BYTES) return { ok: false, code: "too_large" };
+      if (V.bmffImageFormat(bytes) === "avif") {
+        const normalized = await V.avifToPng(bytes, S.MAX_INLINE_BYTES, controller.signal);
+        if (!normalized.ok) return normalized;
+        bytes = normalized.bytes;
+        contentType = "image/png";
+        fileName = "page-image.png";
+      }
+      return uploadLocalBytes(bytes.buffer, {
         requested_url: pageUrl,
         effective_url: pageUrl,
         page_url: pageUrl,
         url: pageUrl,
-        file_name: "page-image",
+        file_name: fileName,
         content_type: contentType,
         candidate_source: candidate.source,
       });
@@ -341,6 +350,7 @@
       const retry = failures.length ? {
         label: `重试失败项（${failures.length}）`,
         run: () => { void saveBatch({ items: failures }); },
+        dismissible: true,
       } : null;
       panels.showToast(S.progressMessage(summary, true), summary.failed === 0 && summary.unconfirmed === 0, retry ? 0 : 12000, retry);
     } finally {

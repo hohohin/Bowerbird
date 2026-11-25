@@ -163,44 +163,51 @@
     if (!candidates.length || (candidates.length === 1 && !signal) || !globalThis.chrome?.runtime?.connect) return null;
     let port;
     let pending;
-    let disconnected = false;
 
-    function disconnect() {
-      disconnected = true;
+    function disconnect(current) {
+      if (!current || port !== current) return;
+      port = undefined;
       pending?.finish({ ok: false, code: "result_unknown" });
-      try { port?.disconnect(); } catch { /* extension may have reloaded */ }
+      try { current.disconnect(); } catch { /* extension may have reloaded */ }
     }
 
     function cancel() {
-      if (disconnected) return;
-      try { port.postMessage({ type: "cancel" }); } catch { disconnect(); }
+      const current = port;
+      if (!current) return;
+      try { current.postMessage({ type: "cancel" }); } catch { disconnect(current); }
     }
 
-    try {
-      port = chrome.runtime.connect({ name: "collect_image_batch" });
-      port.onDisconnect.addListener(() => {
-        void chrome.runtime.lastError;
-        disconnect();
-      });
-      port.onMessage.addListener(message => {
-        if (pending && message?.index === pending.index) {
-          pending.finish(message.result || { ok: false, code: "result_unknown" });
-        }
-      });
-      port.postMessage({ type: "start", items: candidates });
-      signal?.addEventListener("abort", cancel, { once: true });
-      if (signal?.aborted) cancel();
-    } catch {
-      disconnect();
-      return null;
+    function connect(index) {
+      let current;
+      try {
+        current = chrome.runtime.connect({ name: "collect_image_batch" });
+        port = current;
+        current.onDisconnect.addListener(() => {
+          void chrome.runtime.lastError;
+          disconnect(current);
+        });
+        current.onMessage.addListener(message => {
+          if (port === current && pending && message?.index === pending.index) {
+            pending.finish(message.result || { ok: false, code: "result_unknown" });
+          }
+        });
+        current.postMessage({ type: "start", items: candidates.filter(candidate => candidate.index >= index) });
+        return current;
+      } catch {
+        disconnect(current);
+        return null;
+      }
     }
 
-    function save(item, index) {
-      if (!/^https?:\/\//i.test(item.media_url || "")) return requestBackground(item);
-      if (signal?.aborted) return Promise.resolve({ ok: false, code: "cancelled" });
-      if (disconnected) return Promise.resolve({ ok: false, code: "desktop_unavailable" });
+    function submit(current, index) {
+      try {
+        current.postMessage({ type: "save", index });
+      } catch {
+        disconnect(current);
+        return null;
+      }
       return new Promise(resolve => {
-        const timer = setTimeout(disconnect, MESSAGE_TIMEOUT_MS);
+        const timer = setTimeout(() => disconnect(current), MESSAGE_TIMEOUT_MS);
         pending = {
           index,
           finish(result) {
@@ -209,11 +216,23 @@
             resolve(result);
           },
         };
-        try { port.postMessage({ type: "save", index }); } catch { disconnect(); }
       });
     }
 
-    return { save, close() { signal?.removeEventListener("abort", cancel); disconnect(); } };
+    if (!connect(candidates[0].index)) return null;
+    signal?.addEventListener("abort", cancel, { once: true });
+
+    function save(item, index) {
+      if (signal?.aborted) return Promise.resolve({ ok: false, code: "cancelled" });
+      if (!/^https?:\/\//i.test(item.media_url || "")) return requestBackground(item);
+      const submitted = port && submit(port, index);
+      if (submitted) return submitted;
+      // A completed or uncertain item stays in the summary. Only start the replacement port at the next unsent index.
+      const replacement = connect(index);
+      return (replacement && submit(replacement, index)) || requestBackground(item);
+    }
+
+    return { save, close() { signal?.removeEventListener("abort", cancel); disconnect(port); } };
   }
 
   async function runBatch(items, handlers, onProgress = () => {}, { signal } = {}) {

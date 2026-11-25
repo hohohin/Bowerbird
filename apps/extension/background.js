@@ -182,8 +182,7 @@ async function readCandidate(candidate, signal, visited, depth) {
     let fileName = fileNameFromUrl(effectiveUrl);
     let uploadedType = contentType;
     if (bmff === "avif") {
-      // The desktop image ingest supports PNG. Chromium can decode AVIF into its first frame.
-      const normalized = await avifToPng(bytes, signal);
+      const normalized = await BowerbirdVideo.avifToPng(bytes, MAX_IMAGE_BYTES, signal);
       if (!normalized.ok) return normalized;
       bytes = normalized.bytes;
       uploadedType = "image/png";
@@ -217,28 +216,6 @@ async function readCandidate(candidate, signal, visited, depth) {
     }
   }
   return { ok: false, error: "目标返回的不是可识别图片，页面也没有可用主图" };
-}
-
-async function avifToPng(bytes, signal) {
-  let bitmap;
-  try {
-    signal.throwIfAborted();
-    bitmap = await createImageBitmap(new Blob([bytes], { type: "image/avif" }));
-    signal.throwIfAborted();
-    const { width, height } = bitmap;
-    if (width > 32768 || height > 32768 || width * height > 100000000) return { ok: false, code: "image_dimensions" };
-    const canvas = new OffscreenCanvas(width, height);
-    canvas.getContext("2d").drawImage(bitmap, 0, 0);
-    const png = await canvas.convertToBlob({ type: "image/png" });
-    signal.throwIfAborted();
-    if (png.size > MAX_IMAGE_BYTES) return { ok: false, code: "too_large" };
-    return { ok: true, bytes: new Uint8Array(await png.arrayBuffer()) };
-  } catch (error) {
-    if (signal.aborted) throw error;
-    return { ok: false, code: "invalid_image" };
-  } finally {
-    bitmap?.close();
-  }
 }
 
 async function readResponseLimited(response, limit) {

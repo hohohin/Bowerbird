@@ -315,15 +315,27 @@
       }
       toast.style.background = ok ? "#2e7d32" : "#c62828";
       toast.firstChild.textContent = text;
-      const existing = toast.querySelector("button");
+      const existing = toast.querySelector("[data-collect-action]");
       if (existing && existing.textContent !== action?.label) existing.remove();
-      if (action && !toast.querySelector("button")) {
+      if (action && !toast.querySelector("[data-collect-action]")) {
         const button = document.createElement("button");
         button.type = "button";
+        button.dataset.collectAction = "";
         button.style.cssText = "padding:4px 8px;border:1px solid currentColor;border-radius:4px;background:#0002;color:inherit;font:inherit;cursor:pointer";
         button.textContent = action.label;
         onUserAction(button, "click", action.run);
         toast.append(button);
+      }
+      const closeButton = toast.querySelector("[data-collect-dismiss]");
+      if (!action?.dismissible) closeButton?.remove();
+      else if (!closeButton) {
+        const close = document.createElement("button");
+        close.type = "button";
+        close.dataset.collectDismiss = "";
+        close.textContent = "关闭";
+        close.style.cssText = "padding:4px 8px;border:0;background:none;color:inherit;font:inherit;cursor:pointer";
+        onUserAction(close, "click", () => { toast.remove(); btn.focus(); });
+        toast.append(close);
       }
       if (!toast.isConnected) overlay.mount(toast);
       if (duration > 0) toastTimer = setTimeout(() => toast.remove(), duration);

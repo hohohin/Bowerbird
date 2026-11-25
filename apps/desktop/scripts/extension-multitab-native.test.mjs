@@ -16,6 +16,16 @@ const liveCdn = process.argv.includes("--live-cdn");
 const count = 50;
 const downloadLatency = 110;
 const avif = await readFile("src-tauri/tests/fixtures/image/blue-16.avif");
+const inlineAvif = avif.toString("base64");
+const imagePage = source => `<!doctype html><img id="fixture-image" width="80" height="80" src="${source}">`;
+const formatPages = new Map([
+  ["/format", imagePage("/format.avif")],
+  ["/format-data", imagePage(`data:image/avif;base64,${inlineAvif}`)],
+  ["/format-blob", imagePage("") + `<script>
+    const bytes = Uint8Array.from(atob("${inlineAvif}"), value => value.charCodeAt(0));
+    document.getElementById("fixture-image").src = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+  </script>`],
+]);
 const cloudinary = "https://res.cloudinary.com/demo/image/upload";
 const lowerCdnUrl = `${cloudinary}/w_400,c_fill,q_auto/sample.jpg`;
 const selectedCdnUrl = `${cloudinary}/w_800,c_fill,q_auto/sample.jpg`;
@@ -100,11 +110,10 @@ async function run({ previous = false, verifyHeartbeat = false } = {}) {
       res.end(avif);
       return;
     }
-    if (req.url === "/format" || req.url === "/comma-cdn") {
+    if (formatPages.has(req.url) || req.url === "/comma-cdn") {
       res.setHeader("content-type", "text/html");
-      res.end(req.url === "/format"
-        ? '<!doctype html><img id="fixture-image" width="80" height="80" src="/format.avif">'
-        : `<!doctype html><img id="fixture-image" width="200" src="${lowerCdnUrl}" srcset="${lowerCdnUrl} 400w, ${selectedCdnUrl} 800w" sizes="200px">`);
+      res.end(formatPages.get(req.url)
+        ?? `<!doctype html><img id="fixture-image" width="200" src="${lowerCdnUrl}" srcset="${lowerCdnUrl} 400w, ${selectedCdnUrl} 800w" sizes="200px">`);
       return;
     }
     if (req.url === "/batch" || req.url.startsWith("/idle")) {
@@ -244,7 +253,9 @@ async function run({ previous = false, verifyHeartbeat = false } = {}) {
       await until(async () => (await status())?.connected === false, 38000);
       assert.ok(performance.now() - sockets.at(-1).at >= 29000, "desktop must keep connection through its timeout");
 
-      assert.deepEqual(await captureImage("format"), { ext: "png", width: 16, height: 16 });
+      for (const path of ["format", "format-data", "format-blob"]) {
+        assert.deepEqual(await captureImage(path), { ext: "png", width: 16, height: 16 }, path);
+      }
     }
     return result;
   } catch (error) {
@@ -269,5 +280,5 @@ if (liveCdn) {
   assert.ok(current.peakFetches >= 3 && current.peakFetches <= 4, JSON.stringify(current));
   const faster = 1 - current.milliseconds / previous.milliseconds;
   assert.ok(faster > 0.5, JSON.stringify({ previous, current }));
-  console.log(`PASS: Chromium 20-tab heartbeat, 30-second native expiry and ${count}-image batch; ${JSON.stringify({ previous, current, faster })}`);
+  console.log(`PASS: Chromium 20-tab heartbeat, 30-second native expiry, ${count}-image batch and AVIF sources; ${JSON.stringify({ previous, current, faster })}`);
 }

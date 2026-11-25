@@ -39,7 +39,18 @@ struct Connection {
     version: Option<ExtensionVersion>,
 }
 
-#[derive(Clone, serde::Serialize)]
+impl Connection {
+    fn observe(&mut self, version: Option<ExtensionVersion>) -> bool {
+        let newly_connected = self.last_seen.replace(Instant::now()).is_none();
+        if version.is_some() && self.version != version {
+            self.version = version;
+            return true;
+        }
+        newly_connected
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ExtensionVersion {
     reported: Option<String>,
     expected: &'static str,
@@ -84,14 +95,17 @@ impl ExtensionStatus {
     pub fn open(path: &std::path::Path) -> std::io::Result<Self> {
         Ok(Self { pairing: Arc::new(super::pairing::Pairing::open(path)?), connection: Default::default() })
     }
-    /// 收到扩展任意消息（ping/save/save_batch）时调：更新 last_seen；
-    /// 返回是否「刚连上」（false→true 跳变），供调用方 emit `collect://extension-connected`。
-    pub fn touch(&self) -> bool {
-        self.connection.lock().unwrap().last_seen.replace(Instant::now()).is_none()
-    }
-
-    fn report_version(&self, version: Option<&str>) {
-        self.connection.lock().unwrap().version = Some(ExtensionVersion::from_ping(version));
+    fn observe(&self, app: &AppHandle, grant: &super::pairing::Grant, version: Option<ExtensionVersion>) -> bool {
+        let mut connection = self.connection.lock().unwrap();
+        // Serialize notifications with timeout and pairing replacement. Revalidate the
+        // grant under this lock before recording activity when a pairing has just changed.
+        if !self.pairing.allow_action(grant, 0) {
+            return false;
+        }
+        if connection.observe(version) {
+            let _ = app.emit("collect://extension-connected", connection.version.clone());
+        }
+        true
     }
 
     pub fn snapshot(&self) -> ExtensionConnection {
@@ -99,18 +113,20 @@ impl ExtensionStatus {
         ExtensionConnection { connected: connection.last_seen.is_some(), version: connection.version.clone() }
     }
 
-    pub fn clear(&self) {
-        *self.connection.lock().unwrap() = Connection::default();
+    pub fn replace_pairing(&self, app: &AppHandle, code: &str) -> Result<(), String> {
+        let mut connection = self.connection.lock().unwrap();
+        self.pairing.replace(code)?;
+        *connection = Connection::default();
+        let _ = app.emit("collect://extension-disconnected", None::<ExtensionVersion>);
+        Ok(())
     }
-    /// 心跳超时检查：距上次消息超过 `timeout` 且当前 connected → 清 last_seen 并置 false，
-    /// 返回是否「刚断开」（true→false 跳变），供 tick task emit `collect://extension-disconnected`。
-    pub fn check_timeout(&self, timeout: Duration) -> bool {
+
+    fn check_timeout(&self, app: &AppHandle, timeout: Duration) {
         let mut connection = self.connection.lock().unwrap();
         if connection.last_seen.is_some_and(|time| time.elapsed() > timeout) {
             *connection = Connection::default();
-            return true;
+            let _ = app.emit("collect://extension-disconnected", None::<ExtensionVersion>);
         }
-        false
     }
 }
 
@@ -150,10 +166,6 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
         if !state.status.pairing.allow_action(&grant, cost) { break; }
         match msg {
             Message::Text(text) => {
-                // 任意消息（ping / save / save_batch / save_blob metadata）= 扩展在线。
-                if state.status.touch() {
-                    let _ = state.app.emit("collect://extension-connected", ());
-                }
                 if text.len() > 64 * 1024 {
                     pending_upload = None;
                     pending_stream = None;
@@ -168,8 +180,11 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                 let parsed = serde_json::from_str::<serde_json::Value>(&text).ok();
                 let kind = parsed.as_ref().and_then(|v| v["type"].as_str());
                 if grant.upload_only && !matches!(kind, Some("save_blob" | "save_blob_start" | "save_blob_end" | "ping")) { break; }
-                if kind == Some("ping") && !grant.upload_only {
-                    state.status.report_version(parsed.as_ref().and_then(|v| v["extension_version"].as_str()));
+                let version = (kind == Some("ping") && !grant.upload_only).then(|| {
+                    ExtensionVersion::from_ping(parsed.as_ref().and_then(|v| v["extension_version"].as_str()))
+                });
+                if !state.status.observe(&state.app, &grant, version) {
+                    break;
                 }
                 // A second upload or command invalidates the pending pair. Never let
                 // its next Binary frame acquire the first upload's provenance/project.
@@ -219,13 +234,17 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                         let count = parsed.as_ref().and_then(|v| v["items"].as_array()).map_or(0, Vec::len);
                         if !state.status.pairing.allow_action(&grant, count) { break; }
                     }
-                    let resp = handle_message(&text, &state).await;
+                    let resp = handle_message(parsed.as_ref(), &state).await;
                     let _ = socket.send(Message::Text(resp)).await;
                 }
             }
             Message::Binary(bytes) => {
+                if (pending_upload.is_some() || pending_stream.is_some())
+                    && !state.status.observe(&state.app, &grant, None)
+                {
+                    break;
+                }
                 if let Some(stream) = &mut pending_stream {
-                    state.status.touch();
                     let reply = match stream.write(bytes.as_ref()).await {
                         Ok(received) => serde_json::json!({"ok":true,"received":received}).to_string(),
                         Err(error) => {
@@ -250,7 +269,20 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                             .unwrap_or_else(|error| { tracing::error!("video upload worker: {error}"); serde_json::json!({"ok":false,"code":"save_failed","error":"视频未能保存，请稍后重试。"}).to_string() })
                     }
                     Some((meta, project_id)) if bytes.len() <= 50 * 1024 * 1024 => {
-                        handle_blob(bytes.as_ref(), &meta, project_id.as_deref(), &state)
+                        let state = state.clone();
+                        // Await the receipt so a reused socket still ingests images in order.
+                        tokio::task::spawn_blocking(move || {
+                            handle_blob(bytes.as_ref(), &meta, project_id.as_deref(), &state)
+                        })
+                        .await
+                        .unwrap_or_else(|error| {
+                            tracing::error!("image upload worker: {error}");
+                            serde_json::json!({
+                                "ok": false,
+                                "code": "result_unknown",
+                                "error": "图片入库回执尚未确认"
+                            }).to_string()
+                        })
                     }
                     Some(_) => serde_json::json!({
                         "ok": false,
@@ -378,11 +410,10 @@ fn redact_url(value: &str) -> String {
     }
 }
 
-async fn handle_message(text: &str, state: &AppState) -> String {
+async fn handle_message(value: Option<&serde_json::Value>, state: &AppState) -> String {
     let project_id = state.active_project.get();
-    let v: serde_json::Value = match serde_json::from_str(text) {
-        Ok(v) => v,
-        Err(_) => return r#"{"ok":false,"error":"bad json"}"#.to_string(),
+    let Some(v) = value else {
+        return r#"{"ok":false,"error":"bad json"}"#.to_string();
     };
     let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
     if kind != "ping" {
@@ -393,15 +424,11 @@ async fn handle_message(text: &str, state: &AppState) -> String {
             Ok(project) => serde_json::json!({"ok":true,"name":project.flatten().map(|p| p.name)}).to_string(),
             Err(_) => serde_json::json!({"ok":false,"error":"project unavailable"}).to_string(),
         },
-        "ping" => {
-            let _ = state.app.emit("collect://extension-connected", state.status.snapshot().version);
-            serde_json::json!({"ok":true,"pong":true,"capabilities":{"video_blob":true,"video_stream_upload":true,"video_max_bytes":video_blob::MAX_BYTES}}).to_string()
-        }
+        "ping" => serde_json::json!({"ok":true,"pong":true,"capabilities":{"video_blob":true,"video_stream_upload":true,"video_max_bytes":video_blob::MAX_BYTES}}).to_string(),
         "save" => {
             if v["media_kind"] == "video" {
                 return serde_json::json!({"ok":false,"code":"video_upload_required","error":"视频需要由浏览器上传文件内容，请更新插件后重试。"}).to_string();
             }
-            let _ = state.app.emit("collect://extension-connected", ());
             let url = v.get("url").and_then(|u| u.as_str()).unwrap_or("");
             if url.is_empty() {
                 return r#"{"ok":false,"error":"empty url"}"#.to_string();
@@ -420,7 +447,6 @@ async fn handle_message(text: &str, state: &AppState) -> String {
             }
         }
         "save_batch" => {
-            let _ = state.app.emit("collect://extension-connected", ());
             let Some(items) = v.get("items").and_then(|items| items.as_array()) else {
                 return r#"{"ok":false,"error":"items must be an array","results":[]}"#.to_string();
             };
@@ -623,9 +649,7 @@ pub async fn serve_listener(
         let timeout = std::time::Duration::from_secs(30);
         loop {
             interval.tick().await;
-            if tick_status.check_timeout(timeout) {
-                let _ = tick_app.emit("collect://extension-disconnected", ());
-            }
+            tick_status.check_timeout(&tick_app, timeout);
         }
     });
     let app = Router::new()

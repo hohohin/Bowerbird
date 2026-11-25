@@ -169,6 +169,17 @@ try {
   ]);
   assert.equal(await page.evaluate(() => window.fixture.uploads.length), 2);
 
+  // A persistent retry notice can be dismissed without enqueueing a retry.
+  await page.evaluate(() => { window.fixture.mode = "pending"; });
+  await page.locator("#remote").click({ modifiers: ["Alt"] });
+  await page.waitForFunction(() => window.fixture.callbacks.length === 1);
+  await page.evaluate(() => window.fixture.callbacks.shift()({ ok: false, error: "HTTP 404" }));
+  await status.getByRole("button", { name: "重试失败项（1）", exact: true }).waitFor();
+  await status.getByRole("button", { name: "关闭", exact: true }).click();
+  await status.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.fixture.messages.length), 3);
+  assert.equal(await button.evaluate(el => el.getRootNode().activeElement === el), true);
+
   // A mixed drag must keep all items, instead of stopping at its first local URL.
   const html = await page.evaluate(() => {
     window.fixture.mode = "success";

@@ -7,10 +7,8 @@
 
   async function streamResponse(response, support, metadata, signal, onReadComplete) {
     const limit = support.maxBytes;
-    if (Number(response.headers.get("content-length")) > limit) return { ok: false, code: "too_large" };
-    if (!response.body) return { ok: false, code: "invalid_video" };
-    const access = await S.socketAccess();
-    if (!access.ok) return access;
+    const body = response.body;
+    if (!body) return { ok: false, code: "invalid_video" };
 
     let socket;
     let reader;
@@ -38,6 +36,9 @@
     });
 
     try {
+      if (Number(response.headers.get("content-length")) > limit) return { ok: false, code: "too_large" };
+      const access = await S.socketAccess();
+      if (!access.ok) return access;
       signal?.throwIfAborted();
       signal?.addEventListener("abort", onAbort, { once: true });
       socket = S.openSocket(access.protocols);
@@ -53,10 +54,10 @@
 
       // Native fetch streams can fill the same backing store in-place. A default
       // reader also works for other ReadableStreams (such as fixture responses).
-      try { reader = response.body.getReader({ mode: "byob" }); }
+      try { reader = body.getReader({ mode: "byob" }); }
       catch { /* Non-byte stream. */ }
       const byob = !!reader;
-      reader ||= response.body.getReader();
+      reader ||= body.getReader();
       let buffer = new ArrayBuffer(CHUNK_BYTES);
       let source;
       let offset = 0;
@@ -122,7 +123,7 @@
       return { ok: false, code: committed ? "result_unknown" : error?.code || (error?.name === "AbortError" ? "fetch_timeout" : "fetch_failed") };
     } finally {
       signal?.removeEventListener("abort", onAbort);
-      void reader?.cancel().catch(() => {});
+      void (reader ?? body).cancel().catch(() => {});
       socket?.close();
     }
   }

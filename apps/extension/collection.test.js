@@ -124,6 +124,7 @@ function backgroundFixture(fetch, videoSupport = true, receipt, pairing) {
   const onConnect = messageEvent();
   const uploads = [];
   const sockets = [];
+  const batches = [];
   const pings = [];
   const stored = {};
   let now = 0;
@@ -170,9 +171,19 @@ function backgroundFixture(fetch, videoSupport = true, receipt, pairing) {
         let closed = false;
         const events = [messageEvent(), messageEvent()];
         const disconnects = [messageEvent(), messageEvent()];
+        const messages = [];
+        batches.push({
+          messages,
+          drop() {
+            if (closed) return;
+            closed = true;
+            for (const event of disconnects) event.dispatch();
+          },
+        });
         const ports = events.map((event, side) => ({ name, sender: sender(1), onMessage: event, onDisconnect: disconnects[side],
           postMessage(message) {
             if (closed) throw new Error("Port closed");
+            if (side === 0) messages.push(message);
             queueMicrotask(() => { if (!closed) events[1 - side].dispatch(message); });
           },
           disconnect() { if (!closed) { closed = true; disconnects[1 - side].dispatch(); } },
@@ -189,7 +200,7 @@ function backgroundFixture(fetch, videoSupport = true, receipt, pairing) {
     assert.ok(dispatch(value, tabId, overrides, resolve));
   });
   return {
-    api, uploads, sockets, pings, timers, message, dispatch,
+    api, uploads, sockets, batches, pings, timers, message, dispatch,
     send: value => message({ type: "save_image", ...value }),
     time: value => { now = value; },
     proofCount: () => proofs,
@@ -356,6 +367,67 @@ test("batch reconnects remaining images after a lost receipt and retry excludes 
   assert.equal(summary.failedItems.length, 1);
   assert.equal(summary.failedItems[0], items[3]);
   assert.deepEqual(fixture.uploads.map(({metadata}) => metadata.requested_url), items.filter((_, index) => index !== 3).map(item => item.media_url));
+});
+
+for (const fault of ["page timeout", "background port loss"]) {
+  test(`${fault} resumes only unsent candidates and preserves real upload failures`, async () => {
+    const items = imageItems(4);
+    let firstSent;
+    const firstUpload = new Promise(resolve => { firstSent = resolve; });
+    const fixture = backgroundFixture(async url => url === items[2].media_url ? {ok:false,status:403} : imageResponse(url), true, (socket, metadata) => {
+      if (metadata.requested_url === items[0].media_url) firstSent(socket);
+      else socket.reply({ ok: true });
+    });
+    const pending = fixture.api.runBatch(items, { remote: fixture.api.requestBackground });
+    const originalSocket = await firstUpload;
+    if (fault === "page timeout") {
+      const deadline = [...fixture.timers.values()].find(timer => timer.delay === fixture.api.MESSAGE_TIMEOUT_MS);
+      assert.ok(deadline);
+      deadline.fn();
+    } else fixture.batches[0].drop();
+    originalSocket.reply({ ok: true });
+    const summary = await pending;
+    assert.equal(summary.unconfirmed, 1);
+    assert.equal(summary.results[0].code, "result_unknown");
+    assert.equal(summary.saved, 2);
+    assert.equal(summary.failed, 1);
+    assert.equal(summary.failedItems[0], items[2]);
+    assert.match(summary.results[2].error, /HTTP 403/);
+    assert.equal(summary.cancelled, 0);
+    assert.equal(fixture.batches.length, 2);
+    assert.deepEqual(Array.from(fixture.batches[1].messages[0].items, item => item.index), [1, 2, 3]);
+    assert.deepEqual(fixture.uploads.map(({metadata}) => metadata.requested_url), [0,1,3].map(index => items[index].media_url));
+  });
+}
+
+test("stopping during a reopened batch cancels its fetches and keeps the interrupted result unknown", async () => {
+  const items = imageItems(4);
+  const controller = new AbortController();
+  let firstSent;
+  let releaseReplacement;
+  let attempts = 0;
+  const firstUpload = new Promise(resolve => { firstSent = resolve; });
+  const replacementStarted = new Promise(resolve => { releaseReplacement = resolve; });
+  const fixture = backgroundFixture((url, { signal }) => {
+    if (url !== items[1].media_url) return Promise.resolve(imageResponse(url));
+    attempts += 1;
+    if (attempts === 2) releaseReplacement(signal);
+    return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  }, true, socket => firstSent(socket));
+  const pending = fixture.api.runBatch(items, { remote: fixture.api.requestBackground }, undefined, { signal: controller.signal });
+  const originalSocket = await firstUpload;
+  fixture.batches[0].drop();
+  const replacementSignal = await replacementStarted;
+  controller.abort();
+  originalSocket.reply({ ok: true });
+  const summary = await pending;
+  assert.equal(replacementSignal.aborted, true);
+  assert.equal(summary.completed, 1);
+  assert.equal(summary.unconfirmed, 1);
+  assert.equal(summary.cancelled, 3);
+  assert.equal(summary.failedItems.length, 0);
+  assert.equal(fixture.batches.length, 2);
+  assert.equal(fixture.uploads.length, 1);
 });
 
 test("mixed batches save page-owned images in order while sharing the remote socket", async () => {

@@ -90,6 +90,7 @@ try {
   const request = message => new Promise(done => {
     assert.ok(listeners.some(listener => listener(message, {id:extensionId, tab:{id:1}}, done)));
   });
+  assert.equal((await context.BowerbirdCollection.currentProject()).name, "Fixture");
   async function assertVersion(reported, update_required) {
     const expected = { connected:true, version:{ reported, expected:manifest.version, update_required } };
     for (let lapsed = 0; lapsed < 1000; lapsed += 50) {
@@ -133,6 +134,28 @@ try {
   assert.equal(picture.ok, true, JSON.stringify(picture)); assert.notEqual(picture.asset_id, video.asset_id);
   const heicPicture = await request({ type: 'save_image', url: `${origin}/heic`, pageUrl: `${origin}/heic-source` });
   assert.equal(heicPicture.ok, true, JSON.stringify(heicPicture));
+  const pictureAccess = await context.BowerbirdCollection.socketAccess();
+  const ordered = await new Promise((done, reject) => {
+    const socket = new WebSocket(url, {protocols:pictureAccess.protocols,headers:{origin:extensionOrigin}});
+    const replies = [];
+    const timeout = setTimeout(() => { socket.close(); reject(new Error("Missing ordered image receipts")); }, 5000);
+    socket.onopen = () => {
+      const metadata = JSON.stringify({
+        type: "save_blob", url: `${origin}/image`, page_url: `${origin}/picture-source`, content_type: "image/svg+xml",
+      });
+      socket.send(metadata);
+      socket.send(Buffer.from("not an image"));
+      socket.send(metadata);
+      socket.send(image);
+    };
+    socket.onmessage = event => {
+      replies.push(JSON.parse(event.data));
+      if (replies.length === 2) { clearTimeout(timeout); socket.close(); done(replies); }
+    };
+    socket.onerror = error => { clearTimeout(timeout); reject(error); };
+  });
+  assert.equal(ordered[0].ok, false);
+  assert.equal(ordered[1].asset_id, picture.asset_id, "an image error keeps the connection and next receipt in order");
   const invalid = await context.BowerbirdCollection.uploadBytes(new TextEncoder().encode('<html>not video</html>').buffer,
     { media_kind: 'video', url: `${origin}/fake.mp4`, file_name: 'fake.mp4', content_type: 'video/mp4' });
   assert.equal(invalid.ok, false);
@@ -173,6 +196,12 @@ try {
   assert.equal(await ended, 0, output);
   const result = await waitFile('result.json');
   assert.equal(result.assets.length, 4); assert.equal(result.members.length, 4);
+  assert.deepEqual(result.connection_events, [
+    null,
+    {reported:null, expected:manifest.version, update_required:true},
+    {reported:"0.5.2", expected:manifest.version, update_required:true},
+    {reported:manifest.version, expected:manifest.version, update_required:false},
+  ].map(version => ({event:"collect://extension-connected", version})));
   const heicAsset = result.assets.find(asset => asset.id === heicPicture.asset_id);
   assert.equal(heicAsset.ext, 'png');
   assert.deepEqual([heicAsset.width, heicAsset.height], [96, 32]);
@@ -194,7 +223,7 @@ try {
   const playback = await page.evaluate(async () => { const video = document.querySelector('video'); await video.play(); return { width: video.videoWidth, height: video.videoHeight }; });
   await page.waitForFunction(() => document.querySelector('video').currentTime > 0.1);
   assert.equal(playback.width, saved.width); assert.equal(playback.height, saved.height);
-  await writeFile(`${root}/verification.json`, JSON.stringify({ video, duplicate, legacy, large, largeSize, frames, maxFrame, picture, heicPicture, invalid, conflicting, playback, root }, null, 2));
+  await writeFile(`${root}/verification.json`, JSON.stringify({ video, duplicate, legacy, large, largeSize, frames, maxFrame, picture, heicPicture, ordered, connectionEvents: result.connection_events, invalid, conflicting, playback, root }, null, 2));
   console.log('PASS extension background -> native WS -> isolated SQLite/media -> playback; 200 MiB stream, 1 MiB frames, legacy upload, interrupted staging cleanup and dedup');
   console.log(root);
 } finally {

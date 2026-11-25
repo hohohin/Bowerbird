@@ -35,3 +35,30 @@ test("video streams are size bounded without Content-Length and selected XHS URL
   assert.equal(item.media_url,"https://cdn.test/a.mp4");assert.equal(item.source_url,"https://www.xiaohongshu.com/explore/id");
   assert.equal(V.xhs({type:"normal",imageList:[]},"https://site.test/"),null);
 });
+
+test("video streaming cancels the response when declined before reading", async () => {
+  let sessions = 0;
+  const socket = {
+    send() { queueMicrotask(() => this.onmessage({ data: '{"capabilities":{"video_blob":true}}' })); },
+    close() {},
+  };
+  const context = vm.createContext({
+    setTimeout, clearTimeout,
+    BowerbirdCollection: {
+      UPLOAD_TIMEOUT_MS: 1000,
+      socketAccess: async () => { sessions += 1; return { ok: true }; },
+      openSocket: () => { queueMicrotask(() => socket.onopen()); return socket; },
+      pingMessage: () => '{"type":"ping"}',
+    },
+  });
+  vm.runInContext(readFileSync(new URL("video-upload.js", import.meta.url), "utf8"), context);
+  const { streamResponse } = context.BowerbirdVideoUpload;
+  for (const [length, expected] of [[10, "too_large"], [4, "desktop_upgrade"]]) {
+    let cancelled = false;
+    const body = new ReadableStream({ cancel() { cancelled = true; } });
+    const result = await streamResponse(new Response(body, { headers: { "content-length": length } }), { maxBytes: 8 });
+    assert.equal(result.code, expected);
+    assert.equal(cancelled, true);
+  }
+  assert.equal(sessions, 1);
+});

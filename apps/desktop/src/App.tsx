@@ -658,15 +658,6 @@ function App() {
     };
   }, [setAutoAnalyzing]);
 
-  // 浏览器扩展加载后及之后每 15 秒向本地 WS 发 ping；后端收到后 emit collect://extension-connected。
-  useEffect(() => {
-    let unlisten: UnlistenFn | undefined;
-    listen("collect://extension-connected", () => setExtensionConnected(true)).then(
-      (u) => (unlisten = u)
-    );
-    return () => unlisten?.();
-  }, [setExtensionConnected]);
-
   // 生成结果流式回显（创作板「发送」/ 生成面板「继续修改」触发）：
   // 生成 UI 独立成面板后，codex://chunk 监听挪到全局。App 单次挂载，但 StrictMode 双挂载下
   // 仍需 alive 守卫——否则同一 Done 被两个监听器各收一次 → 同一张图 append 两次（见踩坑）。
@@ -805,22 +796,32 @@ function App() {
     };
   }, [setCodexHealth]);
 
-  // 扩展连接状态：挂载取一次 + listen 连/断（心跳经 collect://extension-connected/disconnected）。
+  // Subscribe before reading the snapshot so an initial read cannot hide a newer transition.
   useEffect(() => {
-    api.extensionStatus().then(setExtensionConnected).catch(() => {});
-    let unlistenConn: UnlistenFn | undefined;
-    let unlistenDisc: UnlistenFn | undefined;
+    const unlisteners: UnlistenFn[] = [];
     let alive = true;
-    listen("collect://extension-connected", () => setExtensionConnected(true)).then(
-      (u) => (alive ? (unlistenConn = u) : u())
-    );
-    listen("collect://extension-disconnected", () => setExtensionConnected(false)).then(
-      (u) => (alive ? (unlistenDisc = u) : u())
-    );
+    let revision = 0;
+    const onConnection = (connected: boolean) => {
+      if (!alive) return;
+      revision += 1;
+      setExtensionConnected(connected);
+    };
+    void Promise.allSettled([
+      listen("collect://extension-connected", () => onConnection(true)),
+      listen("collect://extension-disconnected", () => onConnection(false)),
+    ].map(registration => registration.then(unlisten => {
+      if (alive) unlisteners.push(unlisten);
+      else unlisten();
+    }))).then(() => {
+      if (!alive) return;
+      const requestedAt = revision;
+      void api.extensionStatus().then(connected => {
+        if (alive && revision === requestedAt) setExtensionConnected(connected);
+      }).catch(() => {});
+    });
     return () => {
       alive = false;
-      unlistenConn?.();
-      unlistenDisc?.();
+      unlisteners.forEach(unlisten => unlisten());
     };
   }, [setExtensionConnected]);
 

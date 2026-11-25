@@ -24,6 +24,30 @@
     }
     return heic ? "heic" : null;
   }
+  // Desktop image ingest accepts PNG. Chromium decodes the first AVIF frame.
+  async function avifToPng(bytes, maxBytes, signal) {
+    let bitmap;
+    try {
+      signal.throwIfAborted();
+      bitmap = await createImageBitmap(new Blob([bytes], { type: "image/avif" }));
+      signal.throwIfAborted();
+      const { width, height } = bitmap;
+      if (width > 32768 || height > 32768 || width * height > 100000000) return { ok: false, code: "image_dimensions" };
+      const canvas = new OffscreenCanvas(width, height);
+      canvas.getContext("2d").drawImage(bitmap, 0, 0);
+      const png = await canvas.convertToBlob({ type: "image/png" });
+      signal.throwIfAborted();
+      if (png.size > maxBytes) return { ok: false, code: "too_large" };
+      const output = await png.arrayBuffer();
+      signal.throwIfAborted();
+      return { ok: true, bytes: new Uint8Array(output) };
+    } catch (error) {
+      if (signal.aborted) throw error;
+      return { ok: false, code: "invalid_image" };
+    } finally {
+      bitmap?.close();
+    }
+  }
   function candidate(raw, pageUrl, options = {}) {
     if (!raw || String(raw).length > (/^data:video\//i.test(raw) ? Math.ceil(MAX_BYTES*4/3)+4096 : 16384)) return null;
     let url;
@@ -82,5 +106,5 @@
     const urls=[...variants.map(item=>item.masterUrl || item.master_url || item.url),note.video?.url,note.video?.playUrl];
     return urls.map(url=>candidate(url,pageUrl,{source:"xhs-video",name:note.title || "小红书视频"})).find(Boolean) || null;
   }
-  root.BowerbirdVideo = { MAX_BYTES,candidate,format,bmffImageFormat,stream,read,element,xhs };
+  root.BowerbirdVideo = { MAX_BYTES,candidate,format,bmffImageFormat,avifToPng,stream,read,element,xhs };
 })(globalThis);
