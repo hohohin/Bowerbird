@@ -1,3 +1,4 @@
+import { projectCanvasCallbacks } from "./lib/projectCanvasCallbacks";
 // Shared library layout must load before component and theme overrides.
 import "./components/LocalFileWorkspace.css";
 import { useCallback, useEffect, useState } from "react";
@@ -490,7 +491,7 @@ function App() {
       const { requestId, dataUrl, meta, fileName } = payload;
       let receipt = receipts.get(requestId);
       if (!receipt) {
-        const save = useStore.getState().prepareCanvasAnnotation?.() ?? undefined;
+        const save = projectCanvasCallbacks.prepareAnnotation?.() ?? undefined;
         receipt = { save, savedToLibrary: !save };
         receipts.set(requestId, receipt);
         if (receipts.size > 64) {

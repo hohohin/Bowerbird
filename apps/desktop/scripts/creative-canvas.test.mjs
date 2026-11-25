@@ -622,7 +622,7 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
         dismissFailureButton: () => null,
         selectedCanvasNodeIds: new Set(), selectedCanvasNodeIdsRef: { current: new Set() },
         removeNodes: (ids) => removed.push(...ids),
-        isOutsideFocusedThread: () => false, moveGraphNode() {}, endGraphNodeDrag() {} };
+        isOutsideFocusedThread: () => false, moveCanvasDrag() {}, endGraphNodeDrag() {} };
       const render = new Function(...Object.keys(bindings), code + "; return render;")(...Object.values(bindings));
       const card = render({ id: "card", width: 260, height: 148, x: 0, y: 0, zIndex: 1 });
       const button = React.Children.toArray(card.props.children).find((child) => child.type === "button");
@@ -650,7 +650,7 @@ for (const dragKind of ["material", "execution"]) {
     test("mixed marquee drag from " + dragKind + (cancel ? " cancels both layouts" : " persists both layouts"), async () => {
       const source = readFileSync(new URL("../src/components/CanvasWorkspace.tsx", import.meta.url), "utf8");
       const file = ts.createSourceFile("canvas.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-      const names = ["selectionAnchors", "expandArtboardSelection", "expandMovableSelection", "translateGraphSelection", "translateMaterialSelection", "translateWorkflowSelection", "translateDrag", "beginNodeDrag", "beginGraphNodeDrag", "moveNode", "moveGraphNode", "endNodeDrag", "endGraphNodeDrag", "updateNodeDrag", "updateGraphNodeDrag", "persistMovedWorkflowCards", "persistGeometries"];
+      const names = ["selectionAnchors", "expandArtboardSelection", "expandMovableSelection", "translateGraphSelection", "translateMaterialSelection", "translateWorkflowSelection", "translateDrag", "beginCanvasDrag", "beginNodeDrag", "beginGraphNodeDrag", "restoreCanvasDrag", "endNodeDrag", "endGraphNodeDrag", "updateNodeDrag", "updateGraphNodeDrag", "persistMovedWorkflowCards", "persistGeometries"];
       const declarations = [];
       function visit(node) {
         if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text)) declarations.push(node.getText(file));
@@ -658,6 +658,10 @@ for (const dragKind of ["material", "execution"]) {
       }
       visit(file);
       assert.equal(declarations.length, names.length);
+      const dragSource = readFileSync(new URL("../src/components/canvas/useCanvasDrag.ts", import.meta.url), "utf8");
+      const dragFile = ts.createSourceFile("useCanvasDrag.ts", dragSource, ts.ScriptTarget.Latest, true);
+      const dragDeclarations = dragFile.statements.filter(statement => ts.isFunctionDeclaration(statement)).map(statement =>
+        statement.getText(dragFile).replace(/^export /, ""));
       const material = { id: "ref", kind: "asset", asset: { assetId: "asset-ref" }, x: 0, y: 0, width: 100, height: 100, order: 1 };
       const prompt = { id: "prompt", kind: "prompt", x: 200, y: 0, width: 100, height: 100, zIndex: 2, hiddenAt: null, threadId: "t", positionLocked: false };
       const agent = { ...prompt, id: "agent", kind: "agent_group", x: 400 };
@@ -668,17 +672,16 @@ for (const dragKind of ["material", "execution"]) {
       const selectedIds = new Set(["ref", "prompt", "agent"]);
       const writes = [];
       const persisted = [];
-      let handlers;
-      const nodeFrame = { push: (event) => handlers.updateNodeDrag(event), finish: (event) => handlers.updateNodeDrag(event), cancel() {} };
-      const graphNodeFrame = { push: (event) => handlers.updateGraphNodeDrag(event), finish: (event) => handlers.updateGraphNodeDrag(event), cancel() {} };
       let activated = 0;
       const bindings = {
         conversationCardsRef: { current: { cards: new Map(), hiddenIds: new Set() } },
-        useStore: { getState: () => ({ genJobs: {} }) }, nodeFrame, graphNodeFrame,
+        useStore: { getState: () => ({ genJobs: {} }) },
+        useRef: (current) => ({ current }), useCallback: (callback) => callback,
+        useCanvasFrame: (update) => ({ push: update, finish: update, cancel() {} }),
         concealedNodeIds: { current: new Set() }, peekIntent: { current: undefined }, lastCardDragEnd: { current: 0 }, peekedCard: null,
         snapSizeObserverRef: { current: null }, planeRef: { current: null }, groupsRef: { current: new Map() },
         isVideoPath, isAudioPath: () => false, creationImage: { handlesVideo: () => false }, armCanvasAssetHold() {}, dismissPeekForDrag() {},
-        showDragGuides() {}, observeSnapSizes() {}, canvasPointerSample: (input) => input, clearDragProjection() {}, hitContentCell: () => null,
+        showDragGuides() {}, observeSnapSizes() {}, hitContentCell: () => null,
         snapCanvasRectPrepared, prepareCanvasSnapAnchors, projectCanvasNodeLayoutUpdate,
         window: { getSelection: () => null },
         agentPromptGroupMap, expandCanvasSections, readCanvasNote, intersectArtboard, graphEdges: [], setPendingNewCards() {},
@@ -689,19 +692,24 @@ for (const dragKind of ["material", "execution"]) {
         hoverRef: { current: null },
         snapEnabledRef: { current: true }, zoomRef: { current: 1 },
         nodesRef, graphNodesRef, threads: [{ id: "old", archivedAt: 1 }],
-        selectedCanvasNodeIdsRef: { current: selectedIds }, nodeDragRef: { current: null }, graphNodeDragRef: { current: null },
+        selectedCanvasNodeIdsRef: { current: selectedIds },
         spacePressedRef: { current: false }, suppressNodeClickRef: { current: false }, activeCanvasRef: { current: {} },
         nodeRect: (node) => ({ x: node.x, y: node.y, width: node.width, height: node.height }),
         toBoardPoint: (x, y) => ({ x, y }), snapCanvasRect, translateCanvasSelection, exceedsCanvasDragThreshold, isCanvasPanGesture,
-        commitNodes: (nodes) => { nodesRef.current = nodes; }, setGraphNodes() {}, focusGraphNode() {}, setSelectedCanvasNodeIds() {},
+        commitNodes: (nodes) => { nodesRef.current = nodes; }, setGraphNodes: (nodes) => { graphNodesRef.current = nodes; }, focusGraphNode() {}, setSelectedCanvasNodeIds() {},
         setActiveDragId() {}, setGuides() {}, setHover() {}, setFolderDropTargetId() {},
         pushGeometryUndo() {},
         enqueueWrite: (write) => { writes.push(write()); }, ensureMaterialized: async () => {},
         api: { projectCanvasNodeUpdate: async (id, layout) => { persisted.push({ id, ...layout }); },
           projectCanvasNodesBatchUpdate: async (_project, updates) => { persisted.push(...updates.map(({ nodeId, value }) => ({ id: nodeId, ...value }))); } },
       };
-      const code = ts.transpileModule(declarations.join("\n"), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-      handlers = new Function(...Object.keys(bindings), code + ";return { " + names.join(",") + " };")(...Object.values(bindings));
+      const code = ts.transpileModule([...dragDeclarations, ...declarations].join("\n"), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+      const handlers = new Function(...Object.keys(bindings), code + `
+        const { activeDragRef, dragFrame, moveCanvasDrag } = useCanvasDrag((event, kind) => {
+          if (kind === "material") updateNodeDrag(event); else updateGraphNodeDrag(event);
+        });
+        return { ${names.join(",")}, moveCanvasDrag };
+      `)(...Object.values(bindings));
       const anchors = handlers.selectionAnchors();
       assert.deepEqual(canvasNodeIdsInRect({ x: -10, y: -10, width: 520, height: 120 }, anchors), [...selectedIds]);
       const target = { isConnected: true, focus() {}, setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {} };
@@ -710,9 +718,14 @@ for (const dragKind of ["material", "execution"]) {
       const move = { ...down, timeStamp: 10, clientX: down.clientX + 37, clientY: down.clientY + 53 };
       const prefix = dragKind === "material" ? "Node" : "GraphNode";
       handlers["begin" + prefix + "Drag"](down, origin);
-      handlers[dragKind === "material" ? "moveNode" : "moveGraphNode"]({ ...down, clientX: down.clientX + 3 });
+      const competing = dragKind === "material" ? prompt : material;
+      const anotherPointer = { ...down, pointerId: 2, clientX: competing.x + 10 };
+      handlers[dragKind === "material" ? "beginGraphNodeDrag" : "beginNodeDrag"](anotherPointer, competing);
+      handlers.moveCanvasDrag({ ...anotherPointer, clientX: anotherPointer.clientX + 75 });
+      assert.equal(nodesRef.current[0].x, 0, "the second pointer cannot start another card drag");
+      handlers.moveCanvasDrag({ ...down, clientX: down.clientX + 3 });
       assert.equal(nodesRef.current[0].x, 0, "small pointer jitter stays a click");
-      handlers[dragKind === "material" ? "moveNode" : "moveGraphNode"](move);
+      handlers.moveCanvasDrag(move);
       assert.deepEqual([nodesRef.current[0].x, nodesRef.current[0].y], [37, 53]);
       assert.deepEqual(graphNodesRef.current.slice(0, 2).map((node) => [node.x, node.y]), [[237, 53], [437, 53]]);
       assert.equal(graphNodesRef.current[2], hidden);
@@ -739,13 +752,16 @@ for (const grouped of [false, true]) {
 test("one undo restores " + (grouped ? "grouped" : "mixed") + " removal without replacing updated execution state", async () => {
   const source = readFileSync(new URL("../src/components/CanvasWorkspace.tsx", import.meta.url), "utf8");
   const file = ts.createSourceFile("canvas.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const names = ["removeNodes", "undoCanvasAction", "applyCanvasUndo", "pushCanvasUndo", "popCanvasUndo"];
+  const names = ["removeNodes", "applyCanvasUndo"];
   const declarations = [];
   function visit(node) {
     if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text)) declarations.push(node.getText(file));
     ts.forEachChild(node, visit);
   }
   visit(file);
+  const undoSource = readFileSync(new URL("../src/components/canvas/useCanvasUndo.ts", import.meta.url), "utf8");
+  const undoFile = ts.createSourceFile("useCanvasUndo.ts", undoSource, ts.ScriptTarget.Latest, true);
+  declarations.push(undoFile.statements.find(statement => ts.isFunctionDeclaration(statement)).getText(undoFile).replace(/^export /, ""));
   const asset = { id: "asset-node", kind: "asset", asset: { id: "asset-node", assetId: "a" }, x: 10, y: 20 };
   const original = { id: "asset-node", kind: "asset", hiddenAt: null, x: 10, y: 20, payloadJson: "asset" };
   const prompt = { id: "prompt", kind: "prompt", hiddenAt: null, x: 200, y: 20, payloadJson: "running" };
@@ -754,18 +770,17 @@ test("one undo restores " + (grouped ? "grouped" : "mixed") + " removal without 
   let groupPresent = grouped;
   const nodesRef = { current: [material] };
   const graphNodesRef = { current: [original, prompt] };
-  const history = { current: [] };
   const stored = new Map([[original.id, original], [prompt.id, prompt]]);
   const writes = [];
   const bindings = {
-    nodesRef, graphNodesRef, undoHistoryRef: history, undoInFlightRef: { current: false }, groupsRef: { current: new Map([["group", { id: "group", name: "my group", role: "composition" }]]) },
+    nodesRef, graphNodesRef, groupsRef: { current: new Map([["group", { id: "group", name: "my group", role: "composition" }]]) },
     workflowInteractive: true, workflowRef: { current: null }, canvasWorkflowController: () => ({ document: { nodes: [] } }),
-    flushDocumentCard() {}, setCanUndo() {}, notifyError: (error) => { throw error; },
+    useRef: (current) => ({ current }), useState: (value) => [value, () => {}], useLatestCallback: (callback) => callback,
     conversationCardsRef: { current: { cards: new Map() } },
     groupedAssetNode: (snapshot) => ({ ...asset, asset: snapshot }),
     projectCanvasGroupUpdate: (original, node) => ({ ...original, x: node.x, y: node.y }),
     activeCanvasRef: { current: { id: "project" } }, focusedNodeIdRef: { current: "prompt" },
-    setSelectedCanvasNodeIds() {}, setFocusedNodeId() {}, setGraphNodes() {},
+    setSelectedCanvasNodeIds() {}, setFocusedNodeId() {}, setGraphNodes: (nodes) => { graphNodesRef.current = nodes; },
     commitNodes: (nodes) => { nodesRef.current = nodes; }, enqueueWrite: (write) => writes.push(write), ensureMaterialized: async () => {},
     api: {
       projectCanvasGroupDelete: async () => { groupPresent = false; },
@@ -785,7 +800,11 @@ test("one undo restores " + (grouped ? "grouped" : "mixed") + " removal without 
     },
   };
   const code = ts.transpileModule(declarations.join("\n"), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const handlers = new Function(...Object.keys(bindings), code + "; return { " + names.join(",") + " };")(...Object.values(bindings));
+  const handlers = new Function(...Object.keys(bindings), code + `
+    const { undoHistoryRef, pushCanvasUndo, popCanvasUndo, undoCanvasAction } = useCanvasUndo(() => activeCanvasRef.current.id, applyCanvasUndo, error => { throw error; });
+    return { removeNodes, undoCanvasAction, undoHistoryRef };
+  `)(...Object.values(bindings));
+  const history = handlers.undoHistoryRef;
   handlers.removeNodes([material.id, "prompt"]);
   assert.equal(nodesRef.current.length, 0);
   assert.ok(graphNodesRef.current.every((node) => node.hiddenAt != null));
@@ -827,7 +846,7 @@ test("canvas Ctrl+Z undoes removal without taking over text editing or adding to
     let undone = 0;
     let prevented = 0;
     const bindings = { promptMenuRef: { current: null }, workflowAgentDetail: null, scopedInspectorOpen: false, viewModeRef: { current: "canvas" },
-      nodeDragRef: { current: null }, graphNodeDragRef: { current: null }, undoHistoryRef: { current: [{}] },
+      activeDragRef: { current: null }, undoHistoryRef: { current: [{}] },
       document: { querySelector: () => null }, undoCanvasAction: () => undone++, HTMLTextAreaElement: class {},
       newConnectedTextarea: { current: null },
       useStore: { getState: () => ({ canvasLibraryOpen: false }) },

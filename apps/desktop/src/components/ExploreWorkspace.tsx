@@ -1,3 +1,4 @@
+import { projectCanvasCallbacks } from "../lib/projectCanvasCallbacks";
 import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { PanelEdgeHandle } from "./PanelEdgeHandle";
@@ -129,7 +130,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, onCreat
       }
       // Flush existing composer state before materializing a still-empty project.
       if (target && !capturedAsset) {
-        if (target === contextProjectId && useStore.getState().activeProjectId === contextProjectId) await state.projectCanvasFlush?.();
+        if (target === contextProjectId && useStore.getState().activeProjectId === contextProjectId) await projectCanvasCallbacks.flush?.();
         const current = useStore.getState();
         const selected = current.projects.find(p => p.id === target);
         if (!selected) throw new Error("项目已不存在");

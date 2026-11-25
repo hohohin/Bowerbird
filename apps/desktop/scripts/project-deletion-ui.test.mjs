@@ -69,7 +69,8 @@ assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='delete_
 await page.evaluate(async()=>{
   window.reset();window.calls=[];window.running=1;
   const {useStore}=await import('/src/store.ts');
-  useStore.setState({activeProjectId:'p',projectCanvasFlush:async()=>{throw new Error('synthetic unsaved canvas');}});
+  useStore.setState({activeProjectId:'p'});
+  (await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush=async()=>{throw new Error('synthetic unsaved canvas');};
   useStore.setState({genJobs:{active:{id:'active',projectId:'p',threadId:'t',running:true},other:{id:'other',projectId:'other',threadId:'other-thread',running:true}}});
   const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
   window.deletedController=canvasWorkflowController('p');
@@ -82,7 +83,7 @@ await page.evaluate(async()=>{await window.deletedController.save();});
 assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='canvas_workflow_save').length),0);
 assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='delete_project').length),1);
 assert.deepEqual(await page.evaluate(async()=>{const {useStore}=await import('/src/store.ts');const jobs=useStore.getState().genJobs;return [jobs.active.projectId,jobs.active.threadId,jobs.other.projectId];}),[null,null,'other']);
-await page.evaluate(async()=>{window.pendingResults=[];const {useStore}=await import('/src/store.ts');useStore.setState({projectCanvasFlush:null});});
+await page.evaluate(async()=>{window.pendingResults=[];(await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush=null;});
 await page.evaluate(()=>{window.reset();window.running=0;window.pending=true;});
 await page.getByRole('button',{name:'删除测试项目'}).click();await box.check();
 await page.getByRole('button',{name:'删除项目及素材',exact:true}).click();

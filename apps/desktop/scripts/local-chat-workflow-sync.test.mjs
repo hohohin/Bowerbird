@@ -20,6 +20,8 @@ function fixture(initial = doc([node('original')]), options = {}) {
   const modules = new Map();
   const requests = new Map(), sends = [], stops = [];
   const genJobs = {}, generationRequests = [];
+  const workflowHost = { getState: () => ({ genJobs,
+    startGeneration: async (...args) => { generationRequests.push(args.at(-1)); return { accepted: true }; } }) };
   const chatListeners = new Set(), checkpoints = new Map();
   const reads = { checkpoints: 0, full: 0 };
   const chatApi = { revision: async id => { reads.checkpoints++; return checkpoints.get(id); }, getByRequest: async id => clone(requests.get(id) ?? null) };
@@ -62,6 +64,11 @@ function fixture(initial = doc([node('original')]), options = {}) {
     const module = { exports: {} }; modules.set(path, module);
     const output = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
     const require = specifier => {
+      const nestedExecutor = dirname(path) === resolve(lib, 'executors');
+      if (nestedExecutor && specifier.startsWith('../')) specifier = './' + specifier.slice(3);
+      const base = nestedExecutor ? lib : dirname(path);
+      if (specifier.startsWith('./executors/')) return load(resolve(lib, specifier + '.ts'));
+      if (specifier === './automaticMedia') return load(resolve(lib, 'executors/automaticMedia.ts'));
       if (specifier === './api') return { api };
       if (specifier === './userError') return load(resolve(dirname(path), 'userError.ts'));
       if (specifier === './dshSkill.ts' || specifier === './chatProvider.ts') return load(resolve(dirname(path), specifier));
@@ -74,8 +81,8 @@ function fixture(initial = doc([node('original')]), options = {}) {
       if (specifier === 'zustand') return { createStore };
       if (specifier === './chatCapabilities') return { chatProviderAccessIssue: () => null,
         selectedChatOptions: (...args) => load(resolve(lib, 'chatCapabilities.ts')).selectedChatOptions(...args) };
-      if (specifier === '../store') return { useStore: { getState: () => ({ genJobs,
-        startGeneration: async (...args) => { generationRequests.push(args.at(-1)); return { accepted: true }; } }) } };
+      if (specifier === '../store') return { useStore: workflowHost };
+      if (specifier === './workflowHost') return { getWorkflowHost: () => workflowHost };
       if (specifier === '@tauri-apps/api/event') return { emit: async () => {} };
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
@@ -91,7 +98,7 @@ function fixture(initial = doc([node('original')]), options = {}) {
       if (['./comfyVideo', './comfyVideo.ts', './genProviders', './genProviders.ts', './canvasNodePayload', './canvasNodePayload.ts', './projectNodeIds', './canvasConversationCards'].includes(specifier)) {
         return load(resolve(lib, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       }
-      if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts'].includes(specifier)) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
+      if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts', './workflowMigrations', './workflowTriggerScheduler', './workflowPersistenceQueue'].includes(specifier)) return load(resolve(base, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       return {};
     };
     vm.runInContext(`(function(require,module,exports){${output}\n})`, context, { filename: path })(require, module, module.exports);
@@ -387,8 +394,7 @@ test('completion scheduling reads no idle snapshots and falls back only while an
   c.notifySessionCompletionChange();
   await advance(0);
   assert.deepEqual(claimed, [], 'terminal event before result projection waits');
-  assert.equal(c.pendingSessionCompletion, true, 'the unresolved projected turn schedules a fallback');
-  assert.equal(timers.size, 1);
+  assert.equal(timers.size, 1, 'the unresolved projected turn schedules one fallback');
   nodes = [...nodes, result('continued')];
   await advance(1500);
   assert.deepEqual(claimed, ['continued'], 'fallback still observes a pending continuation after leaving the project');

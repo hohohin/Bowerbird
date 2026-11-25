@@ -68,14 +68,15 @@ try {
   await expectHome('projects');
 
   await openProject();
-  await page.evaluate(() => {
-    window.originalFlush = window.store.getState().projectCanvasFlush;
-    window.store.setState({ projectCanvasFlush: async () => { throw new Error('隔离保存失败'); } });
+  await page.evaluate(async () => {
+    const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+    window.originalFlush = projectCanvasCallbacks.flush;
+    projectCanvasCallbacks.flush = async () => { throw new Error('隔离保存失败'); };
   });
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await page.waitForFunction(() => !window.store.getState().projectRoutePending);
   assert.equal(await canvas.isVisible(), true, 'failed save keeps the project open');
-  await page.evaluate(() => window.store.setState({ projectCanvasFlush: window.originalFlush }));
+  await page.evaluate(async () => { (await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush = window.originalFlush; });
   await page.getByRole('button', { name: '探索', exact: true }).click();
   await nav.waitFor();
   await library.click();

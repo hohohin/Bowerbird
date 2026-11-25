@@ -1,3 +1,4 @@
+import { projectCanvasCallbacks } from "../lib/projectCanvasCallbacks";
 import { useEffect, useRef } from "react";
 import { ArrowLeft, Compass, Images, LayoutDashboard, Link2, LoaderCircle } from "lucide-react";
 import { SidebarAccount } from "./SidebarAccount";
@@ -126,7 +127,7 @@ export function Toolbar({
       if (parent) {
         const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
         if (normalize(path) !== normalize(parent + "/初始引导")) throw new Error("请选择「初始引导」文件夹，再继续入门引导");
-        await useStore.getState().projectCanvasFlush?.();
+        await projectCanvasCallbacks.flush?.();
         await api.importFolder(path, activeProjectId);
       }
       const id = await folderConnections.connect(path, activeProjectId);

@@ -1,10 +1,10 @@
+import { projectCanvasCallbacks } from "../lib/projectCanvasCallbacks";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { fileWorkspace, type FileMovePreview, type FileWorkspaceStatus, type HistoryMovePreview } from "../lib/fileWorkspace";
 import { ModalShell } from "./ModalShell";
-import { useStore } from "../store";
 
 export function FileWorkspaceMoveDialog({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<FileWorkspaceStatus | null>(null);
@@ -48,7 +48,7 @@ export function FileWorkspaceMoveDialog({ onClose }: { onClose: () => void }) {
     try {
       if (cancel) await fileWorkspace.moveCancel();
       else {
-        await useStore.getState().projectCanvasFlush?.();
+        await projectCanvasCallbacks.flush?.();
         if (status?.migration?.state !== "pending") {
           if (!preview) return;
           if (historyPreview) await fileWorkspace.historySchedule(preview.token, skipMissing);

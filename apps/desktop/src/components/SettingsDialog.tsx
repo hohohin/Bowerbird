@@ -1,3 +1,4 @@
+import { projectCanvasCallbacks } from "../lib/projectCanvasCallbacks";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-shell";
@@ -206,7 +207,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
     setMigrating(true);
     setMigrateError(null);
     try {
-      await useStore.getState().projectCanvasFlush?.();
+      await projectCanvasCallbacks.flush?.();
       await api.migrateLibraryRoot(migrateTarget);
       await api.restartApp();
     } catch (error) {

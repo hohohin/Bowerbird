@@ -1,5 +1,11 @@
 //! Canvas-unit placement shared by native generation and artifact delivery.
-use super::*;
+use rusqlite::{OptionalExtension, Transaction};
+
+use crate::core::creative_session_contract::{CreativeNodeKind, CreativeNodeRole};
+use crate::error::AppResult;
+
+use super::{CanvasNode, ProjectCanvasSnapshot};
+use super::repository::project_canvas_snapshot_tx;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -461,6 +467,7 @@ pub(super) fn generation_workflow_history<'a>(source: &Value, snapshot: &'a Proj
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn compact_edges_replace_fixed_downward_steps() {
         let card = Rect {

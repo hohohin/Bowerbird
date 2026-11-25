@@ -233,9 +233,10 @@ try {
     await distantCard.waitFor();
     assert.equal(await distantCard.evaluate(element => !element.hasAttribute('data-canvas-offscreen')), true,
       'panning to a deferred card mounts it as a real card');
-    const readsBeforeRejectedExit = await page.evaluate(() => {
-      window.previousCanvasFlush = window.store.getState().projectCanvasFlush;
-      window.store.setState({ projectCanvasFlush: async () => { throw new Error('隔离保存失败'); } });
+    const readsBeforeRejectedExit = await page.evaluate(async () => {
+      const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+      window.previousCanvasFlush = projectCanvasCallbacks.flush;
+      projectCanvasCallbacks.flush = async () => { throw new Error('隔离保存失败'); };
       return window.calls.filter(call => call.command === 'project_canvas_get').length;
     });
     await back.click();
@@ -243,7 +244,7 @@ try {
     assert.equal(await ready.isVisible(), true, 'a failed save leaves the restored workspace usable');
     assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'project_canvas_get').length), readsBeforeRejectedExit,
       'a failed exit does not replace the live workspace with a new saved snapshot');
-    await page.evaluate(() => window.store.setState({ projectCanvasFlush: window.previousCanvasFlush }));
+    await page.evaluate(async () => { (await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush = window.previousCanvasFlush; });
     await back.click();
     await open.waitFor();
     await page.evaluate(() => {

@@ -159,14 +159,17 @@ try {
   // Returning from a project uses the existing flush/route boundary; a failed save cannot start picking.
   const failedRoute = await page.evaluate(async () => {
     const store = window.fixtureStore;
-    store.setState({ activeProjectId: "project", projectCanvasFlush: async () => { throw new Error("未保存画板"); } });
+    const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+    store.setState({ activeProjectId: "project" });
+    projectCanvasCallbacks.flush = async () => { throw new Error("未保存画板"); };
     try { await store.getState().beginCollectionAdd("one"); } catch { /* expected */ }
     return { project: store.getState().activeProjectId, target: store.getState().collectionAddTargetId };
   });
   assert.deepEqual(failedRoute, { project: "project", target: null });
   const successfulRoute = await page.evaluate(async () => {
     const store = window.fixtureStore;
-    store.setState({ projectCanvasFlush: null });
+    const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+    projectCanvasCallbacks.flush = null;
     await store.getState().beginCollectionAdd("one");
     return { project: store.getState().activeProjectId, target: store.getState().collectionAddTargetId, mode: store.getState().mode };
   });

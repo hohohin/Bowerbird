@@ -1,5 +1,5 @@
 //! Versioned, local workflow definitions. Provider jobs keep their existing authority.
-use std::{collections::{HashMap, HashSet}, future::Future, sync::Arc};
+use std::{collections::HashSet, future::Future, sync::Arc};
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -7,6 +7,9 @@ use tauri::State;
 use crate::{db::Database, error::{AppError, AppResult}};
 use crate::cloud::{AuthClient, EntitlementService};
 use super::project_canvas::run_canvas_db;
+
+mod validation;
+pub(crate) use validation::validate;
 use crate::core::project_canvas::{NewCanvasNode, insert_node_tx, touch_canvas_tx};
 
 pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<()> {
@@ -93,359 +96,6 @@ pub async fn canvas_workflow_authorize(auth: State<'_, AuthClient>, entitlement:
 pub struct WorkflowSnapshot { revision: i64, document: Value }
 
 fn invalid() -> AppError { AppError::Other("工作流数据无效".into()) }
-
-fn validate_binding_metadata(binding: &Value) -> AppResult<()> {
-    if binding.get("autoConnect").is_some_and(|id| id.as_str().is_none_or(str::is_empty)) { return Err(invalid()); }
-    if let Some(filter) = binding.get("mediaFilter") {
-        let media = filter.as_array().filter(|items| !items.is_empty() && items.len() <= 3).ok_or_else(invalid)?;
-        let mut seen = HashSet::new();
-        for kind in media {
-            let kind = kind.as_str().filter(|kind| matches!(*kind, "image" | "video" | "audio")).ok_or_else(invalid)?;
-            if !seen.insert(kind) { return Err(invalid()); }
-        }
-    }
-    Ok(())
-}
-
-fn control_binding_fields(binding: &Value, fields: &[&str]) -> bool {
-    binding.as_object().is_some_and(|value|
-        value.keys().all(|key| key == "autoConnect" || fields.contains(&key.as_str())))
-}
-
-fn h3_r2v_port(port: &str) -> Option<(&'static str, usize)> {
-    match port {
-        "reference-image" => Some(("image", 9)),
-        "reference-video" => Some(("video", 3)),
-        "r2v-audio" => Some(("audio", 3)),
-        _ => None,
-    }
-}
-
-fn validate_image_output(value: &Value, assets: &mut HashSet<String>) -> AppResult<()> {
-    // An asynchronous image output may contain only exact generation-session references.
-    if value.get("assetIds").is_none() && value.get("nodeIds").is_none() { return Err(invalid()); }
-    if let Some(ids) = value.get("nodeIds") {
-        if ids.as_array().is_none_or(|ids| ids.iter().any(|id| id.as_str().is_none_or(str::is_empty))) { return Err(invalid()); }
-    }
-    if let Some(ids) = value.get("assetIds") {
-        for asset in ids.as_array().ok_or_else(invalid)? {
-            assets.insert(asset.as_str().ok_or_else(invalid)?.to_owned());
-        }
-    }
-    Ok(())
-}
-
-fn validate_loop(run: &Value, nodes: &[Value], assets: &mut HashSet<String>) -> AppResult<()> {
-    let Some(state) = run.get("loop") else { return Ok(()); };
-    let owner = state["nodeId"].as_str().ok_or_else(invalid)?;
-    if !nodes.iter().any(|node| node["id"] == owner && node["kind"] == "loop") { return Err(invalid()); }
-    let order = run["order"].as_array().ok_or_else(invalid)?;
-    if !order.contains(&json!(owner)) { return Err(invalid()); }
-    let body = state["bodyIds"].as_array().filter(|body| !body.is_empty()).ok_or_else(invalid)?;
-    let mut ids = HashSet::new();
-    for id in body {
-        let key = id.as_str().ok_or_else(invalid)?;
-        if key == owner || !order.contains(id) || !ids.insert(key) { return Err(invalid()); }
-    }
-    let index = state["index"].as_u64().ok_or_else(invalid)? as usize;
-    let start_index = match state.get("startIndex") {
-        Some(value) => value.as_u64().filter(|index| *index < 100).ok_or_else(invalid)? as usize,
-        None => 0,
-    };
-    let completed = state["completed"].as_array().ok_or_else(invalid)?;
-    if let Some(items) = state.get("items") {
-        let items = items.as_array().filter(|items| !items.is_empty() && items.len() <= 100).ok_or_else(invalid)?;
-        let processed = start_index + completed.len();
-        if start_index >= items.len() || index >= items.len() || !(processed == index || processed == items.len() && index + 1 == items.len()) { return Err(invalid()); }
-        if run["status"] == "done" && processed != items.len() { return Err(invalid()); }
-        for item in items {
-            if !item["text"].is_string() { return Err(invalid()); }
-            for asset in item["assetIds"].as_array().ok_or_else(invalid)? {
-                assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
-            }
-        }
-    } else if index != start_index || !completed.is_empty() || run["status"] == "done" { return Err(invalid()); }
-    for item in completed {
-        let outputs = item["outputs"].as_object().ok_or_else(invalid)?;
-        let steps = item["steps"].as_object().ok_or_else(invalid)?;
-        if outputs.len() != ids.len() || steps.len() != ids.len()
-            || outputs.keys().any(|id| !ids.contains(id.as_str()))
-            || steps.iter().any(|(id, step)| !ids.contains(id.as_str()) || step["status"] != "done") { return Err(invalid()); }
-        for ports in outputs.values() {
-            for value in ports.as_object().ok_or_else(invalid)?.values() {
-                if !matches!(value["type"].as_str(), Some("text" | "image" | "visual-profile" | "session")) { return Err(invalid()); }
-                if value["type"] == "image" {
-                    validate_image_output(value, assets)?;
-                } else if let Some(list) = value.get("assetIds") {
-                    for asset in list.as_array().ok_or_else(invalid)? {
-                        assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
-    // Local history includes frozen inputs and results from multiple runs. Its
-    // cumulative size is not a per-request limit; validate the graph below.
-    if document["schema_version"] != 1 { return Err(invalid()); }
-    let nodes = document["nodes"].as_array().ok_or_else(invalid)?;
-    if nodes.len() > 500 { return Err(invalid()); }
-    let mut ids = HashSet::new();
-    let mut assets = HashSet::new();
-    let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
-    for node in nodes {
-        let id = node["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("director3d" | "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
-            || !matches!(node["action"].as_str(), Some("describe" | "reuse" | "layers"))
-            || node["x"].as_f64().filter(|v| v.is_finite()).is_none()
-            || node["y"].as_f64().filter(|v| v.is_finite()).is_none()
-            || !node["prompt"].is_string() || !node["provider"].is_string()
-            || !node["trigger"].is_boolean() || !node["outputPorts"].is_array() { return Err(invalid()); }
-        let inputs = node["inputs"].as_object().ok_or_else(invalid)?;
-        if node["kind"] == "planner" && (node["trigger"] != false || inputs.keys().any(|key| key != "text" && key != "image")
-            || node["outputs"].as_object().is_none_or(|outputs| !outputs.is_empty()) || node["outputPorts"].as_array().is_none_or(|ports| !ports.is_empty())) { return Err(invalid()); }
-        if node["kind"] == "trigger" && inputs.keys().any(|key| key != "completion") { return Err(invalid()); }
-        if node.get("triggerCount").is_some_and(|count| node["kind"] != "trigger" || count.as_u64().is_none_or(|count| count > 9999)) { return Err(invalid()); }
-        if node.get("triggerMode").is_some_and(|mode| node["kind"] != "trigger" || !matches!(mode.as_str(), Some("manual" | "daily" | "once" | "completion"))) { return Err(invalid()); }
-        if let Some(schedule) = node.get("triggerSchedule") {
-            if node["kind"] != "trigger" || schedule["id"].as_str().is_none_or(str::is_empty)
-                || schedule["at"].as_u64().is_none_or(|at| at == 0 || at > 8_640_000_000_000_000)
-                || !matches!(schedule["status"].as_str(), Some("armed" | "fired" | "missed" | "failed")) { return Err(invalid()); }
-            if let Some(time) = schedule.get("dailyAt") {
-                let time = time.as_str().ok_or_else(invalid)?.as_bytes();
-                if time.len() != 5 || time[2] != b':' || ![time[0], time[1], time[3], time[4]].iter().all(u8::is_ascii_digit)
-                    || &time[..2] > b"23".as_slice() || &time[3..] > b"59".as_slice() || schedule["status"] != "armed" { return Err(invalid()); }
-            }
-        }
-        if let Some(seen) = node.get("completionSeen") {
-            if node["kind"] != "trigger" { return Err(invalid()); }
-            let mut unique = HashSet::new();
-            for session in seen.as_array().ok_or_else(invalid)? {
-                if !unique.insert(session.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?) { return Err(invalid()); }
-            }
-        }
-        if node["kind"] == "loop" {
-            if node.get("loopMode").is_some_and(|mode| !matches!(mode.as_str(), Some("images" | "rows" | "count"))) { return Err(invalid()); }
-            if node.get("loopStartItem").is_some_and(|value| value.as_u64().is_none_or(|item| !(1..=100).contains(&item))) { return Err(invalid()); }
-            if node["loopMode"] == "count" {
-                if node["loopCount"].as_u64().is_none_or(|count| !(1..=100).contains(&count)) { return Err(invalid()); }
-            } else if node.get("loopCount").is_some() { return Err(invalid()); }
-            let port = if node["loopMode"] == "count" { "signal" } else if node["loopMode"] == "rows" { "text" } else { "image" };
-            if inputs.keys().any(|key| key != port && key != "signal") { return Err(invalid()); }
-        }
-        if node["kind"] == "text" && node["textSource"].is_string() {
-            if node["textSource"].as_str().is_none_or(str::is_empty) || inputs.keys().any(|key| key != "signal") || node.get("textTarget").is_some() { return Err(invalid()); }
-            if nodes.iter().any(|other| other["id"] != node["id"] && other["textSource"] == node["textSource"]) { return Err(invalid()); }
-        } else if node["kind"] == "text" {
-            if node["textTarget"]["nodeId"].as_str().is_none_or(str::is_empty)
-                || node["textTarget"]["cellId"].as_str().is_none_or(str::is_empty)
-                || inputs.values().filter_map(Value::as_array).map(Vec::len).sum::<usize>() != 1
-                || inputs.keys().any(|key| key != "text" && key != "image") { return Err(invalid()); }
-            if nodes.iter().any(|other| other["id"] != node["id"] && other["kind"] == "text" && other["textTarget"]["nodeId"] == node["textTarget"]["nodeId"] && other["textTarget"]["cellId"] == node["textTarget"]["cellId"]) { return Err(invalid()); }
-            if let Some(axis) = node["textTarget"].get("appendAxis") {
-                if !matches!(axis.as_str(), Some("row" | "column")) || node["textTarget"]["append"] != true { return Err(invalid()); }
-                let cells = node["textTarget"]["axisCellIds"].as_array().filter(|cells| !cells.is_empty()).ok_or_else(invalid)?;
-                let mut unique = HashSet::new();
-                for cell in cells {
-                    let id = cell.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-                    if !unique.insert(id) { return Err(invalid()); }
-                }
-                if node["textTarget"].get("axisOffset").is_some_and(|offset| offset.as_u64().is_none()) { return Err(invalid()); }
-            }
-            if let Some(value) = node["textTarget"].get("cellIds") {
-                let cells = value.as_array().ok_or_else(invalid)?;
-                let mut unique = HashSet::new();
-                for cell in cells {
-                    let id = cell.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-                    if !unique.insert(id) || nodes.iter().any(|other| other["id"] != node["id"] && other["textTarget"]["nodeId"] == node["textTarget"]["nodeId"]
-                        && (other["textTarget"]["cellId"] == *cell || other["textTarget"]["cellIds"].as_array().is_some_and(|ids| ids.contains(cell)))) { return Err(invalid()); }
-                }
-            }
-        }
-        let parked_r2v = node.get("savedComfyR2V").map(|parked| {
-            if node["kind"] != "generation" || node["generation"]["media"] != "video" { return Err(invalid()); }
-            parked.as_object().filter(|inputs| inputs.keys().all(|port| h3_r2v_port(port).is_some())).ok_or_else(invalid)
-        }).transpose()?;
-        let mut deps = Vec::new();
-        for (port, bindings, parked) in inputs.iter().map(|(port, value)| (port, value, false))
-            .chain(parked_r2v.into_iter().flatten().map(|(port, value)| (port, value, true))) {
-            if port == "completion" {
-                if node["kind"] != "trigger" { return Err(invalid()); }
-                for binding in bindings.as_array().ok_or_else(invalid)? {
-                    validate_binding_metadata(binding)?;
-                    if binding.get("canvasNodeId").is_some() {
-                        if binding["canvasNodeId"].as_str().is_none_or(str::is_empty) || binding["cellId"] != "image"
-                            || !control_binding_fields(binding, &["canvasNodeId", "cellId"]) { return Err(invalid()); }
-                        continue;
-                    }
-                    let producer = nodes.iter().find(|source| source["id"] == binding["nodeId"]).ok_or_else(invalid)?;
-                    if matches!(producer["kind"].as_str(), Some("trigger" | "planner")) || producer.get("textSource").is_some()
-                        || !matches!(binding["portId"].as_str(), Some("text" | "image" | "visual-profile" | "iteration"))
-                        || !control_binding_fields(binding, &["nodeId", "portId", "pendingCompletionSession"]) { return Err(invalid()); }
-                    if binding.get("pendingCompletionSession").is_some_and(|session|
-                        session.as_str().is_none_or(str::is_empty) || binding["portId"] != "image"
-                        || !matches!(producer["kind"].as_str(), Some("generation" | "comfy-video"))) { return Err(invalid()); }
-                }
-                continue; // Completion events do not participate in the data dependency DAG.
-            }
-            let local_video = node["kind"] == "comfy-video";
-            let r2v = local_video && node["comfyVideo"]["mode"] == "r2v";
-            let legacy_frames = local_video && matches!(port.as_str(), "first-frame" | "last-frame");
-            let legacy_audio = local_video && port == "reference-audio";
-            let r2v_port = (local_video || parked).then(|| h3_r2v_port(port)).flatten();
-            let typed_port = r2v_port.or_else(|| legacy_audio.then_some(("audio", 1)));
-            let image_port = port == "image" || typed_port.is_some() || legacy_frames;
-            let inactive = parked || r2v_port.is_some() && !r2v || r2v && (legacy_audio || legacy_frames);
-            if !image_port && !matches!(port.as_str(), "text" | "visual-profile" | "signal") { return Err(invalid()); }
-            let bindings = bindings.as_array().ok_or_else(invalid)?;
-            if typed_port.is_some_and(|(_, limit)| bindings.len() > limit) { return Err(invalid()); }
-            for binding in bindings {
-                validate_binding_metadata(binding)?;
-                if typed_port.is_some_and(|(media, _)| media != "image" && binding.get("videoFrame").is_some()
-                    || binding.get("mediaFilter").is_some_and(|filter| filter.as_array().is_none_or(|types| types.len() != 1 || types[0] != media))
-                    || binding.get("portId").is_some_and(|port| port != "image")) { return Err(invalid()); }
-                if port == "signal" {
-                    let producer = nodes.iter().find(|node| node["id"] == binding["nodeId"]).ok_or_else(invalid)?;
-                    if producer["kind"] != "trigger" || binding["portId"] != "signal" || !control_binding_fields(binding, &["nodeId", "portId"]) { return Err(invalid()); }
-                    deps.push(producer["id"].as_str().ok_or_else(invalid)?);
-                    continue;
-                }
-                if binding["portId"] == "signal" { return Err(invalid()); }
-                if let Some(frame) = binding.get("videoFrame") {
-                    if !image_port || !matches!(frame["position"].as_str(), Some("first" | "last"))
-                        || ["groupId", "assetIds", "canvasNodeId", "cellId", "dimension"].iter().any(|key| binding.get(*key).is_some())
-                    { return Err(invalid()); }
-                    if let Some(source) = binding.get("nodeId") {
-                        // Generated videos use the legacy "image" output socket, even before a file exists.
-                        let producer = nodes.iter().find(|card| card["id"] == *source).ok_or_else(invalid)?;
-                        let video = matches!(producer["kind"].as_str(), Some("comfy-video" | "director3d"))
-                            || producer["kind"] == "generation" && producer["generation"]["media"] == "video"
-                            || producer["kind"] == "agent" && producer["skill"] == "hyperframes";
-                        // The generic image transport can also carry audio. Only persist a frame for an image receiver.
-                        let accepts_frame = legacy_frames || matches!(r2v_port, Some(("image", _)))
-                            || port == "image" && !local_video && node["kind"] != "voice" && !node["textSource"].is_string()
-                                && (node["kind"] != "text" || node["textTarget"]["image"] == true);
-                        if !video || !accepts_frame || binding["portId"] != "image"
-                            || frame.get("assetId").is_some() || binding.get("assetId").is_some() || binding.get("assetNodeId").is_some()
-                            || binding["mediaFilter"].as_array().is_some_and(|types| !types.iter().any(|kind| kind == "image"))
-                        { return Err(invalid()); }
-                    } else {
-                        let frame_asset = frame["assetId"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-                        if binding.get("portId").is_some() || binding["assetId"].as_str().is_none_or(|id| id.is_empty() || id == frame_asset) { return Err(invalid()); }
-                        assets.insert(frame_asset.to_owned());
-                    }
-                }
-                if let Some(dimension) = binding.get("dimension") {
-                    let asset = binding["assetId"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-                    if port != "text" || !dimension["title"].is_string() || !dimension["body"].is_string()
-                        || !(dimension["id"].is_null() || dimension["id"].is_string())
-                        || ["nodeId", "portId", "groupId", "assetIds", "canvasNodeId", "cellId"].iter().any(|key| binding.get(*key).is_some())
-                    { return Err(invalid()); }
-                    assets.insert(asset.to_owned());
-                } else if binding["groupId"].is_string() {
-                    if !image_port || binding.get("nodeId").is_some() || binding.get("assetId").is_some() || binding.get("canvasNodeId").is_some() { return Err(invalid()); }
-                    for asset in binding["assetIds"].as_array().ok_or_else(invalid)? {
-                        assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
-                    }
-                } else if let Some(asset) = binding["assetId"].as_str() {
-                    if !image_port || binding.get("nodeId").is_some() { return Err(invalid()); }
-                    assets.insert(asset.to_owned());
-                } else if binding["canvasNodeId"].is_string() {
-                    if (port != "text" && !image_port) || !binding["cellId"].is_string() || binding.get("nodeId").is_some() { return Err(invalid()); }
-                    if matches!(binding["cellId"].as_str(), Some("*" | "*text" | "*latest" | "*latest-image")) {
-                        if (matches!(binding["cellId"].as_str(), Some("*" | "*latest-image")) && !image_port)
-                            || (matches!(binding["cellId"].as_str(), Some("*text" | "*latest")) && port != "text") { return Err(invalid()); }
-                        for producer in nodes.iter().filter(|node| !inactive && node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"]) {
-                            deps.push(producer["id"].as_str().ok_or_else(invalid)?);
-                        }
-                    }
-                    if let Some(producer) = nodes.iter().filter(|_| !inactive).find(|node| node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"] && (node["textTarget"]["cellId"] == binding["cellId"] || node["textTarget"]["cellIds"].as_array().is_some_and(|ids| ids.contains(&binding["cellId"]))))
-                        .or_else(|| nodes.iter().find(|node| !inactive && node["resultNodeIds"].as_array().is_some_and(|ids| ids.contains(&binding["canvasNodeId"])))) {
-                        deps.push(producer["id"].as_str().ok_or_else(invalid)?);
-                    }
-                } else {
-                    if nodes.iter().any(|node| node["id"] == binding["nodeId"] && node["kind"] == "planner") { return Err(invalid()); }
-                    let producer = binding["nodeId"].as_str().ok_or_else(invalid)?;
-                    if !inactive { deps.push(producer); }
-                    if !binding["portId"].is_string() { return Err(invalid()); }
-                }
-            }
-        }
-        dependencies.insert(id, deps);
-        for value in node["outputs"].as_object().ok_or_else(invalid)?.values() {
-            match value["type"].as_str() {
-                Some("session") if value["nodeIds"].as_array().is_some_and(|ids| ids.iter().all(|id| id.is_string())) => {},
-                Some("image") => validate_image_output(value, &mut assets)?,
-                Some("text") if value["text"].is_string() => {
-                    if let Some(ids) = value.get("assetIds") {
-                        for asset in ids.as_array().ok_or_else(invalid)? {
-                            assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
-                        }
-                    }
-                },
-                Some("visual-profile") if value["profileId"].as_str().is_some_and(|id| !id.is_empty()) && value["version"].as_i64().is_some_and(|v| v > 0) => {},
-                _ => return Err(invalid()),
-            }
-        }
-    }
-    let mut settled = HashSet::new();
-    while settled.len() < nodes.len() {
-        let before = settled.len();
-        for (id, deps) in &dependencies {
-            if deps.iter().any(|dep| !ids.contains(dep)) { return Err(invalid()); }
-            if deps.iter().all(|dep| settled.contains(dep)) { settled.insert(*id); }
-        }
-        if before == settled.len() { return Err(AppError::Other("工作流包含循环".into())); }
-    }
-    let runs = match document.get("runs") {
-        Some(value) => value.as_array().ok_or_else(invalid)?.iter().collect::<Vec<_>>(),
-        None => if document["run"].is_null() { vec![] } else { vec![&document["run"]] },
-    };
-    let mut run_ids = HashSet::new();
-    let mut schedule_ids = HashSet::new();
-    let mut accesses: Vec<(HashSet<&str>, HashSet<&str>)> = Vec::new();
-    let triggers: HashSet<&str> = nodes.iter().filter(|node| node["kind"] == "trigger").filter_map(|node| node["id"].as_str()).collect();
-    for run in runs {
-        if let Some(schedule) = run.get("scheduleId") {
-            if !schedule_ids.insert(schedule.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?)
-                || !nodes.iter().any(|node| node["id"] == run["startId"] && node["kind"] == "trigger") { return Err(invalid()); }
-        }
-        if let Some(queue) = run.get("triggerQueue") {
-            for id in queue.as_array().ok_or_else(invalid)? {
-                if !nodes.iter().any(|node| node["id"] == *id && node["kind"] == "trigger") { return Err(invalid()); }
-            }
-        }
-        validate_loop(run, nodes, &mut assets)?;
-        if run["order"].as_array().is_some_and(|order| order.iter().any(|id| nodes.iter().any(|node| node["id"] == *id && node["kind"] == "planner"))) { return Err(invalid()); }
-        if !matches!(run["status"].as_str(), Some("running" | "waiting" | "done" | "failed" | "stopped"))
-            || !run["id"].is_string() || !run["threadId"].is_string()
-            || !run["steps"].is_object()
-            || run["order"].as_array().ok_or_else(invalid)?.iter().any(|id| id.as_str().is_none_or(|id| !ids.contains(id))) { return Err(invalid()); }
-        if !run_ids.insert(run["id"].as_str().ok_or_else(invalid)?) { return Err(invalid()); }
-        if matches!(run["status"].as_str(), Some("running" | "waiting")) {
-            let locked = run.get("lockedNodeIds").unwrap_or(&run["order"]).as_array().ok_or_else(invalid)?;
-            let mut reads_and_writes = HashSet::new();
-            for id in locked {
-                let id = id.as_str().ok_or_else(invalid)?;
-                if !ids.contains(id) || !reads_and_writes.insert(id) { return Err(invalid()); }
-            }
-            let mut writes = HashSet::new();
-            for id in run.get("writeNodeIds").unwrap_or(&run["order"]).as_array().ok_or_else(invalid)? {
-                let id = id.as_str().ok_or_else(invalid)?;
-                if !reads_and_writes.contains(id) || !writes.insert(id) { return Err(invalid()); }
-            }
-            if run["order"].as_array().ok_or_else(invalid)?.iter().any(|id| !writes.contains(id.as_str().unwrap())) { return Err(invalid()); }
-            writes.retain(|id| !triggers.contains(id));
-            reads_and_writes.retain(|id| !triggers.contains(id));
-            if accesses.iter().any(|(other_access, other_writes)| !writes.is_disjoint(other_access) || !other_writes.is_disjoint(&reads_and_writes)) { return Err(invalid()); }
-            accesses.push((reads_and_writes, writes));
-        }
-    }
-    Ok(assets)
-}
 
 // A prior saved document can predate the current validator. Read only the
 // ownership-bearing fields so saving it never needs to revalidate old runs.
@@ -650,6 +300,46 @@ mod tests {
         let saved = db.workflow_get("p").unwrap();
         assert_eq!(saved.revision, 2);
         assert_eq!(saved.document, empty);
+    }
+
+    #[test]
+    fn workflow_validation_preserves_unknown_fields_and_reports_typed_paths() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.lock_conn().unwrap().execute(
+            "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)",
+            [],
+        ).unwrap();
+        let mut node = node("durable", json!({}));
+        node["futureMetadata"] = json!({"request":"frozen","values":[1,2,3]});
+        let mut doc = json!({"schema_version":1,"nodes":[node],"run":null,"extra":{"keep":true}});
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+
+        doc["nodes"][0]["kind"] = json!("unregistered");
+        let error = validate(&doc).unwrap_err().to_string();
+        assert!(error.contains("durable") && error.contains("nodes[0].kind"), "{error}");
+        doc["nodes"][0]["kind"] = json!("generation");
+        doc["nodes"][0]["inputs"]["image"] = json!([{"nodeId":"missing","portId":"image"}]);
+        let error = validate(&doc).unwrap_err().to_string();
+        assert!(error.contains("durable") && error.contains("nodes[0].inputs.image[0]"), "{error}");
+    }
+
+    #[test]
+    fn workflow_kahn_accepts_reverse_chain_and_reports_a_cycle_member() {
+        let mut nodes: Vec<_> = (0..500).rev().map(|index| {
+            let inputs = if index == 0 { json!({}) } else {
+                json!({"image":[{"nodeId":format!("n{}", index - 1),"portId":"image"}]})
+            };
+            node(&format!("n{index}"), inputs)
+        }).collect();
+        let document = json!({"schema_version":1, "nodes":nodes, "run":null});
+        assert!(validate(&document).is_ok());
+        nodes[499]["inputs"] = json!({"image":[{"nodeId":"n1","portId":"image"}]});
+        let cyclic = json!({"schema_version":1, "nodes":nodes, "run":null});
+        let error = validate(&cyclic).unwrap_err().to_string();
+        assert!(error.contains("工作流包含循环"), "{error}");
+        assert!(error.contains("n0，nodes[499]") || error.contains("n1，nodes[498]"), "{error}");
     }
 
     #[test]

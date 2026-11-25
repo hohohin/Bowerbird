@@ -45,11 +45,11 @@ function fixture(initial = example.workflow, assetExtensions = {}) {
     }
     throw new Error(`unexpected native call: ${command}`);
   };
-  const real = new Set(['canvasWorkflow', 'workflowExternalChanges', 'canvasCardNames', 'workflowDiagnostics',
+  const real = new Set(['canvasWorkflow', 'workflowExternalChanges', 'workflowMigrations', 'workflowTriggerScheduler', 'workflowPersistenceQueue', 'canvasNodePayload', 'canvasCardNames', 'workflowDiagnostics',
     'contentTable', 'workflowLoop', 'canvasNotes', 'canvasNoteSource', 'canvasSessionOutputs', 'canvasConversationCards',
     'comfyVideo', 'videoGeneration', 'workflowTriggerSchedule', 'workflowProviderIssue', 'workflowAgentChat', 'chatProvider',
     'audioMedia', 'workflowAutoConnect']);
-  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, setTimeout, clearTimeout });
+  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, AbortController, setTimeout, clearTimeout });
   function load(path) {
     if (modules.has(path)) return modules.get(path).exports;
     const module = { exports: {} }; modules.set(path, module);
@@ -57,7 +57,13 @@ function fixture(initial = example.workflow, assetExtensions = {}) {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
     }).outputText;
     const require = specifier => {
+      const nestedExecutor = dirname(path) === resolve(lib, 'executors');
+      if (nestedExecutor && specifier.startsWith('../')) specifier = './' + specifier.slice(3);
+      const base = nestedExecutor ? lib : dirname(path);
+      if (specifier.startsWith('./executors/')) return load(resolve(lib, specifier + '.ts'));
+      if (specifier === './automaticMedia') return load(resolve(lib, 'executors/automaticMedia.ts'));
       if (specifier === './api') return { api };
+      if (specifier === './workflowHost') return { getWorkflowHost: () => ({ getState: () => account }) };
       if (specifier === '../store') return { useStore: { getState: () => account } };
       if (specifier === './chatCapabilities') {
         const snapshot = { store: { getState: () => ({}) } };
@@ -69,7 +75,7 @@ function fixture(initial = example.workflow, assetExtensions = {}) {
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
       if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined };
       if (real.has(specifier.replace(/^\.\//, '').replace(/\.ts$/, ''))) {
-        return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
+        return load(resolve(base, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       }
       return {};
     };

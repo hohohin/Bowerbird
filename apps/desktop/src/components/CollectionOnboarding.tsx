@@ -1,3 +1,4 @@
+import { projectCanvasCallbacks } from "../lib/projectCanvasCallbacks";
 import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { useState } from "react";
@@ -46,7 +47,7 @@ export function CollectionOnboarding() {
     if (busy || (create ? !name.trim() : !selectedId)) return;
     setBusy(true); setError("");
     try {
-      await useStore.getState().projectCanvasFlush?.();
+      await projectCanvasCallbacks.flush?.();
       // UI 集合 corresponds to a normal folder; kind=collection is the separate 收藏夹.
       const id = create ? await api.createFolder(name.trim()) : selectedId;
       if (create) {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { projectCanvasCallbacks, registerProjectCanvasCallback } from "../src/lib/projectCanvasCallbacks.ts";
 
 import {
   backendProjectScopeForRoute,
@@ -23,6 +24,17 @@ import {
 const persisted = { id: "project-persisted" };
 const provisional = { id: "project-provisional", provisional: true };
 const projects = [persisted, provisional];
+
+test("leaving a former canvas cannot unregister the current project's save callback", async () => {
+  const first = registerProjectCanvasCallback("flush", async () => { throw new Error("stale canvas"); });
+  let saves = 0;
+  const current = registerProjectCanvasCallback("flush", async () => { saves++; });
+  first();
+  await projectCanvasCallbacks.flush();
+  assert.equal(saves, 1);
+  current();
+  assert.equal(projectCanvasCallbacks.flush, null);
+});
 
 test("entering a listed project activates its workspace", () => {
   assert.equal(resolveWorkspaceProjectId(persisted.id, projects), persisted.id);

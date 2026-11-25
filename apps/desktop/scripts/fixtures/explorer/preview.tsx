@@ -57,7 +57,7 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 useStore.setState({ assets: [], total: 0, projects: withSidebar ? [{ id: "p", name: "探索侧栏测试", kind: "blank" } as any] : [], activeProjectId: withSidebar ? "p" : null, projectRoutePending: false,
-  projectRouteRevision: 0, settings: {}, mode: "browse", boardOpen: false, projectCanvasFlush: async () => {} });
+  projectRouteRevision: 0, settings: {}, mode: "browse", boardOpen: false });
 function Fixture() {
   const [opened, setOpened] = useState(false);
   const [dialog, setDialog] = useState(false);

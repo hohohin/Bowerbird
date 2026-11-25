@@ -1,3 +1,4 @@
+import { projectCanvasCallbacks } from "../lib/projectCanvasCallbacks";
 import { userErrorMessage } from "../lib/userError";
 import { useRef, useState } from "react";
 import { api } from "../lib/api";
@@ -27,8 +28,8 @@ export function ProjectRenameDialog({ projectId, currentName, onClose }: {
       const state = useStore.getState();
       if (state.projectRoutePending) throw new Error("项目正在切换，请稍后重试");
       if (state.activeProjectId === projectId) {
-        if (!state.projectCanvasRename) throw new Error("项目画板尚未就绪，请稍后重试");
-        await state.projectCanvasRename(trimmed);
+        if (!projectCanvasCallbacks.rename) throw new Error("项目画板尚未就绪，请稍后重试");
+        await projectCanvasCallbacks.rename(trimmed);
       } else {
         if (!await api.projectCanvasRename(projectId, trimmed)) throw new Error("项目已不存在，无法重命名");
       }

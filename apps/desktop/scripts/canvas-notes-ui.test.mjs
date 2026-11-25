@@ -303,7 +303,11 @@ try {
   await page.getByRole("textbox", { name: "第 2 行第 1 列", exact: true }).fill("失败时保留的内容");
   await page.locator(".canvas-save-error").waitFor();
   await page.getByRole("textbox", { name: "第 2 行第 1 列", exact: true }).fill("继续编辑后的内容");
-  await page.evaluate(async () => { window.failNoteSave = false; await window.store.getState().projectCanvasFlush(); });
+  await page.evaluate(async () => {
+    window.failNoteSave = false;
+    const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+    await projectCanvasCallbacks.flush();
+  });
   assert.equal(JSON.parse((await page.evaluate(() => window.snapshot())).nodes.find(n => n.id === textId).payloadJson).cells[1][0].text, "继续编辑后的内容");
   await mkdir(".tmp/canvas-notes", { recursive: true });
   await page.screenshot({ path: ".tmp/canvas-notes/preview.png" });

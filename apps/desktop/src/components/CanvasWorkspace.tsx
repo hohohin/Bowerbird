@@ -191,7 +191,6 @@ import {
   prepareCanvasSnapAnchors,
   type CanvasSnapAnchor,
   snapCanvasRectPrepared,
-  type PreparedCanvasSnapAnchors,
   translateCanvasSelection,
   type CanvasPoint,
   type CanvasRect,
@@ -225,7 +224,13 @@ import {
   creativePromptLoadForProject,
   type CreativeLaunchRequest,
 } from "../lib/creativeLaunch";
-import { createOrderedWriteJournal, drainOrderedWriteJournal } from "../lib/orderedWriteJournal";
+import { useCanvasPersistence } from "./canvas/useCanvasPersistence";
+import { useCanvasCamera } from "./canvas/useCanvasCamera";
+import { canvasPointerSample, clearDragProjection, useCanvasDrag, type CanvasDrag, type CanvasPointerSample } from "./canvas/useCanvasDrag";
+import { useCanvasScope, useCanvasScopeValue } from "./canvas/useCanvasScope";
+import { afterCanvasPaint, ENTRY_LIGHT_CARD_LIMIT, EMPTY_ENTRY_CARDS, useCanvasEntryScheduler } from "./canvas/useCanvasEntryScheduler";
+import { useCanvasUndo, type CanvasUndoEntry } from "./canvas/useCanvasUndo";
+import { registerProjectCanvasCallback } from "../lib/projectCanvasCallbacks";
 import { useStore } from "../store";
 import { EXPLORER_CANVAS_DROP_EVENT, prepareExplorerCanvasDrop, type ExplorerCanvasDropDetail } from "../lib/explorerCanvasDrop";
 import { importDroppedMedia, prepareMediaImport } from "../lib/mediaImport";
@@ -253,18 +258,6 @@ type CanvasNode = ProjectCanvasUiNode;
 type CanvasAssetNode = Extract<CanvasNode, { kind: "asset" }>;
 type CanvasFolderNode = Extract<CanvasNode, { kind: "folder" }>;
 
-interface DragProjection {
-  preview?: ReturnType<typeof canvasDragPreview>;
-  apply?: () => void;
-}
-
-function clearDragProjection(drag: DragProjection | null) {
-  if (!drag) return;
-  drag.preview?.clear();
-  drag.preview = null;
-  drag.apply = undefined;
-}
-
 interface CanvasMarqueePress {
   origin: CanvasPoint;
   cursor: CanvasPointerSample;
@@ -279,15 +272,7 @@ interface CanvasMarqueePress {
   sectionIds?: Set<string>;
 }
 
-type CanvasUndoEntry =
-  | { kind: "gallery"; projectId: string; edit: GalleryMerge }
-  | { kind: "names"; projectId: string; before: Record<string, string | undefined> }
-  | { kind: "content"; projectId: string; before: ProjectGraphNode; after: ProjectGraphNode; typedAt?: number; restoredMaterials?: CanvasNode[] }
-  | { kind: "materials"; projectId: string; before: CanvasNode[]; after: CanvasNode[]; groups: Map<string, CanvasGroup> }
-  | { kind: "workflow"; projectId: string; edit: WorkflowEditUndo; connectedGenerationId?: string }
-  | { kind: "paste"; projectId: string; nodeIds: string[]; groupIds: string[]; workflowIds: string[] }
-  | { kind: "removal"; changedFolders?: CanvasFolderNode[]; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup>; workflow?: WorkflowEditUndo | null }
-  | { kind: "geometry"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; workflow: WorkflowGeometry[] };
+type CanvasTool = "select" | "pan" | "section" | "artboard" | "bubble" | "document" | Exclude<WorkflowKind, "trigger">;
 
 interface ActiveCanvasState {
   id: string;
@@ -337,18 +322,6 @@ function baseNodeRect(node: { x: number; y: number; width: number; height: numbe
   // Stored asset geometry includes its caption, independent of this display preference.
   const caption = node.kind === "asset" && !useStore.getState().settings?.canvas_show_asset_names ? 30 : 0;
   return { x: node.x, y: node.y, width: node.width, height: node.height - caption };
-}
-
-const ENTRY_LIGHT_CARD_LIMIT = 48;
-const ENTRY_MIN_BATCH_WEIGHT = 24;
-const ENTRY_HEAVY_CARD_WEIGHT = 6;
-const ENTRY_FRAME_BUDGET_MS = 16;
-const EMPTY_ENTRY_CARDS: ReadonlySet<string> = new Set();
-
-function afterCanvasPaint(run: () => void) {
-  let timer: number | undefined;
-  const frame = requestAnimationFrame(() => { timer = window.setTimeout(run, 0); });
-  return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); };
 }
 
 function containedNodeIds(nodes: CanvasNode[]) {
@@ -475,11 +448,6 @@ function FolderPreview({
 }
 
 
-type CanvasPointerSample = Pick<PointerEvent<HTMLElement>, "pointerId" | "clientX" | "clientY" | "currentTarget">;
-function canvasPointerSample(event: PointerEvent<HTMLElement>): CanvasPointerSample {
-  return { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, currentTarget: event.currentTarget };
-}
-
 export function CanvasWorkspace({
   projectId,
   exploring = false,
@@ -563,11 +531,19 @@ export function CanvasWorkspace({
   const setFocusedThreadId = useStore((state) => state.setFocusedThreadId);
   const timelineScope = useStore((state) => state.projectTimelineScope);
   const setProjectTimelineScope = useStore((state) => state.setProjectTimelineScope);
-  const [activeCanvas, setActiveCanvasState] = useState<ActiveCanvasState>(() => provisionalCanvas(project));
-  const [nodes, setNodes] = useState<CanvasNode[]>([]);
-  const [snapshotPromptId, setSnapshotPromptId] = useState<string | null>(null);
-  const [graphNodes, setGraphNodes] = useState<ProjectGraphNode[]>([]);
-  const [graphEdges, setGraphEdges] = useState<CanvasEdge[]>([]);
+  const canvasScope = useCanvasScope(() => ({
+    activeCanvas: provisionalCanvas(project), nodes: [] as CanvasNode[], graphNodes: [] as ProjectGraphNode[], graphEdges: [] as CanvasEdge[],
+    snapshotPromptId: null as string | null, focusedNodeId: focusNodeId, viewMode: "canvas" as CreativeViewMode, frequentPicking: false,
+    loading: true, loadFailed: false, entryCardIds: EMPTY_ENTRY_CARDS as ReadonlySet<string> | null, entryViewportReady: false,
+    snapEnabled: (() => { try { return localStorage.getItem(CANVAS_SNAP_ENABLED_KEY) !== "false"; } catch { return true; } })(),
+    selectedCanvasNodeIds: new Set<string>(), expandedFolderIds: new Set<string>(), guides: [] as CanvasSnapGuide[],
+    layoutDragId: null as string | null, drawingTool: "select" as CanvasTool, panning: false, spacePanReady: false,
+  }));
+  const [activeCanvas, setActiveCanvasState, activeCanvasRef] = useCanvasScopeValue(canvasScope, "activeCanvas");
+  const [nodes, setNodes, nodesRef] = useCanvasScopeValue(canvasScope, "nodes");
+  const [snapshotPromptId, setSnapshotPromptId] = useCanvasScopeValue(canvasScope, "snapshotPromptId");
+  const [graphNodes, setGraphNodes, graphNodesRef] = useCanvasScopeValue(canvasScope, "graphNodes");
+  const [graphEdges, setGraphEdges] = useCanvasScopeValue(canvasScope, "graphEdges");
   const pendingOriginals = usePendingOriginalDeletion();
   const [canvasReadEpoch, setCanvasReadEpoch] = useState(originalDeletionEpoch);
   const hideCanvasOriginal = useCallback((id?: string | null, path?: string | null) =>
@@ -591,22 +567,26 @@ export function CanvasWorkspace({
   const nonChatGraphNodes = useMemo(() => shownGraph.filter(node => !canvasChatId(node)), [shownGraph]);
   const [threads, setThreads] = useState<CreativeThread[]>([]);
   const archivedThreadIds = useMemo(() => new Set(threads.filter(thread => thread.archivedAt != null).map(thread => thread.id)), [threads]);
-  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(focusNodeId);
-  const focusedNodeIdRef = useRef(focusedNodeId);
+  const [focusedNodeId, setFocusedNodeId, focusedNodeIdRef] = useCanvasScopeValue(canvasScope, "focusedNodeId");
   const [pendingNewCards, setPendingNewCards] = useState<string[]>([]);
   const pendingNewReferencesRef = useRef(new Map<string, ProjectGraphNode>());
-  focusedNodeIdRef.current = focusedNodeId;
   const appliedFocusRequestRef = useRef<string | null>(null);
-  const [pan, setPan] = useState<CanvasPoint>({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
-  const [viewMode, setViewMode] = useState<CreativeViewMode>("canvas");
+  const [viewMode, setViewMode, viewModeRef] = useCanvasScopeValue(canvasScope, "viewMode");
+  const {
+    pan, setPan, zoom, setZoom, panRef, zoomRef, stageRef, planeRef, gridElement, zoomLabelRef,
+    centeredEditorRef, editorCenterFrameRef, cameraSettleRef, paintWindow, mediaZoomHandle, wheelStageRect,
+    cameraFrame, paintCamera, settleCamera, scheduleCamera, cancelEditorCenter, readCanvasZoom, toBoardPoint,
+  } = useCanvasCamera({
+    projectId, viewMode,
+    prioritize: (currentPan, currentZoom) => prioritizeEntry.current?.(currentPan, currentZoom),
+    repaintGesture: () => { const marquee = marqueePressRef.current; if (marquee?.active) updatePan(marquee.cursor); },
+    scheduleViewSave, cancelViewSave: () => clearTimeout(viewSaveTimer.current),
+  });
   const [composerSeedIds, setComposerSeedIds] = useState<string[]>([]);
   const sourceCollapsed = !useStore(state => state.canvasLibraryOpen);
   const [sourceCatalogVisited, setSourceCatalogVisited] = useState(!sourceCollapsed);
   const frequentLibrary = useCanvasFrequentAssets(!sourceCollapsed, projectId);
-  const [frequentPicking, setFrequentPicking] = useState(false);
-  const frequentPickingRef = useRef(frequentPicking);
-  frequentPickingRef.current = frequentPicking;
+  const [frequentPicking, setFrequentPicking, frequentPickingRef] = useCanvasScopeValue(canvasScope, "frequentPicking");
   useEffect(() => { setFrequentPicking(false); }, [projectId, exploring]);
   const setCanvasLibraryOpen = useStore(state => state.setCanvasLibraryOpen);
   const setSourceCollapsed = useCallback((collapsed: boolean) => setCanvasLibraryOpen(!collapsed), [setCanvasLibraryOpen]);
@@ -636,9 +616,9 @@ export function CanvasWorkspace({
   const [canvasAssets, setCanvasAssets] = useState<Asset[]>([]);
   const audioOverwriteRevision = useRef(0);
   const [catalogAssets, setCatalogAssets] = useState<Asset[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [entryCardIds, setEntryCardIds] = useState<ReadonlySet<string> | null>(EMPTY_ENTRY_CARDS);
-  const [entryViewportReady, setEntryViewportReady] = useState(false);
+  const [loading, setLoading] = useCanvasScopeValue(canvasScope, "loading");
+  const [entryCardIds, setEntryCardIds] = useCanvasScopeValue(canvasScope, "entryCardIds");
+  const [entryViewportReady, setEntryViewportReady] = useCanvasScopeValue(canvasScope, "entryViewportReady");
   const opening = loading || !entryViewportReady;
   const entryCandidates = useRef<ReadonlySet<string> | null>(null);
   const prioritizeEntry = useRef<(pan: CanvasPoint, zoom: number) => void>();
@@ -650,44 +630,26 @@ export function CanvasWorkspace({
     entryCardIdsRef.current = entryCardIds;
     entryCommitAt.current = performance.now();
   }, [entryCardIds]);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadFailed, setLoadFailed] = useCanvasScopeValue(canvasScope, "loadFailed");
   const [loadRevision, setLoadRevision] = useState(0);
   const restoredEntry = useRef<{ projectId: string; loadRevision: number }>();
-  const [savingVisible, setSavingVisible] = useState(false);
-  const saveIndicator = useRef({ busy: false, timer: 0 });
-  function setSaving(busy: boolean) {
-    const indicator = saveIndicator.current;
-    if (indicator.busy === busy) return;
-    indicator.busy = busy;
-    window.clearTimeout(indicator.timer);
-    indicator.timer = window.setTimeout(() => setSavingVisible(busy), busy ? 250 : 350);
-  }
-  useEffect(() => () => window.clearTimeout(saveIndicator.current.timer), []);
   const [error, setError] = useState<string | null>(null);
-  const [layoutDragId, setActiveDragId] = useState<string | null>(null);
-  const [guides, setGuides] = useState<CanvasSnapGuide[]>([]);
-  const [snapEnabled, setSnapEnabled] = useState(() => {
-    try { return localStorage.getItem(CANVAS_SNAP_ENABLED_KEY) !== "false"; }
-    catch { return true; }
-  });
-  const snapEnabledRef = useRef(snapEnabled);
+  const [layoutDragId, setActiveDragId] = useCanvasScopeValue(canvasScope, "layoutDragId");
+  const [guides, setGuides] = useCanvasScopeValue(canvasScope, "guides");
+  const [snapEnabled, setSnapEnabled, snapEnabledRef] = useCanvasScopeValue(canvasScope, "snapEnabled");
   const [hoverIntent, setHoverIntent] = useState<HoverIntent | null>(null);
   const hoverRef = useRef<{ intent: HoverIntent; ready: boolean } | null>(null);
   const [hoverReady, setHoverReady] = useState(false);
   const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
-  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
+  const [expandedFolderIds, setExpandedFolderIds, expandedFolderIdsRef] = useCanvasScopeValue(canvasScope, "expandedFolderIds");
   const [pendingProductGroup, setPendingProductGroup] = useState<{ projectId: string; id: string } | null>(null);
   const [replicationProjectId, setReplicationProjectId] = useState<string | null>(null);
   useEffect(() => { setReplicationProjectId(null); }, [projectId]);
-  const expandedFolderIdsRef = useRef(expandedFolderIds);
   const [externalDragOver, setExternalDragOver] = useState(false);
-  const [spacePanReady, setSpacePanReady] = useState(false);
-  const [panning, setPanning] = useState(false);
+  const [spacePanReady, setSpacePanReady] = useCanvasScopeValue(canvasScope, "spacePanReady");
+  const [panning, setPanning] = useCanvasScopeValue(canvasScope, "panning");
   const marqueeElement = useRef<HTMLDivElement>(null);
-  const wheelStageRect = useRef<DOMRect | undefined>(undefined);
-  const gridElement = useRef<HTMLDivElement>(null);
-  const paintWindow = useRef<ReturnType<typeof canvasPaintWindow> | null>(null);
-  const [selectedCanvasNodeIds, setSelectedCanvasNodeIds] = useState<Set<string>>(() => new Set());
+  const [selectedCanvasNodeIds, setSelectedCanvasNodeIds, selectedCanvasNodeIdsRef] = useCanvasScopeValue(canvasScope, "selectedCanvasNodeIds");
   const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; assetIds?: Array<string | null>; canvasNodeId?: string; index: number } | null>(null);
   const videoFrameSaves = useRef(new Map<string, () => Promise<void>>());
   const videoTrimSaves = useRef(new Map<string, () => Promise<Asset>>());
@@ -695,7 +657,6 @@ export function CanvasWorkspace({
   const transfer = useAssetTransferDialogs();
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
   const viewSaveTimer = useRef<ReturnType<typeof setTimeout>>();
-  const mediaZoomHandle = useRef<((value: number) => void) | null>(null);
   const [documentEditor, setDocumentEditor] = useState<{ nodeId: string; projectId: string; initialDocument: TextWorkspaceDocument } | null>(null);
   const documentEditorSession = useRef(0);
   const documentEditorRevision = useRef(0);
@@ -728,38 +689,16 @@ export function CanvasWorkspace({
   );
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [diagnosticTarget, setDiagnosticTarget] = useState<HTMLDivElement | null>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
-  const planeRef = useRef<HTMLDivElement>(null);
-  const zoomLabelRef = useRef<HTMLSpanElement>(null);
-  const centeredEditorRef = useRef<HTMLElement | null>(null);
-  const editorCenterFrameRef = useRef<number | null>(null);
-  useEffect(() => {
-    const stop = () => { if (editorCenterFrameRef.current != null) settleCamera(); };
-    window.addEventListener("blur", stop);
-    return () => {
-      window.removeEventListener("blur", stop);
-      cancelEditorCenter();
-      centeredEditorRef.current = null;
-    };
-  }, [projectId, viewMode]);
-  const cameraSettleRef = useRef<ReturnType<typeof setTimeout>>();
   const snapSizeObserverRef = useRef<ResizeObserver | null>(null);
   const cellHitCacheRef = useRef<ReturnType<typeof createCanvasCellHitCache> | null>(null);
   const lastImportPointRef = useRef<{ projectId: string; x: number; y: number } | null>(null);
-  const nodesRef = useRef(nodes);
-  // Mutations publish this ref synchronously, even while their React render is pending.
-  const graphNodesRef = useRef(graphNodes);
-  const focusedThreadIdRef = useRef(focusedThreadId);
-  const timelineScopeRef = useRef(timelineScope);
-  const panRef = useRef(pan);
-  const zoomRef = useRef(zoom);
-  const viewModeRef = useRef(viewMode);
+  const focusedThreadIdRef = useMemo(() => ({ get current() { return useStore.getState().focusedThreadId; } }), []);
+  const timelineScopeRef = useMemo(() => ({ get current() { return useStore.getState().projectTimelineScope; } }), []);
   const sourceWidthRef = useRef(360); // Preserve the legacy saved view field; the library now fills the workspace.
-  const activeCanvasRef = useRef(activeCanvas);
   const groupsRef = useRef(new Map<string, CanvasGroup>());
-  const undoHistoryRef = useRef<CanvasUndoEntry[]>([]);
-  const undoInFlightRef = useRef(false);
-  const [canUndo, setCanUndo] = useState(false);
+  const { undoHistoryRef, canUndo, pushCanvasUndo, popCanvasUndo, removeUndoEntry, clearCanvasUndo, undoCanvasAction } =
+    useCanvasUndo(() => { flushDocumentCard(); return activeCanvasRef.current.id; },
+      applyCanvasUndo, error => notifyError(error, "画板撤销未完成"));
   useEffect(() => {
     const onMerge = (event: Event) => {
       const { edit, projectId } = (event as CustomEvent<{ edit: GalleryMerge; projectId: string | null }>).detail;
@@ -768,27 +707,24 @@ export function CanvasWorkspace({
     window.addEventListener(GALLERY_MERGED_EVENT, onMerge);
     return () => window.removeEventListener(GALLERY_MERGED_EVENT, onMerge);
   }, []);
-  function pushCanvasUndo(entry: CanvasUndoEntry) {
-    const history = undoHistoryRef.current;
-    history.push(entry);
-    if (history.length > 80) history.shift();
-    setCanUndo(true);
-  }
-  function popCanvasUndo() {
-    const entry = undoHistoryRef.current.pop();
-    setCanUndo(undoHistoryRef.current.length > 0);
-    return entry;
-  }
   const resizeBaselineRef = useRef<Map<string, { material?: CanvasNode; graph?: ProjectGraphNode }>>(new Map());
   const titleBaselineRef = useRef(activeCanvas.title);
   const viewDirtyRef = useRef(false);
   const viewRevisionRef = useRef(0);
-  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const writeJournalRef = useRef(createOrderedWriteJournal());
-  const pendingWritesRef = useRef(0);
+  const { writeQueueRef, writeJournalRef, savingVisible, beginWrite, enqueueWrite, retryPendingWrites, flushCanvasWrites, flushDetachedView } = useCanvasPersistence({
+    reportError, clearError: () => setError(null),
+    prepareFlush: () => {
+      panFrame.flush();
+      settleCamera();
+      // Pull the live documents into the queue before waiting for it.
+      composerDraftFlushRef.current?.();
+      flushDocumentCard();
+    },
+    persistView: () => queueViewPersistence(true),
+  });
   const composerDraftFlushRef = useRef<(() => void) | null>(null);
   const loadTokenRef = useRef(0);
-  const loadingRef = useRef(loading);
+  const loadingRef = useMemo(() => ({ get current() { const state = canvasScope.getState(); return state.loading || !state.entryViewportReady; } }), [canvasScope]);
   const initialSnapshotRestoredRef = useRef(false);
   const processedLaunchRef = useRef<string | null>(null);
   const externalInstancesRef = useRef<{ signature: string; assets: CanvasAssetSnapshot[] } | null>(null);
@@ -796,38 +732,6 @@ export function CanvasWorkspace({
   const suppressNodeClickRef = useRef(false);
   const canvasDragHold = useRef(createCanvasDragHold());
   const canvasExportRef = useRef<AbortController | null>(null);
-  const nodeDragRef = useRef<DragProjection & {
-    nodeId: string;
-    toggleSelection: boolean;
-    selectedIds: Set<string>;
-    initialNodes: CanvasNode[];
-    initialGraphNodes: ProjectGraphNode[];
-    initialWorkflow: WorkflowGeometry[];
-    snapAnchors?: PreparedCanvasSnapAnchors;
-    crossedThreshold?: boolean;
-    pointerId: number;
-    offsetX: number;
-    offsetY: number;
-    startClientX: number;
-    startClientY: number;
-    moved: boolean;
-  } | null>(null);
-  const graphNodeDragRef = useRef<DragProjection & {
-    nodeId: string;
-    toggleSelection: boolean;
-    initialNodes: ProjectGraphNode[];
-    initialMaterialNodes: CanvasNode[];
-    initialWorkflow: WorkflowGeometry[];
-    snapAnchors?: PreparedCanvasSnapAnchors;
-    crossedThreshold?: boolean;
-    selectedIds: Set<string>;
-    pointerId: number;
-    offsetX: number;
-    offsetY: number;
-    startClientX: number;
-    startClientY: number;
-    moved: boolean;
-  } | null>(null);
   const panDragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -838,8 +742,7 @@ export function CanvasWorkspace({
   } | null>(null);
   const marqueePressRef = useRef<CanvasMarqueePress | null>(null);
   const blankPressCount = useRef(0);
-  const selectedCanvasNodeIdsRef = useRef(selectedCanvasNodeIds);
-  const [drawingTool, setDrawingTool] = useState<"select" | "pan" | "section" | "artboard" | "bubble" | "document" | Exclude<WorkflowKind, "trigger">>("select");
+  const [drawingTool, setDrawingTool] = useCanvasScopeValue(canvasScope, "drawingTool");
   const [artboardDialog, setArtboardDialog] = useState<{ nodeId: string; projectId: string; revision: number; composition: ArtboardComposition } | null>(null);
   useEffect(() => { setArtboardDialog(null); }, [projectId]);
   const workflowRef = useRef<WorkflowLayerHandle>(null);
@@ -1069,24 +972,12 @@ export function CanvasWorkspace({
   const [sectionPreview, setSectionPreview] = useState<CanvasRect | null>(null);
   const sectionDrawRef = useRef<{ pointerId: number; start: CanvasPoint; artboard: boolean } | null>(null);
 
-  nodesRef.current = nodes;
-  focusedThreadIdRef.current = focusedThreadId;
-  timelineScopeRef.current = timelineScope;
-  viewModeRef.current = viewMode;
-  activeCanvasRef.current = activeCanvas;
-  loadingRef.current = opening;
-  selectedCanvasNodeIdsRef.current = selectedCanvasNodeIds;
 
-  const nodeFrame = useCanvasFrame(updateNodeDrag);
-  const graphNodeFrame = useCanvasFrame(updateGraphNodeDrag);
-  const panFrame = useCanvasFrame(updatePan);
-  const cameraFrame = useCanvasFrame<void>(() => {
-    paintCamera();
-    const marquee = marqueePressRef.current;
-    if (marquee?.active) updatePan(marquee.cursor);
-    clearTimeout(cameraSettleRef.current);
-    cameraSettleRef.current = setTimeout(settleCamera, 120);
+  const { activeDragRef, dragFrame, moveCanvasDrag } = useCanvasDrag((event, kind) => {
+    if (kind === "material") updateNodeDrag(event);
+    else updateGraphNodeDrag(event);
   });
+  const panFrame = useCanvasFrame(updatePan);
   useEffect(() => {
     const hold = canvasDragHold.current;
     const move = (event: globalThis.PointerEvent) => hold.move(event.pointerId, { x: event.clientX, y: event.clientY }, event.buttons);
@@ -1106,10 +997,8 @@ export function CanvasWorkspace({
       window.removeEventListener("blur", hold.cancel);
     };
   }, [projectId, projectRouteRevision, projectRoutePending, viewMode, exploring]);
-  const readCanvasZoom = useCallback(() => { cameraFrame.flush(); return zoomRef.current; }, [cameraFrame]);
   // The refs own the live camera during gestures; React catches up when input settles.
-  const activeDragId = layoutDragId ?? (nodeDragRef.current?.moved ? nodeDragRef.current.nodeId
-    : graphNodeDragRef.current?.moved ? graphNodeDragRef.current.nodeId : null);
+  const activeDragId = layoutDragId ?? (activeDragRef.current?.moved ? activeDragRef.current.nodeId : null);
   const manyCanvasCards = Math.max(graphNodes.length, nodes.length) + workflowNodes.length >= 150;
   useLayoutEffect(() => {
     if (!manyCanvasCards || !planeRef.current || !stageRef.current || loading || viewMode !== "canvas") return;
@@ -1120,11 +1009,12 @@ export function CanvasWorkspace({
   useLayoutEffect(paintCamera, [pan.x, pan.y, zoom, projectId, loading, viewMode, manyCanvasCards, entryCardIds]);
   useEffect(() => () => {
     clearTimeout(cameraSettleRef.current);
-    clearDragProjection(nodeDragRef.current); clearDragProjection(graphNodeDragRef.current);
-    nodeFrame.cancel(); graphNodeFrame.cancel(); panFrame.cancel(); cameraFrame.cancel();
+    clearDragProjection(activeDragRef.current);
+    activeDragRef.current = null;
+    dragFrame.cancel(); panFrame.cancel(); cameraFrame.cancel();
     cellHitCacheRef.current?.dispose(); cellHitCacheRef.current = null;
     snapSizeObserverRef.current?.disconnect(); snapSizeObserverRef.current = null;
-  }, [projectId, nodeFrame, graphNodeFrame, panFrame, cameraFrame]);
+  }, [projectId, dragFrame, panFrame, cameraFrame]);
 
   useEffect(() => {
     setSelectedCanvasNodeIds(new Set());
@@ -1132,8 +1022,7 @@ export function CanvasWorkspace({
     setSectionPreview(null);
     sectionDrawRef.current = null;
     setCanvasLightbox(null);
-    undoHistoryRef.current = [];
-    setCanUndo(false);
+    clearCanvasUndo();
     resizeBaselineRef.current.clear();
     lastCardDragEnd.current = -Infinity;
     if (marqueeElement.current) marqueeElement.current.hidden = true;
@@ -1166,7 +1055,6 @@ export function CanvasWorkspace({
     const materials = nodesRef.current.map(node => orders.has(node.id) ? { ...node, order: orders.get(node.id)! } : node);
     const graph = graphNodesRef.current.map(node => orders.has(node.id) ? { ...node, zIndex: orders.get(node.id)! } : node);
     commitNodes(materials);
-    graphNodesRef.current = graph;
     setGraphNodes(graph);
     pushGeometryUndo(preMaterials, preGraph);
     persistGeometries(materials.filter(node => orders.has(node.id)), graph.filter(node => node.kind !== "asset" && orders.has(node.id)));
@@ -1206,13 +1094,11 @@ export function CanvasWorkspace({
   }
 
   function commitNodes(next: CanvasNode[]) {
-    nodesRef.current = next;
     setNodes(next);
   }
 
   function replaceActive(next: ActiveCanvasState) {
-    activeCanvasRef.current = next;
-    setActiveCanvasState({ ...next });
+        setActiveCanvasState({ ...next });
   }
 
   function markViewDirty(notify = true) {
@@ -1226,94 +1112,12 @@ export function CanvasWorkspace({
     if (viewDirtyRef.current && !loadingRef.current) viewSaveTimer.current = setTimeout(() => void queueViewPersistence(false), 220);
   }
 
-  function paintCamera() {
-    wheelStageRect.current = undefined;
-    const currentPan = panRef.current;
-    const currentZoom = zoomRef.current;
-    prioritizeEntry.current?.(currentPan, currentZoom);
-    if (planeRef.current) {
-      paintWindow.current?.paint(currentPan, currentZoom);
-      planeRef.current.style.transform = `translate3d(${currentPan.x}px, ${currentPan.y}px, 0) scale(${currentZoom})`;
-    }
-    if (stageRef.current) {
-      // The industrial grid repeats every 80 screen pixels. Pan its own layer
-      // without repainting the stage or invalidating inherited styles on every card.
-      if (gridElement.current) gridElement.current.style.transform = `translate3d(${currentPan.x % 80}px,${currentPan.y % 80}px,0)`;
-    }
-    const label = `${Math.round(currentZoom * 100)}%`;
-    if (zoomLabelRef.current && zoomLabelRef.current.textContent !== label) zoomLabelRef.current.textContent = label;
-  }
-
-  function cancelEditorCenter() {
-    if (editorCenterFrameRef.current != null) cancelAnimationFrame(editorCenterFrameRef.current);
-    editorCenterFrameRef.current = null;
-  }
-
-  function settleCamera() {
-    cancelEditorCenter();
-    clearTimeout(cameraSettleRef.current);
-    cameraFrame.cancel();
-    paintCamera();
-    mediaZoomHandle.current?.(zoomRef.current);
-    scheduleViewSave();
-  }
-
-  function scheduleCamera() {
-    cameraFrame.push();
-    clearTimeout(cameraSettleRef.current);
-    clearTimeout(viewSaveTimer.current);
-  }
-
   function lockWorkspaceInteraction() {
     const workspace = workspaceRef.current;
     if (!workspace) return;
     const focused = document.activeElement;
     workspace.inert = true;
     if (focused instanceof HTMLElement && workspace.contains(focused)) focused.blur();
-  }
-
-  function scheduleWriteDrain(retryBlocked: boolean) {
-    pendingWritesRef.current += 1;
-    setSaving(true);
-    const run = writeQueueRef.current
-      .then(async () => {
-        const failure = await drainOrderedWriteJournal(writeJournalRef.current, retryBlocked);
-        if (failure != null) reportError(failure);
-      })
-      .finally(() => {
-        pendingWritesRef.current -= 1;
-        if (pendingWritesRef.current === 0) setSaving(false);
-      });
-    writeQueueRef.current = run;
-    return run;
-  }
-
-  function enqueueWrite(work: () => Promise<void>) {
-    writeJournalRef.current.pending.push(work);
-    return scheduleWriteDrain(false);
-  }
-
-  async function retryPendingWrites() {
-    if (writeJournalRef.current.pending.length === 0) return;
-    await scheduleWriteDrain(true);
-    if (writeJournalRef.current.failure != null) throw writeJournalRef.current.failure;
-    setError(null);
-  }
-
-  async function flushCanvasWrites(includeView: boolean) {
-    panFrame.flush();
-    settleCamera();
-    // Pull the editor's latest in-memory ProseMirror document through the
-    // persistence callback before waiting on the queue.
-    composerDraftFlushRef.current?.();
-    flushDocumentCard();
-    await writeQueueRef.current;
-    await retryPendingWrites();
-    if (includeView) {
-      await queueViewPersistence(true);
-      await writeQueueRef.current;
-      await retryPendingWrites();
-    }
   }
 
   async function ensureMaterialized(
@@ -1523,7 +1327,6 @@ export function CanvasWorkspace({
     setCanvasReadEpoch(readEpoch);
     setCanvasAssets(exactAssets);
     commitNodes(hydrated.nodes);
-    graphNodesRef.current = snapshot.nodes;
     setGraphNodes(snapshot.nodes);
     setGraphEdges(snapshot.edges);
     setThreads(snapshot.threads);
@@ -1533,7 +1336,6 @@ export function CanvasWorkspace({
       sourceWidthRef.current = hydrated.sourceWidth ?? 360;
       setPan(hydrated.pan);
       setZoom(hydrated.zoom);
-      viewModeRef.current = hydrated.viewMode;
       setViewMode(hydrated.viewMode);
       setFocusedThreadId(snapshot.view?.focusedThreadId ?? null);
       setProjectTimelineScope(snapshot.view?.timelineScope ?? "focused");
@@ -1556,7 +1358,6 @@ export function CanvasWorkspace({
     replaceActive(draft);
     groupsRef.current.clear();
     commitNodes([]);
-    graphNodesRef.current = [];
     setGraphNodes([]);
     setGraphEdges([]);
     setThreads([]);
@@ -1566,7 +1367,6 @@ export function CanvasWorkspace({
     sourceWidthRef.current = 360;
     setPan({ x: 0, y: 0 });
     setZoom(1);
-    viewModeRef.current = "canvas";
     setViewMode("canvas");
     titleBaselineRef.current = draft.title;
     setComposerSeedIds([]);
@@ -1692,7 +1492,7 @@ export function CanvasWorkspace({
     const id = activeCanvasRef.current.id;
     const chat = useLocalChatStore.getState().summaries[action.conversationId];
     if (chat?.projectId !== id) throw new Error("请回到这段对话所属的项目再撤销。");
-    if (nodeDragRef.current || graphNodeDragRef.current) throw new Error("请先完成卡片拖动再撤销。");
+    if (activeDragRef.current) throw new Error("请先完成卡片拖动再撤销。");
     await flushCanvasWrites(false);
     const controller = canvasWorkflowController(id);
     await controller.flush();
@@ -1723,7 +1523,7 @@ export function CanvasWorkspace({
     const nextPan = { x: 60 - left * nextZoom, y: (stage.height - height * nextZoom) / 2 - top * nextZoom };
     zoomRef.current = nextZoom; panRef.current = nextPan;
     setZoom(nextZoom); setPan(nextPan); setSelectedCanvasNodeIds(new Set(rects.map(rect => rect.id)));
-    viewModeRef.current = "canvas"; setViewMode("canvas"); markViewDirty();
+    setViewMode("canvas"); markViewDirty();
   }
 
   async function startLocalChat(request: ChatComposeRequest) {
@@ -1956,7 +1756,6 @@ export function CanvasWorkspace({
       return cleanup;
     }
     initialSnapshotRestoredRef.current = false;
-    loadingRef.current = true;
     setLoading(true);
     setEntryViewportReady(false);
     entryCandidates.current = null;
@@ -2090,7 +1889,7 @@ export function CanvasWorkspace({
       if (writeJournalRef.current.failure != null || writeJournalRef.current.pending.length > 0) return;
       // A write appended while we waited, or a live node gesture whose write is
       // not queued until pointer-up, means the local projection is newer.
-      if (writeQueueRef.current !== settledQueue || nodeDragRef.current || graphNodeDragRef.current) {
+      if (writeQueueRef.current !== settledQueue || activeDragRef.current) {
         scheduleRefresh(eventProjectId, 80);
         return;
       }
@@ -2112,7 +1911,7 @@ export function CanvasWorkspace({
           writeJournalRef.current.failure != null
           || writeJournalRef.current.pending.length > 0
         ) return;
-        if (writeQueueRef.current !== queueBeforeRead || nodeDragRef.current || graphNodeDragRef.current) {
+        if (writeQueueRef.current !== queueBeforeRead || activeDragRef.current) {
           scheduleRefresh(eventProjectId, 80);
           return;
         }
@@ -2241,7 +2040,7 @@ export function CanvasWorkspace({
         setPan(nextPan); setZoom(1);
         setSelectedCanvasNodeIds(new Set([target.id]));
         setFocusedNodeId(target.id); setFocusedThreadId(focusThreadId);
-        viewModeRef.current = "canvas"; setViewMode("canvas");
+        setViewMode("canvas");
         if (projectId && focusThreadId) useStore.getState().clearProjectThreadUnread(projectId, focusThreadId);
         markViewDirty();
       }
@@ -2327,7 +2126,7 @@ export function CanvasWorkspace({
         || useStore.getState().projectContextMenu) return;
       if (event.key === "Escape" && frequentPickingRef.current) {
         event.preventDefault(); event.stopPropagation();
-        frequentPickingRef.current = false; setFrequentPicking(false);
+        setFrequentPicking(false);
         return;
       }
       const open = useStore.getState().canvasLibraryOpen;
@@ -2365,7 +2164,7 @@ export function CanvasWorkspace({
       && target.closest("[data-workflow-card]")?.getAttribute("data-workflow-card") === pendingUndo.connectedGenerationId;
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z"
       && (!editing || connectedPrompt || !!target?.closest(".canvas-text-grid")) && !event.defaultPrevented && !scopedInspectorOpen && viewModeRef.current === "canvas"
-      && !nodeDragRef.current && !graphNodeDragRef.current
+      && !activeDragRef.current
       && !document.querySelector('[role="dialog"][aria-modal="true"]') && undoHistoryRef.current.length > 0) {
       event.preventDefault();
       undoCanvasAction();
@@ -2389,11 +2188,11 @@ export function CanvasWorkspace({
       setSelectedCanvasNodeIds(marquee.baseSelection);
       if (stageRef.current?.hasPointerCapture(marquee.pointerId)) stageRef.current.releasePointerCapture(marquee.pointerId);
     }
-    clearDragProjection(nodeDragRef.current); clearDragProjection(graphNodeDragRef.current);
-    nodeFrame.cancel(); graphNodeFrame.cancel(); panFrame.cancel();
+    clearDragProjection(activeDragRef.current);
+    dragFrame.cancel(); panFrame.cancel();
     snapSizeObserverRef.current?.disconnect(); snapSizeObserverRef.current = null;
     settleCamera();
-    if (hoverRef.current?.intent.kind === "cell" && !nodeDragRef.current) clearExternalDrag();
+    if (hoverRef.current?.intent.kind === "cell" && activeDragRef.current?.kind !== "material") clearExternalDrag();
     setDrawingTool("select");
     sectionDrawRef.current = null;
     setSectionPreview(null);
@@ -2413,27 +2212,14 @@ export function CanvasWorkspace({
       setGenPanelOpen(false);
       return;
     }
-    if (nodeDragRef.current) {
-      if (nodeDragRef.current.moved) {
-        translateWorkflowSelection(nodeDragRef.current.initialWorkflow, nodeDragRef.current.selectedIds, 0, 0, true);
-        commitNodes(nodeDragRef.current.initialNodes);
-        translateGraphSelection(nodeDragRef.current.initialGraphNodes, nodeDragRef.current.selectedIds, 0, 0);
-      }
-      nodeDragRef.current = null;
+    const drag = activeDragRef.current;
+    if (drag) {
+      restoreCanvasDrag(drag);
+      activeDragRef.current = null;
       setActiveDragId(null);
       setGuides([]);
       setHover(null);
       setFolderDropTargetId(null);
-    }
-    if (graphNodeDragRef.current) {
-      if (graphNodeDragRef.current.moved) {
-        translateGraphSelection(graphNodeDragRef.current.initialNodes, graphNodeDragRef.current.selectedIds, 0, 0);
-        translateWorkflowSelection(graphNodeDragRef.current.initialWorkflow, graphNodeDragRef.current.selectedIds, 0, 0, true);
-        commitNodes(graphNodeDragRef.current.initialMaterialNodes);
-      }
-      graphNodeDragRef.current = null;
-      setActiveDragId(null);
-      setGuides([]);
     }
     if (panDragRef.current) {
       panDragRef.current = null;
@@ -2484,12 +2270,7 @@ export function CanvasWorkspace({
       if (useStore.getState().projectRoutePending) lockWorkspaceInteraction();
       await flushCanvasWrites(true);
     };
-    useStore.getState().registerProjectCanvasFlush(flush);
-    return () => {
-      if (useStore.getState().projectCanvasFlush === flush) {
-        useStore.getState().registerProjectCanvasFlush(null);
-      }
-    };
+    return registerProjectCanvasCallback("flush", flush);
   }, []);
 
   useEffect(() => () => {
@@ -2506,14 +2287,9 @@ export function CanvasWorkspace({
       timelineScopeRef.current,
       persistedProjectActiveNodeId(focusedNodeIdRef.current, graphNodesRef.current),
     );
-    const journal = writeJournalRef.current;
-    void writeQueueRef.current
-      .then(async () => {
-        const failure = await drainOrderedWriteJournal(journal, true);
-        if (failure == null) await api.projectCanvasViewFlush(input);
-      })
+    void flushDetachedView(async () => { await api.projectCanvasViewFlush(input); })
       .catch((reason) => console.error("project canvas unmount flush failed", reason));
-  }, []);
+  }, [flushDetachedView]);
 
   const titleIme = useImeGuard();
   function commitProjectTitle() {
@@ -2557,12 +2333,7 @@ export function CanvasWorkspace({
         titleBaselineRef.current = title;
       }
     };
-    useStore.setState({ projectCanvasRename: rename });
-    return () => {
-      if (useStore.getState().projectCanvasRename === rename) {
-        useStore.setState({ projectCanvasRename: null });
-      }
-    };
+    return registerProjectCanvasCallback("rename", rename);
   }, []);
 
   async function toggleFocusedThreadArchive() {
@@ -2582,8 +2353,7 @@ export function CanvasWorkspace({
       );
     };
     if (!isCurrentWorkspace()) return;
-    pendingWritesRef.current += 1;
-    setSaving(true);
+    const endWrite = beginWrite();
     setError(null);
     try {
       await flushCanvasWrites(false);
@@ -2614,25 +2384,14 @@ export function CanvasWorkspace({
     } catch (cause) {
       if (isCurrentWorkspace()) setError(String(cause));
     } finally {
-      pendingWritesRef.current -= 1;
-      if (pendingWritesRef.current === 0) setSaving(false);
+      endWrite();
     }
   }
-
-  const toBoardPoint = useCallback((clientX: number, clientY: number): CanvasPoint => {
-    const rect = stageRef.current?.getBoundingClientRect();
-    if (!rect) return { x: 0, y: 0 };
-    return {
-      x: (clientX - rect.left - panRef.current.x) / zoomRef.current,
-      y: (clientY - rect.top - panRef.current.y) / zoomRef.current,
-    };
-  }, []);
 
   function setFolderExpanded(id: string, expanded: boolean) {
     const next = new Set(expandedFolderIdsRef.current);
     if (expanded) next.add(id);
     else next.delete(id);
-    expandedFolderIdsRef.current = next;
     setExpandedFolderIds(next);
   }
 
@@ -2827,7 +2586,7 @@ export function CanvasWorkspace({
       externalInstancesRef.current = null;
       setExternalDragOver(false);
       // Native preparation can finish after a newer ordinary canvas gesture has begun.
-      if (!nodeDragRef.current && !graphNodeDragRef.current) {
+      if (!activeDragRef.current) {
         setHover(null);
         setFolderDropTargetId(null);
       }
@@ -3018,7 +2777,7 @@ export function CanvasWorkspace({
     return new Set([...ids, ...positions.keys()]);
   }
 
-  function translateDrag(drag: DragProjection & { nodeId: string; selectedIds: Set<string> }, materials: CanvasNode[], graph: ProjectGraphNode[],
+  function translateDrag(drag: CanvasDrag, materials: CanvasNode[], graph: ProjectGraphNode[],
     workflowGeometry: WorkflowGeometry[], dx: number, dy: number) {
     const apply = () => {
       translateGraphSelection(graph, drag.selectedIds, dx, dy);
@@ -3050,8 +2809,7 @@ export function CanvasWorkspace({
     if (snapSizeObserverRef.current) return;
     const observer = new ResizeObserver(() => {
       // Workflow results can grow a stationary card while another card is being dragged.
-      if (nodeDragRef.current) nodeDragRef.current.snapAnchors = undefined;
-      if (graphNodeDragRef.current) graphNodeDragRef.current.snapAnchors = undefined;
+      if (activeDragRef.current) activeDragRef.current.snapAnchors = undefined;
     });
     stageRef.current?.querySelectorAll("[data-workflow-card]").forEach(card => observer.observe(card));
     snapSizeObserverRef.current = observer;
@@ -3068,7 +2826,6 @@ export function CanvasWorkspace({
       return { ...node, ...position };
     });
     if (!changed) return;
-    graphNodesRef.current = next;
     setGraphNodes(next);
   }
 
@@ -3133,7 +2890,6 @@ export function CanvasWorkspace({
     const next = nodesRef.current.map((node) => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node);
     const graph = graphNodesRef.current.map((node) => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node);
     commitNodes(next);
-    graphNodesRef.current = graph;
     setGraphNodes(graph);
     pushGeometryUndo(beforeMaterials, beforeGraph, beforeWorkflow);
     setSelectedCanvasNodeIds(new Set(positions.keys()));
@@ -3193,8 +2949,7 @@ export function CanvasWorkspace({
               pushCanvasUndo({ kind: "paste", projectId, nodeIds: [node.id], groupIds: [], workflowIds: [] });
               setCanvasAssets(current => [...current.filter(item => item.id !== asset.id), asset]);
               if ("payloadJson" in node) {
-                graphNodesRef.current = [...graphNodesRef.current.filter(existing => existing.id !== node.id), node];
-                setGraphNodes(graphNodesRef.current);
+                setGraphNodes([...graphNodesRef.current.filter(existing => existing.id !== node.id), node]);
               } else commitNodes([...nodesRef.current.filter(existing => existing.id !== node.id), node]);
             }
           }
@@ -3355,10 +3110,7 @@ export function CanvasWorkspace({
         || route.activeProjectId !== activeCanvasRef.current.id) return null;
       return prepareAnnotatedImageAt(toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2));
     };
-    useStore.setState({ prepareCanvasAnnotation: prepare });
-    return () => {
-      if (useStore.getState().prepareCanvasAnnotation === prepare) useStore.setState({ prepareCanvasAnnotation: null });
-    };
+    return registerProjectCanvasCallback("prepareAnnotation", prepare);
   }, []);
 
   function prepareAnnotatedImageAt(point: CanvasPoint) {
@@ -3424,8 +3176,8 @@ export function CanvasWorkspace({
       || loadingRef.current || route.projectRoutePending || frequentPickingRef.current) return;
     const element = event.currentTarget, pointerId = event.pointerId;
     const expectedProject = activeCanvasRef.current.id, revision = route.projectRouteRevision;
-    const selection = nodeDragRef.current?.pointerId === pointerId ? nodeDragRef.current.selectedIds
-      : graphNodeDragRef.current?.pointerId === pointerId ? graphNodeDragRef.current.selectedIds : new Set([nodeId]);
+    const drag = activeDragRef.current;
+    const selection = drag?.pointerId === pointerId ? drag.selectedIds : new Set([nodeId]);
     const assets = member || selection.size === 1 ? [asset] : [...selection].flatMap(id => {
       const shown = selectedConversationImage(id, conversationImages(id));
       if (shown) return [shown];
@@ -3440,8 +3192,8 @@ export function CanvasWorkspace({
       if (!element.isConnected || !element.hasPointerCapture(pointerId) || loadingRef.current || isNativeAssetDrag()
         || !isWorkspaceOperationCurrent(expectedProject, current.activeProjectId, current.projectRoutePending, revision, current.projectRouteRevision)) return;
       // Nothing has moved: relinquish the pending canvas gesture before the OS takes the pointer.
-      nodeFrame.cancel(); graphNodeFrame.cancel();
-      nodeDragRef.current = null; graphNodeDragRef.current = null;
+      dragFrame.cancel();
+      activeDragRef.current = null;
       cancelConversationImageClick(); suppressNodeClickRef.current = true;
       setActiveDragId(null); setGuides([]); setHover(null); setFolderDropTargetId(null);
       element.releasePointerCapture(pointerId);
@@ -3453,61 +3205,24 @@ export function CanvasWorkspace({
     });
   }
 
-  function beginNodeDrag(event: PointerEvent<HTMLElement>, node: CanvasNode) {
-    if (isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return;
+  function beginCanvasDrag(event: PointerEvent<HTMLElement>, node: { id: string; x: number; y: number; kind: string }, kind: CanvasDrag["kind"]) {
+    if (activeDragRef.current || isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return false;
     clearTimeout(peekIntent.current);
     suppressNodeClickRef.current = false;
-    event.preventDefault();
-    event.stopPropagation();
-    window.getSelection()?.removeAllRanges();
-    event.currentTarget.focus({ preventScroll: true });
-    const point = toBoardPoint(event.clientX, event.clientY);
-    const toggleSelection = event.ctrlKey || event.metaKey;
-    const selectedIds = expandMovableSelection(toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
-      ? new Set([...selectedCanvasNodeIdsRef.current, node.id])
-      : new Set([node.id]));
-    nodeDragRef.current = {
-      nodeId: node.id,
-      toggleSelection,
-      selectedIds,
-      initialNodes: nodesRef.current,
-      initialGraphNodes: graphNodesRef.current,
-      initialWorkflow: workflowRef.current?.bounds(true) ?? [],
-      pointerId: event.pointerId,
-      offsetX: point.x - node.x,
-      offsetY: point.y - node.y,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      moved: false,
-    };
-    if (!toggleSelection) {
-      focusGraphNode(node.id);
-      if (!selectedCanvasNodeIdsRef.current.has(node.id)) setSelectedCanvasNodeIds(new Set());
-    }
-    event.currentTarget.setPointerCapture(event.pointerId);
-    if (node.kind === "asset") armCanvasAssetHold(event, node.id, node.asset);
-  }
-
-  function beginGraphNodeDrag(event: PointerEvent<HTMLElement>, node: { id: string; x: number; y: number; kind: string }) {
-    if (isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return;
-    clearTimeout(peekIntent.current);
-    suppressNodeClickRef.current = false;
-    setPendingNewCards(pending => pending.filter(id => id !== node.id));
-    // Readonly rich text can opt back into selection inside a draggable card.
+    if (kind === "graph") setPendingNewCards(pending => pending.filter(id => id !== node.id));
     event.preventDefault();
     event.stopPropagation();
     window.getSelection()?.removeAllRanges();
     const point = toBoardPoint(event.clientX, event.clientY);
     const toggleSelection = event.ctrlKey || event.metaKey;
     const initialWorkflow = workflowRef.current?.bounds(true) ?? [];
-    const isWorkflow = initialWorkflow.some(item => item.id === node.id);
+    const isWorkflow = kind === "graph" && initialWorkflow.some(item => item.id === node.id);
     if (isWorkflow) stageRef.current?.focus({ preventScroll: true });
     else event.currentTarget.focus({ preventScroll: true });
-    graphNodeDragRef.current = {
-      nodeId: node.id,
-      toggleSelection,
-      initialNodes: graphNodesRef.current,
-      initialMaterialNodes: nodesRef.current,
+    activeDragRef.current = {
+      kind, nodeId: node.id, toggleSelection,
+      initialGraphNodes: graphNodesRef.current,
+      initialNodes: nodesRef.current,
       initialWorkflow,
       selectedIds: expandMovableSelection(toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
         ? new Set([...selectedCanvasNodeIdsRef.current, node.id]) : new Set([node.id])),
@@ -3523,18 +3238,27 @@ export function CanvasWorkspace({
       if (!selectedCanvasNodeIdsRef.current.has(node.id)) setSelectedCanvasNodeIds(new Set(node.kind === "note" || isWorkflow ? [node.id] : []));
     }
     event.currentTarget.setPointerCapture(event.pointerId);
+    return true;
   }
 
-  function moveGraphNode(event: PointerEvent<HTMLElement>) {
-    const drag = graphNodeDragRef.current;
-    if (drag?.pointerId !== event.pointerId) return;
-    drag.crossedThreshold ||= exceedsCanvasDragThreshold({ x: drag.startClientX, y: drag.startClientY }, { x: event.clientX, y: event.clientY });
-    graphNodeFrame.push(canvasPointerSample(event));
+  function beginNodeDrag(event: PointerEvent<HTMLElement>, node: CanvasNode) {
+    if (beginCanvasDrag(event, node, "material") && node.kind === "asset") armCanvasAssetHold(event, node.id, node.asset);
+  }
+
+  function beginGraphNodeDrag(event: PointerEvent<HTMLElement>, node: { id: string; x: number; y: number; kind: string }) {
+    beginCanvasDrag(event, node, "graph");
+  }
+
+  function restoreCanvasDrag(drag: CanvasDrag) {
+    if (!drag.moved) return;
+    translateGraphSelection(drag.initialGraphNodes, drag.selectedIds, 0, 0);
+    translateWorkflowSelection(drag.initialWorkflow, drag.selectedIds, 0, 0, true);
+    commitNodes(drag.initialNodes);
   }
 
   function updateGraphNodeDrag(event: CanvasPointerSample) {
-    const drag = graphNodeDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
+    const drag = activeDragRef.current;
+    if (drag?.kind !== "graph" || drag.pointerId !== event.pointerId) return;
     if (!drag.moved) {
       if (!drag.crossedThreshold && !exceedsCanvasDragThreshold(
         { x: drag.startClientX, y: drag.startClientY },
@@ -3544,7 +3268,7 @@ export function CanvasWorkspace({
       dismissPeekForDrag(drag.selectedIds);
       if (drag.toggleSelection) setSelectedCanvasNodeIds(drag.selectedIds);
     }
-    const origin = drag.initialNodes.find((node) => node.id === drag.nodeId) ?? drag.initialWorkflow.find(node => node.id === drag.nodeId);
+    const origin = drag.initialGraphNodes.find((node) => node.id === drag.nodeId) ?? drag.initialWorkflow.find(node => node.id === drag.nodeId);
     if (!origin) return;
     const point = toBoardPoint(event.clientX, event.clientY);
     if (snapEnabledRef.current) observeSnapSizes();
@@ -3555,11 +3279,11 @@ export function CanvasWorkspace({
         width: origin.width,
         height: origin.height,
       },
-      snapEnabledRef.current ? drag.snapAnchors ??= prepareCanvasSnapAnchors(selectionAnchors(drag.initialMaterialNodes, drag.initialNodes).filter(node => !drag.selectedIds.has(node.id))) : { ordered: [] },
+      snapEnabledRef.current ? drag.snapAnchors ??= prepareCanvasSnapAnchors(selectionAnchors(drag.initialNodes, drag.initialGraphNodes).filter(node => !drag.selectedIds.has(node.id))) : { ordered: [] },
       { enabled: snapEnabledRef.current, zoom: zoomRef.current },
     );
     showDragGuides(snapped.guides);
-    translateDrag(drag, drag.initialMaterialNodes, drag.initialNodes, drag.initialWorkflow, snapped.x - origin.x, snapped.y - origin.y);
+    translateDrag(drag, drag.initialNodes, drag.initialGraphNodes, drag.initialWorkflow, snapped.x - origin.x, snapped.y - origin.y);
     const conversation = conversationCardsRef.current.cards.get(drag.nodeId);
     if (conversation && drag.selectedIds.size === 1) {
       const latest = conversation.latest;
@@ -3579,12 +3303,12 @@ export function CanvasWorkspace({
   }
 
   function endGraphNodeDrag(event: PointerEvent<HTMLElement>, cancelled = false) {
-    const drag = graphNodeDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
+    const drag = activeDragRef.current;
+    if (drag?.kind !== "graph" || drag.pointerId !== event.pointerId) return;
     clearDragProjection(drag);
     drag.snapAnchors = undefined;
-    if (cancelled) graphNodeFrame.cancel();
-    else graphNodeFrame.finish(canvasPointerSample(event));
+    if (cancelled) dragFrame.cancel();
+    else dragFrame.finish(canvasPointerSample(event));
     if (drag.moved) lastCardDragEnd.current = performance.now();
     snapSizeObserverRef.current?.disconnect(); snapSizeObserverRef.current = null;
     const isWorkflow = drag.initialWorkflow.some(node => node.id === drag.nodeId);
@@ -3599,24 +3323,22 @@ export function CanvasWorkspace({
     const drop = cell && hover?.ready && hover.intent.kind === "cell" && hover.intent.movingId === drag.nodeId
       && hover.intent.source.canvasNodeId && hover.intent.targetId === cell.targetId && hover.intent.cellId === cell.cellId ? hover.intent : null;
     if (cancelled && drag.moved) {
-      translateGraphSelection(drag.initialNodes, drag.selectedIds, 0, 0);
-      translateWorkflowSelection(drag.initialWorkflow, drag.selectedIds, 0, 0, true);
-      commitNodes(drag.initialMaterialNodes);
+      restoreCanvasDrag(drag);
     } else if (drop) {
       suppressNodeClickRef.current = true;
       // The cell owns presentation only after its save succeeds; preserve the source geometry.
-      translateGraphSelection(drag.initialNodes, drag.selectedIds, 0, 0);
-      commitNodes(drag.initialMaterialNodes);
+      translateGraphSelection(drag.initialGraphNodes, drag.selectedIds, 0, 0);
+      commitNodes(drag.initialNodes);
       fillHoveredCell(drop);
     } else if (drag.moved && node) {
       suppressNodeClickRef.current = true;
       const moved = persistMovedWorkflowCards(drag.selectedIds);
-      pushGeometryUndo(drag.initialMaterialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)),
-        drag.initialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)), drag.initialWorkflow.filter(node => moved.has(node.id)));
+      pushGeometryUndo(drag.initialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)),
+        drag.initialGraphNodes.filter((candidate) => drag.selectedIds.has(candidate.id)), drag.initialWorkflow.filter(node => moved.has(node.id)));
       persistGeometries(nodesRef.current.filter(node => drag.selectedIds.has(node.id)),
         graphNodesRef.current.filter(node => node.kind !== "asset" && node.hiddenAt == null && drag.selectedIds.has(node.id)));
     }
-    graphNodeDragRef.current = null;
+    activeDragRef.current = null;
     if (drag.moved && peekedCard && drag.selectedIds.has(peekedCard.anchorId)) closePeekAfterLeave();
     setHover(null);
     setActiveDragId(null);
@@ -3699,9 +3421,8 @@ export function CanvasWorkspace({
   function peekAnchorIsDragging() {
     if (!peekedCard) return false;
     const anchorId = peekedCard.anchorId;
-    const materialDrag = nodeDragRef.current, graphDrag = graphNodeDragRef.current;
-    return materialDrag?.moved && materialDrag.selectedIds.has(anchorId)
-      || graphDrag?.moved && graphDrag.selectedIds.has(anchorId);
+    const drag = activeDragRef.current;
+    return drag?.moved && drag.selectedIds.has(anchorId);
   }
 
   const closePeekAfterLeave = useLatestCallback(() => {
@@ -3718,7 +3439,7 @@ export function CanvasWorkspace({
   function canStartPeek() {
     return workflowInteractive && !useStore.getState().projectRoutePending && !loadingRef.current
       && !spacePressedRef.current && drawingTool !== "pan" && zoomRef.current >= 0.35
-      && !panDragRef.current && !nodeDragRef.current && !graphNodeDragRef.current && !activeDragId
+      && !panDragRef.current && !activeDragRef.current && !activeDragId
       && performance.now() - lastCardDragEnd.current >= 250
       && !libraryDragging && !libraryDragActive.current && !externalDragInStage.current && !isNativeAssetDrag()
       && resizeBaselineRef.current.size === 0 && !canvasExportRef.current
@@ -4272,16 +3993,9 @@ export function CanvasWorkspace({
     });
   }, []);
 
-  function moveNode(event: PointerEvent<HTMLDivElement>) {
-    const drag = nodeDragRef.current;
-    if (drag?.pointerId !== event.pointerId) return;
-    drag.crossedThreshold ||= exceedsCanvasDragThreshold({ x: drag.startClientX, y: drag.startClientY }, { x: event.clientX, y: event.clientY });
-    nodeFrame.push(canvasPointerSample(event));
-  }
-
   function updateNodeDrag(event: CanvasPointerSample) {
-    const drag = nodeDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
+    const drag = activeDragRef.current;
+    if (drag?.kind !== "material" || drag.pointerId !== event.pointerId) return;
     const originMoving = drag.initialNodes.find((node) => node.id === drag.nodeId);
     if (!originMoving) return;
     if (!drag.moved) {
@@ -4337,12 +4051,12 @@ export function CanvasWorkspace({
   }
 
   function endNodeDrag(event: PointerEvent<HTMLDivElement>, cancelled = false) {
-    const drag = nodeDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
+    const drag = activeDragRef.current;
+    if (drag?.kind !== "material" || drag.pointerId !== event.pointerId) return;
     clearDragProjection(drag);
     drag.snapAnchors = undefined;
-    if (cancelled) nodeFrame.cancel();
-    else nodeFrame.finish(canvasPointerSample(event));
+    if (cancelled) dragFrame.cancel();
+    else dragFrame.finish(canvasPointerSample(event));
     if (drag.moved) lastCardDragEnd.current = performance.now();
     snapSizeObserverRef.current?.disconnect(); snapSizeObserverRef.current = null;
     const moving = nodesRef.current.find((node) => node.id === drag.nodeId);
@@ -4362,9 +4076,7 @@ export function CanvasWorkspace({
     if (voiceTarget && moving?.kind === "asset" && moving.asset.assetId && workflowRef.current?.bindRecording(voiceTarget, moving.asset.assetId, moving.id)) {
       commitNodes(drag.initialNodes);
     } else if (cancelled && drag.moved) {
-      commitNodes(drag.initialNodes);
-      translateGraphSelection(drag.initialGraphNodes, drag.selectedIds, 0, 0);
-      translateWorkflowSelection(drag.initialWorkflow, drag.selectedIds, 0, 0, true);
+      restoreCanvasDrag(drag);
     } else if (!cancelled && !drag.moved && moving) {
       if (drag.toggleSelection) toggleCanvasNodeSelection(moving.id);
       else if (!creationImage.handlesVideo(event.currentTarget)) activateCanvasMaterial(moving);
@@ -4400,7 +4112,7 @@ export function CanvasWorkspace({
       persistGeometries(nodesRef.current.filter(node => drag.selectedIds.has(node.id)),
         graphNodesRef.current.filter(node => node.kind !== "asset" && node.hiddenAt == null && drag.selectedIds.has(node.id)));
     }
-    nodeDragRef.current = null;
+    activeDragRef.current = null;
     if (drag.moved && peekedCard && drag.selectedIds.has(peekedCard.anchorId)) closePeekAfterLeave();
     setActiveDragId(null);
     setGuides([]);
@@ -4428,8 +4140,7 @@ export function CanvasWorkspace({
     } else {
       pushCanvasUndo({ kind: "content", projectId: node.projectId, before: node, after: updated, typedAt: history === "typing" ? Date.now() : undefined });
     }
-    graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
-    setGraphNodes(graphNodesRef.current);
+    setGraphNodes(graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate));
     void enqueueWrite(async () => { await api.projectCanvasNoteUpdate(nodeId, payloadJson); });
     if (updated.width !== node.width || updated.height !== node.height) persistGraphNodeGeometry(updated);
   }
@@ -4446,8 +4157,7 @@ export function CanvasWorkspace({
     const updated = cancelled ? { ...node, x: baseline.x, y: baseline.y, width: baseline.width, height: baseline.height }
       : { ...node, ...size, height: node.kind === "prompt" && size.width === baseline.width ? baseline.height : size.height };
     if (canvasGeometryDiffers(node, updated)) {
-      graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
-      setGraphNodes(graphNodesRef.current);
+      setGraphNodes(graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate));
     }
     setActiveDragId(finished ? null : nodeId);
     if (finished) {
@@ -4491,8 +4201,7 @@ export function CanvasWorkspace({
       && top.typedAt && Date.now() - top.typedAt < 800) {
       top.after = after; top.typedAt = Date.now();
     } else pushCanvasUndo({ kind: "content", projectId: node.projectId, before: node, after, typedAt: Date.now() });
-    graphNodesRef.current = graphNodesRef.current.map(item => item.id === node.id ? { ...item, payloadJson } : item);
-    setGraphNodes(graphNodesRef.current);
+    setGraphNodes(graphNodesRef.current.map(item => item.id === node.id ? { ...item, payloadJson } : item));
     documentSaveRef.current = { nodeId: node.id, payloadJson };
     clearTimeout(documentSaveTimer.current);
     documentSaveTimer.current = setTimeout(flushDocumentCard, 450);
@@ -4641,8 +4350,7 @@ export function CanvasWorkspace({
     const node: ProjectGraphNode = { id: canvasId(noteType), projectId: draft.id, threadId: null, kind: "note", assetId: null, role: null,
       payloadJson: JSON.stringify(value), ...rect, zIndex: Math.max(0, ...selectionAnchors().map(anchor => anchor.order)) + 1, positionLocked: false, hiddenAt: null, createdAt: Date.now(), updatedAt: Date.now() };
     pushCanvasUndo({ kind: "paste", projectId: draft.id, nodeIds: [node.id], groupIds: [], workflowIds: [] });
-    graphNodesRef.current = [...graphNodesRef.current, node];
-    setGraphNodes(graphNodesRef.current);
+    setGraphNodes([...graphNodesRef.current, node]);
     setSelectedCanvasNodeIds(new Set([node.id]));
     void enqueueWrite(async () => {
       await ensureMaterialized(draft);
@@ -5117,7 +4825,6 @@ export function CanvasWorkspace({
     commitNodes(nodesRef.current.filter(node => !ids.has(node.id)).map(node =>
       node.kind === "folder" && changedFolders.includes(node) ? { ...node, assets: node.assets.filter(asset => !ids.has(asset.id)) } : node));
     const next = graphNodesRef.current.map((node) => ids.has(node.id) ? { ...node, hiddenAt: Date.now() } : node);
-    graphNodesRef.current = next;
     setGraphNodes(next);
     setSelectedCanvasNodeIds((current) => new Set([...current].filter((id) => !ids.has(id))));
     if (focusedNodeIdRef.current && ids.has(focusedNodeIdRef.current)) setFocusedNodeId(null);
@@ -5254,28 +4961,10 @@ export function CanvasWorkspace({
     pushCanvasUndo({ kind: "geometry", projectId: draft.id, materials: materialBefore, graph: graphBefore, workflow: workflowBefore });
   }
 
-  function undoCanvasAction() {
-    if (undoInFlightRef.current) return false;
-    flushDocumentCard();
-    const entry = undoHistoryRef.current[undoHistoryRef.current.length - 1];
-    if (!entry || entry.projectId !== activeCanvasRef.current.id) return false;
-    undoInFlightRef.current = true;
-    void applyCanvasUndo(entry).catch(error => notifyError(error, "画板撤销未完成")).finally(() => {
-      undoInFlightRef.current = false;
-    });
-    return true;
-  }
-
   async function applyCanvasUndo(entry: CanvasUndoEntry) {
     if (entry.kind === "gallery") {
-      await api.undoGenerationGalleryMerge(entry.edit).then(() => {
-        const history = undoHistoryRef.current;
-        const index = history.indexOf(entry);
-        if (index >= 0) {
-          history.splice(index, 1);
-          setCanUndo(history.length > 0);
-        }
-      }).catch(error => notifyError(error, "合组撤销未完成"));
+      await api.undoGenerationGalleryMerge(entry.edit).then(() => removeUndoEntry(entry))
+        .catch(error => notifyError(error, "合组撤销未完成"));
       return;
     }
     if (entry.kind === "names") {
@@ -5297,8 +4986,7 @@ export function CanvasWorkspace({
       const restored = { ...live, payloadJson: restoreCanvasNoteEdit(live.payloadJson, entry.before.payloadJson, entry.after.payloadJson),
         width: live.width === entry.after.width ? entry.before.width : live.width,
         height: live.height === entry.after.height ? entry.before.height : live.height };
-      graphNodesRef.current = graphNodesRef.current.map(node => node.id === live.id ? restored : node);
-      setGraphNodes(graphNodesRef.current);
+      setGraphNodes(graphNodesRef.current.map(node => node.id === live.id ? restored : node));
       await enqueueWrite(async () => {
         await api.projectCanvasNoteUpdate(restored.id, restored.payloadJson);
         await api.projectCanvasNodeUpdate(restored.id, { x: restored.x, y: restored.y, width: restored.width, height: restored.height, zIndex: restored.zIndex, positionLocked: restored.positionLocked });
@@ -5384,7 +5072,6 @@ export function CanvasWorkspace({
         const before = graphBefore.get(node.id);
         return before ? { ...node, x: before.x, y: before.y, width: before.width, height: before.height, zIndex: before.zIndex } : node;
       });
-      graphNodesRef.current = next;
       setGraphNodes(next);
       persistGeometries(nodesRef.current.filter(node => materialBefore.has(node.id)),
         next.filter(node => node.kind !== "asset" && graphBefore.has(node.id)));
@@ -5408,7 +5095,6 @@ export function CanvasWorkspace({
     const graphIds = new Set(graphNodesRef.current.map((node) => node.id));
     const next = [...graphNodesRef.current.map((node) => ids.has(node.id) ? { ...node, hiddenAt: null } : node),
       ...entry.graph.filter((node) => !graphIds.has(node.id))];
-    graphNodesRef.current = next;
     setGraphNodes(next);
     const draft = activeCanvasRef.current;
     await enqueueWrite(async () => {
@@ -5445,7 +5131,7 @@ export function CanvasWorkspace({
     if (!entry || entry.kind !== "workflow" || entry.connectedGenerationId !== nodeId
       || entry.projectId !== activeCanvasRef.current.id || !isWorkspaceOperationCurrent(entry.projectId, route.activeProjectId, route.projectRoutePending)
       || workspaceRef.current?.closest("[inert]")
-      || scopedInspectorOpen || viewModeRef.current !== "canvas" || nodeDragRef.current || graphNodeDragRef.current
+      || scopedInspectorOpen || viewModeRef.current !== "canvas" || activeDragRef.current
       || document.querySelector('[data-context-owner], [role="dialog"][aria-modal="true"]')) return false;
     return undoCanvasAction();
   });
@@ -5519,7 +5205,6 @@ export function CanvasWorkspace({
 
   function selectViewMode(next: CreativeViewMode) {
     if (viewModeRef.current === next) return;
-    viewModeRef.current = next;
     setViewMode(next);
     markViewDirty();
   }
@@ -5552,7 +5237,6 @@ export function CanvasWorkspace({
       setPan(nextPan);
     }
     focusGraphNode(targetId);
-    viewModeRef.current = "canvas";
     setViewMode("canvas");
     markViewDirty();
   }
@@ -5606,180 +5290,13 @@ export function CanvasWorkspace({
   );
   const chatGraphNodes = useMemo(() => activeGraphNodes.filter(node => node.hiddenAt == null && canvasChatId(node) && !workflowNodes.some(workflow => workflow.id === node.id)), [activeGraphNodes, workflowNodes]);
   const workflowSettled = currentWorkflowEntry !== null;
-  const startEntryMount = useLatestCallback(() => {
-    const mounted = entryCardIdsRef.current;
-    if (!mounted || !projectId) return;
-    const token = loadTokenRef.current;
-    const stage = stageRef.current;
-    const candidates = new Map([
-      ...[...graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null), ...promptGraphNodes, ...agentGraphNodes, ...chatGraphNodes]
-        .map(node => ({ ...node, weight: ENTRY_HEAVY_CARD_WEIGHT })),
-      ...visibleMaterials.map(node => ({ ...node,
-        weight: node.kind === "asset" && !isVideoPath(node.asset.storePath) && !isAudioPath(node.asset.storePath) && !isTextPath(node.asset.storePath) ? 1 : ENTRY_HEAVY_CARD_WEIGHT })),
-      ...workflowNodes.filter(node => node.kind !== "text").map(node => ({ ...node, width: workflowCardWidth(node), height: 330, weight: ENTRY_HEAVY_CARD_WEIGHT })),
-    ].map(card => [card.id, card]));
-    const wires: Array<[string, string]> = graphEdges.map(edge => [edge.fromNodeId, edge.toNodeId]);
-    for (const node of workflowNodes) {
-      const target = node.textTarget?.nodeId ?? node.textSource ?? node.id;
-      for (const binding of Object.values(node.inputs).flat()) {
-        const source = binding.canvasNodeId ?? binding.assetNodeId ?? binding.nodeId ?? binding.groupId;
-        if (source) wires.push([source, target]);
-      }
-    }
-    entryCandidates.current = new Set(candidates.keys());
-    let committed = new Set(mounted);
-    let remaining = new Set([...candidates.keys()].filter(id => !committed.has(id)));
-    let nearby: string[] = [];
-    let lastView: { x: number; y: number; zoom: number; width: number; height: number } | undefined;
-    let initialViewReady = entryViewportReady;
-    let expected: ReadonlySet<string> | null = mounted;
-    let lastCommitted: ReadonlySet<string> | null = mounted;
-    let active = true;
-    let cancelBatch: (() => void) | undefined;
-    let resume: number | undefined;
-    let idle: number | undefined;
-    let batchBudget = ENTRY_LIGHT_CARD_LIMIT;
-    let batchStarted: number | undefined;
-    let viewportBatchCommitted = mounted.size > 0;
-    let width = stage?.clientWidth ?? 0;
-    let height = stage?.clientHeight ?? 0;
-    function priority(pan: CanvasPoint, zoom: number) {
-      if (lastView?.x === pan.x && lastView.y === pan.y && lastView.zoom === zoom
-        && lastView.width === width && lastView.height === height) return;
-      lastView = { ...pan, zoom, width, height };
-      const buffer = 200;
-      const inView = new Set([...remaining].filter(id => {
-        const card = candidates.get(id)!;
-        return pan.x + card.x * zoom <= width + buffer && pan.x + (card.x + card.width) * zoom >= -buffer
-          && pan.y + card.y * zoom <= height + buffer && pan.y + (card.y + card.height) * zoom >= -buffer;
-      }));
-      // A wire can cross the viewport even when its two cards are outside it.
-      for (const [fromId, toId] of wires) {
-        const from = candidates.get(fromId), to = candidates.get(toId);
-        if (!from || !to || (!remaining.has(fromId) && !remaining.has(toId))) continue;
-        const left = Math.min(from.x, to.x), right = Math.max(from.x + from.width, to.x + to.width);
-        const bend = Math.max(50, (right - left) * .45);
-        if (pan.x + (left - bend) * zoom > width + buffer || pan.x + (right + bend) * zoom < -buffer
-          || pan.y + Math.min(from.y, to.y) * zoom > height + buffer
-          || pan.y + Math.max(from.y + from.height, to.y + to.height) * zoom < -buffer) continue;
-        if (remaining.has(fromId)) inView.add(fromId);
-        if (remaining.has(toId)) inView.add(toId);
-      }
-      const distanceToViewportStart = (id: string) => {
-        const card = candidates.get(id)!;
-        const x = pan.x + card.x * zoom, y = pan.y + card.y * zoom;
-        const intersects = x <= width && x + card.width * zoom >= 0 && y <= height && y + card.height * zoom >= 0;
-        return (intersects ? 0 : width + height) + Math.max(0, x) + Math.max(0, y);
-      };
-      nearby = [...inView].sort((a, b) => distanceToViewportStart(a) - distanceToViewportStart(b));
-      if (nearby.length && (resume !== undefined || idle !== undefined)) {
-        window.clearTimeout(resume);
-        resume = undefined;
-        if (idle !== undefined) window.cancelIdleCallback(idle);
-        idle = undefined;
-        cancelBatch?.();
-        cancelBatch = afterCanvasPaint(mountBatch);
-      }
-    }
-    function scheduleBatch() {
-      if (initialViewReady && nearby.length === 0) {
-        // Offscreen cards can wait until input has settled and the browser is idle.
-        resume = window.setTimeout(() => {
-          resume = undefined;
-          if (typeof window.requestIdleCallback !== "function") { mountBatch(); return; }
-          idle = window.requestIdleCallback(() => { idle = undefined; mountBatch(); }, { timeout: 250 });
-        }, 100);
-      } else cancelBatch = afterCanvasPaint(mountBatch);
-    }
-    function mountBatch() {
-      const route = useStore.getState();
-      if (!active || loadTokenRef.current !== token || route.projectRoutePending
-        || route.activeProjectId !== projectId || route.projectRouteRevision !== projectRouteRevision) return;
-      const current = entryCardIdsRef.current;
-      if (current !== expected) {
-        if (current === lastCommitted) {
-          scheduleBatch();
-          return;
-        }
-        if (!current) return;
-        // Workflow readiness can restart the scheduler while the preceding
-        // transition is already committing. Continue from the painted set.
-        expected = current;
-        committed = new Set(current);
-        remaining = new Set([...candidates.keys()].filter(id => !committed.has(id)));
-        batchStarted = undefined;
-        lastView = undefined;
-        priority(panRef.current, zoomRef.current);
-      }
-      lastCommitted = current;
-      if (initialViewReady && (nodeDragRef.current || graphNodeDragRef.current || panDragRef.current)) {
-        scheduleBatch();
-        return;
-      }
-      if (initialViewReady && !nearby.length && performance.now() - inputDuringEntry.current < 650) {
-        scheduleBatch();
-        return;
-      }
-      if (batchStarted !== undefined) {
-        viewportBatchCommitted = true;
-        const elapsed = entryCommitAt.current - batchStarted;
-        if (elapsed > ENTRY_FRAME_BUDGET_MS) batchBudget = Math.max(ENTRY_MIN_BATCH_WEIGHT, Math.floor(batchBudget * .75));
-        else if (elapsed < ENTRY_FRAME_BUDGET_MS / 2) batchBudget = Math.min(ENTRY_LIGHT_CARD_LIMIT, batchBudget + ENTRY_HEAVY_CARD_WEIGHT);
-        batchStarted = undefined;
-      }
-      const ids: string[] = [];
-      let weight = 0;
-      const prioritized = nearby.length > 0;
-      for (const id of prioritized ? nearby : initialViewReady ? remaining : []) {
-        const cost = candidates.get(id)!.weight;
-        if (ids.length > 0 && weight + cost > batchBudget) break;
-        ids.push(id);
-        weight += cost;
-      }
-      if (prioritized) nearby.splice(0, ids.length);
-      for (const id of ids) { committed.add(id); remaining.delete(id); }
-      // The first viewport batch makes the shell interactive. Neighboring
-      // cards and their wires continue to mount before the offscreen queue.
-      const ready = !initialViewReady && (viewportBatchCommitted || nearby.length === 0);
-      const done = workflowSettled && remaining.size === 0;
-      if (ready) {
-        initialViewReady = true;
-        inputDuringEntry.current = performance.now();
-      }
-      const next = done ? null : ids.length ? new Set(committed) : expected;
-      if (ids.length) batchStarted = performance.now();
-      expected = next;
-      // The paint scheduler already yields between small commits. A transition
-      // here can keep a background batch pending behind live workspace updates.
-      if (ready || done) setEntryViewportReady(previous => active ? true : previous);
-      if (next !== current) setEntryCardIds(previous => active && previous === current ? next : previous);
-      if (done) {
-        prioritizeEntry.current = undefined;
-        resize.disconnect();
-      } else if (remaining.size && (initialViewReady || nearby.length)) scheduleBatch();
-    }
-    prioritizeEntry.current = priority;
-    const resize = new ResizeObserver(([entry]) => {
-      width = entry.contentRect.width;
-      height = entry.contentRect.height;
-      priority(panRef.current, zoomRef.current);
-    });
-    if (stage) resize.observe(stage);
-    priority(panRef.current, zoomRef.current);
-    cancelBatch = afterCanvasPaint(mountBatch);
-    return () => {
-      active = false;
-      prioritizeEntry.current = undefined;
-      resize.disconnect();
-      cancelBatch?.();
-      window.clearTimeout(resume);
-      if (idle !== undefined) window.cancelIdleCallback(idle);
-    };
+  useCanvasEntryScheduler({
+    stageRef, entryCandidates, prioritizeEntry, inputDuringEntry, entryCardIdsRef, entryCommitAt, panRef, zoomRef,
+    loadTokenRef, graphNodes, promptGraphNodes, agentGraphNodes, chatGraphNodes, visibleMaterials, workflowNodes,
+    graphEdges, projectId, projectRouteRevision, projectRoutePending, loading, loadFailed, workflowSettled,
+    entryViewportReady, hasActiveGesture: () => !!(activeDragRef.current || panDragRef.current),
+    setEntryViewportReady, setEntryCardIds,
   });
-  useEffect(() => {
-    if (loading || loadFailed || projectRoutePending) return;
-    return startEntryMount();
-  }, [loading, loadFailed, projectId, projectRouteRevision, projectRoutePending, startEntryMount, workflowSettled]);
   const deferredCandidateIds = entryCandidates.current;
   const cardMounted = (id: string) => entryCardIds === null || entryCardIds.has(id) || (!!deferredCandidateIds && !deferredCandidateIds.has(id));
   const entryCardContext = useMemo(() => ({}), [graphNodes, visibleMaterials, workflowInteractive, genJobs]);
@@ -5801,7 +5318,6 @@ export function CanvasWorkspace({
     if (!nodeId || opening || projectRoutePending || panning || activeDragId) return;
     const finishPlacement = () => setPendingNewCards(pending => pending.filter(id => id !== nodeId));
     if (viewMode !== "canvas") {
-      viewModeRef.current = "canvas";
       setViewMode("canvas");
       return;
     }
@@ -5870,7 +5386,6 @@ export function CanvasWorkspace({
       const changed = new Map(references.map((node) => [node.id, node]));
       changed.set(moved.id, moved);
       const updated = graphNodesRef.current.map((node) => changed.get(node.id) ?? node);
-      graphNodesRef.current = updated;
       setGraphNodes(updated);
       commitNodes(nodesRef.current.map((node) => {
         const reference = changed.get(node.id);
@@ -5887,7 +5402,6 @@ export function CanvasWorkspace({
       if (placement.x !== target.x || placement.y !== target.y) {
         const moved = { ...target, ...placement };
         const updated = graphNodesRef.current.map((node) => node.id === nodeId ? moved : node);
-        graphNodesRef.current = updated;
         setGraphNodes(updated);
         persistGraphNodeGeometry(moved);
       }
@@ -6077,7 +5591,7 @@ export function CanvasWorkspace({
     setSelectedChatId(current => current === previousId ? null : current);
   }, []);
   const workflowOnDragStart = useLatestCallback(beginGraphNodeDrag);
-  const workflowOnDragMove = useLatestCallback(moveGraphNode);
+  const workflowOnDragMove = useLatestCallback(moveCanvasDrag);
   const workflowOnDragEnd = useLatestCallback(endGraphNodeDrag);
   const workflowOnNodeMenu = useLatestCallback(openCanvasNodeMenu);
   const workflowOnRemove = useLatestCallback((id: string) => removeNodes(selectedCanvasNodeIdsRef.current.has(id) ? selectedCanvasNodeIdsRef.current : [id]));
@@ -6480,7 +5994,7 @@ export function CanvasWorkspace({
             if (target.isContentEditable || target.closest('input, textarea, select, [role="combobox"]')) return;
             if (viewModeRef.current !== "canvas" || loadingRef.current || useStore.getState().projectRoutePending
               || scopedInspectorOpen || canvasLightbox || promptMenu || useStore.getState().contextMenu
-              || nodeDragRef.current || graphNodeDragRef.current || marqueePressRef.current || panDragRef.current
+              || activeDragRef.current || marqueePressRef.current || panDragRef.current
               || document.querySelector('[role="dialog"][aria-modal="true"]')
               || selectedCanvasNodeIdsRef.current.size === 0) return;
             event.preventDefault();
@@ -6537,7 +6051,6 @@ export function CanvasWorkspace({
                 onPointerDown={event => event.preventDefault()} onClick={undoCanvasAction}><Undo2 size={18} /></button>
               <button type="button" data-tip={snapEnabled ? "关闭吸附对齐" : "开启吸附对齐"} aria-label="吸附对齐" aria-pressed={snapEnabled} onClick={() => {
                 const next = !snapEnabled;
-                snapEnabledRef.current = next;
                 setSnapEnabled(next);
                 setGuides([]);
                 try { localStorage.setItem(CANVAS_SNAP_ENABLED_KEY, String(next)); } catch { /* Keep the toggle usable when storage is unavailable. */ }
@@ -6590,7 +6103,7 @@ export function CanvasWorkspace({
                 className={`canvas-note ${section ? "is-section" : value.note_type === "bubble" ? "is-bubble" : "is-text is-content-card"} ${value.note_type === "document" ? "is-document-card" : ""} ${value.artboard ? "is-artboard" : ""} ${selected ? "is-selected" : ""} ${writerFailures.length ? "canvas-card-error" : ""}`}
                 style={{ "--section-color": value.section_color, width: node.width, height: node.height,
                   ...(plainSection ? { left: node.x, top: node.y } : { transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: section ? 0 : activeDragId === node.id || (activeDragId != null && selected) ? CANVAS_DRAG_Z_LIFT + node.zIndex : node.zIndex }) } as CSSProperties & { "--section-color"?: string }}
-                onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
+                onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveCanvasDrag}
                 onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
                 onLostPointerCapture={event => endGraphNodeDrag(event, true)}
                 onContextMenu={event => openCanvasNodeMenu(event, node.id)}
@@ -6692,7 +6205,7 @@ export function CanvasWorkspace({
                 role="button" tabIndex={0} aria-label={`对话 · ${chat?.title ?? "正在读取"}`} aria-busy={localChatRunning(chat)}
                 className={`canvas-chat-node${selectedCanvasNodeIds.has(node.id) ? " is-selected" : ""}${selectedChatId === chatId ? " is-focused" : ""}${localChatRunning(chat) ? " canvas-card-running" : ""}`}
                 style={{ width: node.width, minHeight: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: activeDragId === node.id ? CANVAS_DRAG_Z_LIFT + node.zIndex : node.zIndex }}
-                onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
+                onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveCanvasDrag}
                 onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
                 onContextMenu={event => openCanvasNodeMenu(event, node.id)}
                 onClick={event => {
@@ -6746,7 +6259,7 @@ export function CanvasWorkspace({
                   onPointerDown={(event) => {
                     beginGraphNodeDrag(event, node);
                   }}
-                  onPointerMove={moveGraphNode}
+                  onPointerMove={moveCanvasDrag}
                   onPointerUp={endGraphNodeDrag}
                   onPointerCancel={(event) => endGraphNodeDrag(event, true)}
                   onClick={(event) => {
@@ -6852,7 +6365,7 @@ export function CanvasWorkspace({
                   onPointerDown={(event) => {
                     beginGraphNodeDrag(event, node);
                   }}
-                  onPointerMove={moveGraphNode}
+                  onPointerMove={moveCanvasDrag}
                   onPointerUp={endGraphNodeDrag}
                   onPointerCancel={(event) => endGraphNodeDrag(event, true)}
                   onClick={event => {
@@ -6927,7 +6440,7 @@ export function CanvasWorkspace({
                       event.preventDefault(); event.stopPropagation();
                     }
                   }}
-                  onPointerMove={moveNode}
+                  onPointerMove={moveCanvasDrag}
                   onPointerUp={endNodeDrag}
                   onPointerCancel={(event) => endNodeDrag(event, true)}
                   onLostPointerCapture={(event) => endNodeDrag(event, true)}
@@ -7178,7 +6691,7 @@ export function CanvasWorkspace({
               check(); pushCanvasUndo({ kind: "paste", projectId: project.id, nodeIds: [nodeId], groupIds: [], workflowIds: [] });
             }
             check(); const snapshot = await api.projectCanvasGet(project.id); check();
-            graphNodesRef.current = snapshot.nodes; setGraphNodes(snapshot.nodes); setSelectedCanvasNodeIds(new Set([nodeId]));
+            setGraphNodes(snapshot.nodes); setSelectedCanvasNodeIds(new Set([nodeId]));
           }}
           onAddVideo={async (path, operationId) => {
             const project = activeCanvasRef.current;
@@ -7214,7 +6727,7 @@ export function CanvasWorkspace({
             pushCanvasUndo({ kind: "paste", projectId: draft.id, nodeIds: built.notes.filter(node => !existing.nodes.some(item => item.id === node.id)).map(node => node.id), groupIds: [], workflowIds: built.nodes.map(node => node.id) });
             const snapshot = await api.projectCanvasGet(draft.id);
             if (activeCanvasRef.current?.id !== draft.id) return;
-            graphNodesRef.current = snapshot.nodes; setGraphNodes(snapshot.nodes);
+            setGraphNodes(snapshot.nodes);
             setSelectedCanvasNodeIds(new Set([built.selectedId]));
             const first = controller.document.nodes.find(node => node.id === built.selectedId)!;
             const rect = { ...built.rect, x: first.x, y: first.y };

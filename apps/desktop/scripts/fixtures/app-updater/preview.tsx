@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { registerProjectCanvasCallback } from "../../../src/lib/projectCanvasCallbacks";
 import { createRoot } from "react-dom/client";
 import { AppUpdateCard } from "../../../src/components/AppUpdateCard";
 import { AppUpdateMonitor } from "../../../src/components/AppUpdateMonitor";
@@ -46,11 +47,12 @@ w.__TAURI_INTERNALS__ = {
     return null;
   },
 };
-useStore.setState({ settingsRequest: { section: "system" }, projectCanvasFlush: async () => {
+useStore.setState({ settingsRequest: { section: "system" } });
+registerProjectCanvasCallback("flush", async () => {
   w.calls.push("flush");
   if (w.holdFlush) await new Promise<void>(resolve => { w.releaseFlush = resolve; });
   if (w.flushFails) throw new Error("保存失败");
-} });
+});
 
 function Fixture() {
   const [visible, setVisible] = useState(true);

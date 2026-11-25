@@ -565,15 +565,16 @@ try {
   // Real App routing: the existing return button retains save protection.
   await page.goto(root + 'canvas-reference/preview.html?source-library&detail-route');
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
-  await page.evaluate(() => {
-    window.savedFlush = window.store.getState().projectCanvasFlush;
-    window.store.getState().registerProjectCanvasFlush(async () => { throw new Error('模拟保存失败'); });
+  await page.evaluate(async () => {
+    const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+    window.savedFlush = projectCanvasCallbacks.flush;
+    projectCanvasCallbacks.flush = async () => { throw new Error('模拟保存失败'); };
   });
   const navigation = page.locator('.app-topbar').getByRole('button', { name: '返回素材库', exact: true });
   await navigation.click();
   await page.getByText('模拟保存失败', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.store.getState().activeProjectId), 'p');
-  await page.evaluate(() => window.store.getState().registerProjectCanvasFlush(window.savedFlush));
+  await page.evaluate(async () => { (await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush = window.savedFlush; });
   await navigation.click();
   await page.locator('.library-home').getByRole('tab',{name:'全局素材',exact:true}).click();
   await page.getByRole('region',{name:'本机文件',exact:true}).getByRole('button',{name:'原图.png',exact:true}).waitFor();

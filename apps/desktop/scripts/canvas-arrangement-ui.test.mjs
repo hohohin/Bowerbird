@@ -18,12 +18,14 @@ try {
   await page.evaluate(() => {
     const snapshot = window.snapshot();
     const base = snapshot.nodes[0];
+    const imageHeight = (base.width - 2) * (150 / 190) + 32;
     const card = (id, kind, x, y, payload = {}) => ({ ...base, id, kind, x, y,
       assetId: kind === "asset" ? "a" : null, role: kind === "asset" ? "output" : null,
+      height: kind === "asset" ? imageHeight : base.height,
       payloadJson: JSON.stringify({ schema_version: 1, text: "整理回归", status: "succeeded",
         ...(kind === "asset" ? { snapshot: { name: id, width: 190, height: 150 } } : {}), ...payload }) });
     snapshot.nodes = [
-      { ...base, x: 80, y: 100 }, card("prompt", "prompt", 320, 100),
+      { ...base, x: 80, y: 100, height: imageHeight }, card("prompt", "prompt", 320, 100),
       card("output", "asset", 560, 100), card("agent-prompt", "prompt", 800, 100),
       card("agent", "agent_group", 800, 100, { run_id: "test-run" }),
       card("agent-output", "asset", 560, 100), card("obstacle", "asset", 80, 350),

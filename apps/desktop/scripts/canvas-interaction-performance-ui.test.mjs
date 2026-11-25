@@ -308,11 +308,12 @@ async function checkGeometry() {
   await page.waitForFunction(width => Math.abs(window.snapshot().nodes.find(node => node.id === 'material-0').width - width - 20) < .01, resizeBefore.width);
   }
   const routeFlush = await page.evaluate(async () => {
-    await window.store.getState().projectCanvasFlush();
+    const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+    await projectCanvasCallbacks.flush();
     const before = window.snapshot().view;
     document.querySelector('.canvas-stage').dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaX: 37, deltaY: 11 }));
     // Route leave invokes this same barrier before any 120ms camera settle.
-    await window.store.getState().projectCanvasFlush();
+    await projectCanvasCallbacks.flush();
     return { before, after: window.snapshot().view, called: window.calls.some(call => call.command === 'project_canvas_view_flush') };
   });
   assert.equal(routeFlush.called, true);

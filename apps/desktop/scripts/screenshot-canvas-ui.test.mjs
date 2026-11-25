@@ -33,7 +33,7 @@ const saves = () => page.evaluate(() => window.calls.filter(call => call.command
 
 try {
   await page.goto(fixture + "&provisional");
-  await page.waitForFunction(() => !!window.store?.getState().prepareCanvasAnnotation?.());
+  await page.waitForFunction(async () => !!(await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.prepareAnnotation?.());
   const center = await page.locator("[data-canvas-stage]").evaluate(stage => {
     const { width, height } = stage.getBoundingClientRect();
     const view = new DOMMatrix(getComputedStyle(document.querySelector(".canvas-plane")).transform);
