@@ -12,7 +12,7 @@ export async function layerDecompositionAvailable() {
 }
 
 /** Same persisted request/result contract as the editor's Start decomposition button. */
-export async function workflowLayerDecompose(assetId: string, path: string, prompt: string, key: string, create: boolean, stopped: () => boolean, progress: (message: string) => void = () => {}) {
+export async function workflowLayerDecompose(assetId: string, path: string, prompt: string, key: string, create: boolean, stopped: () => boolean, waitForPoll: () => Promise<boolean>, progress: (message: string) => void) {
   if (activeAssets.has(assetId)) throw new Error("这张图片正在拆分，请等待当前拆分完成");
   activeAssets.add(assetId);
   try {
@@ -50,7 +50,8 @@ export async function workflowLayerDecompose(assetId: string, path: string, prom
     if (result.status === "not_found" && create && workspace.pending) result = await api.layerCloudRequest(workspace.pending.request);
     while (["uploading", "queued", "leased", "running", "cancel_requested"].includes(result.status)) {
       progress(`云端拆分${result.status === "queued" ? "排队中" : "处理中"}${typeof result.progress === "number" ? ` · ${result.progress}%` : ""}`);
-      check(); await new Promise(resolve => setTimeout(resolve, 2000)); check();
+      if (!await waitForPoll()) return null;
+      check();
       result = await api.layerCloudRequest({ action: "get_by_key", idempotency_key: key });
     }
     check();

@@ -268,16 +268,20 @@ pub fn compatible_image(paths: &LibraryPaths, path: &Path) -> AppResult<PathBuf>
     compatible_image_in(&paths.root.join("external-previews"), path)
 }
 
+pub(crate) fn compatible_image_destination(folder: &Path, path: &Path) -> AppResult<PathBuf> {
+    let key = preview_key(path, &fs::metadata(path)?)?;
+    Ok(folder.join(format!("{key}.png")))
+}
+
 fn compatible_image_in(folder: &Path, path: &Path) -> AppResult<PathBuf> {
     if !crate::media::heic::is_path(path) { return Ok(path.to_path_buf()); }
-    let key = preview_key(path, &fs::metadata(path)?)?;
+    let destination = compatible_image_destination(folder, path)?;
     fs::create_dir_all(folder)?;
-    let destination = folder.join(format!("{key}.png"));
     if !destination.is_file() {
-        let temporary = folder.join(format!("{key}-{}.png", ulid::Ulid::new()));
+        let temporary = folder.join(format!("preview-{}.png", ulid::Ulid::new()));
         let result = (|| -> AppResult<()> {
             crate::media::heic::convert_to_png(path, &temporary)?;
-            if preview_key(path, &fs::metadata(path)?)? != key { return Err(invalid("文件正在变化，请稍后重试")); }
+            if compatible_image_destination(folder, path)? != destination { return Err(invalid("文件正在变化，请稍后重试")); }
             if !destination.is_file() { fs::rename(&temporary, &destination)?; }
             Ok(())
         })();

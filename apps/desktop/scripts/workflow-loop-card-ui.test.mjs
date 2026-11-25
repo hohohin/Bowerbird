@@ -5,7 +5,7 @@ import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs'
 
 const out = '.tmp/loop-card-design';
 await mkdir(out, { recursive: true });
-const server = await createServer({ cacheDir: '.tmp/loop-design-vite', server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/loop-design-vite', server: { host: '127.0.0.1', port: 17969, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {
@@ -43,10 +43,17 @@ try {
   await page.screenshot({ path: `${out}/b2-canvas.png`, clip: { x: sourceBox.x - 8, y: sourceBox.y - 30,
     width: loopBox.x + loopBox.width - sourceBox.x + 16, height: Math.max(sourceBox.height, loopBox.height) + 44 } });
   await page.getByRole('button', { name: '缩小', exact: true }).click();
-  const handle = await page.locator('[data-canvas-node-id="shots"] .canvas-text-handle').boundingBox();
-  await page.mouse.move(handle.x + 12, handle.y + 7);
+  const grip = page.locator('[data-canvas-node-id="shots"] .canvas-text-handle');
+  await grip.hover();
+  const handle = await grip.boundingBox();
   await page.mouse.down();
-  await page.mouse.move(handle.x + 35, handle.y + 39, { steps: 6 });
+  await page.mouse.move(handle.x + handle.width / 2 + 23, handle.y + handle.height / 2 + 32, { steps: 6 });
+  await page.waitForFunction(() => {
+    const source = document.querySelector('[data-canvas-node-id="shots"]');
+    const frame = document.querySelector('.workflow-loop-frame');
+    return source?.style.translate && frame?.style.translate === source.style.translate;
+  });
+  await checkFrame(1);
   await page.mouse.up();
   await checkFrame(1);
   await page.getByRole('button', { name: '放大', exact: true }).click();

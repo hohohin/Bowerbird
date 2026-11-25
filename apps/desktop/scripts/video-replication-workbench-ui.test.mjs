@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
@@ -21,7 +22,7 @@ try {
   await page.route("**/*",route=>new URL(route.request().url()).hostname==="127.0.0.1"?route.continue():route.abort());
   await page.goto(server.resolvedUrls.local[0]+entry+"?strict");
   const button = (parent,name)=>parent.getByRole("button",{name,exact:true});
-  await button(page,"工具箱").waitFor();
+  await page.locator('[data-canvas-tool-group="toolbox"]').waitFor();
   await page.evaluate(path=>{
     const ipc=window.__TAURI_INTERNALS__.invoke;
     const asset={id:"fetched",name:"采集样片.mp4",source:"imported",ext:"mp4",duration:2,store_path:"/"+path+"/video.mp4"};
@@ -56,8 +57,7 @@ try {
     };
   },directory);
   async function openTool(){
-    await button(page,"工具箱").click();
-    await page.getByRole("menuitem",{name:/抖音视频采集/}).click();
+    await selectCanvasTool(page, "抖音视频采集");
     const dialog=page.getByRole("dialog",{name:"抖音视频采集",exact:true});await dialog.waitFor();return dialog;
   }
   let dialog=await openTool();

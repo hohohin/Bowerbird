@@ -1,6 +1,7 @@
 //! SQLite 访问层。磁盘库的前台浏览从独立的 WAL 只读连接读取。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -8,12 +9,15 @@ use rusqlite::{Connection, OpenFlags};
 
 use crate::error::{AppError, AppResult};
 
-pub mod migrations;
 mod classification_presets;
+pub mod migrations;
 
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
 
 pub struct Database {
+    canvas_path: Option<PathBuf>,
+    canvas_readers: [Mutex<Option<Connection>>; 2],
+    next_canvas_reader: AtomicUsize,
     // Close the reader before the writer so it does not hold the WAL open at shutdown.
     browser: Option<Mutex<Connection>>,
     pub conn: Mutex<Connection>,
@@ -28,13 +32,19 @@ impl Database {
         conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         // WAL 提升并发读；外键约束开。
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-        let browser = conn
+        let canvas_path = conn
             .path()
             .filter(|path| !path.is_empty())
-            .map(|path| Self::read_only_connection(Path::new(path)))
+            .map(PathBuf::from);
+        let browser = canvas_path
+            .as_deref()
+            .map(Self::read_only_connection)
             .transpose()?
             .map(Mutex::new);
         Ok(Self {
+            canvas_path,
+            canvas_readers: Default::default(),
+            next_canvas_reader: Default::default(),
             browser,
             conn: Mutex::new(conn),
         })
@@ -42,6 +52,9 @@ impl Database {
 
     pub fn open_read_only(path: &Path) -> AppResult<Self> {
         Ok(Self {
+            canvas_path: Some(path.to_owned()),
+            canvas_readers: Default::default(),
+            next_canvas_reader: Default::default(),
             browser: None,
             conn: Mutex::new(Self::read_only_connection(path)?),
         })
@@ -55,6 +68,33 @@ impl Database {
         conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         Ok(conn)
+    }
+
+    pub(crate) fn lock_conn(&self) -> AppResult<MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|_| AppError::Other("SQLite connection lock poisoned".into()))
+    }
+
+    pub(crate) fn with_canvas_reader<T>(
+        &self,
+        read: impl FnOnce(&mut Connection) -> AppResult<T>,
+    ) -> AppResult<T> {
+        let Some(path) = self.canvas_path.as_deref() else {
+            return read(&mut *self.lock_conn()?);
+        };
+        let index =
+            self.next_canvas_reader.fetch_add(1, Ordering::Relaxed) % self.canvas_readers.len();
+        let mut slot = self.canvas_readers[index]
+            .lock()
+            .map_err(|_| AppError::Other("SQLite canvas reader lock poisoned".into()))?;
+        if slot.is_none() {
+            *slot = Some(Self::read_only_connection(path)?);
+        }
+        let conn = slot
+            .as_mut()
+            .ok_or_else(|| AppError::Other("SQLite canvas reader unavailable".into()))?;
+        read(conn)
     }
 
     pub(crate) fn browser_connection(&self) -> MutexGuard<'_, Connection> {
@@ -195,7 +235,13 @@ mod tests {
             while_locked,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout)
         ));
-        assert_eq!(finish.recv_timeout(Duration::from_secs(3)).unwrap().unwrap(), 1);
+        assert_eq!(
+            finish
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .unwrap(),
+            1
+        );
         read.join().unwrap();
     }
 

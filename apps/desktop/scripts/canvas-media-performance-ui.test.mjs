@@ -14,7 +14,7 @@ const live = path.join(root, 'src');
 const out = '.tmp/canvas-media-performance';
 await mkdir(out, { recursive: true });
 const slash = value => value.replaceAll('\\', '/');
-const server = await createServer({ configFile: false, root, plugins: baseline ? [{
+const server = await createServer({ root, cacheDir: '.tmp/canvas-media-performance-vite', plugins: baseline ? [{
   name: 'frozen-media-baseline', enforce: 'pre',
   resolveId(source, importer) {
     if (!importer || !source.startsWith('.')) return;
@@ -63,7 +63,11 @@ async function open(scenario) {
   });
   await page.goto(`http://127.0.0.1:1627/scripts/fixtures/canvas-media-performance/preview.html?scenario=${scenario}`);
   await page.locator('[data-canvas-node-id="perf-node-0"]').waitFor();
-  await page.waitForTimeout(1800);
+  if (scenario !== 'tiers') {
+    // The canvas mounts nearby cards first and yields between offscreen batches.
+    await page.waitForFunction(() => document.querySelectorAll('.canvas-stage [data-canvas-node-id]').length === 330,
+      undefined, { timeout: 60_000 });
+  }
   return { page, errors, requests };
 }
 async function measure(page) {
@@ -179,7 +183,7 @@ try {
     }
     assert.deepEqual(await page.evaluate(() => [...new Set(window.mediaCalls.filter(call => call.command === 'canvas_image_preview').map(call => call.args.maxSize))]), [512, 1024, 2048]);
     await card.focus(); await page.keyboard.press('Enter');
-    const dialog = page.getByRole('dialog', { name: /媒体预览/ }); await dialog.waitFor();
+    const dialog = page.getByRole('dialog', { name: '图片与生成记录预览' }); await dialog.waitFor();
     assert.equal(await dialog.locator('img').getAttribute('src'), '/__canvas_perf__/original/0.png', 'Explicit viewer uses the original image');
     await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'detached' });
     assert.deepEqual(errors, []);

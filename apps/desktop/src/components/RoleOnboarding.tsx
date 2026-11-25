@@ -1,3 +1,4 @@
+import { projectCanvasCallbacks } from "../lib/projectCanvasCallbacks";
 import { userErrorMessage } from "../lib/userError";
 import { useState } from "react";
 import { Check, Clapperboard, Megaphone, Palette } from "lucide-react";
@@ -18,7 +19,7 @@ export function RoleOnboarding() {
     if (busy || ["marketing", "director"].includes(role)) return;
     setBusy(true); setError(""); setMissingRole(null);
     try {
-      await useStore.getState().projectCanvasFlush?.();
+      await projectCanvasCallbacks.flush?.();
       let session = restart || guide.completedRoles.includes(role) ? undefined : guide.sessions[role];
       if (session && (!session.projectId || (role === "designer" && session.step === 0 && session.reviewUntil !== undefined))) {
         await useStore.getState().exitProject();

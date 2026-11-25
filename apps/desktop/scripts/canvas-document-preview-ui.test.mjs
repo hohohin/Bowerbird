@@ -1,3 +1,4 @@
+import { selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 import {createServer} from 'vite';
@@ -43,7 +44,7 @@ try{
  assert.equal(await card.locator('.text-file-title').innerText(),'空白文档');assert.equal(await card.locator('.text-file-excerpt').innerText(),'');
  await page.reload();await card.getByRole('button',{name:'编辑文本卡片',exact:true}).click();await editor.waitFor();assert.equal(await editor.locator('[data-slate-string]').count(),0);
  await page.getByRole('button',{name:'返回',exact:true}).click();
- await page.getByRole('button',{name:'文本卡片工具',exact:true}).click();const stage=await page.locator('.canvas-stage').boundingBox();await page.mouse.click(stage.x+700,stage.y+200);
+ await selectCanvasTool(page, '文本卡片');const stage=await page.locator('.canvas-stage').boundingBox();await page.mouse.click(stage.x+700,stage.y+200);
  await page.waitForFunction(()=>window.snapshot().nodes.length===2);
  assert.ok(await page.evaluate(()=>window.snapshot().nodes.filter(node=>node.id!=='doc').every(node=>Math.abs(node.width/node.height-.75)<.001)));
  console.log('PASS shared 3:4 document surface, parsed body, port center, double-click/edit, empty/reloaded/new cards');

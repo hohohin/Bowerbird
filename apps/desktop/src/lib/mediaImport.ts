@@ -1,3 +1,4 @@
+import { projectCanvasCallbacks } from "./projectCanvasCallbacks";
 import { invoke } from "@tauri-apps/api/core";
 import { api } from "./api";
 import type { Asset } from "./types";
@@ -56,7 +57,7 @@ export async function prepareMediaImport(projectId: string | null, revision: num
   const state = useStore.getState();
   if (state.projectRoutePending || state.projectRouteRevision !== revision) throw new Error("项目已切换，请重新导入素材");
   if (!projectId) return;
-  if (projectId === state.activeProjectId) await state.projectCanvasFlush?.();
+  if (projectId === state.activeProjectId) await projectCanvasCallbacks.flush?.();
   const current = useStore.getState();
   const project = current.projects.find(item => item.id === projectId);
   if (!project || project.archived_at) throw new Error("目标项目已不可用");

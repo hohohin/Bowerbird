@@ -23,15 +23,16 @@ export function dragWire(from: End, to: End, draw: Draw = canvasWirePath, obstac
 /** Project a translation onto existing cards, their labels and incident curves until release.
  * A routed edge or live topology change hands the gesture back to the full layout. */
 export function canvasDragPreview(plane: HTMLElement, ids: Set<string>, primary: string, invalidate: () => void) {
-  if (plane.querySelector(".workflow-loop-frame")) return null;
+  if (plane.querySelector(".workflow-loop-frame:not([data-workflow-loop-owner])")) return null;
   const items: HTMLElement[] = [], found = new Set<string>();
   const curves = new Map<SVGPathElement, Wire & { moveFrom: boolean; moveTo: boolean; original: string; last?: string }>();
   for (const el of plane.children) {
     if (!(el instanceof HTMLElement)) continue;
     const data = el.dataset;
     const id = data.canvasNodeId || data.workflowCard || data.workflowMaterial || data.cardName || data.workflowTextKey || data.canvasSelectionFrame;
-    if (data.workflowPeekAnchor) {
-      if (ids.has(data.workflowPeekAnchor)) items.push(el);
+    const owner = data.workflowPeekAnchor ?? data.workflowLoopOwner;
+    if (owner) {
+      if (ids.has(owner)) items.push(el);
     } else if (id && ids.has(id)) {
       items.push(el);
       if (data.canvasNodeId || data.workflowCard) found.add(id);
@@ -41,15 +42,18 @@ export function canvasDragPreview(plane: HTMLElement, ids: Set<string>, primary:
   const svg = plane.querySelector(".workflow-wires"), graph = plane.querySelector(".canvas-graph-edges");
   const movesMaterial = items.some(el => el.hasAttribute("data-workflow-material"));
   for (const el of plane.querySelectorAll<SVGPathElement>(".workflow-wires > path,.canvas-graph-edges > path")) {
+    if (el.matches(".is-draft")) continue;
     const wire = wires.get(el);
+    if ((!wire?.from.owner || !wire.to.owner) && el.hasAttribute("data-workflow-pending")) continue;
     if (!wire?.from.owner || !wire.to.owner) return null;
     const moveFrom = ids.has(wire.from.owner), moveTo = ids.has(wire.to.owner);
     if (moveFrom || moveTo || movesMaterial && wire.obstacles) curves.set(el, { ...wire, moveFrom, moveTo, original: el.getAttribute("d")! });
   }
   const observer = new MutationObserver(records => {
     if (records.some(record => record.type === "childList"
-      ? [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element && !node.matches(".canvas-snap-guide,.canvas-cell-drop-target,[data-workflow-peek-anchor]"))
-      : curves.get(record.target as SVGPathElement)?.last !== (record.target as SVGPathElement).getAttribute("d"))) invalidate();
+      ? [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element && !node.matches(".canvas-snap-guide,.canvas-cell-drop-target,[data-workflow-peek-anchor],.is-draft"))
+      : !(record.target as SVGPathElement).matches(".is-draft")
+        && curves.get(record.target as SVGPathElement)?.last !== (record.target as SVGPathElement).getAttribute("d"))) invalidate();
   });
   observer.observe(plane, { childList: true });
   for (const layer of [svg, graph]) if (layer) observer.observe(layer, { subtree: true, childList: true, attributes: true, attributeFilter: ["d"] });

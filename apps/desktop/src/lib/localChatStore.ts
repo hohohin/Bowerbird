@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { useShallow } from "zustand/react/shallow";
+import { shallow } from "zustand/shallow";
 import { listen } from "@tauri-apps/api/event";
 import { useStore } from "../store";
 import { selectedChatOptions } from "./chatCapabilities";
@@ -89,9 +89,21 @@ function receiveText(update: TextUpdate) {
   state.applyConversation({ ...chat, messages, preview: update.preview, revision: update.revision });
 }
 
-export function useProjectChatSummaries(projectId: string | null) {
-  return useLocalChatStore(useShallow(state => Object.fromEntries((projectId ? state.projectIds[projectId] ?? [] : [])
-    .map(id => [id, state.summaries[id]] as const))));
+function sameCanvasChatSummaries(previous: Record<string, ChatSummary>, next: Record<string, ChatSummary>) {
+  const ids = Object.keys(previous);
+  return ids.length === Object.keys(next).length && ids.every(id => {
+    const before = previous[id], after = next[id];
+    if (before === after) return true;
+    if (!before || !after) return false;
+    const { preview: _beforePreview, revision: _beforeRevision, ...beforeLayout } = before;
+    const { preview: _afterPreview, revision: _afterRevision, ...afterLayout } = after;
+    return shallow(beforeLayout, afterLayout);
+  });
+}
+
+export function useProjectChatSummaries(projectId: string | null, canvasLayoutOnly = false) {
+  return useLocalChatStore(state => Object.fromEntries((projectId ? state.projectIds[projectId] ?? [] : [])
+    .map(id => [id, state.summaries[id]] as const)), canvasLayoutOnly ? sameCanvasChatSummaries : shallow);
 }
 
 let eventSubscription: Promise<void> | null = null;

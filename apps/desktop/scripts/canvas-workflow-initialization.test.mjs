@@ -1,4 +1,4 @@
-import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
+import { canvasToolMenuItem, enableCanvasToolbarPro, placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -27,14 +27,15 @@ try {
   assert.equal(await page.evaluate(()=>window.calls.some(call=>call.command==='project_canvas_materialize')),false,'untouched canvas remains provisional');
   const stage=page.locator('[data-canvas-stage]');
   const expected=await stage.evaluate(element=>{const rect=element.getBoundingClientRect();const matrix=new DOMMatrix(getComputedStyle(document.querySelector('.canvas-plane')).transform);return {x:(600-matrix.e)/matrix.a,y:(200-matrix.f)/matrix.d};});
-  await page.getByRole('button',{name:'新增工作流助手',exact:true}).dragTo(stage,{targetPosition:{x:600,y:200}});
+  await enableCanvasToolbarPro(page);
+  await (await canvasToolMenuItem(page, '工作流助手')).dragTo(stage,{targetPosition:{x:600,y:200}});
   await page.locator('.workflow-card.is-planner').waitFor();
   assert.equal((await workflow()).nodes.length,1,'drag creates exactly one card');
   assert.ok(Math.abs((await workflow()).nodes[0].x-expected.x)<2&&Math.abs((await workflow()).nodes[0].y-expected.y)<2,'drop position is converted to canvas coordinates');
   const commands=await page.evaluate(()=>window.calls.map(call=>call.command));
   assert.ok(commands.indexOf('project_canvas_materialize')<commands.indexOf('canvas_workflow_save'));
   await drag('planner');
-  await page.getByRole('button',{name:'新增 Agent 卡片',exact:true}).dragTo(stage,{targetPosition:{x:350,y:300}});
+  await (await canvasToolMenuItem(page, 'Agent 卡片')).dragTo(stage,{targetPosition:{x:350,y:300}});
   await page.locator('.workflow-card.is-agent').waitFor();
   await page.locator('.workflow-card.is-agent').getByRole('textbox',{name:'Agent 要求'}).fill('改写提示词');
   await drag('agent');

@@ -2,8 +2,12 @@ import "../../../src/styles.css";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CanvasToolbox } from "../../../src/components/CanvasToolbox";
+import { CanvasToolGroups, useCanvasToolMemory } from "../../../src/components/CanvasToolGroup";
+import { ModalShell } from "../../../src/components/ModalShell";
 import { VideoReplicationDialog } from "../../../src/components/VideoReplicationDialog";
 import { useStore } from "../../../src/store";
+import { canUseComfyVideo } from "../../../src/lib/comfyVideo";
+import { notify } from "../../../src/lib/notify";
 import "../../../src/components/CanvasNotes.css";
 import "../../../src/components/TacticalDialogs.css";
 import "../../../src/components/CanvasSecondaryTactical.css";
@@ -53,8 +57,25 @@ w.__TAURI_INTERNALS__ = {
 };
 function App() {
   const [opened, setOpened] = useState(false);
+  const [upgrade, setUpgrade] = useState(false);
+  const auth = useStore(state => state.cloudAuth);
+  const entitlement = useStore(state => state.cloudEntitlement);
+  const account = auth?.logged_in && auth.user_id === entitlement?.user_id ? entitlement : null;
+  const canUseLocalVideo = canUseComfyVideo(auth, entitlement);
+  const pro = (account?.tier === "pro" || account?.tier === "studio") && (account.offline_state === "fresh" || account.offline_state === "grace");
+  const { remembered, remember } = useCanvasToolMemory();
   return <div style={{ height: "100vh", background: "var(--bb-bg)", color: "var(--bb-ink)", padding: 32 }}><h1>项目画板</h1>
-    <div className="canvas-drawing-tools"><CanvasToolbox onOpenReplication={() => setOpened(true)} onOpenLocalVideo={() => { window.dispatchEvent(new Event("local-video-placement")); }} /><hr /><div className="canvas-assist-tools" role="group" aria-label="辅助"><span>辅助</span><button aria-label="吸附对齐">⊔</button></div></div>
+    <CanvasToolGroups hoverBlocked={() => false}>
+      <CanvasToolbox workflowReady pro={pro} canUseLocalVideo={canUseLocalVideo} isTestAccount={account?.is_test_account === true}
+        active="select" remembered={remembered.toolbox} onTool={tool => {
+          if ((tool === "comfy-video" && !canUseLocalVideo) || (tool === "voice" && !pro)) { setUpgrade(true); return; }
+          if (tool === "replication") setOpened(true);
+          if (tool === "comfy-video") window.dispatchEvent(new Event("local-video-placement"));
+          if (tool === "video-to-doc") { notify("功能开发中"); return; }
+          remember("toolbox", tool);
+        }} />
+    </CanvasToolGroups>
+    {upgrade && <ModalShell title="解锁 Pro" onClose={() => setUpgrade(false)}>已有结果仍可查看和导出</ModalShell>}
     {opened && <VideoReplicationDialog projectId="p" ensureProject={async () => {}} onClose={() => setOpened(false)}
        onOpenReplication={() => setOpened(false)} onAddVideo={async () => {}} />}
   </div>;

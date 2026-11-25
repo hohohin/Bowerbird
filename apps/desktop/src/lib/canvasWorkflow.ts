@@ -18,6 +18,12 @@ export class WorkflowInputError extends WorkflowNodeError {
 
 /** Editable workflow wiring is independent from immutable generation history edges. */
 export type WorkflowKind = "director3d" | "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
+
+export function workflowNodeRequiresPro(node: WorkflowNode): boolean {
+  if (node.kind === "generation") return node.generation?.media === "video" && !!node.generation.localVideo;
+  return node.kind !== "text";
+}
+
 export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
 export const H3_VIDEO_AUDIO_PORT = "reference-audio";
 export const H3_R2V_INPUT_PORTS = { image: "reference-image", video: "reference-video", audio: "r2v-audio" } as const;
@@ -353,8 +359,9 @@ export function workflowConnectionError(nodes: WorkflowNode[], fromId: string, p
 /** Connection validation may follow generated-media provenance without changing how saved inputs execute. */
 export function workflowConnectionCycleError(nodes: WorkflowNode[], source: WorkflowInput, targetId: string,
   generationOrigins?: ReadonlyMap<string, Pick<WorkflowNode, "id">>): string | null {
+  const inputProducers = indexWorkflowInputProducers(nodes);
   const sourceIds = (input: WorkflowInput) => {
-    const ids = workflowInputProducers(nodes, input);
+    const ids = inputProducers(input);
     const materialId = input.assetNodeId ?? input.canvasNodeId;
     const origin = materialId ? generationOrigins?.get(materialId) : undefined;
     return origin && !ids.includes(origin.id) ? [...ids, origin.id] : ids;
@@ -385,6 +392,31 @@ export function workflowInputProducers(nodes: WorkflowNode[], input: WorkflowInp
   return id ? [id] : [];
 }
 
+function indexWorkflowInputProducers(nodes: WorkflowNode[]) {
+  const writers = new Map<string, Map<string, string>>();
+  const automaticResults = new Map<string, string>();
+  const tableProducers = new Map<string, string[]>();
+  for (const node of nodes) {
+    const target = node.textTarget;
+    if (target) {
+      const cells = writers.get(target.nodeId) ?? new Map<string, string>();
+      for (const cell of [target.cellId, ...(target.cellIds ?? [])]) if (!cells.has(cell)) cells.set(cell, node.id);
+      writers.set(target.nodeId, cells);
+    }
+    for (const result of node.resultNodeIds ?? []) if (!automaticResults.has(result)) automaticResults.set(result, node.id);
+    for (const table of new Set([...(target ? [target.nodeId] : []), ...(node.resultNodeIds ?? [])])) {
+      const producers = tableProducers.get(table) ?? [];
+      producers.push(node.id);
+      tableProducers.set(table, producers);
+    }
+  }
+  return (input: WorkflowInput): string[] => {
+    if (input.canvasNodeId && ["*", "*text", "*latest", "*latest-image"].includes(input.cellId ?? "")) return tableProducers.get(input.canvasNodeId) ?? [];
+    const id = input.nodeId ?? (input.canvasNodeId ? writers.get(input.canvasNodeId)?.get(input.cellId ?? "") ?? automaticResults.get(input.canvasNodeId) : undefined);
+    return id ? [id] : [];
+  };
+}
+
 function workflowSaveDependencies(node: WorkflowNode): WorkflowNode["inputs"] {
   if (node.kind === "trigger") return {};
   if (node.kind !== "comfy-video") return node.inputs;
@@ -397,6 +429,7 @@ function workflowSaveDependencies(node: WorkflowNode): WorkflowNode["inputs"] {
 /** Wiring checks graph structure, independently of prompt validity or cached outputs. */
 export function assertWorkflowAcyclic(nodes: WorkflowNode[], startId: string, includeInactiveInputs = false): void {
   const byId = new Map(nodes.map(node => [node.id, node]));
+  const inputProducers = indexWorkflowInputProducers(nodes);
   const visiting = new Set<string>(), visited = new Set<string>();
   const visit = (id: string) => {
     if (visiting.has(id)) throw new Error("这条连接会形成循环");
@@ -405,7 +438,7 @@ export function assertWorkflowAcyclic(nodes: WorkflowNode[], startId: string, in
     const node = byId.get(id);
     const inputs = node ? includeInactiveInputs ? workflowSaveDependencies(node) : workflowExecutionInputs(node) : {};
     for (const input of Object.values(inputs).flat()) {
-      for (const producer of workflowInputProducers(nodes, input)) visit(producer);
+      for (const producer of inputProducers(input)) visit(producer);
     }
     visiting.delete(id);
     visited.add(id);
@@ -414,14 +447,18 @@ export function assertWorkflowAcyclic(nodes: WorkflowNode[], startId: string, in
 }
 
 export function invalidateWorkflow(nodes: WorkflowNode[], changedId: string): WorkflowNode[] {
-  const ids = new Set([changedId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const node of nodes) if (!ids.has(node.id) && Object.values(workflowExecutionInputs(node)).flat().some(input => input.portId !== "signal" && workflowInputProducers(nodes, input).some(id => ids.has(id)))) {
-      ids.add(node.id); changed = true;
+  const inputProducers = indexWorkflowInputProducers(nodes);
+  const downstream = new Map<string, Set<string>>();
+  for (const node of nodes) for (const input of Object.values(workflowExecutionInputs(node)).flat()) {
+    if (input.portId === "signal") continue;
+    for (const producer of inputProducers(input)) {
+      const consumers = downstream.get(producer) ?? new Set<string>();
+      consumers.add(node.id);
+      downstream.set(producer, consumers);
     }
   }
+  const ids = new Set([changedId]);
+  for (const id of ids) for (const consumer of downstream.get(id) ?? []) ids.add(consumer);
   return nodes.map(node => ids.has(node.id) ? { ...node, outputs: {} } : node);
 }
 
@@ -430,48 +467,79 @@ export function workflowOrder(nodes: WorkflowNode[], startId: string, single = f
   nodes = workflowExecutionNodes(nodes, startId);
   const byId = new Map(nodes.map(node => [node.id, node]));
   if (!byId.has(startId)) throw new Error("起点卡片不存在");
-  const reachable = new Set([startId]);
-  for (const id of reachable) for (const node of nodes) {
-    // Receiving content is part of delivering this card's output, even for a single-card run.
-    if (single && !node.textTarget) continue;
-    if (Object.values(node.inputs).flat().some(input => workflowInputProducers(nodes, input).includes(id))) reachable.add(node.id);
-  }
-  for (const id of reachable) {
-    // Missing prerequisites added below also deliver to their receivers, without running other branches.
-    for (const node of nodes) if (node.textTarget && Object.values(node.inputs).flat().some(input => workflowInputProducers(nodes, input).includes(id))) reachable.add(node.id);
-    if (single) continue;
-    for (const input of Object.values(byId.get(id)!.inputs).flat()) {
-      // A signal wire starts flows from the switch; it never pulls that trigger into another flow's execution.
-      if (input.portId === "signal") continue;
-      for (const producer of workflowInputProducers(nodes, input)) {
-        if (!input.nodeId && !nodes.some(node => node.id === producer && node.kind === "text")) continue;
-        const source = byId.get(producer);
-        if (!source) throw new Error("连接的上游卡片已删除，请重新连接");
-        // Image cells store their own value. Reading one does not replay an idle
-        // input writer; writers reached by this run still execute before consumers.
-        if (input.canvasNodeId && source.textTarget?.image && !reachable.has(producer)) continue;
-        if (source.kind === "text" || !source.outputs[input.portId ?? "text"]) reachable.add(source.id);
+  const inputProducers = indexWorkflowInputProducers(nodes);
+  const upstream = new Map<string, { input: WorkflowInput; producer: string }[]>();
+  const downstream = new Map<string, Set<string>>();
+  const downstreamWriters = new Map<string, Set<string>>();
+  for (const node of nodes) {
+    const bindings = Object.values(node.inputs).flat().flatMap(input => inputProducers(input).map(producer => ({ input, producer })));
+    upstream.set(node.id, bindings);
+    for (const { producer } of bindings) {
+      const consumers = downstream.get(producer) ?? new Set<string>();
+      consumers.add(node.id);
+      downstream.set(producer, consumers);
+      if (node.textTarget) {
+        const writers = downstreamWriters.get(producer) ?? new Set<string>();
+        writers.add(node.id);
+        downstreamWriters.set(producer, writers);
       }
     }
   }
-  const order: string[] = [], pending = new Set(reachable);
-  while (pending.size) {
-    const ready = [...pending].filter(id => Object.values(byId.get(id)!.inputs).flat().every(input => workflowInputProducers(nodes, input).every(id => !pending.has(id))));
-    if (!ready.length) throw new Error("工作流包含循环，请先断开循环连接");
-    for (const id of ready) { pending.delete(id); order.push(id); }
+  const reachable = new Set([startId]);
+  // Receiving content is part of delivering this card's output, even for a single-card run.
+  const consumers = single ? downstreamWriters : downstream;
+  for (const id of reachable) for (const consumer of consumers.get(id) ?? []) reachable.add(consumer);
+  for (const id of reachable) {
+    // Missing prerequisites added below also deliver to their receivers, without running other branches.
+    for (const writer of downstreamWriters.get(id) ?? []) reachable.add(writer);
+    if (single) continue;
+    for (const { input, producer } of upstream.get(id) ?? []) {
+      // A signal wire starts flows from the switch; it never pulls that trigger into another flow's execution.
+      if (input.portId === "signal") continue;
+      const source = byId.get(producer);
+      if (!input.nodeId && source?.kind !== "text") continue;
+      if (!source) throw new Error("连接的上游卡片已删除，请重新连接");
+      // Image cells store their own value. Reading one does not replay an idle
+      // input writer; writers reached by this run still execute before consumers.
+      if (input.canvasNodeId && source.textTarget?.image && !reachable.has(producer)) continue;
+      if (source.kind === "text" || !source.outputs[input.portId ?? "text"]) reachable.add(source.id);
+    }
   }
-  return order;
+  const inDegree = new Map<string, number>(), levels = new Map<string, number>(), queue: string[] = [];
+  for (const id of reachable) {
+    const degree = new Set(upstream.get(id)?.map(edge => edge.producer).filter(producer => reachable.has(producer))).size;
+    inDegree.set(id, degree);
+    if (degree === 0) queue.push(id);
+  }
+  for (let index = 0; index < queue.length; index++) {
+    const id = queue[index], level = levels.get(id) ?? 0;
+    for (const consumer of downstream.get(id) ?? []) {
+      const degree = inDegree.get(consumer);
+      if (degree === undefined) continue;
+      levels.set(consumer, Math.max(levels.get(consumer) ?? 0, level + 1));
+      inDegree.set(consumer, degree - 1);
+      if (degree === 1) queue.push(consumer);
+    }
+  }
+  if (queue.length !== reachable.size) throw new Error("工作流包含循环，请先断开循环连接");
+  // Preserve the existing within-wave order used by independent ready cards.
+  const waves: string[][] = [];
+  for (const id of reachable) (waves[levels.get(id) ?? 0] ??= []).push(id);
+  return waves.flat();
 }
 
 /** A text-card start reads current cells without rerunning their producers. */
 export function workflowExecutionNodes(nodes: WorkflowNode[], startId: string): WorkflowNode[] {
   nodes = nodes.filter(node => node.kind !== "planner");
-  nodes = nodes.map(node => generationInputNode({ ...node, inputs: workflowExecutionInputs(node) }, nodes));
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  nodes = nodes.map(node => projectGenerationInputs({ ...node, inputs: workflowExecutionInputs(node) }, id => byId.get(id)));
   const start = nodes.find(node => node.id === startId);
   const sources = nodes.filter(node => node.textSource && (node.id === startId || (start?.kind === "trigger" && node.inputs.signal?.some(input => input.nodeId === startId))));
   if (!sources.length) return nodes;
+  const sourcesByTable = new Map<string, WorkflowNode>();
+  for (const source of sources) if (!sourcesByTable.has(source.textSource!)) sourcesByTable.set(source.textSource!, source);
   return nodes.map(node => ({ ...node, inputs: Object.fromEntries(Object.entries(node.inputs).map(([port, inputs]) =>
-    [port, inputs.map(input => { const source = sources.find(source => source.textSource === input.canvasNodeId); return source ? { ...input, canvasNodeId: undefined, cellId: undefined, nodeId: source.id, portId: input.cellId } : input; })])) }));
+    [port, inputs.map(input => { const source = input.canvasNodeId && sourcesByTable.get(input.canvasNodeId); return source ? { ...input, canvasNodeId: undefined, cellId: undefined, nodeId: source.id, portId: input.cellId } : input; })])) }));
 }
 
 /** Completion wires are events, never data prerequisites or an ordinary graph cycle. */
@@ -512,11 +580,13 @@ export function activePromptReferences(node: WorkflowNode) {
 /** A pipe number is the current position among the receiving card's inputs of that type. */
 export function normalizeWorkflowInputSlots(node: WorkflowNode): WorkflowNode {
   if (node.kind !== "generation" && node.kind !== "agent" && node.kind !== "planner") return node;
-  const inputs = { ...node.inputs };
+  let inputs = node.inputs;
   for (const type of ["text", "image"] as const) {
-    if (!inputs[type]) continue;
-    inputs[type] = inputs[type].map((input, index) => input.slot === index + 1 ? input : { ...input, slot: index + 1 });
+    const bindings = inputs[type];
+    if (!bindings?.some((input, index) => input.slot !== index + 1)) continue;
+    inputs = { ...inputs, [type]: bindings.map((input, index) => input.slot === index + 1 ? input : { ...input, slot: index + 1 }) };
   }
+  let changed = inputs !== node.inputs;
   const promptReferences = node.promptReferences?.map(ref => {
     if (ref.direction === "output") return ref;
     // Planner mentions used source identities before numbered pipes. Migrate
@@ -528,11 +598,14 @@ export function normalizeWorkflowInputSlots(node: WorkflowNode): WorkflowNode {
       : (labelSlot ? Number(labelSlot) : undefined)
       ?? bindings.find(input => workflowReferenceMatchesInput(ref, input))?.slot
       ?? (bindings.length === 1 ? bindings[0].slot : undefined));
-    const input = bindings.find(input => input.slot === slot);
-    return { ...ref, slot, input: input ?? ref.input, assetId: undefined,
-      label: slot ? `${ref.type === "text" ? "文本" : "图片来源"} ${slot}` : ref.label };
+    const input = bindings.find(input => input.slot === slot) ?? ref.input;
+    const label = slot ? `${ref.type === "text" ? "文本" : "图片来源"} ${slot}` : ref.label;
+    if (slot === ref.slot && input === ref.input && label === ref.label && ref.assetId === undefined
+      && Object.prototype.hasOwnProperty.call(ref, "slot") && Object.prototype.hasOwnProperty.call(ref, "assetId")) return ref;
+    changed = true;
+    return { ...ref, slot, input, assetId: undefined, label };
   });
-  return { ...node, inputs, ...(promptReferences ? { promptReferences } : {}) };
+  return changed ? { ...node, inputs, ...(promptReferences ? { promptReferences } : {}) } : node;
 }
 export function rebindGenerationReferences(node: WorkflowNode): WorkflowNode {
   return normalizeWorkflowInputSlots(node);
@@ -542,17 +615,26 @@ export const workflowReferenceMatchesInput = (ref: Pick<WorkflowPromptReference,
 export function isWorkflowGenerationResult(input: WorkflowInput, source?: WorkflowNode) {
   return !!source && source.id === input.nodeId && input.portId === "image" && (source.kind === "generation" || source.kind === "comfy-video");
 }
-function implicitGenerationInput(input: WorkflowInput, nodes: readonly WorkflowNode[]) {
-  return !!input.autoConnect || (input.portId === "image" && isWorkflowGenerationResult(input, nodes.find(node => node.id === input.nodeId)));
+function implicitGenerationInput(input: WorkflowInput, sourceById: (id: string) => WorkflowNode | undefined) {
+  return !!input.autoConnect || (input.portId === "image" && !!input.nodeId && isWorkflowGenerationResult(input, sourceById(input.nodeId)));
 }
 export function generationInputNode(node: WorkflowNode, nodes: readonly WorkflowNode[] = []): WorkflowNode {
+  return projectGenerationInputs(node, id => nodes.find(candidate => candidate.id === id));
+}
+function projectGenerationInputs(node: WorkflowNode, sourceById: (id: string) => WorkflowNode | undefined): WorkflowNode {
   if (node.kind === "comfy-video") return { ...node, inputs: workflowExecutionInputs(node) };
   if (node.kind !== "generation" && node.kind !== "agent") return node;
   node = rebindGenerationReferences(node);
   if (usesConnectedAgentInputs(node)) return node;
-  const refs = activePromptReferences(node);
-  return { ...node, inputs: { ...node.inputs, ...Object.fromEntries((["text", "image"] as const).map(type =>
-    [type, (node.inputs[type] ?? []).filter(input => type === "image" || implicitGenerationInput(input, nodes) || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input)))])) } };
+  const slots = new Set<number>(), bindings = new Set<string>();
+  for (const ref of activePromptReferences(node)) {
+    if (ref.type !== "text" || ref.direction === "output") continue;
+    if (ref.slot !== undefined) slots.add(ref.slot);
+    else bindings.add(workflowBindingKey(ref.input));
+  }
+  const text = (node.inputs.text ?? []).filter(input => implicitGenerationInput(input, sourceById)
+    || (input.slot !== undefined && slots.has(input.slot)) || (bindings.size > 0 && bindings.has(workflowBindingKey(input))));
+  return { ...node, inputs: { ...node.inputs, text, image: [...(node.inputs.image ?? [])] } };
 }
 function usesConnectedAgentInputs(node: WorkflowNode) {
   return node.kind === "agent";
@@ -668,7 +750,7 @@ export function generationReferencePreviewOrder(node: WorkflowNode, values: Reco
   const ids = new Set(values.image?.flatMap(value => value.assetIds ?? []) ?? []);
   for (const id of generationMentionAssets(node.prompt, resolved)) ids.add(id);
   for (const type of ["text", "image"] as const) for (const [index, binding] of (node.inputs[type] ?? []).entries()) {
-    if (implicitGenerationInput(binding, nodes)) for (const id of values[type]?.[index]?.assetIds ?? []) ids.add(id);
+    if (implicitGenerationInput(binding, id => nodes.find(node => node.id === id))) for (const id of values[type]?.[index]?.assetIds ?? []) ids.add(id);
   }
   for (const value of Object.values(values).flat()) for (const id of value.assetIds ?? []) ids.add(id);
   return orderedGenerationReferences(node.inputs, values, [...ids]);
@@ -727,7 +809,7 @@ export function compileGenerationPrompt(node: WorkflowNode, values: Record<strin
   // control placement, so the same source is never appended a second time.
   const automaticText: WorkflowValue[] = [];
   for (const type of ["text", "image"] as const) for (const [index, input] of (inputs[type] ?? []).entries()) {
-    if ((type !== "image" && !implicitGenerationInput(input, nodes)) || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) continue;
+    if ((type !== "image" && !implicitGenerationInput(input, id => nodes.find(node => node.id === id))) || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) continue;
     const value = values[type]?.[index];
     const label = `${type === "text" ? "文字" : "素材"}输入 ${input.slot ?? index + 1}`;
     if (emptyCompanionPort(type, index, inputs, values)) continue;
@@ -877,15 +959,17 @@ export const workflowRunActive = (run: WorkflowRun) => run.status === "running" 
 export const workflowRuns = (document: CanvasWorkflow): WorkflowRun[] => document.runs ?? (document.run ? [document.run] : []);
 export function workflowDependencies(nodes: WorkflowNode[], order: string[]): string[] {
   const ids = new Set(order);
+  const orderIds = new Set(order), byId = new Map(nodes.map(node => [node.id, node]));
+  const inputProducers = indexWorkflowInputProducers(nodes);
   for (const id of ids) {
-    const node = nodes.find(node => node.id === id);
+    const node = byId.get(id);
     if (!node || node.kind === "trigger") continue;
     for (const input of Object.values(workflowExecutionInputs(node)).flat()) {
       if (input.portId === "signal") continue;
-      for (const producer of workflowInputProducers(nodes, input)) ids.add(producer);
+      for (const producer of inputProducers(input)) ids.add(producer);
     }
   }
-  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => input.portId !== "signal" && order.includes(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
+  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => input.portId !== "signal" && orderIds.has(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
   for (const node of nodes) if ((node.textTarget && tables.has(node.textTarget.nodeId)) || node.resultNodeIds?.some(id => tables.has(id))) ids.add(node.id);
   return [...ids];
 }
@@ -895,7 +979,7 @@ export function workflowLockedNodes(document: CanvasWorkflow): Set<string> {
 /** Execution can rewrite outputs and native result tables; cached dependencies are read-only. */
 export function workflowWriteNodes(nodes: WorkflowNode[], order: string[]): string[] {
   const ids = new Set(order);
-  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => input.portId !== "signal" && order.includes(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
+  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => input.portId !== "signal" && ids.has(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
   for (const node of nodes) if ((node.textTarget && tables.has(node.textTarget.nodeId)) || node.resultNodeIds?.some(id => tables.has(id))) ids.add(node.id);
   return [...ids];
 }

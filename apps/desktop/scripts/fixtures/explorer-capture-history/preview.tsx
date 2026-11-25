@@ -63,7 +63,7 @@ w.complete = (id: string) => {
   item.resolve(asset);
 };
 useStore.setState({ assets: [], total: 0, projects: [{ id: "p", name: "测试画板", kind: "blank", provisional: false } as any], activeProjectId: "p", projectRoutePending: false,
-  projectRouteRevision: 0, settings: {}, mode: "browse", projectCanvasFlush: async () => {} });
+  projectRouteRevision: 0, settings: {}, mode: "browse" });
 document.addEventListener("bowerbird:prepare-explorer-canvas-drop", ((event: CustomEvent) => {
   const { projectId, clientX, clientY } = event.detail;
   event.detail.place = async (asset: any) => {

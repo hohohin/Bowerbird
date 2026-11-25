@@ -118,7 +118,7 @@ try {
     check(!restored.document.run,'planning never creates an execution run');
     const {useStore}=await import('/src/store.ts');let executed=0;
     api.localAgentFindAssetId=async()=> 'existing';
-    useStore.setState({startGeneration:async(...args)=>{
+    useStore.setState({codexHealth:{ok:true,reason:''},startGeneration:async(...args)=>{
       executed++;const identity=args[12];useStore.setState(s=>({genJobs:{...s.genJobs,[identity.jobId]:{turns:[{turnKey:identity.turnKey,images:['existing.png']}]}}}));return {accepted:true};
     }});
     await restored.start(restored.document.nodes.find(node=>node.kind==='trigger').id);

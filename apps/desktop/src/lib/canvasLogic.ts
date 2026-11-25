@@ -13,12 +13,13 @@ export interface CanvasRect extends CanvasPoint {
 export function canvasPlacementForNewCard(
   card: CanvasRect, viewport: CanvasRect, pan: CanvasPoint, zoom: number, obstacles: CanvasRect[],
 ): CanvasPoint | null {
+  if (!Number.isFinite(zoom) || zoom <= 0) return null;
   const left = (viewport.x - pan.x) / zoom;
   const top = (viewport.y - pan.y) / zoom;
   const right = left + viewport.width / zoom - card.width;
   const bottom = top + viewport.height / zoom - card.height;
   if (viewport.width <= 0 || viewport.height <= 0 || right < left || bottom < top) return null;
-  const gap = 16 / zoom;
+  const gap = Math.min(48, 16 / zoom);
   const visible = obstacles.filter((other) => other.x + other.width + gap > left
     && other.x - gap < right + card.width && other.y + other.height + gap > top
     && other.y - gap < bottom + card.height);
@@ -27,15 +28,22 @@ export function canvasPlacementForNewCard(
     && card.y < other.y + other.height + gap && card.y + card.height + gap > other.y)) {
     return { x: card.x, y: card.y };
   }
-  const fits = (x: number, y: number) => x >= left && x <= right && y >= top && y <= bottom
-    && !visible.some((other) => x < other.x + other.width + gap && x + card.width + gap > other.x
-      && y < other.y + other.height + gap && y + card.height + gap > other.y);
-  // Obstacle edges plus viewport edges cover narrow spaces that a fixed grid could miss.
-  const xs = [...new Set([left, right, ...visible.flatMap((other) => [other.x + other.width + gap, other.x - card.width - gap])])]
-    .filter((x) => x >= left && x <= right).sort((a, b) => a - b);
-  const ys = [...new Set([top, bottom, ...visible.flatMap((other) => [other.y + other.height + gap, other.y - card.height - gap])])]
+  // Each expanded obstacle excludes an open interval of candidate card origins.
+  // Walking the sorted intervals per row keeps exact edge-touch placement.
+  const blocked = visible.map(other => ({ left: other.x - card.width - gap, right: other.x + other.width + gap,
+    top: other.y - card.height - gap, bottom: other.y + other.height + gap })).sort((a, b) => a.left - b.left);
+  const ys = [...new Set([top, bottom, ...blocked.flatMap(other => [other.top, other.bottom])])]
     .filter((y) => y >= top && y <= bottom).sort((a, b) => a - b);
-  for (const y of ys) for (const x of xs) if (fits(x, y)) return { x, y };
+  for (const y of ys) {
+    let x = left;
+    for (const other of blocked) {
+      if (y <= other.top || y >= other.bottom || x >= other.right) continue;
+      if (x <= other.left) break;
+      x = other.right;
+      if (x > right) break;
+    }
+    if (x <= right) return { x, y };
+  }
   return null;
 }
 
@@ -263,12 +271,18 @@ export function canvasNodeIdsInRect(
 
 /** Translate one selected set by a shared delta so its internal layout stays rigid. */
 export function translateCanvasSelection<T extends CanvasPoint & { id: string }>(
+  nodes: T[], selectedIds: ReadonlySet<string>, dx: number, dy: number,
+): T[];
+export function translateCanvasSelection<T extends CanvasPoint & { id: string }>(
+  nodes: readonly T[], selectedIds: ReadonlySet<string>, dx: number, dy: number,
+): readonly T[];
+export function translateCanvasSelection<T extends CanvasPoint & { id: string }>(
   nodes: readonly T[],
   selectedIds: ReadonlySet<string>,
   dx: number,
   dy: number,
-): T[] {
-  if (selectedIds.size === 0 || (dx === 0 && dy === 0)) return [...nodes];
+): readonly T[] {
+  if (selectedIds.size === 0 || (dx === 0 && dy === 0)) return nodes;
   return nodes.map((node) => selectedIds.has(node.id)
     ? { ...node, x: node.x + dx, y: node.y + dy }
     : node);

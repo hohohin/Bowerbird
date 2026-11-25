@@ -1,6 +1,10 @@
+import {
+  AudioLines, CalendarClock, CheckCheck, Clapperboard,
+  Images, List, MousePointer2, Palette,
+  Repeat2, Sparkles, Timer, Workflow,
+} from "lucide-react";
 import { useCallback } from "react";
-import { AudioLines, CalendarClock, CheckCheck, Clapperboard, Images, List, MousePointer2, Palette, Repeat2, Sparkles, Timer, Workflow } from "lucide-react";
-import type { WorkflowNode } from "../lib/canvasWorkflow";
+import { workflowBindingKey, workflowDisconnectId, type WorkflowInput, type WorkflowNode } from "../lib/canvasWorkflow";
 import { comfyVideoMode, DEFAULT_COMFY_VIDEO } from "../lib/comfyVideo";
 import { ComfyEnvironmentControl, type ComfyEnvironmentState } from "./ComfyVideoCard";
 
@@ -24,6 +28,11 @@ export const WORKFLOW_CARD_PRESENTATION = {
   planner: { icon: Sparkles, code: "MOD", title: "工作流助手" },
   text: { icon: Workflow, code: "MOD", title: "工作流" },
 };
+export const NEW_AGENT_CHAT_TOOLTIP = "在新建对话中运行指令，消除上下文影响";
+
+export const disconnectKey = (node: WorkflowNode, port: string, binding: WorkflowInput) =>
+  workflowDisconnectId(binding) ?? JSON.stringify([node.id, port, workflowBindingKey(binding)]);
+
 export function comfyCheckKey(node: WorkflowNode) {
   return JSON.stringify([node.id, node.comfyVideo?.endpoint ?? DEFAULT_COMFY_VIDEO.endpoint, comfyVideoMode(node.comfyVideo)]);
 }

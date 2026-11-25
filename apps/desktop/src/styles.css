@@ -3716,7 +3716,13 @@ html[data-theme="light"] .app-form-input:focus {
   pointer-events: none;
 }
 
-.canvas-zoom-controls span {
+.canvas-toolbar-divider {
+  flex: 0 0 1px;
+  height: 14px;
+  background: var(--cs-rule, var(--bb-line-strong));
+}
+
+.canvas-zoom-controls > span:not(.canvas-toolbar-divider) {
   width: 44px;
   color: var(--bb-muted);
   font-size: 10px;

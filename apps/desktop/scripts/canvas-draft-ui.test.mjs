@@ -176,18 +176,27 @@ try {
   assert.equal(await page.evaluate(() => window.snapshot().nodes.filter(node => node.assetId?.startsWith("draft-")).length), 2, "an unrelated new document gets its own card");
 
   await page.locator(`[data-canvas-node-id="${node.id}"]`).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "图片标注", exact: true }).click();
+  await page.getByRole("menuitem", { name: "编辑", exact: true }).click();
   const regular = page.getByRole("dialog", { name: "图片标注", exact: true });
   await regular.locator("img").waitFor();
   assert.equal(await regular.getByRole("button", { name: "保存到素材库", exact: true }).count(), 1);
-  assert.equal(await regular.getByRole("button", { name: /不入库/ }).count(), 1);
+  assert.equal(await regular.getByRole("button", { name: "插入创作板", exact: true }).count(), 1);
   await regular.getByRole("button", { name: "右转 90°", exact: true }).click();
   await regular.getByRole("button", { name: "保存到素材库", exact: true }).click();
   await regular.waitFor({ state: "hidden" });
   assert.equal(await page.evaluate(() => JSON.parse(window.calls.find(call => call.command === "save_annotated_image").args.annotationJson).source_asset_id), latest[0].assetId);
   await expectNoDraft('[data-canvas-node-id="old"]');
-  await page.locator('[data-canvas-node-id="gen-prompt:job:turn:0"]').waitFor();
-  await expectNoDraft('[data-canvas-node-id="gen-prompt:job:turn:0"]');
+  const runningCard = '[data-canvas-node-id="gen-prompt:job:turn:0"]';
+  const { x, y, deltaX, deltaY } = await page.locator(runningCard).evaluate(card => {
+    const stage = card.closest(".canvas-stage").getBoundingClientRect();
+    const bounds = card.getBoundingClientRect();
+    const x = stage.left + stage.width / 2;
+    const y = stage.top + stage.height / 2;
+    return { x, y, deltaX: bounds.left + bounds.width / 2 - x, deltaY: bounds.top + bounds.height / 2 - y };
+  });
+  await page.mouse.move(x, y);
+  await page.mouse.wheel(deltaX, deltaY);
+  await expectNoDraft(runningCard);
 
   await page.evaluate(() => sessionStorage.clear());
   await load("?provisional");

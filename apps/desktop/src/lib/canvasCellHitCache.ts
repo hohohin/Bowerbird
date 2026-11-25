@@ -1,69 +1,87 @@
 import type { CanvasPoint, CanvasRect } from "./canvasLogic";
 
-export interface CanvasCellHitEntry {
-  element: HTMLElement;
-  targetId: string;
+interface CanvasCellHitEntry {
   cellId: string;
   rect: CanvasRect;
 }
+const cellSelector = "[data-canvas-cell]";
+const maxCachedCards = 12;
 
-/** Geometry only: callers apply current graph visibility, locks and z-order at hit time. */
+/** Measure only candidate content cards. Callers apply graph visibility, locks and z-order. */
 export function createCanvasCellHitCache(
-  stage: HTMLElement,
   toBoardPoint: (clientX: number, clientY: number) => CanvasPoint,
   getZoom: () => number,
 ) {
-  const cellSelector = "[data-canvas-cell]", cardSelector = "[data-canvas-node-id]";
-  let dirty = true, disposed = false;
-  let entries: CanvasCellHitEntry[] = [];
-  let observed = new Set<Element>();
-  const invalidate = () => { dirty = true; };
-  const containsCell = (node: Node) => node instanceof Element
-    && (node.matches(cellSelector) || !!node.querySelector(cellSelector));
-  const changed = (records: MutationRecord[]) => {
-    if (records.some(record => {
-      const element = record.target instanceof Element ? record.target : record.target.parentElement;
-      const card = element?.closest(cardSelector);
-      // A camera transform is outside every card and must not invalidate board-space geometry.
-      if (element && (observed.has(element) || (card && containsCell(card)))) return true;
-      return record.type === "childList" && [...record.addedNodes, ...record.removedNodes].some(containsCell);
-    })) invalidate();
-  };
-  const sizes = new ResizeObserver(invalidate);
-  const mutations = new MutationObserver(changed);
-  mutations.observe(stage, { subtree: true, childList: true, attributes: true,
-    attributeFilter: ["style", "class", "data-canvas-cell", "data-canvas-node-id"] });
-  stage.addEventListener("scroll", invalidate, true);
+  type CardCache = ReturnType<typeof observeCard>;
+  const cards = new Map<HTMLElement, CardCache>();
+  let disposed = false;
+
+  function observeCard(card: HTMLElement) {
+    let dirty = true;
+    let cells = new Set<HTMLElement>();
+    let entries: CanvasCellHitEntry[] = [];
+    const invalidate = () => { dirty = true; };
+    const sizes = new ResizeObserver(invalidate);
+    sizes.observe(card);
+    const position = new MutationObserver(invalidate);
+    position.observe(card, { attributes: true, attributeFilter: ["style", "class"] });
+    const topology = new MutationObserver(records => { if (cellTopologyChanged(records)) invalidate(); });
+    topology.observe(card, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-canvas-cell"] });
+    card.addEventListener("scroll", invalidate, true);
+
+    return {
+      get(fresh: boolean) {
+        if (!fresh && !dirty && !position.takeRecords().length && !cellTopologyChanged(topology.takeRecords())) return entries;
+        const zoom = getZoom();
+        if (!Number.isFinite(zoom) || zoom <= 0) { dirty = true; return []; }
+        const origin = toBoardPoint(0, 0);
+        const nextCells = new Set(card.querySelectorAll<HTMLElement>(cellSelector));
+        entries = [...nextCells].flatMap(element => {
+          const cellId = element.dataset.canvasCell;
+          if (!cellId) return [];
+          const { left, top, width, height } = element.getBoundingClientRect();
+          return [{ cellId, rect: { x: origin.x + left / zoom, y: origin.y + top / zoom, width: width / zoom, height: height / zoom } }];
+        });
+        for (const element of cells) if (!nextCells.has(element)) sizes.unobserve(element);
+        for (const element of nextCells) if (!cells.has(element)) sizes.observe(element);
+        cells = nextCells;
+        dirty = false;
+        position.takeRecords();
+        topology.takeRecords();
+        return entries;
+      },
+      dispose() {
+        sizes.disconnect();
+        position.disconnect();
+        topology.disconnect();
+        card.removeEventListener("scroll", invalidate, true);
+      },
+    };
+  }
 
   return {
-    get(fresh = false): readonly CanvasCellHitEntry[] {
-      if (disposed) return [];
-      changed(mutations.takeRecords());
-      if (!fresh && !dirty) return entries;
-      const nextObserved = new Set<Element>();
-      const zoom = getZoom();
-      const origin = toBoardPoint(0, 0);
-      entries = Array.from(stage.querySelectorAll<HTMLElement>(cellSelector)).flatMap(element => {
-        const card = element.closest<HTMLElement>(cardSelector);
-        const targetId = card?.dataset.canvasNodeId, cellId = element.dataset.canvasCell;
-        if (!card || targetId === undefined || cellId === undefined) return [];
-        nextObserved.add(card); nextObserved.add(element);
-        const bounds = element.getBoundingClientRect();
-        return [{ element, targetId, cellId, rect: { x: origin.x + bounds.left / zoom, y: origin.y + bounds.top / zoom,
-          width: bounds.width / zoom, height: bounds.height / zoom } }];
-      });
-      for (const element of observed) if (!nextObserved.has(element)) sizes.unobserve(element);
-      for (const element of nextObserved) if (!observed.has(element)) sizes.observe(element);
-      observed = nextObserved;
-      dirty = false;
-      return entries;
+    get(card: HTMLElement, fresh = false): readonly CanvasCellHitEntry[] {
+      if (disposed || !card.isConnected) return [];
+      const cache = cards.get(card) ?? observeCard(card);
+      cards.delete(card);
+      cards.set(card, cache);
+      if (cards.size > maxCachedCards) {
+        const oldest = cards.keys().next().value!;
+        cards.get(oldest)?.dispose();
+        cards.delete(oldest);
+      }
+      return cache.get(fresh);
     },
-    invalidate,
     dispose() {
       disposed = true;
-      mutations.disconnect(); sizes.disconnect();
-      stage.removeEventListener("scroll", invalidate, true);
-      observed.clear(); entries = [];
+      for (const cache of cards.values()) cache.dispose();
+      cards.clear();
     },
   };
+}
+
+function cellTopologyChanged(records: MutationRecord[]) {
+  return records.some(record => record.type === "attributes" || [...record.addedNodes, ...record.removedNodes].some(
+    node => node instanceof Element && (node.matches(cellSelector) || node.querySelector(cellSelector)),
+  ));
 }

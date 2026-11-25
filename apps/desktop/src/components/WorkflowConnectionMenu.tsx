@@ -1,7 +1,7 @@
 import type { CanvasNotePayload } from "../lib/canvasNotes";
 import { userErrorMessage } from "../lib/userError";
 import { ContextMenu, ContextSubmenu } from "./ContextMenu";
-import { WORKFLOW_CARD_PRESENTATION } from "./workflowCardPresentation";
+import { WORKFLOW_CARD_PRESENTATION } from "./WorkflowLayerPresentation";
 import type { WorkflowKind, WorkflowNode } from "../lib/canvasWorkflow";
 
 export type VideoReferenceMode = "first" | "last" | "audio";

@@ -1,5 +1,11 @@
 //! Canvas-unit placement shared by native generation and artifact delivery.
-use super::*;
+use rusqlite::{OptionalExtension, Transaction};
+
+use crate::core::creative_session_contract::{CreativeNodeKind, CreativeNodeRole};
+use crate::error::AppResult;
+
+use super::{CanvasNode, ProjectCanvasSnapshot};
+use super::repository::project_canvas_snapshot_tx;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -115,6 +121,15 @@ pub(in crate::core) fn visible_obstacles(
     batch_source: Option<Rect>,
 ) -> AppResult<Vec<Rect>> {
     let snapshot = project_canvas_snapshot_tx(tx, project)?;
+    Ok(obstacles_in_snapshot(&snapshot, workflow, excluded, batch_source))
+}
+
+pub(super) fn obstacles_in_snapshot(
+    snapshot: &ProjectCanvasSnapshot,
+    workflow: &Value,
+    excluded: &[&str],
+    batch_source: Option<Rect>,
+) -> Vec<Rect> {
     let archived: HashSet<_> = snapshot
         .threads
         .iter()
@@ -299,7 +314,7 @@ pub(in crate::core) fn visible_obstacles(
             .filter(|n| n["kind"] != "text" && !excluded.contains(&n["id"].as_str().unwrap_or("")))
             .map(workflow_rect),
     );
-    Ok(result)
+    result
 }
 
 pub(super) fn workflow(tx: &Transaction<'_>, project: &str) -> AppResult<Value> {
@@ -452,6 +467,7 @@ pub(super) fn generation_workflow_history<'a>(source: &Value, snapshot: &'a Proj
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn compact_edges_replace_fixed_downward_steps() {
         let card = Rect {

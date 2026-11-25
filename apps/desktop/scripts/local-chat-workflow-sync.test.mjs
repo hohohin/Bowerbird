@@ -13,13 +13,15 @@ const clone = value => structuredClone(value);
 const plain = value => JSON.parse(JSON.stringify(value));
 const node = (id, prompt = '') => ({ id, kind: 'generation', x: 0, y: 0, action: 'describe', skill: 'image-edit', prompt, ratio: null, provider: 'codex', inputs: {}, outputs: {}, outputPorts: [], trigger: false });
 const doc = nodes => ({ schema_version: 1, nodes, run: null });
-function fixture(initial = doc([node('original')])) {
-  let saved = { revision: 1, document: clone(initial) }, fail = false, gate, readGate, failRead = false;
+function fixture(initial = doc([node('original')]), options = {}) {
+  let saved = { revision: 1, document: clone(initial) }, fail = false, failNext = false, gate, readGate, failRead = false;
   const interleavedChanges = [];
   const writes = [];
   const modules = new Map();
   const requests = new Map(), sends = [], stops = [];
   const genJobs = {}, generationRequests = [];
+  const workflowHost = { getState: () => ({ genJobs,
+    startGeneration: async (...args) => { generationRequests.push(args.at(-1)); return { accepted: true }; } }) };
   const chatListeners = new Set(), checkpoints = new Map();
   const reads = { checkpoints: 0, full: 0 };
   const chatApi = { revision: async id => { reads.checkpoints++; return checkpoints.get(id); }, getByRequest: async id => clone(requests.get(id) ?? null) };
@@ -44,23 +46,30 @@ function fixture(initial = doc([node('original')])) {
       if (readGate) { readGate.entered(); await readGate.promise; }
       if (failRead) throw new Error('synthetic read failed');
       return snapshot;
-    }, projectCanvasGet: async () => ({ nodes: [] }), canvasWorkflowAuthorize: async () => {}, projectThreadCreate: async () => {},
+    }, projectCanvasGet: options.projectCanvasGet ?? (async () => ({ nodes: [] })), canvasWorkflowAuthorize: options.authorize ?? (async () => {}), projectThreadCreate: async () => {},
     getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.png` })),
     canvasWorkflowSave: async (_id, revision, document) => {
+      if (options.beforeSave) await options.beforeSave(document);
       if (gate) await gate;
-      if (fail) throw new Error('synthetic disk write failed');
+      if (fail || failNext) { failNext = false; throw new Error('synthetic disk write failed'); }
       const change = interleavedChanges.shift();
       if (change) saved = { revision: saved.revision + 1, document: change(clone(saved.document)) };
       if (revision !== saved.revision) throw new Error('工作流已被其他窗口修改，请重新打开项目');
       saved = { revision: revision + 1, document: clone(document) }; writes.push(saved.document); return saved.revision;
     },
   };
-  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, TextEncoder, setTimeout, clearTimeout });
+  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, TextEncoder, AbortController, Error, setTimeout: options.setTimeout ?? setTimeout,
+    clearTimeout: options.clearTimeout ?? clearTimeout });
   function load(path) {
     if (modules.has(path)) return modules.get(path).exports;
     const module = { exports: {} }; modules.set(path, module);
     const output = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
     const require = specifier => {
+      const nestedExecutor = dirname(path) === resolve(lib, 'executors');
+      if (nestedExecutor && specifier.startsWith('../')) specifier = './' + specifier.slice(3);
+      const base = nestedExecutor ? lib : dirname(path);
+      if (specifier.startsWith('./executors/')) return load(resolve(lib, specifier + '.ts'));
+      if (['./canvasWorkflowCardExecutors', './canvasWorkflowMediaInputs', './workflowEntitlement'].includes(specifier)) return load(resolve(lib, specifier + '.ts'));
       if (specifier === './api') return { api };
       if (specifier === './userError') return load(resolve(dirname(path), 'userError.ts'));
       if (specifier === './dshSkill.ts' || specifier === './chatProvider.ts') return load(resolve(dirname(path), specifier));
@@ -69,24 +78,28 @@ function fixture(initial = doc([node('original')])) {
         selectChatCodexModel: (...args) => load(resolve(lib, 'localChat.ts')).selectChatCodexModel(...args) };
       if (specifier === './localChatStore') return { ensureLocalChatEvents: async () => {},
         useLocalChatStore: { getState: () => chatStore, subscribe: listener => { chatListeners.add(listener); return () => chatListeners.delete(listener); } } };
-      if (specifier === './workflowProviderIssue') return { workflowProviderIssue: () => null, workflowGenerationProvider: node => node.provider };
+      if (specifier === './workflowProviderIssue') return { workflowProviderIssue: options.providerIssue ?? (() => null), workflowGenerationProvider: node => node.provider };
       if (specifier === 'zustand') return { createStore };
       if (specifier === './chatCapabilities') return { chatProviderAccessIssue: () => null,
         selectedChatOptions: (...args) => load(resolve(lib, 'chatCapabilities.ts')).selectedChatOptions(...args) };
-      if (specifier === '../store') return { useStore: { getState: () => ({ genJobs,
-        startGeneration: async (...args) => { generationRequests.push(args.at(-1)); return { accepted: true }; } }) } };
+      if (specifier === '../store') return { useStore: workflowHost };
+      if (specifier === './workflowHost') return { getWorkflowHost: () => workflowHost };
       if (specifier === '@tauri-apps/api/event') return { emit: async () => {} };
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
+      if (specifier === '@tauri-apps/api/core' && options.invoke) return { invoke: options.invoke };
       if (specifier === './workflowLoop') return load(resolve(lib, 'workflowLoop.ts'));
-      if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined, agentOutputTargets: () => [] };
+      if (specifier === './workflowAgentOutputs') return load(resolve(lib, 'workflowAgentOutputs.ts'));
       if (specifier === './canvasSessionOutputs') return { completedCanvasSessions: () => [], reconcileCanvasWorkflowReferences: nodes => nodes,
         canvasSessionCompletionLookup: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompletionLookup(...args),
+        canvasSessionCompleted: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompleted(...args),
+        canvasSessionCompletionStatus: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompletionStatus(...args),
+        submittedTurnState: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).submittedTurnState(...args),
         workflowGenerationActivity: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).workflowGenerationActivity(...args) };
-      if (['./comfyVideo', './comfyVideo.ts', './genProviders', './genProviders.ts', './canvasNodePayload.ts', './projectNodeIds'].includes(specifier)) {
+      if (['./comfyVideo', './comfyVideo.ts', './genProviders', './genProviders.ts', './canvasNodePayload', './canvasNodePayload.ts', './projectNodeIds', './canvasConversationCards', './videoGeneration', './audioMedia.ts', './textMedia.ts'].includes(specifier)) {
         return load(resolve(lib, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       }
-      if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts'].includes(specifier)) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
+      if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts', './workflowMigrations', './workflowTriggerScheduler', './workflowPersistenceQueue'].includes(specifier)) return load(resolve(base, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       return {};
     };
     vm.runInContext(`(function(require,module,exports){${output}\n})`, context, { filename: path })(require, module, module.exports);
@@ -96,7 +109,7 @@ function fixture(initial = doc([node('original')])) {
   const { mergeWorkflowChanges } = load(resolve(lib, 'workflowExternalChanges.ts'));
   return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), writes, requests, sends, stops, chatStore, chatApi, chatListeners, checkpoints, reads, load, genJobs, generationRequests,
     external: document => { saved = { revision: saved.revision + 1, document: clone(document) }; },
-    fail: value => { fail = value; }, failRead: value => { failRead = value; },
+    fail: value => { fail = value; }, failNext: () => { failNext = true; }, failRead: value => { failRead = value; },
     interleave: (...changes) => { interleavedChanges.push(...changes); },
     holdRead: () => {
       let entered, release;
@@ -106,6 +119,169 @@ function fixture(initial = doc([node('original')])) {
     },
     hold: () => { let release; gate = new Promise(resolve => { release = resolve; }); return () => { gate = undefined; release(); }; } };
 }
+
+const deniedCanvasPro = async () => { throw new Error('工作流卡片的创建、编辑和运行需要 Pro；已有结果仍可查看和导出'); };
+
+test('Canvas Pro denial rolls back queued drafts, leaving valid cleanup and free edits usable', async () => {
+  const agent = { ...node('agent', '旧配置'), kind: 'agent' };
+  const draw = { ...node('draw', '旧提示'), inputs: { image: [{ nodeId: agent.id, portId: 'image', slot: 1 }] } };
+  const f = fixture(doc([agent, draw]), { authorize: deniedCanvasPro });
+  const c = f.controller;
+  await c.load();
+  const bad = c.edit(c.document.nodes.map(card => card.id === agent.id ? { ...card, prompt: '未授权配置' } : card));
+  const queued = c.edit(c.document.nodes.map(card => card.id === draw.id ? { ...card, prompt: '带有未授权配置的下一份快照' } : card));
+  await Promise.all([assert.rejects(bad, /需要 Pro/), assert.rejects(queued, /需要 Pro/)]);
+  assert.equal(c.error, '');
+  assert.equal(c.document.nodes.find(card => card.id === agent.id).prompt, agent.prompt);
+  await c.edit(c.document.nodes.map(card => card.id === draw.id ? { ...card, prompt: '独立生成', inputs: {} } : { ...card, x: 60 }));
+  assert.deepEqual(f.saved().document.nodes.map(card => [card.x, card.prompt]), [[60, '旧配置'], [0, '独立生成']]);
+  await c.edit(c.document.nodes.filter(card => card.id !== agent.id));
+  assert.deepEqual(f.saved().document.nodes.map(card => card.id), ['draw']);
+});
+
+test('Canvas Pro denial of the first native checkpoint never publishes a new run', async () => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const agent = { ...node('agent', '原始指令'), kind: 'agent' };
+  const f = fixture(doc([agent]), { beforeSave: async document => {
+    if (!document.run) return;
+    entered.resolve(); await release.promise; await deniedCanvasPro();
+  } });
+  const c = f.controller;
+  await c.load();
+  const started = c.start(agent.id, true);
+  await entered.promise;
+  assert.equal(c.document.run, null, 'initial checkpoint is not visible until the native save succeeds');
+  release.resolve();
+  await assert.rejects(started, /需要 Pro/);
+  assert.equal(c.document.run, null);
+  assert.equal(c.error, '');
+  assert.equal(f.sends.length, 0);
+});
+
+test('Canvas Pro applies only to changed paid bindings on a free generation card', () => {
+  const f = fixture();
+  const { workflowDefinitionRequiresPro } = f.load(resolve(lib, 'workflowEntitlement.ts'));
+  const agent = { ...node('agent'), kind: 'agent' };
+  const paidWire = { nodeId: agent.id, portId: 'image', slot: 1 };
+  const draw = { ...node('draw'), inputs: { image: [paidWire] } };
+  const before = [agent, draw];
+  assert.equal(workflowDefinitionRequiresPro(before, [agent, { ...draw, inputs: { image: [{ assetId: 'new', slot: 1 }, { ...paidWire, slot: 2 }] } }]), false);
+  assert.equal(workflowDefinitionRequiresPro(before, [agent, { ...draw, inputs: { image: [{ ...paidWire, portId: 'mask' }] } }]), true);
+  assert.equal(workflowDefinitionRequiresPro(before, [agent, { ...draw, savedComfyAudio: [paidWire] }]), true);
+  assert.equal(workflowDefinitionRequiresPro(before, [agent, { ...draw, savedComfyR2V: { 'reference-image': [paidWire] } }]), true);
+});
+
+test('Canvas Pro permits generation creation and edits on a mixed board', async () => {
+  const agent = { ...node('agent', '旧指令'), kind: 'agent' };
+  const f = fixture(doc([agent]), { authorize: deniedCanvasPro });
+  await f.controller.load();
+  const draw = node('draw', '一只红色小鸟');
+  await f.controller.edit([...f.controller.document.nodes, draw]);
+  await f.controller.edit(f.controller.document.nodes.map(card => card.id === draw.id ? { ...card, prompt: '一只蓝色小鸟' } : card));
+  assert.equal(f.saved().document.nodes.find(card => card.id === draw.id).prompt, '一只蓝色小鸟');
+  await assert.rejects(() => f.controller.edit(f.controller.document.nodes.map(card => card.id === agent.id ? { ...card, prompt: '改写付费卡片' } : card)), /需要 Pro/);
+  assert.equal(f.saved().document.nodes.find(card => card.id === agent.id).prompt, agent.prompt);
+});
+
+test('Canvas Pro allows an ordinary generation run that only reads a paid card’s cached output', async () => {
+  const source = { ...node('cached', '旧指令'), kind: 'agent', outputs: { image: { type: 'image', assetIds: ['reference'] } } };
+  const draw = { ...node('draw', '一只小鸟'), inputs: { image: [{ nodeId: source.id, portId: 'image' }] } };
+  const f = fixture(doc([source, draw]), { authorize: deniedCanvasPro });
+  await f.controller.load();
+  await f.controller.start(draw.id);
+  assert.deepEqual(f.saved().document.run.order, [draw.id]);
+  assert.ok(f.saved().document.run.lockedNodeIds.includes(source.id));
+  assert.equal(f.saved().document.run.status, 'done', f.saved().document.run.steps[draw.id].error);
+  assert.equal(f.generationRequests.length, 1);
+});
+
+test('Canvas Pro leaves the generation provider rejection in control', async () => {
+  const draw = node('draw', '一只小鸟');
+  const f = fixture(doc([draw]), { authorize: deniedCanvasPro, providerIssue: () => ({ message: 'Bcoin 余额不足' }) });
+  await f.controller.load();
+  await assert.rejects(() => f.controller.start(draw.id, true), /Bcoin 余额不足/);
+  assert.equal(f.saved().document.run, null);
+  assert.equal(f.generationRequests.length, 0);
+});
+
+test('Canvas Pro keeps consecutive free generation drafts coalesced', async () => {
+  const draw = node('draw', '原始指令');
+  const f = fixture(doc([draw]), { authorize: deniedCanvasPro });
+  await f.controller.load();
+  const draft = prompt => f.controller.edit([{ ...draw, prompt }], undefined, draw.id);
+  const edits = [draft('一'), draft('一只'), draft('一只小鸟')];
+  assert.equal(f.controller.document.nodes[0].prompt, '一只小鸟');
+  await Promise.all(edits);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.saved().document.nodes[0].prompt, '一只小鸟');
+});
+
+test('Canvas Pro protects a paid card in the planned write scope', async () => {
+  const draw = { ...node('draw', '生成'), resultNodeIds: ['shared-note'] };
+  const agent = { ...node('agent', '已有指令'), kind: 'agent', resultNodeIds: ['shared-note'] };
+  const f = fixture(doc([draw, agent]), { authorize: deniedCanvasPro });
+  await f.controller.load();
+  await assert.rejects(() => f.controller.start(draw.id, true), /需要 Pro/);
+  assert.equal(f.saved().document.run, null);
+  assert.equal(f.generationRequests.length, 0);
+});
+
+test('Canvas Pro protects a reachable paid execution but leaves an accepted phase resumable', async () => {
+  const draw = node('draw', '一只小鸟');
+  const agent = { ...node('agent', '读取图片'), kind: 'agent', inputs: { image: [{ nodeId: draw.id, portId: 'image' }] } };
+  const f = fixture(doc([draw, agent]), { authorize: deniedCanvasPro });
+  await f.controller.load();
+  await assert.rejects(() => f.controller.start(draw.id), /需要 Pro/);
+  assert.equal(f.generationRequests.length, 0);
+
+  const run = { id: 'paused', startId: agent.id, order: [agent.id], status: 'waiting', steps: { [agent.id]: { status: 'pending' } } };
+  const paused = fixture({ ...doc([{ ...agent, inputs: {} }]), run }, { authorize: deniedCanvasPro });
+  await paused.controller.load();
+  await paused.controller.continue(run.id);
+  assert.equal(paused.saved().document.run.status, 'done', paused.saved().document.run.steps[agent.id].error);
+  assert.equal(paused.sends.length, 1);
+});
+
+test('Canvas Pro preserves queued completion from an accepted paid phase and gates entry from a free phase', async () => {
+  const source = node('source', '已经完成');
+  const trigger = { ...node('receiver'), kind: 'trigger', triggerMode: 'completion', triggerCount: 2,
+    inputs: { completion: [{ nodeId: source.id, portId: 'signal' }] } };
+  const draw = { ...node('draw', '生成'), inputs: { signal: [{ nodeId: trigger.id, portId: 'signal' }] } };
+  for (const kind of ['generation', 'agent']) {
+    const run = { id: 'queued', startId: source.id, order: [source.id], status: 'waiting',
+      steps: { [source.id]: { status: 'done' } }, triggerQueue: [trigger.id] };
+    let attempts = 0;
+    const f = fixture({ ...doc([{ ...source, kind }, trigger, draw]), run }, { authorize: async () => { attempts++; await deniedCanvasPro(); } });
+    await f.controller.load();
+    await f.controller.continue(run.id);
+    assert.equal(f.saved().document.run.status, kind === 'generation' ? 'waiting' : 'done', JSON.stringify(f.saved().document.run.steps));
+    assert.deepEqual(f.saved().document.run.triggerQueue, kind === 'generation' ? [trigger.id] : []);
+    assert.equal(f.saved().document.nodes.find(card => card.id === trigger.id).triggerCount, kind === 'generation' ? 2 : 1);
+    assert.equal(f.generationRequests.length, kind === 'generation' ? 0 : 1);
+    assert.equal(attempts, kind === 'generation' ? 1 : 0);
+  }
+});
+
+test('Canvas Pro gates explicit retries only when the reset loop step is paid', async () => {
+  const owner = { ...node('loop'), kind: 'loop', loopMode: 'count' };
+  for (const kind of ['generation', 'agent']) {
+    const card = { ...node('body', '再次提交'), kind };
+    const run = { id: 'loop-run', startId: owner.id, order: [owner.id, card.id], status: 'waiting',
+      steps: { [owner.id]: { status: 'done' }, [card.id]: { status: 'failed', retrySafe: true } },
+      loop: { nodeId: owner.id, bodyIds: [card.id], index: 0, items: [{ text: '', assetIds: [] }], completed: [] } };
+    const f = fixture({ ...doc([owner, card]), run }, { authorize: deniedCanvasPro });
+    await f.controller.load();
+    if (kind === 'agent') {
+      await assert.rejects(() => f.controller.retryLoop(run.id), /需要 Pro/);
+      assert.equal(f.saved().document.run.steps[card.id].status, 'failed');
+      assert.equal(f.sends.length, 0);
+    } else {
+      await f.controller.retryLoop(run.id);
+      assert.equal(f.saved().document.run.status, 'done', f.saved().document.run.steps[card.id].error);
+      assert.equal(f.generationRequests.length, 1);
+    }
+  }
+});
 
 test('portable Agent templates retain provider/model settings and discard conversation identity', () => {
   const f = fixture();
@@ -243,6 +419,163 @@ test('retry after a failed write retains the unsaved edit', async () => {
   await assert.rejects(c.save(doc([node('original', 'unsaved')])), /synthetic disk/);
   f.fail(false); await c.retrySave();
   assert.equal(f.saved().document.nodes[0].prompt, 'unsaved'); assert.equal(c.error, '');
+});
+
+test('the next checkpoint commits a failed edit and preserves newer remote changes', async () => {
+  const f = await activeFixture(), c = f.controller;
+  const hold = f.hold();
+  f.failNext();
+  const failed = c.save({ ...c.document, nodes: c.document.nodes.map(n => n.id === 'a' ? { ...n, x: 12 } : n) }, true);
+  const result = assert.rejects(failed, /synthetic disk/);
+  const checkpoint = c.step('run-b', 'b', { detail: 'queued behind a failed edit' });
+  hold(); await result; await checkpoint;
+  assert.equal(f.saved().document.nodes[0].x, 12);
+  assert.equal(f.saved().document.runs[1].steps.b.detail, 'queued behind a failed edit');
+  assert.equal(c.error, '');
+
+  f.fail(true);
+  await assert.rejects(c.save({ ...c.document, nodes: c.document.nodes.map(n => n.id === 'a' ? { ...n, x: 20 } : n) }), /synthetic disk/);
+  f.fail(false);
+  const disk = f.saved().document;
+  f.external({ ...disk, nodes: disk.nodes.map(n => n.id === 'b' ? { ...n, y: 40 } : n) });
+  await c.refreshExternalCards();
+  assert.equal(c.document.nodes[0].x, 20);
+  assert.equal(c.document.nodes[1].y, 40);
+  assert.match(c.error, /synthetic disk/);
+  await c.save({ ...c.document, nodes: c.document.nodes.map(n => n.id === 'b' ? { ...n, y: 60 } : n) });
+  assert.deepEqual(f.saved().document.nodes.map(n => [n.x, n.y]), [[20, 0], [0, 60]]);
+  assert.equal(c.error, '');
+});
+
+test('an old video executor cannot release the new execution lock after stop times out', { timeout: 5000 }, async () => {
+  const h3 = { ...node('h3'), kind: 'comfy-video' };
+  const run = { ...running(h3.id), status: 'waiting', accountId: null, steps: { [h3.id]: { status: 'waiting', jobId: 'original-video' } } };
+  const deadline = Promise.withResolvers(), cancel = Promise.withResolvers();
+  const old = Promise.withResolvers(), resumed = Promise.withResolvers();
+  const calls = [];
+  const f = fixture({ ...doc([h3]), run, runs: [run] }, {
+    authorize: deniedCanvasPro,
+    setTimeout(callback, delay) {
+      if (delay !== 20_000) return setTimeout(callback, delay);
+      deadline.resolve(callback);
+      return setTimeout(() => {}, delay);
+    },
+    invoke(command, args) {
+      assert.equal(command, 'comfy_video');
+      assert.equal(args.requestId, 'original-video');
+      assert.notEqual(args.action, 'start');
+      calls.push(args.action);
+      if (args.action === 'cancel') return cancel.promise;
+      return calls.length === 1 ? old.promise : resumed.promise;
+    },
+  });
+  const waitForCall = async count => {
+    while (calls.length < count) await new Promise(setImmediate);
+  };
+  const c = f.controller;
+  await c.load();
+  const oldExecution = c.continue();
+  await waitForCall(1);
+  const before = c.document;
+  const stopping = assert.rejects(c.stop(), /超时/);
+  await waitForCall(2);
+  assert.equal(before.run.steps[h3.id].comfyStopping, undefined);
+  assert.equal(c.document.run.steps[h3.id].comfyStopping, true);
+  (await deadline.promise)();
+  await stopping;
+  const newExecution = c.continue();
+  await waitForCall(3);
+  const activeStep = c.document.run.steps[h3.id];
+  old.resolve({ status: 'done', message: '迟到的原结果', asset: { id: 'stale' } });
+  await oldExecution;
+  assert.equal(c.document.run.steps[h3.id], activeStep);
+  assert.ok(c.executing.has(run.id), 'the resumed execution still owns the lock');
+  await c.continue();
+  assert.deepEqual(calls, ['status', 'cancel', 'status']);
+  resumed.resolve({ status: 'unknown', message: '查询原任务' });
+  cancel.resolve({ status: 'cancelled', message: '迟到的停止回执' });
+  await newExecution;
+  assert.equal(c.document.run.steps[h3.id].jobId, 'original-video');
+});
+
+test('editor drafts stay responsive and flush together before a durable boundary', async () => {
+  const h3 = { ...node('h3'), kind: 'comfy-video' };
+  const f = fixture(doc([h3])), c = f.controller;
+  await c.load();
+  const draft = prompt => c.edit([{ ...h3, prompt }], undefined, h3.id, true);
+  const first = draft('首'), second = draft('首次'), third = draft('首次编辑');
+  await new Promise(setImmediate);
+  assert.equal(c.document.nodes[0].prompt, '首次编辑');
+  assert.equal(f.writes.length, 0);
+  await c.flush();
+  await Promise.all([first, second, third]);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.saved().document.nodes[0].prompt, '首次编辑');
+});
+
+test('completion scheduling reads no idle snapshots and falls back only while an original turn is pending', async () => {
+  const nativePrompt = (id, status, jobId = 'ordinary-job') => ({ id, projectId: 'p', kind: 'prompt', createdAt: 1, hiddenAt: null,
+    payloadJson: JSON.stringify({ job_id: jobId, turn_key: id, status }) });
+  const result = (turn, jobId = 'ordinary-job') => ({ id: `output-${turn}`, projectId: 'p', kind: 'asset', createdAt: 2, hiddenAt: null, role: 'output', assetId: `asset-${turn}`,
+    payloadJson: JSON.stringify({ execution: { job_id: jobId, turn_key: turn } }) });
+  const old = nativePrompt('previous', 'done');
+  const receiver = { ...node('recipient'), kind: 'trigger', triggerMode: 'completion', triggerCount: 2,
+    inputs: { completion: [{ canvasNodeId: old.id, cellId: 'image' }] } };
+  let nodes = [old, result(old.id)], reads = 0, currentTime = 0, id = 0;
+  const timers = new Map();
+  const f = fixture(doc([receiver]), {
+    projectCanvasGet: async () => { reads++; return { nodes }; },
+    setTimeout(callback, delay) { timers.set(++id, { callback, at: currentTime + delay }); return id; },
+    clearTimeout(timer) { timers.delete(timer); },
+  });
+  const advance = async duration => {
+    const end = currentTime + duration;
+    while (true) {
+      const next = [...timers].filter(([, t]) => t.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next) break;
+      const [timer, { at, callback }] = next;
+      currentTime = at; timers.delete(timer); callback();
+      await new Promise(setImmediate);
+    }
+    currentTime = end;
+  };
+  const c = f.controller;
+  const claimed = [];
+  c.startRun = async (triggerId, _single, sessionId) => {
+    claimed.push(sessionId);
+    await c.save({ ...c.document, nodes: c.document.nodes.map(n => n.id === triggerId ? { ...n, triggerCount: n.triggerCount - 1,
+      completionSeen: [...(n.completionSeen ?? []), sessionId] } : n) });
+  };
+  await c.load();
+  assert.equal(c.ready, true, c.error);
+  await advance(0);
+  c.setCanvasActive(false);
+  const afterLoad = reads;
+  await advance(30_000);
+  assert.equal(reads, afterLoad, 'idle project schedules no canvas IPC');
+  assert.deepEqual(claimed, [], 'loading never replays the historical turn');
+
+  nodes = [...nodes, nativePrompt('continued', 'done')];
+  c.notifySessionCompletionChange();
+  await advance(0);
+  assert.deepEqual(claimed, [], 'terminal event before result projection waits');
+  assert.equal(timers.size, 1, 'the unresolved projected turn schedules one fallback');
+  nodes = [...nodes, result('continued')];
+  await advance(1500);
+  assert.deepEqual(claimed, ['continued'], 'fallback still observes a pending continuation after leaving the project');
+  const afterDelivery = reads;
+  await advance(30_000);
+  assert.equal(reads, afterDelivery, 'finished follow-up leaves no recurring read');
+
+  nodes = [...nodes, nativePrompt('workflow-turn', 'running', 'workflow-job')];
+  await c.save({ ...c.document, nodes: c.document.nodes.map(n => ({ ...n, inputs: { completion: [
+    { nodeId: 'workflow', portId: 'image', pendingCompletionSession: 'workflow-turn' },
+  ] } })) });
+  await advance(0);
+  nodes = [...nodes.filter(n => n.id !== 'workflow-turn'), nativePrompt('workflow-turn', 'done', 'workflow-job'), result('workflow-turn', 'workflow-job')];
+  c.notifySessionCompletionChange();
+  await advance(0);
+  assert.deepEqual(claimed, ['continued', 'workflow-turn'], 'a fresh terminal event dispatches the original submitted workflow turn without waiting for the timer');
 });
 
 test('refresh and subsequent save retain remote card names without starting a run', async () => {

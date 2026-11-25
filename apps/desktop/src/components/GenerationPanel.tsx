@@ -13,6 +13,7 @@ import { DEFAULT_VIDEO_OPTIONS, imageInputError, resolveVideoOptions, videoInput
 import { VideoControls } from "./creation/VideoControls";
 import { MediaPreview } from "./MediaPreview";
 import { useStore, type GenEditingMode } from "../store";
+import { useGenerationJob } from "./GenerationJobFeedback";
 import { api } from "../lib/api";
 import { generationParentLocator } from "../lib/creativeGeneration";
 import { generationPromptNodeId } from "../lib/projectNodeIds";
@@ -119,7 +120,8 @@ export function GenerationPanel({
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const activeJob: GenJob | null = snapshot?.job ?? (activeJobId ? genJobs[activeJobId] ?? null : null);
+  const liveJob = useGenerationJob(snapshot ? null : activeJobId);
+  const activeJob: GenJob | null = snapshot?.job ?? liveJob ?? null;
   // Historical canvas turns use their node ID for scrolling and their original turn key for diagnostics.
   const diagnosticJobId = snapshot ? snapshot.sourceJobId : activeJob?.id;
   const diagnosticKey = (turn: GenTurn) => turn.turnKey && (snapshot?.diagnosticTurnKeys
@@ -1220,6 +1222,7 @@ function GenEditComposer({
   } = useCreationEditor({
     draftKey: null,
     initialEmpty: isRevise,
+    generationJobId: job.id,
     // 维度环点扇区插进本坞（与创作板互斥挂载，任意时刻只有一个实例消费）。
     consumePendingKeyword: true,
   });

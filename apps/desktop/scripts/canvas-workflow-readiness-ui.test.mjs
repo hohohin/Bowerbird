@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
+import { enableCanvasToolbarPro } from "./fixtures/canvas-reference/place-card.mjs";
 
 // Delay only the native replies. The workspace, store and workflow are the production components.
 const server = await createServer({
@@ -69,9 +70,13 @@ async function fixture(mode) {
       let run = null;
       if (mode === "history" || mode === "history-failure" || project === "p" && ["history-save", "history-save-route"].includes(mode)) {
         const video = nodes.find(node => node.kind === "comfy-video");
-        video.outputs = { image: { type: "image", assetIds: [mode.startsWith("history-save") ? "a" : "archived-h3-result"] } };
+        const deliverable = mode.startsWith("history-save");
+        video.outputs = { image: { type: "image", assetIds: [deliverable ? "a" : "archived-h3-result"] } };
         run = { id: "archived-run", startId: video.id, threadId: "t", order: [video.id], status: "done",
           steps: { [video.id]: { status: "done", jobId: "original-job" } } };
+        if (deliverable) nodes.find(node => node.kind === "generation").inputs = {
+          image: [{ nodeId: video.id, portId: "image", autoConnect: "archived-h3-wire", slot: 1 }],
+        };
       }
       sessionStorage.setItem("workflow-" + project, JSON.stringify({ revision: 0, document: { schema_version: 1, nodes, run } }));
     }
@@ -80,7 +85,11 @@ async function fixture(mode) {
   return page;
 }
 const cards = page => page.locator("[data-workflow-card]");
-const create = page => page.getByRole("button", { name: "新增生成卡片", exact: true });
+async function assertGenerationBlocked(page) {
+  await page.locator('[data-canvas-tool-group="workflow"]').press("ArrowRight");
+  assert.equal(await page.getByRole("menuitem", { name: "生成卡片", exact: true }).isDisabled(), true);
+  await page.keyboard.press("Escape");
+}
 async function switchTo(page, id) {
   await page.evaluate(async id => {
     const { useStore } = await import("/src/store.ts");
@@ -89,10 +98,43 @@ async function switchTo(page, id) {
       projects: state.projects.some(project => project.id === id) ? state.projects : [...state.projects, { ...state.projects[0], id, name: id }] });
   }, id);
 }
-async function ready(page, id) {
+async function ready(page, id, { recoveredVideo = false } = {}) {
   await page.locator(`[data-workflow-card="${id}-instruction"]`).waitFor();
-  assert.equal(await cards(page).count(), 4);
-  assert.equal(await page.evaluate(async id => (await import("/src/lib/canvasWorkflowRuntime.ts")).canvasWorkflowController(id).ready, id), true);
+  const kinds = ["agent", "comfy-video", "generation", "instruction"];
+  const definitions = kinds.map(kind => `${id}-${kind}`);
+  const editors = definitions.filter(cardId => !recoveredVideo || cardId !== `${id}-comfy-video`);
+  const model = await page.evaluate(async id => {
+    const controller = (await import("/src/lib/canvasWorkflowRuntime.ts")).canvasWorkflowController(id);
+    return { ready: controller.ready, ids: controller.document.nodes.map(node => node.id).sort() };
+  }, id);
+  assert.deepEqual(model, { ready: true, ids: definitions });
+  if (recoveredVideo) {
+    const result = page.locator('[data-canvas-node-id="workflow-comfy:original-job"]');
+    await result.waitFor();
+    await page.locator(`[data-workflow-card="${id}-comfy-video"]`).waitFor({ state: "detached" });
+    const wire = page.locator(`path[data-auto-connection="archived-h3-wire"][data-workflow-target="${id}-generation"]`);
+    await wire.waitFor({ state: "attached" });
+    const fromResult = await wire.evaluate((path, selector) => {
+      const result = document.querySelector(selector).getBoundingClientRect();
+      const [x, y] = path.getAttribute("d").match(/-?[\d.]+/g).map(Number);
+      const start = new DOMPoint(x, y).matrixTransform(path.getScreenCTM());
+      return Math.abs(start.x - result.right) < 3;
+    }, '[data-canvas-node-id="workflow-comfy:original-job"]');
+    assert.equal(fromResult, true, "the downstream wire starts at the recovered result's visible socket");
+    const output = await page.evaluate(async id => {
+      const { canvasWorkflowController } = await import("/src/lib/canvasWorkflowRuntime.ts");
+      const { workflowBindingAssetIds, workflowGenerationOrigins } = await import("/src/lib/canvasSessionOutputs.ts");
+      const { document: workflow } = canvasWorkflowController(id);
+      const snapshot = window.snapshot();
+      const result = snapshot.nodes.find(node => node.id === "workflow-comfy:original-job");
+      const source = workflowGenerationOrigins(workflow, snapshot.nodes).get(result.id);
+      const binding = workflow.nodes.find(node => node.id === `${id}-generation`).inputs.image[0];
+      return { producer: source?.id, asset: result.assetId, thread: result.threadId,
+        consumed: workflowBindingAssetIds(binding, source, result, snapshot.nodes) };
+    }, id);
+    assert.deepEqual(output, { producer: `${id}-comfy-video`, asset: "a", thread: "t", consumed: ["a"] });
+  }
+  assert.deepEqual(await cards(page).evaluateAll(nodes => nodes.map(node => node.dataset.workflowCard).sort()), editors);
 }
 try {
   const cold = await fixture("duplicate");
@@ -120,7 +162,8 @@ try {
   await history.getByText("正在加载工作流…", { exact: true }).waitFor();
   assert.equal(await history.evaluate(async () => (await import("/src/lib/canvasWorkflowRuntime.ts")).canvasWorkflowController("p").document.nodes.length), 4);
   assert.equal(await cards(history).count(), 0, "editor waits for recovery of historical H3 results");
-  await history.getByRole("button", { name: "工具箱", exact: true }).click();
+  await enableCanvasToolbarPro(history);
+  await history.locator('[data-canvas-tool-group="toolbox"]').press("ArrowRight");
   assert.equal(await history.getByRole("menuitem", { name: /本地 H3 视频/ }).isDisabled(), true);
   assert.equal(await history.getByRole("menuitem", { name: /抖音视频采集/ }).isEnabled(), true);
   await history.keyboard.press("Escape");
@@ -211,7 +254,7 @@ try {
   await projection.waitForFunction(() => window.calls.filter(call => call.command === "canvas_workflow_get").length >= 2
     && (document.querySelector("[data-workflow-card]") || document.querySelector(".canvas-save-error [type=button]")));
   assert.ok(await projectionWrites() >= 2, "retrying a failed historical result link must issue another native save");
-  await ready(projection, "p");
+  await ready(projection, "p", { recoveredVideo: true });
   assert.deepEqual(await projection.evaluate(() => {
     const saved = JSON.parse(sessionStorage.getItem("workflow-p")).document;
     return { links: saved.nodes.find(node => node.kind === "comfy-video").resultNodeIds, remoteEdit: saved.nodes[1].prompt,
@@ -229,7 +272,7 @@ try {
   await lateRepair.waitForFunction(() => window.calls.filter(call => call.command === "canvas_workflow_get" && call.args.projectId === "p").length >= 2);
   assert.equal(await cards(lateRepair).count(), 0);
   await lateRepair.evaluate(() => window.releaseWorkflow.firstWrite());
-  await ready(lateRepair, "p");
+  await ready(lateRepair, "p", { recoveredVideo: true });
   assert.equal(await lateRepair.evaluate(() => window.calls.filter(call => call.command === "project_canvas_node_create" && call.args.value.id === "workflow-comfy:original-job").length), 1);
   await lateRepair.evaluate(() => { window.failUserWrite = true; });
   await lateRepair.getByRole("textbox", { name: "反推要求" }).fill("preserve my draft", { force: true });
@@ -246,7 +289,7 @@ try {
   await switching.waitForFunction(() => !!window.releaseWorkflow.p1);
   await switching.locator('[data-canvas-node-id="far"]').waitFor({ state: "attached" });
   assert.equal(await cards(switching).count(), 0);
-  assert.equal(await create(switching).isDisabled(), true);
+  await assertGenerationBlocked(switching);
   await switching.getByRole("button", { name: "抓手工具" }).click();
   assert.equal(await switching.getByRole("button", { name: "抓手工具" }).getAttribute("aria-pressed"), "true");
   await switching.getByRole("button", { name: "选择工具" }).click();
@@ -260,7 +303,7 @@ try {
   await switching.evaluate(() => window.releaseWorkflow.q1());
   await switching.waitForFunction(async () => (await import("/src/lib/canvasWorkflowRuntime.ts")).canvasWorkflowController("q").ready);
   assert.equal(await cards(switching).count(), 0);
-  assert.equal(await create(switching).isDisabled(), true);
+  await assertGenerationBlocked(switching);
   await switching.evaluate(() => window.releaseWorkflow.p2());
   await ready(switching, "p");
   await switching.getByRole("textbox", { name: "反推要求" }).fill("p edited after return", { force: true });

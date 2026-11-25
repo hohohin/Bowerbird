@@ -7,6 +7,7 @@ await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 page.setDefaultTimeout(10000);
+page.setDefaultNavigationTimeout(60000);
 const errors = [], remote = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.route('**/*', route => {
@@ -68,14 +69,15 @@ try {
   await expectHome('projects');
 
   await openProject();
-  await page.evaluate(() => {
-    window.originalFlush = window.store.getState().projectCanvasFlush;
-    window.store.setState({ projectCanvasFlush: async () => { throw new Error('隔离保存失败'); } });
+  await page.evaluate(async () => {
+    const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+    window.originalFlush = projectCanvasCallbacks.flush;
+    projectCanvasCallbacks.flush = async () => { throw new Error('隔离保存失败'); };
   });
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await page.waitForFunction(() => !window.store.getState().projectRoutePending);
   assert.equal(await canvas.isVisible(), true, 'failed save keeps the project open');
-  await page.evaluate(() => window.store.setState({ projectCanvasFlush: window.originalFlush }));
+  await page.evaluate(async () => { (await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush = window.originalFlush; });
   await page.getByRole('button', { name: '侧边探索', exact: true }).click();
   await page.getByRole('region', { name: '探索浏览器', exact: true }).waitFor();
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
@@ -106,6 +108,9 @@ try {
   assert.deepEqual(errors, []);
   assert.deepEqual(remote, []);
   console.log('home navigation memory: reload, canvas return, draft return, save failure, explicit destination, invalid/unavailable storage passed');
+} catch (error) {
+  console.error(error);
+  process.exitCode = 1;
 } finally {
   await browser.close();
   await server.close();

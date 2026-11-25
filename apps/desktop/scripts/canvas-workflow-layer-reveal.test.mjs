@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+import { enableCanvasToolbarPro } from './fixtures/canvas-reference/place-card.mjs';
 const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1589, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -8,6 +9,24 @@ const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 try {
   await page.goto('http://127.0.0.1:1589/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await enableCanvasToolbarPro(page);
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const { useStore } = await import('/src/store.ts');
+    api.localAgentFindAssetId = async () => 'existing';
+    window.deferredSent = [];
+    useStore.setState({
+      codexHealth: { ok: true },
+      startGeneration: async (_prompt, assets, ...options) => {
+        const { jobId, turnKey } = options[10];
+        const steps = window.layerController?.document.run?.steps ?? {};
+        const nodeId = Object.keys(steps).find(id => steps[id].jobId === jobId);
+        window.deferredSent.push({ nodeId, assets: assets.map(asset => asset.id) });
+        useStore.setState(state => ({ genJobs: { ...state.genJobs, [jobId]: { turns: [{ turnKey, images: ['existing.png'] }] } } }));
+        return { accepted: true };
+      },
+    });
+  });
   const containerId = await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -29,7 +48,7 @@ try {
   assert.equal(await folder.locator('[role="cell"] img').count(), 2);
   assert.equal(await folder.getByRole('cell').count(), 2);
   assert.equal(await folder.getByRole('row').count(), 1);
-  assert.equal(await page.locator('[data-workflow-card="terminal-split"] .workflow-port.is-output').count(),1);
+  assert.equal(await page.locator('[data-workflow-card="terminal-split"]').getByRole('button', { name: '添加下游', exact: true }).count(),1);
   const bounds = await folder.boundingBox();
   assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= 1600 && bounds.y + bounds.height <= 1000, 'products are revealed within the viewport');
   await page.evaluate(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); await canvasWorkflowController('p').start('terminal-split', true); });
@@ -111,14 +130,13 @@ try {
     await c.edit([...c.document.nodes,dangling]);
     // Numbered input pipes require an explicit replacement; preserve pipe 1 and its prompt token.
     await c.edit(c.document.nodes.map(node=>node.id===dangling.id?{...node,inputs:{image:[{canvasNodeId:'deferred-images',cellId:'*',slot:1}]}}:node));
-    const {useStore}=await import('/src/store.ts');window.deferredSent=[];
-    api.localAgentFindAssetId=async()=> 'existing';
-    useStore.setState({startGeneration:async(...args)=>{window.deferredSent.push(args[1].map(asset=>asset.id));const identity=args[12];useStore.setState(state=>({genJobs:{...state.genJobs,[identity.jobId]:{turns:[{turnKey:identity.turnKey,images:['existing.png']}]}}}));return {accepted:true};}});
+    window.deferredSent = [];
+    const sentToDangling = () => window.deferredSent.filter(request => request.nodeId === dangling.id);
     await c.start(split.id);
-    if(c.document.run.status!=='done'||window.deferredSent[0]?.join(',')!=='c,d')throw Error('empty container must be filled before generation reads its reference: '+JSON.stringify(c.document.run));
+    if(c.document.run.status!=='done'||sentToDangling().length!==1||sentToDangling()[0].assets.join(',')!=='c,d')throw Error('empty container must be filled before generation reads its reference: '+JSON.stringify({run:c.document.run, sent:window.deferredSent}));
     api.layerExport=async(_id,doc)=>({id:doc.layers[0].visible?'a':'b'});
     await c.start(split.id);
-    if(c.document.run.status!=='done'||window.deferredSent[1]?.join(',')!=='a,b'||c.document.nodes.find(node=>node.id===dangling.id).prompt!==dangling.prompt)throw Error('same prompt must read new run images');
+    if(c.document.run.status!=='done'||sentToDangling().length!==2||sentToDangling()[1].assets.join(',')!=='a,b'||c.document.nodes.find(node=>node.id===dangling.id).prompt!==dangling.prompt)throw Error('same prompt must read new run images: '+JSON.stringify({status:c.document.run.status, sent:window.deferredSent}));
     // Legacy per-layer bindings and inline references upgrade together.
     const legacy={...split,id:'legacy',outputPorts:[{id:'layer-old',label:'old',type:'image'}],outputs:{image:{type:'image',assetIds:['a','b']},'layer-old':{type:'image',assetIds:['a']}}};
     const binding={nodeId:'legacy',portId:'layer-old'};

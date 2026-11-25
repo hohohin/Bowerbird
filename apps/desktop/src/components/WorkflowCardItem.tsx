@@ -11,7 +11,7 @@ import { ProviderIssueNotice } from "./creation/ProviderIssueNotice";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { RatioSelect } from "./creation/RatioSelect";
 import { VideoControls } from "./creation/VideoControls";
-import { JobProgressText } from "./JobProgressText";
+import { GenerationJobProgress } from "./GenerationJobFeedback";
 import { TacticalSelect } from "./TacticalSelect";
 import { VoiceCard } from "./VoiceCard";
 import { VoiceEnvironmentControl } from "./VoiceEnvironmentControl";
@@ -22,7 +22,7 @@ import { WorkflowLoopActions, WorkflowLoopCard } from "./WorkflowLoopCard";
 import { WorkflowPlannerCard } from "./WorkflowPlannerCard";
 import { WorkflowPromptEditor } from "./WorkflowPromptEditor";
 import { WorkflowTriggerSchedule } from "./WorkflowTriggerSchedule";
-import { CardComfyEnvironment, TRIGGER_MODES, WindingKey, WORKFLOW_CARD_PRESENTATION } from "./workflowCardPresentation";
+import { CardComfyEnvironment, TRIGGER_MODES, WindingKey, WORKFLOW_CARD_PRESENTATION } from "./WorkflowLayerPresentation";
 import { api } from "../lib/api";
 import { isAudioPath } from "../lib/audioMedia";
 import { cloneCanvasClipboard } from "../lib/canvasClipboard";
@@ -681,10 +681,10 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
           <span className="workflow-h3-status-copy">
             <span>{h3Status}</span>
             {h3Detail && !["生成视频", "正在生成图像", h3Status].includes(h3Detail) && <small>{h3Detail}</small>}
-            {!localVideo && h3Status === generatingStatus && imageActivity.jobId && <JobProgressText jobId={imageActivity.jobId} detailOf={h3Status} />}
+            {!localVideo && h3Status === generatingStatus && imageActivity.jobId && <GenerationJobProgress jobId={imageActivity.jobId} detailFor={h3Status} />}
           </span>
           {h3Progress && <ComfyGenerationProgress progress={h3Progress} />}
-        </span> : (!hasAgentMessages || agentChat?.status !== "idle") && <span role={imageActivity.running ? "status" : undefined}>{imageActivity.running ? <JobProgressText jobId={imageActivity.jobId} /> : agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount) : node.kind === "trigger" && (queuedTrigger || triggerExecuting) ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>}
+        </span> : (!hasAgentMessages || agentChat?.status !== "idle") && <span role={imageActivity.running ? "status" : undefined}>{imageActivity.running ? <GenerationJobProgress jobId={imageActivity.jobId} /> : agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount) : node.kind === "trigger" && (queuedTrigger || triggerExecuting) ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>}
         {starting && node.kind !== "agent" ? <button title="取消启动" onClick={() => controller.cancelStarting(node.id)}><Square size={13} />停止</button> : imageActivity.running && imageActivity.jobId && !controller.isLocked(node.id) ? <button type="button" aria-label="停止生成" onClick={() => useStore.getState().cancelGeneration(imageActivity.jobId)}><Square size={13} />停止</button> : activeWorkflow ? <>
           {retryDelivery && <button onClick={() => handle(controller.continue(activeWorkflow.id))}>重试写入内容卡</button>}
           {continueWorkflow && <button aria-label="继续工作流" onClick={() => handle(controller.continue(activeWorkflow.id))}><Play size={13} />继续</button>}

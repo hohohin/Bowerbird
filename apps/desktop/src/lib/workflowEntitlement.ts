@@ -1,4 +1,4 @@
-import type { WorkflowInput, WorkflowNode } from "./canvasWorkflow";
+import { workflowNodeRequiresPro, type WorkflowInput, type WorkflowNode } from "./canvasWorkflow";
 import { sameWorkflowValue } from "./workflowExternalChanges";
 
 const proDenial = "工作流卡片的创建、编辑和运行需要 Pro；已有结果仍可查看和导出";
@@ -7,9 +7,10 @@ export function isWorkflowProDenied(error: unknown): boolean {
   return (error instanceof Error ? error.message : error) === proDenial;
 }
 
-function isBindingSubsequence(before: WorkflowInput[], after: WorkflowInput[], renumber = false) {
+function isBindingSubsequence(before: WorkflowInput[], after: WorkflowInput[], renumber = false, include?: (binding: WorkflowInput) => boolean) {
   let cursor = 0;
   return after.every((binding, index) => {
+    if (include && !include(binding)) return true;
     while (cursor < before.length) {
       const previous = before[cursor++];
       if (sameWorkflowValue(previous, binding)
@@ -19,9 +20,9 @@ function isBindingSubsequence(before: WorkflowInput[], after: WorkflowInput[], r
   });
 }
 
-function removesOnlyBindings(before: WorkflowNode["inputs"], after: WorkflowNode["inputs"], renumber = false) {
+function removesOnlyBindings(before: WorkflowNode["inputs"], after: WorkflowNode["inputs"], renumber = false, include?: (binding: WorkflowInput) => boolean) {
   return Object.entries(after).every(([port, bindings]) =>
-    isBindingSubsequence(before[port] ?? [], bindings, renumber && (port === "text" || port === "image")));
+    isBindingSubsequence(before[port] ?? [], bindings, renumber && (port === "text" || port === "image"), include));
 }
 
 function editableFields({
@@ -37,16 +38,20 @@ function editableFields({
 
 /** Native canvas_workflow_save remains authoritative. Match its cleanup rules for the UI precheck. */
 export function workflowDefinitionRequiresPro(before: WorkflowNode[], after: WorkflowNode[]): boolean {
-  const previous = before.filter(node => node.kind !== "text");
+  const previous = before.filter(workflowNodeRequiresPro);
   const paidIds = new Set(previous.map(node => node.id));
+  const fromPaid = (input: WorkflowInput) => !!input.nodeId && paidIds.has(input.nodeId);
   const previousById = new Map(before.map(node => [node.id, node]));
   let cursor = 0;
   for (const node of after) {
-    if (node.kind === "text") {
+    if (!workflowNodeRequiresPro(node)) {
       if (paidIds.has(node.id)) return true;
-      if (Object.values(node.inputs).some(bindings => bindings.some(input => input.nodeId && paidIds.has(input.nodeId)))) {
+      if ([...Object.values(node.inputs), ...Object.values(node.savedComfyR2V ?? {}), node.savedComfyAudio ?? []].some(bindings => bindings.some(fromPaid))) {
         const old = previousById.get(node.id);
-        if (!old || !sameWorkflowValue(old.textTarget, node.textTarget) || !removesOnlyBindings(old.inputs, node.inputs)) return true;
+        if (!old || !sameWorkflowValue(old.textTarget, node.textTarget)
+          || !removesOnlyBindings(old.inputs, node.inputs, node.kind === "generation", fromPaid)
+          || !removesOnlyBindings(old.savedComfyR2V ?? {}, node.savedComfyR2V ?? {}, false, fromPaid)
+          || !isBindingSubsequence(old.savedComfyAudio ?? [], node.savedComfyAudio ?? [], false, fromPaid)) return true;
       }
       continue;
     }

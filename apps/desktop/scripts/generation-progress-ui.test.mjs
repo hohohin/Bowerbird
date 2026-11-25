@@ -56,12 +56,17 @@ try {
   await send({ kind: 'submit', submit_id: 'synthetic-submit' });
   await card.getByText('上游处理中', { exact: true }).waitFor();
   await send({ kind: 'recover_started', prompt: '生成一张产品海报', provider: 'jimeng', submit_id: 'synthetic-submit' });
-  assert.equal(await page.evaluate(() => window.store.getState().genJobs['progress-job'].progress), undefined);
+  const readJob = () => page.evaluate(async () => {
+    const { genJobWithStream } = await import('/src/store.ts');
+    const { genJobs, genJobStreams } = window.store.getState();
+    return genJobWithStream(genJobs['progress-job'], genJobStreams['progress-job']);
+  });
+  assert.equal((await readJob()).progress, undefined);
   await send({ stage: 'querying' });
   await panel.getByRole('status').filter({ hasText: '正在查询原任务' }).waitFor();
   await page.evaluate(() => window.store.setState(state => ({ genJobs: { ...state.genJobs, 'progress-job': { ...state.genJobs['progress-job'], running: false } } })));
   await send({ stage: 'saving' });
-  assert.equal(await page.evaluate(() => window.store.getState().genJobs['progress-job'].progress.stage), 'querying');
+  assert.equal((await readJob()).progress.stage, 'querying');
   assert.equal(await panel.getByRole('status').filter({ hasText: '正在查询原任务' }).count(), 0);
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
@@ -74,7 +79,7 @@ try {
   await page.waitForFunction(() => window.store.getState().genJobs['progress-job'].turns.length === 2);
   await panel.getByRole('status').filter({ hasText: '准备生成' }).waitFor();
   await send({ stage: 'queued', queue_position: 3, queue_length: 9 });
-  assert.equal(await page.evaluate(() => window.store.getState().genJobs['progress-job'].progress), undefined, 'previous round cannot overwrite preparing next round');
+  assert.equal((await readJob()).progress, undefined, 'previous round cannot overwrite preparing next round');
   const { turnKey, previewUrl, finalPath } = await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const turnKey = window.store.getState().genJobs['progress-job'].turns.at(-1).turnKey;
@@ -89,7 +94,6 @@ try {
     return { turnKey, previewUrl: canvas.toDataURL('image/png'), finalPath: window.store.getState().assets.find(asset => asset.id === 'a').store_path };
   });
   const preview = { kind: 'preview', turn_key: turnKey, data_url: previewUrl };
-  const readJob = () => page.evaluate(() => window.store.getState().genJobs['progress-job']);
   for (const foreign of [{ turn_key: 'current' }, { turn_key: undefined }, { job_id: 'another-job' }]) await send({ ...preview, ...foreign });
   assert.equal((await readJob()).preview, undefined);
   await send(preview);

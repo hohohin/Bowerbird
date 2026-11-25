@@ -17,7 +17,7 @@ try {
   await page.reload();
   const card=page.locator('[data-canvas-node-id="content"]');await card.waitFor();
   assert.equal(await page.getByRole('button',{name:'图片容器工具',exact:true}).count(),0);
-  assert.equal(await page.getByRole('button',{name:'内容卡片工具',exact:true}).count(),1);
+  assert.equal(await page.locator('[data-canvas-tool-group="content"]').getAttribute('aria-label'),'内容卡片工具');
   await card.getByRole('button',{name:'放大图片：合成参考 a',exact:true}).dblclick();
   await page.getByRole('dialog',{name:'媒体预览，1 / 1',exact:true}).waitFor();await page.keyboard.press('Escape');
   await page.getByRole('dialog').waitFor({state:'detached'});

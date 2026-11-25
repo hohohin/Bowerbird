@@ -5,7 +5,7 @@ import type { CanvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { notifyError } from "../lib/notify";
 import type { CanvasNode } from "../lib/types";
 import type { AutomaticOutput } from "../lib/workflowAutoConnect";
-import type { AutomaticGesture, AutomaticTarget, Connection, ConnectionMenuState } from "./CanvasWorkflowLayer";
+import type { AutomaticGesture, AutomaticTarget, Connection, ConnectionMenuState } from "./WorkflowLayerTypes";
 import type { VideoReferenceMode } from "./WorkflowConnectionMenu";
 
 export function singleVideoOutput(outputs: AutomaticOutput[]) {
@@ -182,8 +182,14 @@ function gestureHandlers({
     else if (input) connect(input.dataset.workflowNode!, input.dataset.workflowInput!, point);
     connectionHoverRef.current = null; setConnectionHover(null);
   };
-  const key = (event: KeyboardEvent) => { if (event.key === "Escape") { connectionRef.current = null; setConnection(null); setArmed(false); clearAutomatic(); } };
-  const cancel = () => { swallowAutomaticClick.current = false; clearAutomatic(); };
+  const cancel = () => {
+    swallowAutomaticClick.current = false;
+    connectionRef.current = null;
+    setConnection(null);
+    setArmed(false);
+    clearAutomatic();
+  };
+  const key = (event: KeyboardEvent) => { if (event.key === "Escape") cancel(); };
   const wheel = (event: WheelEvent) => { if (!(event.target instanceof Element && event.target.closest("[data-context-owner]"))) clearAutomatic(); };
   return { move, end, key, down, click, cancel, wheel };
 }

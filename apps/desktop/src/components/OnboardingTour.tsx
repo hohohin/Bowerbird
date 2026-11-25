@@ -1,3 +1,4 @@
+import { projectCanvasCallbacks } from "../lib/projectCanvasCallbacks";
 import { useEffect, useState } from "react";
 import { ONBOARDING_FEATURE_ENABLED } from "../lib/featureFlags";
 import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, ChevronUp, X } from "lucide-react";
@@ -210,7 +211,7 @@ export function OnboardingTour() {
   async function pause(switchRole = false) {
     const before = useOnboarding.getState();
     try {
-      await useStore.getState().projectCanvasFlush?.();
+      await projectCanvasCallbacks.flush?.();
       const current = useOnboarding.getState();
       if (current.guide.role !== before.guide.role || current.guide.status !== "active" || current.panel !== "lesson") return;
       current.setGuide({ ...current.guide, status: "paused" }); setError(""); current.show(switchRole ? "welcome" : "closed");

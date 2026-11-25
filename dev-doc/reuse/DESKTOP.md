@@ -33,7 +33,7 @@
 ## 撤销画板编辑
 
 - **用途／关键词**：画板撤销、文字连续输入、内容格、保存队列。
-- **入口**：[CanvasWorkspace](../../apps/desktop/src/components/CanvasWorkspace.tsx) 的 `pushCanvasUndo`／`undoCanvasAction` 复用有序写入队列。[canvasNoteUndo.ts](../../apps/desktop/src/lib/canvasNoteUndo.ts) 的 `restoreCanvasNoteEdit` 按格 ID 和字段恢复。
+- **入口**：[useCanvasUndo.ts](../../apps/desktop/src/components/canvas/useCanvasUndo.ts) 管理撤销栈与串行回放。CanvasWorkspace 负责各类撤销操作的保存。[canvasNoteUndo.ts](../../apps/desktop/src/lib/canvasNoteUndo.ts) 的 `restoreCanvasNoteEdit` 按格 ID 和字段恢复。
 - **调用**：业务编辑显式记账，`CanvasTextCard.onChange` 的第三参数区分普通编辑、连续输入和自动撑高。恢复时保留其他格随后到达的结果。
 - 内容卡和工作流共用画板的素材索引。未加载的精确 ID 由 [canvasAssetLoader.ts](../../apps/desktop/src/lib/canvasAssetLoader.ts) 合并查询，作用域随项目、素材目录版本及原件删除状态更新。
 - **边界／状态**：**当前画布会话专用**。手动编辑进入撤销历史，自动布局和任务进度由各自路径更新。原件与服务端任务沿原操作处理。[撤销契约](../CANVAS-WORKFLOW.md#2026-11-10画布编辑撤销源码待发布)。
@@ -48,9 +48,9 @@
 ## 展示生成阶段
 
 - **用途／关键词**：生成进度、任务阶段、排队数字、job／turn。
-- **入口**：[generationProgress.ts](../../apps/desktop/src/lib/generationProgress.ts) 的 `applyGenerationProgress`／`generationProgressLabel`。
+- **入口**：[generationProgress.ts](../../apps/desktop/src/lib/generationProgress.ts) 的 `applyGenerationProgress`／`generationProgressLabel`。[GenerationJobFeedback.tsx](../../apps/desktop/src/components/GenerationJobFeedback.tsx) 提供按 job 订阅的进度、预览和 `useGenerationJob`。
 - **安装更新前判断本地生成**：[hasRunningLocalGeneration](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 汇总各项目正在运行的卡片和已交给生成会话的任务，可传入 `api.listGenJobs()` 的原生队列快照。[更新状态](../../apps/desktop/src/lib/appUpdater.ts) 在画板保存后复查。
-- **调用**：store 按运行中的 job＋turn 接收事件，`GenerationPanel`、`CanvasWorkspace` 和 `libraryGenerationActivity` 共用文案。
+- **调用**：store 按 job 与 turn 接收事件，流式正文、阶段与首图存在 `genJobStreams`。画板和任务列表从结构性 `genJobs` 做投影，需要实时字段的卡片或详情按 job 订阅。
 - **边界／状态**：显示后端观察到的阶段及有效排队数字。耗时和调用次数不用于推算百分比。[阶段与恢复契约](../CANVAS-WORKFLOW.md#2026-11-08生成阶段反馈与-cli-进度核查源码待发布)。
 
 ## 启动工作流或恢复定时预约
@@ -58,6 +58,8 @@
 - **用途／关键词**：触发器、定时、跨画板、执行锁、运行恢复、删除项目后的调度收尾。
 - **画板入口**：`CanvasWorkflowLayer` 的卡头拖动入口复用加号的拖线反馈，调用项目控制器的 `connectCompletionTrigger`，一次保存触发卡与完成／触发连线。
 - **入口**：[canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `canvasWorkflowController(projectId)` 提供项目控制器。[WorkflowScheduleCoordinator](../../apps/desktop/src/components/WorkflowScheduleCoordinator.tsx) 由 `App` 挂载，通过 `setTriggerTimersEnabled` 管理非归档项目计时。
+- **内部实现**：控制器将持久化交给 [workflowPersistenceQueue.ts](../../apps/desktop/src/lib/workflowPersistenceQueue.ts)，调度交给 [workflowTriggerScheduler.ts](../../apps/desktop/src/lib/workflowTriggerScheduler.ts)，工作步骤按卡片类型进入 [executors](../../apps/desktop/src/lib/executors)。[workflowHost.ts](../../apps/desktop/src/lib/workflowHost.ts) 接入桌面状态。
+- **会话完成**：协调器接收画板与生成终态事件，并在应用重新可见时唤醒调度。只有有待确认的轮次才退避查询，路由离场后清理闲置计时。
 - **调用**：手动和定时运行复用 `start`。Agent 用 `create_canvas_cards` 配置触发卡，用 `runCard` 指定本批运行入口，协调器领取保存的动作，断线后读取原回执。[workflowTriggerSchedule.ts](../../apps/desktop/src/lib/workflowTriggerSchedule.ts) 提供 `workflowTriggerMode` 及 `activeTriggerSchedule`，供表单和运行时兼容旧卡、筛选有效预约。`nextDailyTrigger`／`triggerScheduleOccurrence`／`advanceTriggerSchedule` 计算本机时刻、运行身份及下次预约。
 - **边界／状态**：**工作流内部专用**。应用运行时调度，原生 SQLite 事务保护到点消费，复制清除 `triggerSchedule`。删除沿 `useProjectDeletion` → `ProjectDeleteDialog` → `deleteProjectCanvas`，原生成功后 store 调用 `discardProjectWorkflow`，只停止该项目的本地调度、计时器和后续保存。远端任务沿原身份处理。[工作流预约](../CANVAS-WORKFLOW.md#2026-11-05触发器定时执行源码未发布) · [项目删除](../PROJECT-CANVAS-PLAN.md#2026-11-10确认删除项目后不再由任务状态否决源码待发布)。
 
@@ -72,7 +74,7 @@
 ## 读取项目对话摘要和流式正文
 
 - **用途／关键词**：项目对话列表、Agent 卡片、正文增量、工作流等待。
-- **入口**：项目内会话列表或画板卡面使用 [localChatStore.ts](../../apps/desktop/src/lib/localChatStore.ts) 的 `useProjectChatSummaries(projectId)`。打开正文时沿用 `LocalChatPanel` 的 `pinLocalChat` 与 `loadConversation`，读取缺口快照、处理文本增量及保留活跃会话均由 store 负责。
+- **入口**：项目内会话列表使用 [localChatStore.ts](../../apps/desktop/src/lib/localChatStore.ts) 的 `useProjectChatSummaries(projectId)`，画板布局传入第二参数 `true`，按结构变化更新。正文由会话 ID 订阅，`LocalChatPanel` 的 `pinLocalChat` 与 `loadConversation` 处理缺口快照和活跃会话。
 - **调用**：工作流 Agent 步骤用 `CanvasWorkflowController.waitForChatTurn` 订阅已接受会话。五秒未收到目标更新时通过 `localChat.revision(id)` 读取单个版本号，发现差异才读取正文。
 - **边界／状态**：工作流停止按提交轮次执行，其他续聊继续运行。
 
@@ -107,7 +109,7 @@
 ## 顺序保存画板，失败时阻止后续覆盖
 
 - 用途／关键词：FIFO、保存队列、写屏障、失败重试、journal。
-- 实现：[orderedWriteJournal.ts](../../apps/desktop/src/lib/orderedWriteJournal.ts) 的 `createOrderedWriteJournal`、`drainOrderedWriteJournal`；实际调用：[CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 的 `writeJournalRef` 与保存／离开流程。
+- 实现：[useCanvasPersistence.ts](../../apps/desktop/src/components/canvas/useCanvasPersistence.ts) 使用 [orderedWriteJournal.ts](../../apps/desktop/src/lib/orderedWriteJournal.ts) 排队和重试。桌面离场、导入和更新经 [projectCanvasCallbacks.ts](../../apps/desktop/src/lib/projectCanvasCallbacks.ts) 等待当前画板写入完成。
 - 边界：失败队首保留，显式重试前阻止后续写；该 helper 自身没有并发 drain 锁，串行启动和项目生命周期由画板宿主承担。查看画板保存流程时从宿主入手，不把它当通用并发任务调度器或网络重试器直接接入其他板块。
 - 状态：**模块内部专用**（当前生产调用仅画板）；可泛化性尚未验证。
 

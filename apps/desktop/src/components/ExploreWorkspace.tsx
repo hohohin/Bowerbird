@@ -1,3 +1,4 @@
+import { projectCanvasCallbacks } from "../lib/projectCanvasCallbacks";
 import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import { PanelLeftOpen } from "lucide-react";
@@ -224,7 +225,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, layout = "canvas
       }
       // Flush existing composer state before materializing a still-empty project.
       if (target && !capturedAsset) await prepareCaptureProject(target, async () => {
-        if (target === contextProjectId && useStore.getState().activeProjectId === contextProjectId) await state.projectCanvasFlush?.();
+        if (target === contextProjectId && useStore.getState().activeProjectId === contextProjectId) await projectCanvasCallbacks.flush?.();
         const current = useStore.getState();
         const selected = current.projects.find(p => p.id === target);
         if (!selected) throw new Error("项目已不存在");

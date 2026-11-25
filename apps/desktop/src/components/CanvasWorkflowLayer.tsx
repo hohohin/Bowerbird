@@ -6,48 +6,45 @@ import { chatDshStatus, chatQuote } from "../lib/chatCapabilities";
 import { profileExtractionIssue, profileInputKey, workflowProviderIssue } from "../lib/workflowProviderIssue";
 import { useWorkflowLayerIssue } from "./useWorkflowLayerIssue";
 import type { ProviderIssue } from "../lib/generationAvailability";
-import { ConfirmDialog } from "./ConfirmDialog";
-import type { canvasConversationCards } from "../lib/canvasConversationCards";
 import { forwardRef, memo, startTransition, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore as useSnapshot } from "zustand";
-import { createPortal } from "react-dom";
 import { shallow } from "zustand/shallow";
-import { X } from "lucide-react";
 import { api } from "../lib/api";
-import { copyComfyDiagnostic, comfyVideoMode } from "../lib/comfyVideo";
+import { comfyVideoMode } from "../lib/comfyVideo";
 import { startComposerLocalVideo } from "../lib/composerLocalVideo";
 import { activeCanvasNameCounts, assignCanvasCardNames, canvasCardNameError } from "../lib/canvasCardNames";
 import { CanvasCardName } from "./CanvasCardName";
-import { CanvasConnectionHandle } from "./CanvasConnectionHandle";
+import { CanvasConnectionDefinitions, CanvasConnectionHandle } from "./CanvasConnectionHandle";
 import { IMAGE_GENERATION_CARD, WorkflowConnectionMenu, VIDEO_REFERENCE_OPTIONS, type ConnectionCardOption, type VideoReferenceMode } from "./WorkflowConnectionMenu";
-import { automaticValueMedia, canvasAutomaticOutputs, workflowAssetMedia, workflowSourceMediaLabel } from "../lib/workflowCanvasCapabilities";
+import { automaticValueMedia, canvasAutomaticOutputs, workflowSourceMediaLabel } from "../lib/workflowCanvasCapabilities";
+import { hasTableWriter, resolveAssetMediaType } from "./workflowLayerBindings";
 import { automaticInputMedia, planAutomaticConnection, contentCardAcceptsMedia, type AutomaticOutput } from "../lib/workflowAutoConnect";
-import { WorkflowDisconnectMenu, type DisconnectChoice } from "./WorkflowDisconnectMenu";
+import type { DisconnectChoice } from "./WorkflowDisconnectMenu";
 import { workflowLoopItems, workflowLoopRows } from "../lib/workflowLoop";
 import { WorkflowLoopFrame } from "./WorkflowLoopFrame";
 import { placeCanvasCardNearSource } from "../lib/canvasReferencePlacement";
 import { canvasDocumentHeight, expandCanvasSections, readCanvasNote } from "../lib/canvasNotes";
 import { contentInputPort } from "../lib/canvasContentInput";
-import { canvasInputAssetIds, canvasInputValue, canvasWorkflowInputState, workflowBindingAssetIds, workflowGenerationResultAnchor, hiddenWorkflowSessionIds, workflowSessionIds, type WorkflowGenerationActivity } from "../lib/canvasSessionOutputs";
+import { canvasInputAssetIds, canvasInputValue, canvasWorkflowInputState, canvasSessionImages, workflowBindingAssetIds, workflowGenerationResultAnchor, hiddenWorkflowSessionIds, workflowSessionIds, type WorkflowGenerationActivity } from "../lib/canvasSessionOutputs";
 import { useStore } from "../store";
 import { canvasWirePath as path, type DragOffset } from "../lib/canvasDragPreview";
 import { useWorkflowPortGeometry, type WorkflowPortTarget } from "../lib/useWorkflowPortGeometry";
 import { WorkflowCardItem, type WorkflowCardContext } from "./WorkflowCardItem";
-import { WorkflowWireLayer } from "./WorkflowWireLayer";
+import { WorkflowWiresLayer } from "./WorkflowWiresLayer";
+import { WorkflowDisconnectOverlay, WorkflowOverlays } from "./WorkflowOverlays";
 import { renderCanvasCards, useCanvasEntryCardContext } from "./CanvasEntryCard";
 import { isWorkflowProDenied } from "../lib/workflowEntitlement";
 import { singleVideoOutput, useWorkflowConnectionGesture } from "./useWorkflowConnectionGesture";
-import { comfyCheckKey, WindingKey } from "./workflowCardPresentation";
+import { comfyCheckKey, disconnectKey, WindingKey } from "./WorkflowLayerPresentation";
+import type { AutomaticGesture, AutomaticTarget, Connection, ConnectionMenuState, DisconnectTarget, H3RunChoice, MaterialAnchor, PendingConnectionCard, VideoReferenceTarget, WorkflowGeometry, WorkflowLayerHandle, WorkflowLayerProps } from "./WorkflowLayerTypes";
 import { useLatestCallback } from "../lib/useCanvasFrame";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
-import { workflowDiagnosticReport } from "../lib/workflowDiagnostics";
 import { h3CardDraft, h3DraftForResult, h3DraftStale, h3OriginalPrompt, h3PromptPatch, isH3ImageCard, workflowFrameLabel, workflowProducesVideo, workflowVideoAudioLabel } from "../lib/canvasWorkflow";
-import { retryWorkflowSave } from "../lib/workflowRemoval";
-import { H3_R2V_INPUT_LIMITS, H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowDisconnectId, workflowBindingKey, generationReferencePreviewOrder, lastGenerationRunInput, disconnectGenerationReference, reorderGenerationReferences, isWorkflowGenerationResult, workflowOrder } from "../lib/canvasWorkflow";
+import { H3_R2V_INPUT_LIMITS, H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowBindingKey, generationReferencePreviewOrder, lastGenerationRunInput, disconnectGenerationReference, reorderGenerationReferences, isWorkflowGenerationResult, workflowOrder } from "../lib/canvasWorkflow";
 import {
   assertWorkflowAcyclic, invalidateWorkflow, newWorkflowNode, normalizeWorkflowInputSlots, workflowNodeRun, workflowRuns, workflowInputProducers, workflowConnectionError, workflowCompletionTarget, workflowInputs, workflowOutputs,
-  workflowPortY, workflowTitle, workflowCardWidth, type CanvasWorkflow, type WorkflowInput, type WorkflowKind, type WorkflowLoopItem, type WorkflowNode, type WorkflowPort
+  workflowPortY, workflowTitle, workflowCardWidth, type WorkflowInput, type WorkflowLoopItem, type WorkflowNode, type WorkflowPort
 } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode, VisualProfileSummary } from "../lib/types";
 import { H3_IMAGE } from "../lib/genProviders";
@@ -57,104 +54,24 @@ import { materializeVideoFrameOutput, videoFrameOutputPreview } from "../lib/wor
 import { materializeVideoAudioOutput, videoAudioOutputPreview } from "../lib/workflowVideoAudio";
 import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
 import { isAudioPath } from "../lib/audioMedia";
-import { CloudAgentSession } from "./CloudAgentPanel";
-import { ModalShell } from "./ModalShell";
 import { readVoiceDraft } from "../lib/voiceStudioDraft";
-import { WorkflowTemplateLibrary } from "./WorkflowTemplateLibrary";
-import { SaveWorkflowTemplateDialog } from "./SaveWorkflowTemplateDialog";
 import "./CanvasWorkflow.css";
-export { WindingKey } from "./workflowCardPresentation";
+export { WindingKey };
 
 const IDLE_GENERATION: WorkflowGenerationActivity = { running: false };
 
-export type DisconnectTarget = { nodeId: string; port?: string; cellId?: string; wireKey?: string };
-const disconnectKey = (node: WorkflowNode, port: string, binding: WorkflowInput) =>
-  workflowDisconnectId(binding) ?? JSON.stringify([node.id, port, workflowBindingKey(binding)]);
+export type { AutomaticGesture, AutomaticTarget, Connection, ConnectionMenuState, DisconnectTarget, H3RunChoice,
+  MaterialAnchor, PendingConnectionCard, WorkflowGeometry, WorkflowLayerHandle } from "./WorkflowLayerTypes";
 
-export type H3RunChoice = "optimize" | "original" | "previous";
-
-export interface WorkflowGeometry { id: string; x: number; y: number; width: number; height: number }
-export interface WorkflowLayerHandle {
-  bindRecording: (nodeId: string, assetId: string, assetNodeId?: string) => boolean;
-  startLocalVideo: (request: import("../lib/comfyVideo").ComposerLocalVideoRequest, point: { x: number; y: number }) => Promise<void>;
-  templates: (importPackage?: boolean) => void;
-  saveTemplate: (ids: string[], mode?: "template" | "package" | "container") => void;
-  inputText: (nodeId: string, cellId?: string, disconnect?: boolean, type?: "text" | "image" | "auto", point?: { x: number; y: number }, keyboard?: boolean) => void;
-  connectSelection: (nodeIds: string[], clientX: number, clientY: number, keyboard?: boolean) => void;
-  connectCell: (nodeId: string, cellId: string, clientX: number, clientY: number, keyboard?: boolean) => void;
-  openCardMenu: (x: number, y: number, point: { x: number; y: number }) => void;
-  add: (kind: WorkflowKind, x: number, y: number) => void; arm: (x?: number, y?: number) => void;
-  cancelPlacement: () => void;
-  bounds: (includeHidden?: boolean) => WorkflowGeometry[];
-  createImageCard: (sourceId: string, assetId: string, point: { x: number; y: number }) => void;
-  position: (positions: ReadonlyMap<string, { x: number; y: number }>, persist?: boolean) => void;
-  isLocked: (id: string) => boolean;
-  isConnecting: () => boolean;
-}
-export interface MaterialAnchor { id: string; assetId?: string; video?: boolean; audio?: boolean; groupId?: string; assetIds?: string[]; mediaAssetIds?: string[]; x: number; y: number; width: number; height: number }
-interface Props {
-  provisional?: boolean;
-  diagnosticTarget?: HTMLElement | null;
-  getZoom: () => number;
-  opening: boolean;
-  entryCardIds: ReadonlySet<string> | null;
-  deferredCandidateIds: ReadonlySet<string> | null;
-  graphNodes: CanvasNode[];
-  knownAssets?: ReadonlyMap<string, Asset>;
-  loadAssets?: (ids: string[]) => Promise<Asset[]>;
-  visibleGraphNodeIds?: ReadonlySet<string>;
-  conversationCards?: ReturnType<typeof canvasConversationCards>;
-  selectedConversationOutputs?: ReadonlyMap<string, { id: string; video: boolean }>;
-  imageOnlyConversationIds?: ReadonlySet<string>;
-  sessionHeights?: ReadonlyMap<string, number>;
-  generationCardAnchors?: ReadonlyMap<string, CanvasNode>;
-  generationCardOrigins: ReadonlyMap<string, WorkflowNode>;
-  generationActivities: ReadonlyMap<string, WorkflowGenerationActivity>;
-  activeGenerationIds: ReadonlySet<string>;
-  pinnedCardOffsets?: ReadonlyMap<string, { x: number; y: number }>;
-  peekCard?: { nodeId: string; anchorId: string; point: { x: number; y: number } };
-  onPeekInteraction?: (kind: "enter" | "leave" | "blur" | "compose" | "commit") => void;
-  onToggleGenerationPin?: (nodeId: string) => void;
-  onConnectCollapsedGeneration: (nodeId: string, anchorId: string) => void;
-  onUndoGenerationConnection: (nodeId: string) => boolean;
-  selectedIds: Set<string>;
-  panReady: boolean;
-  onSelect: (id: string, additive?: boolean) => void;
-  onNodesChanged: () => void;
-  onEdited: (before: CanvasWorkflow, after: CanvasWorkflow, connectedGenerationId?: string) => void;
-  onOpenGeneration: (node: CanvasNode) => void;
-  getChatCardDefaults?: () => ChatCardDefaults;
-  onOpenAgent: (nodeId: string, conversationId?: string, entryKey?: string, applyPrompt?: (text: string) => Promise<void>) => void;
-  onNewAgentChat?: (previousId: string) => void;
-  onDragStart: (event: React.PointerEvent<HTMLElement>, node: WorkflowNode) => void;
-  onDragMove: (event: React.PointerEvent<HTMLElement>) => void;
-  onDragEnd: (event: React.PointerEvent<HTMLElement>, cancelled?: boolean) => void;
-  onNodeMenu: (event: React.MouseEvent<HTMLElement>, id: string) => void;
-  onRemove: (id: string) => void;
-  projectId: string; zoom?: number; materials: MaterialAnchor[];
-  ensureMaterialized: () => Promise<unknown>;
-  toBoardPoint: (clientX: number, clientY: number) => { x: number; y: number };
-  onPlaced: (rect: { x: number; y: number; width: number; height: number }) => void;
-}
-export type Connection = WorkflowInput & { type: WorkflowPort["type"] };
-export type AutomaticTarget = { nodeId?: string; canvasNodeId?: string; cellId?: string; collapsedAnchorId?: string };
-export type PendingConnectionCard = {
-  projectId: string; node: WorkflowNode; inputs: WorkflowNode["inputs"]; target: AutomaticTarget; connectionId: string;
-};
-export type AutomaticGesture = { id: string; side: "input" | "output"; outputs: AutomaticOutput[]; target: AutomaticTarget;
-  start: { x: number; y: number }; dragged: boolean; latest?: boolean; scope?: string; trigger?: HTMLElement | null;
-  completion?: { pointerId: number; anchor: { x: number; y: number } } };
 function videoReferenceOutput(output: AutomaticOutput, mode?: VideoReferenceMode) {
   return mode === "audio" ? videoAudioOutputPreview(output) : mode ? videoFrameOutputPreview(output, mode) : output;
 }
-type VideoReferenceTarget = { output: AutomaticOutput; target: AutomaticTarget; created?: WorkflowNode };
-export type ConnectionMenuState = { gesture: AutomaticGesture; x: number; y: number; video?: VideoReferenceTarget };
 
 function connectionForType(source: Connection, type?: WorkflowPort["type"]): Connection {
   return ["*latest", "*latest-image"].includes(source.cellId ?? "") && (type === "text" || type === "image")
     ? { ...source, cellId: type === "image" ? "*latest-image" : "*latest", type } : source;
 }
-export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, opening = false, entryCardIds, deferredCandidateIds, materials, graphNodes, knownAssets, loadAssets = api.getAssetsByIds, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, generationCardOrigins, generationActivities, activeGenerationIds, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, onConnectCollapsedGeneration, onUndoGenerationConnection, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
+export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, WorkflowLayerProps>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, settledZoom, opening = false, entryCardIds, deferredCandidateIds, materials, graphNodes, knownAssets, loadAssets = api.getAssetsByIds, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, generationCardOrigins, generationActivities, activeGenerationIds, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, onConnectCollapsedGeneration, onUndoGenerationConnection, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onTriggerArmedChange, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
   const [controllerRevision, setControllerRevision] = useState(0);
@@ -224,7 +141,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     defaultProvider: state.defaultProvider, codexHealth: state.codexHealth, dreaminaHealth: state.dreaminaHealth,
     cloudAuth: state.cloudAuth, cloudEntitlement: state.cloudEntitlement, openVisualProfile: state.openVisualProfile }), shallow);
   const document = controller.document;
-  const chatSummaries = useProjectChatSummaries(projectId);
+  const chatSummaries = useProjectChatSummaries(projectId, true);
   const activeVideoJobs = useStore(state => Object.values(state.genJobs).filter(job => job.media === "video" && job.running).map(job => job.id), shallow);
   const [savingH3Preference, setSavingH3Preference] = useState(false);
   const h3AutoOptimize = useStore(state => state.settings?.h3_auto_optimize_prompt === true);
@@ -286,29 +203,6 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     }
     return result;
   }, [document.nodes, conversationCards]);
-  const portTargets: WorkflowPortTarget[] = [];
-  const addPort = (id: string | undefined, kind: WorkflowPortTarget["kind"], port: string | undefined, image = false) => {
-    const node = id && graphById.get(id);
-    if (node && node.kind === "note" && port !== undefined) portTargets.push({ node, kind, port, image });
-  };
-  const sourcePort = (binding: WorkflowInput) => {
-    if (binding.canvasNodeId && binding.cellId) addPort(binding.canvasNodeId, "cell", binding.cellId);
-    if (binding.canvasNodeId) addPort(binding.canvasNodeId, "output", binding.cellId === "*latest-image" ? "*latest" : binding.cellId);
-    const producer = binding.nodeId ? nodeById.get(binding.nodeId) : undefined;
-    if (producer?.textTarget) addPort(producer.textTarget.nodeId, "output", producer.textTarget.image ? "*" : "*text");
-  };
-  for (const node of document.nodes) for (const [port, inputs] of Object.entries(node.inputs)) {
-    for (const binding of inputs) sourcePort(binding);
-    if (inputs.length && node.textTarget) {
-      const target = graphById.get(node.textTarget.nodeId);
-      if (target && node.textTarget.cellId) addPort(target.id, "cell", node.textTarget.cellId);
-      if (target) addPort(target.id, "input", contentInputPort(readCanvasNote(target), node.textTarget), port === "image");
-    }
-  }
-  for (const target of conversationCards?.embedded.values() ?? []) addPort(target.nodeId, "cell", target.cellId);
-  if (connection) sourcePort(connection);
-  if (automatic?.scope) addPort(automatic.id, "cell", automatic.scope);
-  if (automatic) addPort(automatic.id, automatic.side === "output" ? "output" : "input", "*auto");
   const nameCards = useMemo(() => [
     ...document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) })),
     ...graphNodes.map(node => ({ id: node.id, title: node.kind === "note" ? (readCanvasNote(node).artboard ? "画板" : { text: "内容卡片", images: "内容卡片", document: "文本卡片", bubble: "气泡", section: "分区" }[readCanvasNote(node).note_type] ?? "内容卡片") : node.kind === "asset" ? materialById.get(node.id)?.audio ? "音频卡片" : materialById.get(node.id)?.video ? "视频卡片" : "图片卡片" : "会话卡片" })),
@@ -387,8 +281,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     }
     return inputImages(source).filter(id => {
       if (!media && !source.mediaFilter) return true;
-      const material = materialByAsset.get(id);
-      const type = material?.audio ? "audio" : material?.video ? "video" : workflowAssetMedia(assetById.get(id));
+      const type = resolveAssetMediaType(id, materialByAsset, assetById);
       return !type || (media ? media === type : source.mediaFilter?.includes(type));
     });
   }
@@ -497,16 +390,42 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     }
     return { loopPreviews, currentRows };
   }, [document, graphNodes, graphById, inputImages]);
-  for (const { source, first, last } of currentRows.values()) {
-    addPort(source.id, "cell", first);
-    addPort(source.id, "cell", last);
-  }
-  const portRect = useWorkflowPortGeometry(wireElement, portTargets, getZoom);
-  const frames = new Map<string, { x: number; y: number; width: number; height: number; index: number; total: number }>();
+  const portTargets = useMemo(() => {
+    const targets: WorkflowPortTarget[] = [];
+    const addPort = (id: string | undefined, kind: WorkflowPortTarget["kind"], port: string | undefined, image = false) => {
+      const node = id && graphById.get(id);
+      if (node && node.kind === "note" && port !== undefined) targets.push({ node, kind, port, image });
+    };
+    const sourcePort = (binding: WorkflowInput) => {
+      if (binding.canvasNodeId && binding.cellId) addPort(binding.canvasNodeId, "cell", binding.cellId);
+      if (binding.canvasNodeId) addPort(binding.canvasNodeId, "output", binding.cellId === "*latest-image" ? "*latest" : binding.cellId);
+      const producer = binding.nodeId ? nodeById.get(binding.nodeId) : undefined;
+      if (producer?.textTarget) addPort(producer.textTarget.nodeId, "output", producer.textTarget.image ? "*" : "*text");
+    };
+    for (const node of document.nodes) for (const [port, inputs] of Object.entries(node.inputs)) {
+      for (const binding of inputs) sourcePort(binding);
+      if (inputs.length && node.textTarget) {
+        const target = graphById.get(node.textTarget.nodeId);
+        if (target && node.textTarget.cellId) addPort(target.id, "cell", node.textTarget.cellId);
+        if (target) addPort(target.id, "input", contentInputPort(readCanvasNote(target), node.textTarget), port === "image");
+      }
+    }
+    for (const target of conversationCards?.embedded.values() ?? []) addPort(target.nodeId, "cell", target.cellId);
+    if (connection) sourcePort(connection);
+    if (automatic?.scope) addPort(automatic.id, "cell", automatic.scope);
+    if (automatic) addPort(automatic.id, automatic.side === "output" ? "output" : "input", "*auto");
+    for (const { source, first, last } of currentRows.values()) {
+      addPort(source.id, "cell", first);
+      addPort(source.id, "cell", last);
+    }
+    return targets;
+  }, [document.nodes, nodeById, graphById, conversationCards, connection, automatic, currentRows]);
+  const portRect = useWorkflowPortGeometry(wireElement, portTargets, getZoom, settledZoom);
+  const frames = new Map<string, { owner: string; x: number; y: number; width: number; height: number; index: number; total: number }>();
   for (const [id, row] of currentRows) {
     const first = portRect(row.source, "cell", row.first);
     const last = portRect(row.source, "cell", row.last);
-    if (first && last) frames.set(id, { x: first.x - 3, y: first.y, width: last.x + last.width - first.x + 6,
+    if (first && last) frames.set(id, { owner: row.source.id, x: first.x - 3, y: first.y, width: last.x + last.width - first.x + 6,
       height: first.height, index: row.index, total: row.total });
   }
 
@@ -1232,7 +1151,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     const card = graphById.get(previous.id);
     if (!card) return previous;
     const value = cellId && previous.side === "output" ? canvasInputValue(card, cellId, graphNodes) : undefined;
-    const media = automaticValueMedia(value, assetById, controller.document.nodes.some(node => node.textTarget?.nodeId === card.id && node.textTarget.cellId === cellId));
+    const media = automaticValueMedia(value, assetById, hasTableWriter(controller.document.nodes, card.id, cellId));
     const selectedOutputs = cellId ? selectedMediaOutputs(JSON.stringify([card.id, cellId])) : undefined;
     return { ...previous, scope: cellId, latest: false,
       outputs: previous.side === "output" ? selectedOutputs ?? (value ? [{ binding: { canvasNodeId: card.id, cellId }, type: value.type, ...(media ? { media } : {}) }] : automaticOutputs(card.id)) : [],
@@ -1290,10 +1209,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     if (node.kind === "comfy-video" && port?.type === "image") {
       const audioPort = inputId === H3_VIDEO_AUDIO_PORT;
       const ids = inputImages(r2vMedia || audioPort ? { ...binding, mediaFilter: [r2vMedia ?? "audio"] } : binding);
-      const media = ids.map(id => {
-        const material = materialByAsset.get(id);
-        return material?.audio ? "audio" : material?.video ? "video" : workflowAssetMedia(assetById.get(id));
-      });
+      const media = ids.map(id => resolveAssetMediaType(id, materialByAsset, assetById));
       const producerMedia = source.nodeId && automaticOutputs(source.nodeId).find(output => output.binding.portId === source.portId)?.media;
       const knownMedia = binding.videoAudio ? ["audio"] : media.length && media.every(Boolean) ? media : !media.length && producerMedia ? [producerMedia].flat() : [];
       if (r2vMedia) {
@@ -1638,7 +1554,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       ghostElement.current.style.top = `${cursor.current.y + 16}px`;
     }
   };
-  useLayoutEffect(() => updateCursor.current());
+  useLayoutEffect(() => { onTriggerArmedChange?.(armed); }, [onTriggerArmedChange, armed]);
+  useLayoutEffect(() => updateCursor.current(), [connection, automatic, connectionMenu, armed, toBoardPoint, document.nodes, graphNodes, materials, portRect]);
 
   function automaticButton(id: string, side: "input" | "output", disabled = false, active = automatic?.id === id && automatic.side === side) {
     return <CanvasConnectionHandle side={side} disabled={disabled || panReady} active={active}
@@ -1794,7 +1711,11 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   const entryCardContext = useMemo(() => ({}), [cardContext, controllerRevision, generationActivities, selectedIds,
     pinnedCardOffsets, peekCard, chatsByCard, chatSummaries, armed, panReady, automatic, keyHover, staleReview,
     pendingAgentCards, activeVideoJobs, flowIssues, providerIssues, loopPreviews]);
-  const stagedCardContext = useCanvasEntryCardContext(entryCardContext, opening);
+  const stagedCardContext = useCanvasEntryCardContext(entryCardContext, opening, entryCardContext);
+  const sessionOutputsBySessionId = useMemo(() => {
+    const ids = hiddenWorkflowSessionIds(document.nodes);
+    return new Map(graphNodes.filter(session => ids.has(session.id)).map(session => [session.id, canvasSessionImages(session, graphNodes)]));
+  }, [document.nodes, graphNodes]);
   return <>
     {visibleGraphNodes.filter(node => cardMounted(node.id) && node.hiddenAt == null && (node.kind !== "asset" || materialById.has(node.id)) && !sessionIds.has(node.id) && !conversationCards?.hiddenIds.has(node.id)).map(node => {
       if (node.kind === "prompt" && collapsedAnchorOwners.has(node.id)) return null;
@@ -1806,13 +1727,14 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       return nameEditor(node.id, { left: node.x + (note?.note_type === "section" ? 24 : 0), top: node.y - 28, maxWidth: node.width });
     })}
     {materials.filter(item => item.groupId && cardMounted(item.id)).map(item => nameEditor(item.groupId!, { left: item.x, top: item.y - 28, maxWidth: item.width }))}
-    {disconnectMenu && <WorkflowDisconnectMenu {...disconnectMenu} choices={disconnectChoices(disconnectMenu)} assets={assets} onClose={() => setDisconnectMenu(null)} />}
+    <WorkflowDisconnectOverlay {...{ disconnectMenu, disconnectChoices, assets, setDisconnectMenu }} />
     {Array.from(frames, ([id, frame]) => <WorkflowLoopFrame key={id} {...frame} />)}
-    <WorkflowWireLayer
+    <CanvasConnectionDefinitions />
+    <WorkflowWiresLayer
       automatic={automatic} cardMounted={cardMounted} cardPoint={cardPoint} chooseDisconnect={chooseDisconnect} collapsedAnchor={collapsedAnchor}
-      connection={connection} connectionMenu={connectionMenu} conversationCards={conversationCards} cursor={cursor} disconnectKey={disconnectKey}
+      connection={connection} connectionMenu={connectionMenu} conversationCards={conversationCards} cursor={cursor}
       displayPoint={displayPoint} document={document} draftElement={draftElement} embeddedPoint={embeddedPoint} frames={frames}
-      generationResultAnchors={generationResultAnchors} graphById={graphById} graphNodes={graphNodes} groupById={groupById} materialById={materialById}
+      generationResultAnchors={generationResultAnchors} graphById={graphById} sessionOutputsBySessionId={sessionOutputsBySessionId} groupById={groupById} materialById={materialById}
       nodeDiagnostic={nodeDiagnostic} outputPath={outputPath} pending={pending} portRect={portRect} renderedNodes={renderedNodes}
       scopedPoint={scopedPoint} sourcePoint={sourcePoint} toBoardPoint={toBoardPoint} visibleGraphNodeIds={visibleGraphNodeIds} wireElement={wireElement}
       wireSelected={wireSelected} workflowNodeMounted={workflowNodeMounted} />
@@ -1847,50 +1769,14 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         loopProviderIssues={node.kind === "loop" ? providerIssues : undefined} loopPreview={loopPreviews.get(node.id)}
         failureKey={failure?.key} failureDismissed={failure?.dismissed} failureDiagnostic={failure?.diagnostic} getChatCardDefaults={cardDefaults} />;
     })}
-    {armed && createPortal(<div ref={ghostElement} className="workflow-key-ghost" style={{ left: cursor.current.x + 16, top: cursor.current.y + 16 }}><WindingKey size={30} />卡片上吸附 · 空白处创建 · Esc 取消</div>, window.document.body)}
-    {keyHover && createPortal(<div id="workflow-progress" role="tooltip" className="workflow-progress" style={{ left: Math.max(12, Math.min(keyHover.x, window.innerWidth - 340)), top: Math.max(12, Math.min(keyHover.y + 10, window.innerHeight - 320)) }}>
-      {(() => {
-        const run = [...workflowRuns(document)].reverse().find(item => item.startId === keyHover.id);
-        if (!run) return <><strong>工作流起点</strong><p>点击运行下游流程 · 拖动更换起点 · 右键取下</p></>;
-        const current = run.order.find(id => run.steps[id]?.status === "failed") ?? run.order.find(id => run.steps[id]?.status !== "done");
-        const active = run.order.filter(id => run.steps[id]?.status === "running");
-        return <><strong>{({running:"工作流运行中",waiting:"工作流等待继续",done:"工作流已完成",failed:"工作流已失败",stopped:"工作流已停止"})[run.status]} · {run.order.filter(id => run.steps[id]?.status === "done").length}/{run.order.length}</strong>
-          {current && <p>第 {run.order.indexOf(current) + 1} 步：{userErrorMessage(run.steps[current]?.error || run.steps[current]?.detail, run.steps[current]?.error ? "这一步未完成，请查看问题。" : "准备执行")}</p>}
-          {run.status === "running" && active.length > 1 && <p>{active.length} 个步骤同时执行中</p>}
-          <ol>{run.order.map((id, index) => {
-            const card = document.nodes.find(item => item.id === id); const item = run.steps[id];
-            const label = card?.kind === "instruction" ? ({describe:"反推",layers:"分层拆分",reuse:"复用生成提示词"})[card.action] : card ? workflowTitle(card) : "已移除卡片";
-            const executing = item?.status === "running" || item?.status === "waiting";
-            return <li key={id} className={id === current || executing ? "is-current" : ""}><span>{index + 1}. {label} · {item?.status === "done" ? "已完成" : item?.status === "failed" ? "失败" : executing ? run.status === "stopped" || run.status === "failed" ? "已停止" : item.status === "waiting" ? "等待继续" : "执行中" : run.status === "failed" ? "因上游失败未执行" : run.status === "stopped" ? "已停止，未执行" : "等待上游"}</span>
-              {(id === current || executing) && <p>{userErrorMessage(item?.error || item?.detail, item?.error ? "这一步未完成，请查看问题。" : "准备执行")}</p>}</li>;
-          })}</ol></>;
-      })()}
-    </div>, window.document.body)}
-    {issue && diagnosticTarget && createPortal(<section className="workflow-diagnostic" role="alert" aria-label="工作流问题" onPointerDown={event => event.stopPropagation()}>
-      <header><strong>{deliveryRunIds.has(issue.runId ?? "") ? "内容写入未完成" : issue.phase === "validation" ? "工作流未启动" : "工作流已停止"}</strong><button aria-label="关闭工作流问题" onClick={() => controller.dismissIssue()}><X size={15} /></button></header>
-      <p className="workflow-diagnostic-location">{issue.step ? `第 ${issue.step} 步 · ` : "启动检查 · "}{issue.nodeLabel}</p>
-      {issue.referenceLabel && <p>输入引用：@{issue.referenceLabel}</p>}
-      {issueSourceLabel && <p>来源：{issueSourceLabel}</p>}
-      <p>{userErrorMessage(issue.message, "这一步未能完成。")}</p><p className="workflow-diagnostic-action">{userErrorMessage(issue.action, "请检查这张卡片的输入和设置，然后重试。")}</p>
-      <div className="workflow-diagnostic-buttons"><button onClick={() => locateIssue(issue.nodeId)}>定位出错卡片</button>
-        {deliveryRunIds.has(issue.runId ?? "") && <button onClick={() => handle(controller.continue(issue.runId))}>重试写入内容卡</button>}
-        {issueSourceId && (document.nodes.some(node => node.id === issueSourceId) || graphNodes.some(node => node.id === issueSourceId && node.hiddenAt == null)) && <button onClick={() => locateIssue(issueSourceId)}>定位来源</button>}
-        <button onClick={() => handle((document.nodes.some(node => node.id === issue.nodeId && (node.kind === "comfy-video" || isH3ImageCard(node))) ? copyComfyDiagnostic(workflowDiagnosticReport(issue)) : navigator.clipboard.writeText(workflowDiagnosticReport(issue))).then(() => notifySuccess("诊断信息已复制")))}>复制诊断信息</button>
-      </div>
-      <details><summary>诊断详情</summary><pre>{workflowDiagnosticReport(issue)}</pre></details>
-    </section>, diagnosticTarget)}
-    {controller.error && diagnosticTarget && createPortal(<div className="workflow-save-error" role="alert" onPointerDown={event => event.stopPropagation()}>{userErrorMessage(controller.error, "工作流未能保存，请重试保存。")}<button onClick={() => handle(retryWorkflowSave(controller))}>重试保存</button></div>, diagnosticTarget)}
-    {connectionHover && (() => {
-      const node = nodeById.get(connectionHover.id), card = graphById.get(connectionHover.id) ?? materialById.get(connectionHover.id);
-      const point = node && (!automatic?.completion ? node : peekCard?.nodeId === node.id
-        ? { x: peekCard.point.x - workflowCardWidth(node) - 12, y: peekCard.point.y } : displayPoint(node));
-      const rect = node && point ? { x: point.x, y: point.y, width: workflowCardWidth(node), height: cardHeights.current.get(node.id) ?? 300 }
-        : card && automatic?.completion ? { ...card, height: sessionHeights?.get(card.id) ?? card.height } : card;
-      return rect && <div className={`canvas-connection-target${connectionHover.error ? " is-invalid" : ""}`} style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
-        data-connection-target={connectionHover.id} aria-label={connectionHover.error ? userErrorMessage(connectionHover.error, "此卡片暂时不能连接") : "可以连接"} />;
-    })()}
-    {connectionHover?.error && createPortal(<div className="canvas-connection-notice" role="status" style={{ left: cursor.current.x + 16, top: cursor.current.y + 16 }}>{userErrorMessage(connectionHover.error, "此卡片暂时不能连接")}</div>, window.document.body)}
-    {cardMenu && <WorkflowConnectionMenu key={videoConnection ? "video-reference" : connectionMenu ? connectionMenu.gesture.scope ?? "all" : "blank"}
+    <WorkflowOverlays {...{
+      armed, ghostElement, cursor, keyHover, document, issue, diagnosticTarget, deliveryRunIds, controller,
+      issueSourceLabel, locateIssue, handle, issueSourceId, graphNodes, connectionHover, nodeById,
+      graphById, materialById, automatic, peekCard, displayPoint, cardHeights, sessionHeights,
+      agentOpen, setAgentOpen, localRunReview, projectId, setLocalRunReview, runCard, retryReview,
+      setRetryReview, templateLibrary, selectedIds, state, ensureMaterialized, setTemplateLibrary,
+      templateSelection, onPlaced, setTemplateSelection,
+    }} connectionMenuContent={cardMenu && <WorkflowConnectionMenu key={videoConnection ? "video-reference" : connectionMenu ? connectionMenu.gesture.scope ?? "all" : "blank"}
       x={cardMenu.x} y={cardMenu.y} direction={connectionMenu?.gesture.side} trigger={connectionMenu?.gesture.trigger}
       video={videoConnection && { error: mode => videoReferenceError(videoConnection, mode), choose: mode => {
         const { output, target, created } = videoConnection;
@@ -1906,19 +1792,6 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         }
       }}
       existingCards={connectionMenu ? () => existingConnectionCards(connectionMenu) : undefined}
-      note={connectionMenu ? connectionScope(connectionMenu) : undefined} />}
-    {agentOpen && <ModalShell title="技能执行" width="lg" onClose={() => setAgentOpen(false)}><CloudAgentSession embedded /></ModalShell>}
-    {localRunReview?.projectId === projectId && <ConfirmDialog open title="是否需要继续运行当前卡片？"
-      message="目前已有运行中的本地生成卡片。同时运行当前卡片，可能会导致电脑卡顿、生成速度降低。"
-      confirmLabel="确认" onCancel={() => setLocalRunReview(null)}
-      onConfirm={() => { setLocalRunReview(null); runCard(localRunReview.nodeId, localRunReview.single, true, localRunReview.choice); }} />}
-    {retryReview?.projectId === projectId && <ConfirmDialog open title="重做失败步骤？" confirmLabel="保留卡片并重做"
-      message={`这一步已创建：${retryReview.cardNames.join("、")}。重做会保留这些卡片，也可能再次创建相同的内容。`}
-      onCancel={() => setRetryReview(null)} onConfirm={() => { setRetryReview(null); handle(retryReview.confirm()); }} />}
-    {templateLibrary && <WorkflowTemplateLibrary controller={controller} selectedIds={selectedIds} graphNodes={graphNodes} provider={state.activeGenProvider || state.defaultProvider}
-      instanceRoot={templateLibrary.instanceRoot} importPackage={templateLibrary.importPackage} ensureMaterialized={ensureMaterialized} onClose={() => setTemplateLibrary(null)} onLocate={locateIssue} />}
-    {templateSelection?.projectId === projectId && <SaveWorkflowTemplateDialog nodes={templateSelection.nodes} selectedIds={templateSelection.ids} graphNodes={templateSelection.canvas} bounds={templateSelection.bounds} mode={templateSelection.mode}
-      onEncapsulate={async (name, members, template) => { await ensureMaterialized(); const result = await controller.encapsulate(name, members, templateSelection.bounds, template); onPlaced(result.bounds); return result; }}
-      onClose={() => setTemplateSelection(null)} onSaved={() => notifySuccess(templateSelection.mode === "package" ? "工作流数据包已导出，可发送给对方导入" : templateSelection.mode === "template" ? "已存为模板，并保留封装布局" : "已封装为容器")} />}
+      note={connectionMenu ? connectionScope(connectionMenu) : undefined} />} />
   </>;
 }));

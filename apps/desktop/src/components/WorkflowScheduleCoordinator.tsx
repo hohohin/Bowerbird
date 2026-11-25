@@ -4,12 +4,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { notifyError } from "../lib/notify";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
+import { canvasWorkflowController, notifyWorkflowSessionCompletion, setActiveWorkflowCanvas, wakeWorkflowSchedules } from "../lib/canvasWorkflowRuntime";
 import { activeTriggerSchedule } from "../lib/workflowTriggerSchedule";
+import type { CodexChunk } from "../lib/types";
 
 /** Restore appointments independently of the currently open canvas. */
 export function WorkflowScheduleCoordinator() {
   const projects = useStore(state => state.projects);
+  const activeCanvasProject = useStore(state => state.projectRoutePending ? null : state.activeProjectId);
+  useEffect(() => { setActiveWorkflowCanvas(activeCanvasProject); }, [activeCanvasProject]);
   useEffect(() => {
     let alive = true;
     const listening = listen<string>("local-chat://start-card", async ({ payload: actionId }) => {
@@ -34,10 +37,23 @@ export function WorkflowScheduleCoordinator() {
       if (alive && payload.scheduled) void canvasWorkflowController(payload.projectId).refreshExternalCards()
         .catch(error => notifyError(error, "读取触发卡预约失败"));
     });
+    const canvasChanges = listen<{ projectId: string }>("creative://changed", ({ payload }) => {
+      if (alive && payload.projectId) notifyWorkflowSessionCompletion(payload.projectId);
+    });
+    const generationEnds = listen<CodexChunk>("codex://chunk", ({ payload }) => {
+      if (!alive || (payload.kind !== "done" && payload.kind !== "error") || !payload.job_id) return;
+      const projectId = useStore.getState().genJobs[payload.job_id]?.projectId;
+      if (projectId) notifyWorkflowSessionCompletion(projectId);
+    });
+    const wake = () => { if (document.visibilityState === "visible") wakeWorkflowSchedules(); };
+    document.addEventListener("visibilitychange", wake);
     return () => {
       alive = false;
+      document.removeEventListener("visibilitychange", wake);
       void listening.then(unlisten => unlisten());
       void schedules.then(unlisten => unlisten());
+      void canvasChanges.then(unlisten => unlisten());
+      void generationEnds.then(unlisten => unlisten());
     };
   }, []);
   useEffect(() => {

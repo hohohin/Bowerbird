@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
+import { canvasToolMenuItem } from "./fixtures/canvas-reference/place-card.mjs";
 
 const server = await createServer({ cacheDir: ".tmp/agent-chat-capabilities/vite", server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null } });
 await server.listen();
@@ -13,13 +14,13 @@ const counts = () => page.evaluate(async () => {
   return ["local_chat_models", "local_chat_dsh_status", "local_chat_quote"].map(command => calls.filter(call => call.command === command).length);
 });
 try {
-  await page.goto(server.resolvedUrls.local[0] + "scripts/fixtures/local-chat/preview.html?settings");
+  await page.goto(server.resolvedUrls.local[0] + "scripts/fixtures/local-chat/preview.html?settings&toolbar-pro");
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   assert.deepEqual(await counts(), [1, 1, 1], "startup and StrictMode share one probe per capability");
 
   const stage = page.locator("[data-canvas-stage]");
-  const tool = page.getByRole("button", { name: "新增 Agent 卡片", exact: true });
   for (const y of [160, 470]) {
+    const tool = await canvasToolMenuItem(page, "Agent 卡片");
     await tool.dragTo(stage, { targetPosition: { x: 680, y } });
   }
   const cards = page.locator(".workflow-card.is-agent");

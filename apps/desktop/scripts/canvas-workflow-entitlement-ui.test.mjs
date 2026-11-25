@@ -54,6 +54,11 @@ try {
     const saved = (await api.canvasWorkflowGet('p')).document;
     if (saved.nodes[0].x !== before.nodes[0].x + 10 || saved.nodes[1].inputs.image.length !== 1
       || saved.nodes[1].inputs.image[0].assetId !== 'a') throw Error('cleanup must be persisted');
+    const noteBefore = window.snapshot().nodes.find(node => node.id === 'note').payloadJson;
+    const wireError = await c.bindTextInput('note', 'cell', { nodeId: source.id, portId: 'image' }, 'image').then(() => '', String);
+    if (wireError !== denial || window.snapshot().nodes.find(node => node.id === 'note').payloadJson !== noteBefore) {
+      throw Error('new paid binding must be checked before writing the content card');
+    }
 
     const save = api.canvasWorkflowSave;
     api.canvasWorkflowAuthorize = async () => {};
@@ -76,7 +81,7 @@ try {
   const stage = page.locator('[data-canvas-stage]');
   const box = await stage.boundingBox();
   await page.mouse.dblclick(box.x + box.width - 100, box.y + box.height - 110);
-  await page.getByRole('menuitem', { name: '视频生成', exact: true }).click();
+  await page.getByRole('menuitem', { name: '图片反推', exact: true }).click();
   await page.getByText(denial, { exact: true }).waitFor();
   await page.waitForFunction(() => document.querySelectorAll('[data-workflow-card]').length === 2);
   await page.keyboard.press('Control+z');

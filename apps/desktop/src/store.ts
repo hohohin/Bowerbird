@@ -1,3 +1,5 @@
+import { projectCanvasCallbacks } from "./lib/projectCanvasCallbacks";
+import { configureWorkflowHost } from "./lib/workflowHost";
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
 import { describeAssetWithNotice } from "./lib/describeNotices";
 import { applyGenerationProgress } from "./lib/generationProgress";
@@ -160,6 +162,15 @@ type Mode = "browse" | "manage";
 
 /** 生成会话底部编辑坞的两种入口：「重新编辑」（新版本分支）与底部对话框（会话内续轮）。 */
 export type GenEditingMode = "edit" | "revise";
+export type BoardAssetRequest =
+  ({ kind: "pick"; assetId: string } | { kind: "inject"; asset: PromptedAsset })
+  & { routeRevision: number; generationJobId: string | null };
+type GenJobStream = Pick<GenJob, "streaming" | "progress" | "preview"> & { turnKey?: string };
+
+export function genJobWithStream(job: GenJob | undefined, stream: GenJobStream | undefined) {
+  if (!job || !stream || job.turns[job.turns.length - 1]?.turnKey !== stream.turnKey) return job;
+  return { ...job, streaming: stream.streaming, progress: stream.progress, preview: stream.preview };
+}
 
 export interface CreativeGenerationContext {
   projectId: string;
@@ -258,9 +269,6 @@ interface State {
   exitProject: () => Promise<void>;
   beginProvisionalProject: (name?: string) => Promise<string>;
   deleteProjectCanvas: (id: string, mode?: ProjectDeleteMode, confirmation?: string, discardPendingResults?: string[]) => Promise<ProjectDeleteResult | undefined>;
-  projectCanvasFlush: (() => Promise<void>) | null;
-  projectCanvasRename: ((title: string) => Promise<void>) | null;
-  registerProjectCanvasFlush: (flush: (() => Promise<void>) | null) => void;
   visualProfiles: VisualProfileSummary[];
   activeVisualProfileId: string | null;
   reloadVisualProfiles: () => Promise<void>;
@@ -449,6 +457,7 @@ interface State {
   setAgentApprovalMode: (run: Pick<CloudAgentRunRecord, "projectId" | "threadId">, mode: AgentApprovalMode) => void;
   activeCloudAgentRunId: string | null;
   genJobs: Record<string, GenJob>; // 所有生成会话（首轮创建，续轮追加 turn）
+  genJobStreams: Record<string, GenJobStream>;
   genJobOrder: string[]; // job 创建顺序（侧栏 Status 任务列表稳定排序）
   activeJobId: string | null; // 当前查看/操作的 job（续轮/复用/取消/重试基于它）
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
@@ -516,21 +525,18 @@ interface State {
     generation?: GenerationSettings,
     referenceNodeIds?: Array<string | null>,
   ) => void;
-  // 「标注插入创作板」：注入临时素材（不入库）到当前编辑器。生成面板编辑坞打开 → 原地插入
-  // 不动面板；否则保开创作板 + 延一帧 dispatch board-asset-injected（挂载时序同上）。
+  // 素材请求等到目标编辑器挂载后消费。生成面板编辑坞打开时，标注图插入当前编辑坞。
+  pendingBoardAssets: BoardAssetRequest[];
   insertAnnotatedToBoard: (asset: PromptedAsset) => void;
-  // 「详情页 → 添加到对话框」：关详情回主界面，滚动定位 + 蓝框闪烁（focusAsset 既有机制），
-  // 延一帧插参考图 chip（对话框随详情关闭才挂载，同 reusePromptToBoard 的帧等待）；
+  // 「详情页 → 添加到对话框」：关详情、滚动定位素材，等待对话框挂载后插入参考图；
   // 该图有维度数据则同时呼出维度环（环点扇区继续挑维度）。
   addAssetToBoardFromDetail: (assetId: string) => void;
   // —— 图片标注面板（右键菜单唤起，全局单实例）——
-  prepareCanvasAnnotation: (() => ((dataUrl: string, meta: AnnotationMeta, fileName: string) => Promise<void>) | null) | null;
   annotator: { assetId: string | null; saveDraft?: (dataUrl: string, meta: AnnotationMeta) => Promise<void>;
     saveToCanvas?: (dataUrl: string, meta: AnnotationMeta, fileName: string) => Promise<void> } | null;
   openAnnotator: (assetId: string) => void;
   openDraftAnnotator: (saveDraft: (dataUrl: string, meta: AnnotationMeta) => Promise<void>) => void;
   closeAnnotator: () => void;
-  prepareCanvasDraft: ((request: DraftEditorRequest) => DraftCanvasSaver | null) | null;
   draftEditor: DraftEditorRequest | null;
   openDraftEditor: (request: DraftEditorRequest) => void;
   closeDraftEditor: () => void;
@@ -588,6 +594,30 @@ function taskErrorMessage(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+function createProjectResetPatch(activeProjectId: string | null, retainInspector = false) {
+  return {
+    activeProjectId,
+    canvasLibraryOpen: false,
+    boardOpen: false,
+    focusedThreadId: null,
+    currentFolderId: null,
+    currentCollectionId: null,
+    colorFilter: null,
+    searchQuery: "",
+    smartFilter: null,
+    detailAssetId: null,
+    selectedIds: new Set<string>(),
+    mode: "browse" as const,
+    activePresetId: null,
+    ...(retainInspector ? {} : {
+      genPanelOpen: false,
+      genEditing: null,
+      activeJobId: null,
+      activeCloudAgentRunId: null,
+    }),
+  };
 }
 
 export const useStore = create<State>((set, get) => {
@@ -703,18 +733,30 @@ export const useStore = create<State>((set, get) => {
   // （如后端事件到达但前端无此 job —— 理论不发生，稳健处理）。extra 随本次 set 一并合并。
   function updateJob(id: string, fn: (j: GenJob) => GenJob, extra: Partial<State> = {}) {
     set((s) => {
-      const prev = s.genJobs[id];
+      const prev = genJobWithStream(s.genJobs[id], s.genJobStreams[id]);
       if (!prev) return {};
       let next = fn(prev);
       if (next.preview && (!next.running || next.preview.turnKey !== next.turns[next.turns.length - 1]?.turnKey)) {
         next = { ...next, preview: undefined };
       }
       const genJobs = { ...s.genJobs, [id]: next };
+      const genJobStreams = { ...s.genJobStreams };
+      delete genJobStreams[id];
       return {
-        genJobs,
+        genJobs, genJobStreams,
         generating: Object.values(genJobs).some((j) => j.running),
         ...extra,
       };
+    });
+  }
+  function updateJobStream(id: string, fn: (j: GenJob) => GenJob) {
+    set(state => {
+      const job = genJobWithStream(state.genJobs[id], state.genJobStreams[id]);
+      if (!job) return state;
+      const next = fn(job);
+      if (next === job) return state;
+      const { streaming, progress, preview } = next;
+      return { genJobStreams: { ...state.genJobStreams, [id]: { streaming, progress, preview, turnKey: job.turns[job.turns.length - 1]?.turnKey } } };
     });
   }
   // 把一次生成失败落到指定 job：
@@ -834,9 +876,6 @@ export const useStore = create<State>((set, get) => {
   activeProjectId: null,
   projectRoutePending: false,
   projectRouteRevision: 0,
-  projectCanvasFlush: null,
-  projectCanvasRename: null,
-  registerProjectCanvasFlush: (projectCanvasFlush) => set({ projectCanvasFlush }),
   autoTags: [],
   classifyProgress: null,
   colorRebuild: null,
@@ -1000,22 +1039,7 @@ export const useStore = create<State>((set, get) => {
           || after.projects.some((project) => project.id === active)
         ) return;
         set({
-          activeProjectId: null,
-          boardOpen: false,
-          focusedThreadId: null,
-          currentFolderId: null,
-          currentCollectionId: null,
-          colorFilter: null,
-          searchQuery: "",
-          smartFilter: null,
-          detailAssetId: null,
-          selectedIds: new Set(),
-          mode: "browse",
-          activePresetId: null,
-          genPanelOpen: false,
-          genEditing: null,
-          activeJobId: null,
-          activeCloudAgentRunId: null,
+          ...createProjectResetPatch(null),
         });
       }).catch((error) => console.error("reconcile missing project failed", error));
     } catch (e) {
@@ -1025,7 +1049,7 @@ export const useStore = create<State>((set, get) => {
   enterProject: async (id) => {
     if (get().activeProjectId === id && !get().projectRoutePending) return;
     await runProjectRoute(async () => {
-      if (get().activeProjectId !== id) await get().projectCanvasFlush?.();
+      if (get().activeProjectId !== id) await projectCanvasCallbacks.flush?.();
       let project = get().projects.find((candidate) => candidate.id === id);
       if (!project) {
         await get().reloadProjects();
@@ -1039,31 +1063,13 @@ export const useStore = create<State>((set, get) => {
       const retainInspector = shouldRetainInspectorForProjectRoute(id, get().creativeNavigation);
       useLocalFileMode.getState().setOpen(false);
       set({
-        activeProjectId: id,
-        canvasLibraryOpen: false,
-        boardOpen: false,
-        focusedThreadId: null,
-        currentFolderId: null,
-        currentCollectionId: null,
-        colorFilter: null,
-        searchQuery: "",
-        smartFilter: null,
-        detailAssetId: null,
-        selectedIds: new Set(),
-        mode: "browse",
-        activePresetId: null,
-        ...(retainInspector ? {} : {
-          genPanelOpen: false,
-          genEditing: null,
-          activeJobId: null,
-          activeCloudAgentRunId: null,
-        }),
+        ...createProjectResetPatch(id, retainInspector),
       });
       void get().reloadVisualProfiles();
     });
   },
   exitProject: () => runProjectRoute(async () => {
-    await get().projectCanvasFlush?.();
+    await projectCanvasCallbacks.flush?.();
     const active = get().projects.find((project) => project.id === get().activeProjectId);
     // Clearing the persisted scope is idempotent and must not depend on the
     // possibly stale local provisional flag after a successful materialize.
@@ -1072,28 +1078,12 @@ export const useStore = create<State>((set, get) => {
       projects: active?.provisional
         ? get().projects.filter((project) => project.id !== active.id)
         : get().projects,
-      activeProjectId: null,
+      ...createProjectResetPatch(null),
       libraryHomeView: get().activeProjectId ? "projects" : get().libraryHomeView,
-      canvasLibraryOpen: false,
-      boardOpen: false,
-      focusedThreadId: null,
-      currentFolderId: null,
-      currentCollectionId: null,
-      colorFilter: null,
-      searchQuery: "",
-      smartFilter: null,
-      detailAssetId: null,
-      selectedIds: new Set(),
-      mode: "browse",
-      activePresetId: null,
-      genPanelOpen: false,
-      genEditing: null,
-      activeJobId: null,
-      activeCloudAgentRunId: null,
     });
   }),
   beginProvisionalProject: (name = "未命名创作") => runProjectRoute(async () => {
-    await get().projectCanvasFlush?.();
+    await projectCanvasCallbacks.flush?.();
     const id = crypto.randomUUID();
     const normalizedName = name.trim() || "未命名创作";
     const workspacePath = await prepareFileWorkspace(id, normalizedName);
@@ -1114,24 +1104,8 @@ export const useStore = create<State>((set, get) => {
     useLocalFileMode.getState().setOpen(false);
     set((state) => ({
       projects: [project, ...state.projects.filter((candidate) => !candidate.provisional)],
-      activeProjectId: id,
-      canvasLibraryOpen: false,
-      boardOpen: false,
-      focusedThreadId: null,
+      ...createProjectResetPatch(id),
       projectTimelineScope: "focused",
-      currentFolderId: null,
-      currentCollectionId: null,
-      colorFilter: null,
-      searchQuery: "",
-      smartFilter: null,
-      detailAssetId: null,
-      selectedIds: new Set(),
-      mode: "browse",
-      activePresetId: null,
-      genPanelOpen: false,
-      genEditing: null,
-      activeJobId: null,
-      activeCloudAgentRunId: null,
     }));
     return id;
   }),
@@ -1147,22 +1121,7 @@ export const useStore = create<State>((set, get) => {
       if (deletingActiveProject) {
         set({
           projects: get().projects.filter((candidate) => candidate.id !== id),
-          activeProjectId: null,
-          boardOpen: false,
-          focusedThreadId: null,
-          currentFolderId: null,
-          currentCollectionId: null,
-          colorFilter: null,
-          searchQuery: "",
-          smartFilter: null,
-          detailAssetId: null,
-          selectedIds: new Set(),
-          mode: "browse",
-          activePresetId: null,
-          genPanelOpen: false,
-          genEditing: null,
-          activeJobId: null,
-          activeCloudAgentRunId: null,
+          ...createProjectResetPatch(null),
         });
       } else {
         set({ projects: get().projects.filter((candidate) => candidate.id !== id) });
@@ -1183,22 +1142,7 @@ export const useStore = create<State>((set, get) => {
     if (deletingActiveProject) {
       set({
         projects: get().projects.filter((project) => project.id !== id),
-        activeProjectId: null,
-        boardOpen: false,
-        focusedThreadId: null,
-        currentFolderId: null,
-        currentCollectionId: null,
-        colorFilter: null,
-        searchQuery: "",
-        smartFilter: null,
-        detailAssetId: null,
-        selectedIds: new Set(),
-        mode: "browse",
-        activePresetId: null,
-        genPanelOpen: false,
-        genEditing: null,
-        activeJobId: null,
-        activeCloudAgentRunId: null,
+        ...createProjectResetPatch(null),
       });
     } else {
       set({ projects: get().projects.filter((project) => project.id !== id) });
@@ -1767,6 +1711,7 @@ export const useStore = create<State>((set, get) => {
   cloudAgentRunOrder: [],
   activeCloudAgentRunId: null,
   genJobs: {},
+  genJobStreams: {},
   genJobOrder: [],
   activeJobId: null,
   genUnread: false,
@@ -1857,11 +1802,13 @@ export const useStore = create<State>((set, get) => {
       if (!s.genJobs[id]) return s;
       const genJobs = { ...s.genJobs };
       delete genJobs[id];
+      const genJobStreams = { ...s.genJobStreams };
+      delete genJobStreams[id];
       const genJobOrder = s.genJobOrder.filter((x) => x !== id);
       const activeJobId =
         s.activeJobId === id ? (genJobOrder.length > 0 ? genJobOrder[genJobOrder.length - 1] : null) : s.activeJobId;
       const generating = Object.values(genJobs).some((x) => x.running);
-      return { genJobs, genJobOrder, activeJobId, generating };
+      return { genJobs, genJobStreams, genJobOrder, activeJobId, generating };
     });
   },
   loadGenJobs: async (jobId) => {
@@ -2286,7 +2233,7 @@ export const useStore = create<State>((set, get) => {
   },
   applyGenChunk: (c) => {
     if (c.kind === "preview") {
-      updateJob(c.job_id, job => {
+      updateJobStream(c.job_id, job => {
         if (!job.running || !c.turn_key || job.turns[job.turns.length - 1]?.turnKey !== c.turn_key
           || !["codex", "codex-cli", "default"].includes(job.provider)) return job;
         return { ...job, preview: { turnKey: c.turn_key, dataUrl: c.data_url } };
@@ -2294,7 +2241,7 @@ export const useStore = create<State>((set, get) => {
       return;
     }
     if (c.kind === "progress") {
-      updateJob(c.job_id, job => applyGenerationProgress(job, { stage: c.stage, queue_position: c.queue_position, queue_length: c.queue_length, turnKey: c.turn_key }));
+      updateJobStream(c.job_id, job => applyGenerationProgress(job, { stage: c.stage, queue_position: c.queue_position, queue_length: c.queue_length, turnKey: c.turn_key }));
       return;
     }
     if (c.kind === "started") {
@@ -2347,7 +2294,9 @@ export const useStore = create<State>((set, get) => {
       set((s) => {
         if (s.genJobs[rid]) {
           const existing = s.genJobs[rid];
-          return { genJobs: { ...s.genJobs, [rid]: { ...existing, running: true, streaming: "", progress: undefined,
+          const genJobStreams = { ...s.genJobStreams };
+          delete genJobStreams[rid];
+          return { genJobStreams, genJobs: { ...s.genJobs, [rid]: { ...existing, running: true, streaming: "", progress: undefined, preview: undefined,
             media: c.media ?? existing.media, videoOptions: c.video_options ?? existing.videoOptions,
             submitId: c.submit_id ?? existing.submitId, remoteStatus: "querying" as const,
             turns: existing.turns.map((turn, index) => index === existing.turns.length - 1 ? { ...turn, submitId: c.submit_id ?? turn.submitId, error: null } : turn),
@@ -2394,7 +2343,7 @@ export const useStore = create<State>((set, get) => {
     const id = c.job_id;
     if (!id) return; // 无 job_id 的事件忽略（理论不发生）
     if (c.kind === "delta") {
-      updateJob(id, (j) => ({ ...j, streaming: j.streaming + c.text }));
+      updateJobStream(id, (j) => ({ ...j, streaming: j.streaming + c.text }));
     } else if (c.kind === "done") {
       const imgs = c.images ?? [];
       const completedJob = get().genJobs[id];
@@ -2584,30 +2533,21 @@ export const useStore = create<State>((set, get) => {
       activePresetId: null,
     });
   },
-  insertAnnotatedToBoard: (asset) => {
-    // 生成面板编辑坞打开 → 原地插入不动面板（编辑坞的 useCreationEditor 也监听 injected）；
-    // 否则收起详情页让瀑布流+对话框可见（对话框与详情页互斥，见 App 挂载条件）。
-    if (!get().genPanelOpen) {
-      set({ detailAssetId: null });
-    }
-    setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent("bowerbird://board-asset-injected", { detail: asset }),
-      );
-    }, 0);
-  },
+  pendingBoardAssets: [],
+  insertAnnotatedToBoard: (asset) => set(state => ({
+    ...(!state.genPanelOpen && { detailAssetId: null }),
+    pendingBoardAssets: [...state.pendingBoardAssets, { kind: "inject", asset, routeRevision: state.projectRouteRevision,
+      generationJobId: state.genPanelOpen && state.genEditing ? state.activeJobId : null }],
+  })),
   addAssetToBoardFromDetail: (assetId) => {
-    // 关详情回主界面：瀑布流 + 对话框（互斥）随 detailAssetId 清空而挂载。
-    set({ detailAssetId: null });
+    // The composer can consume the request after remounting when the detail closes.
+    set(state => ({
+      detailAssetId: null,
+      pendingBoardAssets: [...state.pendingBoardAssets, { kind: "pick", assetId, routeRevision: state.projectRouteRevision,
+        generationJobId: state.genPanelOpen && state.genEditing ? state.activeJobId : null }],
+    }));
     // 滚动定位到该图 + 蓝框闪烁（MasonryGrid 既有 focusAsset 消费）。
     get().focusAsset(assetId);
-    // 延一帧插 chip：对话框刚挂载，需等其 useCreationEditor 注册 pick listener；
-    // 插入后编辑器聚焦 → onFocus 激活创作模式（同点编辑框）。
-    setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent("bowerbird://board-asset-picked", { detail: assetId }),
-      );
-    }, 0);
     // 有维度数据（反推 sections）则呼出维度环；环锚点回退链：瀑布流卡片 → 编辑框 chip。
     const hasSections = get().promptedAssets.some(
       (a) => a.id === assetId && a.sections && a.sections.length > 0,
@@ -2616,17 +2556,15 @@ export const useStore = create<State>((set, get) => {
   },
   // —— 图片标注面板 ——
   annotator: null,
-  prepareCanvasAnnotation: null,
-  openAnnotator: (assetId) => set({ annotator: { assetId, saveToCanvas: get().prepareCanvasAnnotation?.() ?? undefined } }),
+  openAnnotator: (assetId) => set({ annotator: { assetId, saveToCanvas: projectCanvasCallbacks.prepareAnnotation?.() ?? undefined } }),
   openDraftAnnotator: (saveDraft) => set({ annotator: { assetId: null, saveDraft }, contextMenu: null }),
   closeAnnotator: () => set({ annotator: null }),
-  prepareCanvasDraft: null,
   draftEditor: null,
   openDraftEditor: (request) => set({
     draftEditor: {
       ...request,
       saveToCanvas: request.saveToCanvas ?? (request.projectId !== null && request.projectId === get().activeProjectId
-        ? get().prepareCanvasDraft?.(request) ?? undefined : undefined),
+        ? projectCanvasCallbacks.prepareDraft?.(request) ?? undefined : undefined),
     },
     contextMenu: null,
   }),
@@ -2656,4 +2594,17 @@ useStore.subscribe((state, previous) => {
   if (view === previousView) return;
   try { localStorage.setItem(LIBRARY_HOME_VIEW_KEY, view); }
   catch { /* Keep navigation usable when preference storage is unavailable. */ }
+});
+
+configureWorkflowHost(useStore);
+
+useStore.subscribe((state, previous) => {
+  if (!state.pendingBoardAssets.length) return;
+  if (state.projectRouteRevision !== previous.projectRouteRevision || state.activeProjectId !== previous.activeProjectId) {
+    useStore.setState({ pendingBoardAssets: [] });
+  } else if (state.genEditing !== previous.genEditing || state.activeJobId !== previous.activeJobId
+    || state.genPanelOpen !== previous.genPanelOpen) {
+    const pendingBoardAssets = state.pendingBoardAssets.filter(request => request.generationJobId === null);
+    if (pendingBoardAssets.length !== state.pendingBoardAssets.length) useStore.setState({ pendingBoardAssets });
+  }
 });

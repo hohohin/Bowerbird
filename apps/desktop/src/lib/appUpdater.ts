@@ -1,5 +1,6 @@
+import { projectCanvasCallbacks } from "./projectCanvasCallbacks";
 import { create } from "zustand";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { check,type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { useStore } from "../store";
 import { api } from "./api";
@@ -101,7 +102,7 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
     let restarting = false;
     try {
       if (!canProceed()) return;
-      await useStore.getState().projectCanvasFlush?.();
+      await projectCanvasCallbacks.flush?.();
       // Startup recovery can still be hydrating the store when the user clicks.
       const queuedJobs = confirmed ? [] : await api.listGenJobs();
       if (!canProceed(queuedJobs)) return;

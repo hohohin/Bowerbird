@@ -1,4 +1,4 @@
-import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
+import { enableCanvasToolbarPro, placeWorkflowCard, selectCanvasTool } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -14,7 +14,11 @@ try {
   await page.waitForSelector('.canvas-workspace[aria-busy="false"]');
   await page.locator('.canvas-workspace').evaluate(async el => { await Promise.all(el.getAnimations().map(animation => animation.finished.catch(() => {}))); });
   assert.equal(await page.getByRole('button', { name: '新增触发器卡片', exact: true }).count(), 0);
-  const tool = await page.getByRole('button', { name: '发条触发器', exact: true }).boundingBox();
+  await enableCanvasToolbarPro(page);
+  await selectCanvasTool(page, '触发卡');
+  await page.keyboard.press('Escape');
+  const triggerSlot = page.locator('[data-canvas-tool-group="workflow"]');
+  const tool = await triggerSlot.boundingBox();
   await page.mouse.move(tool.x + tool.width / 2, tool.y + tool.height / 2); await page.mouse.down();
   await page.mouse.move(1400, 300, { steps: 12 }); await page.mouse.up();
   const trigger = page.locator('.workflow-card.is-trigger'); await trigger.waitFor();
@@ -75,7 +79,11 @@ try {
   await instruction.getByRole('button', { name: '断开触发器连接', exact: true }).click({ button: 'right' });
   await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.waitForFunction(() => !document.querySelector('[data-workflow-signal-link]'));
-  const keyTool = await page.getByRole('button', { name: '发条触发器', exact: true }).boundingBox();
+  await enableCanvasToolbarPro(page);
+  await selectCanvasTool(page, '触发卡');
+  await page.keyboard.press('Escape');
+  assert.equal(await triggerSlot.getAttribute('aria-label'), '触发卡');
+  const keyTool = await triggerSlot.boundingBox();
   const cardHeader = await instruction.locator('header strong').boundingBox();
   await page.mouse.move(keyTool.x + 10, keyTool.y + 10); await page.mouse.down();
   await page.mouse.move(cardHeader.x + 10, cardHeader.y + 10, { steps: 12 }); await page.mouse.up();

@@ -29,7 +29,7 @@ try {
   });
   await page.reload();
   await card.waitFor();
-  assert.equal(await page.getByRole('button', { name: '内容卡片工具', exact: true }).locator('.lucide-table2, .lucide-table-2').count(), 1);
+  assert.equal(await page.locator('[data-canvas-tool-group="content"] :is(.lucide-table2, .lucide-table-2)').count(), 1);
   await input.fill(literalText);
   await input.press('Escape');
   await input.blur();

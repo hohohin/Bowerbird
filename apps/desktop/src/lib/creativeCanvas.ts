@@ -256,9 +256,15 @@ export function rehydrateProjectCanvasAssets(
  * than waiting for the persisted graph snapshot to be read again.
  */
 export function projectGraphNodesWithLiveLayout(
+  graphNodes: CanvasNode[], uiNodes: readonly ProjectCanvasUiNode[],
+): CanvasNode[];
+export function projectGraphNodesWithLiveLayout(
+  graphNodes: readonly CanvasNode[], uiNodes: readonly ProjectCanvasUiNode[],
+): readonly CanvasNode[];
+export function projectGraphNodesWithLiveLayout(
   graphNodes: readonly CanvasNode[],
   uiNodes: readonly ProjectCanvasUiNode[],
-): CanvasNode[] {
+): readonly CanvasNode[] {
   const layoutByNodeId = new Map<string, Pick<CanvasNode, "x" | "y" | "width" | "height" | "zIndex">>();
 
   for (const uiNode of uiNodes) {
@@ -276,7 +282,8 @@ export function projectGraphNodesWithLiveLayout(
     for (const asset of uiNode.assets) layoutByNodeId.set(asset.id, layout);
   }
 
-  return graphNodes.map((node) => {
+  let projected: CanvasNode[] | undefined;
+  for (const [index, node] of graphNodes.entries()) {
     const layout = layoutByNodeId.get(node.id);
     if (!layout
       || (node.x === layout.x
@@ -284,10 +291,12 @@ export function projectGraphNodesWithLiveLayout(
         && node.width === layout.width
         && node.height === layout.height
         && node.zIndex === layout.zIndex)) {
-      return node;
+      continue;
     }
-    return { ...node, ...layout };
-  });
+    projected ??= graphNodes.slice();
+    projected[index] = { ...node, ...layout };
+  }
+  return projected ?? graphNodes;
 }
 
 export function assetPayloadJson(asset: CanvasAssetSnapshot) {

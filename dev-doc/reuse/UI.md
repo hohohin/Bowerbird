@@ -8,6 +8,10 @@
 - **交付：** 文件夹复用 `folderConnections.references`，标签复用 [localClassification.ts](../../apps/desktop/src/lib/localClassification.ts) 的全局／项目 `example` 人工归属接口。
 - **边界：** 两条入口均在松手时冻结项目和落点。探索采集明确投放到标签时传 `skipClassification`，沿现有采集队列重试；`ingest_from_bytes_with_classification` 控制单次自动入队。未分类分组继续原流程。探索分类契约见 [探索浏览器](../EMBEDDED-BROWSER.md#2026-11-04标签落点直接归类源码待发布)。
 
+## 画板工具收纳组
+
+容器、基础内容、工作流和工具箱共用 [CanvasToolGroup](../../apps/desktop/src/components/CanvasToolGroup.tsx)。宿主提供工具名称、图标、可用状态和选用回调。组件负责记忆外层工具及鼠标、键盘手势，弹层沿用 `app-context-menu` 表面和悬浮滚动条。画板宿主继续负责卡片放置、发条附着和权益入口。Agent 工具和卡片共用 [WorkflowLayerPresentation](../../apps/desktop/src/components/WorkflowLayerPresentation.tsx) 的图标。
+
 ## 让新界面沿用主题、按钮和字段
 
 - 需要在报价旁显示 Bcoin 单位时，复用 [BcoinAmount](../../apps/desktop/src/components/BcoinAmount.tsx) 的本地化数字、顶栏同款图标和可读单位。该组件仅负责呈现，使用调用方已查得的有效金额。

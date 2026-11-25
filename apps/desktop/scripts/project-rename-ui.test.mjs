@@ -19,7 +19,7 @@ async function open(target) {
 async function renameCalls() { return page.evaluate(() => window.calls.filter(c => c.command === "project_canvas_rename").length); }
 try {
   await page.goto(base);
-  await page.waitForFunction(() => window.fixtureStore?.getState().projectCanvasRename && document.querySelector(".canvas-board-title")?.value === "测试项目");
+  await page.waitForFunction(async () => !!(await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.rename && document.querySelector(".canvas-board-title")?.value === "测试项目");
   const canvasTitle = page.locator(".canvas-board-title");
   await canvasTitle.fill("中文候选");
   await canvasTitle.dispatchEvent("compositionstart");
@@ -43,7 +43,7 @@ try {
   await page.waitForFunction(() => window.persistedProject().name === "完整项目名称");
   assert.equal(await renameCalls(), 1, "ordinary Enter commits the completed title once");
   await page.goto(base);
-  await page.waitForFunction(() => window.fixtureStore?.getState().projectCanvasRename && document.querySelector(".canvas-board-title")?.value === "测试项目");
+  await page.waitForFunction(async () => !!(await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.rename && document.querySelector(".canvas-board-title")?.value === "测试项目");
   await open(page.locator(".project-name"));
   assert.equal(await input.inputValue(), "测试项目");
   await input.fill("   ");

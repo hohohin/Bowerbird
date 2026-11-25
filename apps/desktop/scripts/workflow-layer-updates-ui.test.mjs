@@ -35,8 +35,10 @@ try {
     const root = createRoot(document.getElementById('root'));
     flushSync(() => root.render(React.createElement(React.Profiler, { id: 'workflow', onRender: () => window.layerCommits++ },
       React.createElement('div', { className: 'canvas-plane', style: { position: 'relative', width: 1000, height: 600 } },
-        React.createElement(CanvasWorkflowLayer, { ref, projectId: 'updates', provisional: true, materials, graphNodes: [], entryCardIds: null,
-          activeGenerationIds: new Set(), generationActivities: new Map(), selectedIds: new Set(), panReady: false,
+        React.createElement(CanvasWorkflowLayer, { ref, projectId: 'updates', provisional: true, materials, graphNodes: [], selectedIds: new Set(), panReady: false,
+          getZoom: () => 1, opening: false, entryCardIds: null, deferredCandidateIds: null,
+          generationCardOrigins: new Map(), generationActivities: new Map(), activeGenerationIds: new Set(),
+          onConnectCollapsedGeneration: noop, onUndoGenerationConnection: () => false,
           onSelect: noop, onNodesChanged: noop, onEdited: noop, onOpenGeneration: noop, onOpenAgent: noop, onDragStart: noop, onDragMove: noop,
           onDragEnd: noop, onNodeMenu: noop, onRemove: noop, ensureMaterialized: async () => {}, toBoardPoint: (x, y) => ({ x, y }), onPlaced: noop })))));
     window.changeUnrelated = () => { for (let i = 0; i < 30; i++) useStore.setState({ searchQuery: `unrelated-${i}` }); };
@@ -53,6 +55,8 @@ try {
       };
       const props = { ref, projectId: 'updates', provisional: true, materials, graphNodes: [],
         activeGenerationIds: new Set(), generationActivities: new Map(), selectedIds: new Set(), panReady: false,
+        getZoom: () => 1, deferredCandidateIds: null, generationCardOrigins: new Map(),
+        onConnectCollapsedGeneration: noop, onUndoGenerationConnection: () => false,
         onSelect: noop, onNodesChanged: noop, onEdited: noop, onOpenGeneration: noop, onOpenAgent: noop, onDragStart: noop, onDragMove: noop,
         onDragEnd: noop, onNodeMenu: noop, onRemove: noop, ensureMaterialized: async () => {}, toBoardPoint: (x, y) => ({ x, y }), onPlaced: noop };
       const render = (ids, opening) => {

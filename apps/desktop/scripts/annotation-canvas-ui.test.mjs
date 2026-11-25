@@ -22,7 +22,7 @@ async function openAndDraw() {
 }
 try {
   await page.goto("http://127.0.0.1:1563/scripts/fixtures/canvas-reference/preview.html?provisional&strict-canvas");
-  await page.waitForFunction(() => window.store?.getState().prepareCanvasAnnotation);
+  await page.waitForFunction(async () => (await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.prepareAnnotation);
   await openAndDraw();
   await dialog.getByRole("button", { name: "文字", exact: true }).click();
   const overlay = dialog.locator("svg.cursor-crosshair");
@@ -138,7 +138,11 @@ try {
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === "save_annotated_image").length), 1);
   assert.equal(await page.evaluate(() => window.snapshot().nodes.filter(node => node.assetId?.startsWith("draft-")).length), 2);
 
-  await page.evaluate(() => { window.store.setState({ prepareCanvasAnnotation: null }); window.store.getState().openAnnotator("existing"); });
+  await page.evaluate(async () => {
+    const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+    projectCanvasCallbacks.prepareAnnotation = null;
+    window.store.getState().openAnnotator("existing");
+  });
   assert.equal(await dialog.getByRole("button", { name: "添加到画板", exact: true }).isDisabled(), true);
   assert.deepEqual(errors, []);
   console.log("PASS annotation canvas: provisional project, metadata, dirty revision, invalid text fallback, reload and retry without duplicate ingestion");

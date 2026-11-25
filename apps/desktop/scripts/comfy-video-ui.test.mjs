@@ -1,3 +1,4 @@
+import { selectCanvasTool } from './fixtures/canvas-reference/place-card.mjs';
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
@@ -73,8 +74,7 @@ try {
   await page.evaluate(()=>{const canvas=window.snapshot();canvas.nodes=canvas.nodes.filter(node=>node.id!=='far');sessionStorage.setItem('reference-fixture',JSON.stringify(canvas));});
   await page.reload();await page.locator('[data-canvas-node-id="old"]').waitFor();await installMock();
   await page.evaluate(()=>{window.environmentPhase='stopped';});
-  await page.getByRole('button',{name:'工具箱',exact:true}).click();
-  await page.getByRole('menuitem',{name:/本地 H3 视频/}).click();
+  await selectCanvasTool(page, '本地 H3 视频');
   assert.equal(await page.locator('.workflow-card.is-comfy-video').count(),0,'tool arms placement first');
   await page.mouse.click(890,180);
   const card=page.locator('.workflow-card.is-comfy-video');await card.waitFor();

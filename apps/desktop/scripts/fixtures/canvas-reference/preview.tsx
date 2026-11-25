@@ -8,6 +8,7 @@ import { LibraryHome } from "../../../src/components/LibraryHome";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
+import { DraftEditor } from "../../../src/components/DraftEditor";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { ImageAnnotator } from "../../../src/components/ImageAnnotator";
 import { DraftEditor } from "../../../src/components/DraftEditor";
@@ -79,6 +80,30 @@ let snapshot = JSON.parse(sessionStorage.getItem("reference-fixture") || "null")
   executionLinks: [], view: { projectId: "p", panX: 100, panY: 60, zoom: 0.9, sourcePanelWidth: 300, viewMode: "canvas", timelineScope: "all" },
 };
 w.calls = [];
+function createFixtureNode(value: any) {
+  const existing = snapshot.nodes.find((node: any) => node.id === value.id);
+  if (existing) {
+    if (Object.entries(value).some(([key, field]) => JSON.stringify(existing[key]) !== JSON.stringify(field))) {
+      throw "模拟重复节点内容不一致";
+    }
+    return existing;
+  }
+  const node = { ...value, hiddenAt: null, createdAt: 10, updatedAt: 10 };
+  snapshot.nodes.push(node);
+  return node;
+}
+function createFixtureGroup(value: any, nodeIds: string[]) {
+  const group = { ...value, createdAt: 10, updatedAt: 10 };
+  snapshot.groups.push(group);
+  snapshot.groupItems.push(...nodeIds.map((nodeId, ordinal) => ({ groupId: group.id, nodeId, ordinal })));
+  return structuredClone(group);
+}
+function updateFixtureNode(nodeId: string, value: any) {
+  const node = snapshot.nodes.find((item: any) => item.id === nodeId);
+  if (!node) return null;
+  Object.assign(node, value);
+  return structuredClone(node);
+}
 const fileChanges = new Map<string, { path: string; name: string } | null>();
 const currentFiles = (entries: any[]) => entries.flatMap(entry => fileChanges.has(entry.path)
   ? fileChanges.get(entry.path) ? [{ ...entry, ...fileChanges.get(entry.path) }] : [] : [entry]);
@@ -297,17 +322,22 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "project_canvas_node_create") {
       if (w.failNodeSave) throw "模拟草稿卡片保存失败";
-      const existing = snapshot.nodes.find((node: any) => node.id === args.value.id);
-      if (existing) {
-        if (Object.entries(args.value).some(([key, value]) => JSON.stringify(existing[key]) !== JSON.stringify(value))) {
-          throw "模拟重复节点内容不一致";
-        }
-        return existing;
-      }
-      const node = { ...args.value, hiddenAt: null, createdAt: 10, updatedAt: 10 };
-      snapshot.nodes.push(node);
+      const node = createFixtureNode(args.value);
       if (w.loseNodeSaveReply) throw "模拟草稿卡片确认失败";
       return node;
+    }
+    if (command === "project_canvas_nodes_batch_create") {
+      if (w.failNodeSave) throw "模拟草稿卡片保存失败";
+      return { nodes: args.values.map(createFixtureNode),
+        groups: (args.groups ?? []).map((group: any) => createFixtureGroup(group.value, group.nodeIds)) };
+    }
+    if (command === "project_canvas_nodes_batch_update") {
+      for (const { nodeId, value } of args.updates) updateFixtureNode(nodeId, value);
+      for (const value of args.groups ?? []) {
+        const group = snapshot.groups.find((item: any) => item.id === value.id);
+        Object.assign(group, value);
+      }
+      return null;
     }
     if (command === "project_canvas_note_update") {
       if (w.failNoteSave) throw "模拟文本保存失败";
@@ -315,8 +345,7 @@ w.__TAURI_INTERNALS__ = {
       node.payloadJson = args.payloadJson; return structuredClone(node);
     }
     if (command === "project_canvas_node_update") {
-      const node = snapshot.nodes.find((n: any) => n.id === args.nodeId);
-      Object.assign(node, args.value); return structuredClone(node);
+      return updateFixtureNode(args.nodeId, args.value);
     }
     if (command === "project_canvas_node_remove") {
       const node = snapshot.nodes.find((n: any) => n.id === args.nodeId);
@@ -330,10 +359,7 @@ w.__TAURI_INTERNALS__ = {
       return true;
     }
     if (command === "project_canvas_group_create") {
-      const group = { ...args.value, createdAt: 10, updatedAt: 10 };
-      snapshot.groups.push(group);
-      snapshot.groupItems.push(...args.nodeIds.map((nodeId: string, ordinal: number) => ({ groupId: group.id, nodeId, ordinal })));
-      return structuredClone(group);
+      return createFixtureGroup(args.value, args.nodeIds);
     }
     if (command === "project_canvas_group_set_items") {
       snapshot.groupItems = snapshot.groupItems.filter((item: any) => item.groupId !== args.groupId);
@@ -598,7 +624,7 @@ function Fixture() {
       <Toolbar localFilesOpen={folderMode} canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
       <div className="flex min-h-0 flex-1">{canvas}</div>
     </div> : explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
-    <FileTaskStatusPanel /><AssetContextMenu /><CaptionRing /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+    <FileTaskStatusPanel /><AssetContextMenu /><CaptionRing /><ImageAnnotator /><DraftEditor /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
 installCatalogPagingMock(window);

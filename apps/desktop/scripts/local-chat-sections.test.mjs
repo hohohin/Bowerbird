@@ -23,7 +23,7 @@ const intersects = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x
 
 // Use the production renderer's minimum height expression rather than a second
 // set of card sizes in this test. Long-content DOM height is checked in the UI.
-const layerPath = resolve(lib, '../components/CanvasWorkflowLayer.tsx');
+const layerPath = resolve(lib, '../components/WorkflowCardItem.tsx');
 const layer = ts.createSourceFile(layerPath, readFileSync(layerPath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let heightExpression;
 function findHeight(node) {
@@ -48,9 +48,9 @@ function fixture(example, initial = example.workflow) {
     canvasWorkflowAuthorize: async () => { calls.push('authorize'); },
     getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.png` })),
   };
-  const real = new Set(['canvasWorkflow', 'workflowExternalChanges', 'canvasCardNames', 'workflowDiagnostics',
+  const real = new Set(['canvasWorkflow', 'workflowExternalChanges', 'workflowMigrations', 'workflowTriggerScheduler', 'workflowPersistenceQueue', 'canvasNodePayload', 'canvasCardNames', 'workflowDiagnostics',
     'contentTable', 'canvasNotes', 'canvasNoteSource', 'canvasLogic', 'canvasSessionOutputs', 'canvasConversationCards', 'comfyVideo', 'videoGeneration', 'workflowTriggerSchedule']);
-  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, setTimeout, clearTimeout });
+  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, AbortController, setTimeout, clearTimeout });
   function load(path) {
     if (modules.has(path)) return modules.get(path).exports;
     const module = { exports: {} }; modules.set(path, module);
@@ -58,7 +58,13 @@ function fixture(example, initial = example.workflow) {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
     }).outputText;
     const require = specifier => {
+      const nestedExecutor = dirname(path) === resolve(lib, 'executors');
+      if (nestedExecutor && specifier.startsWith('../')) specifier = './' + specifier.slice(3);
+      const base = nestedExecutor ? lib : dirname(path);
+      if (specifier.startsWith('./executors/')) return load(resolve(lib, specifier + '.ts'));
+      if (['./canvasWorkflowCardExecutors', './canvasWorkflowMediaInputs', './workflowEntitlement'].includes(specifier)) return load(resolve(lib, specifier + '.ts'));
       if (specifier === './api') return { api };
+      if (specifier === './workflowHost') return { getWorkflowHost: () => ({ getState: () => ({ genJobs: {} }) }) };
       if (specifier === '../store') return { useStore: { getState: () => ({ genJobs: {} }) } };
       if (specifier === '@tauri-apps/api/core') return { invoke: async command => {
         calls.push(command); throw new Error(`unexpected native execution: ${command}`);
@@ -68,7 +74,7 @@ function fixture(example, initial = example.workflow) {
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
       if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined };
       if (real.has(specifier.replace(/^\.\//, '').replace(/\.ts$/, ''))) {
-        return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
+        return load(resolve(base, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       }
       return {};
     };

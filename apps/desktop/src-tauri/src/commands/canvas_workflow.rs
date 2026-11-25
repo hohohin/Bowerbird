@@ -1,13 +1,16 @@
 //! Versioned, local workflow definitions. Provider jobs keep their existing authority.
-use std::{collections::{HashMap, HashSet}, sync::Arc};
-use rusqlite::{params, OptionalExtension};
+use std::{collections::{HashMap, HashSet}, future::Future, sync::Arc};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::State;
 use crate::{db::Database, error::{AppError, AppResult}};
 use crate::cloud::{AuthClient, EntitlementService};
-use crate::core::paths::LibraryPaths;
+use super::project_canvas::run_canvas_db;
+
 pub mod shot_delivery;
+mod validation;
+pub(crate) use validation::validate;
 use crate::core::project_canvas::{NewCanvasNode, insert_node_tx, touch_canvas_tx};
 
 pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<()> {
@@ -23,7 +26,7 @@ pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementServ
 
 // Existing accepted runs can finish after expiry. Results do not change the paid definition.
 fn paid_definition(document: &Value) -> Vec<Value> {
-    document["nodes"].as_array().into_iter().flatten().filter(|n| n["kind"] != "text")
+    document["nodes"].as_array().into_iter().flatten().filter(|node| workflow_card_requires_pro(node))
         .map(|node| {
             let mut node = node.clone();
             if let Some(fields) = node.as_object_mut() {
@@ -37,21 +40,141 @@ fn paid_definition(document: &Value) -> Vec<Value> {
         }).collect()
 }
 
-fn has_new_run(before: &Value, after: &Value) -> bool {
-    let ids = |doc: &Value| -> HashSet<String> {
-        doc["runs"].as_array().into_iter().flatten().chain(std::iter::once(&doc["run"]))
-            .filter(|run| matches!(run["status"].as_str(), Some("running" | "waiting")))
-            .filter_map(|r| r["id"].as_str().map(str::to_owned)).collect()
-    };
-    !ids(after).is_subset(&ids(before))
+fn workflow_card_requires_pro(node: &Value) -> bool {
+    match node["kind"].as_str() {
+        Some("text") => false,
+        Some("generation") => node["generation"]["media"] == "video"
+            && !matches!(node["generation"]["localVideo"], Value::Null | Value::Bool(false)),
+        _ => true,
+    }
+}
+
+fn effective_workflow_runs(document: &Value) -> &[Value] {
+    match document.get("runs") {
+        Some(runs) => runs.as_array().map(Vec::as_slice).unwrap_or_default(),
+        None => document.get("run").filter(|run| !run.is_null())
+            .map(std::slice::from_ref).unwrap_or_default(),
+    }
+}
+
+fn workflow_run_active(run: &Value) -> bool {
+    matches!(run["status"].as_str(), Some("running" | "waiting"))
+}
+
+fn workflow_ids(value: &Value) -> impl Iterator<Item = &str> {
+    value.as_array().into_iter().flatten().filter_map(Value::as_str)
+}
+
+fn workflow_write_ids(run: &Value) -> impl Iterator<Item = &str> {
+    workflow_ids(run.get("writeNodeIds").unwrap_or(&run["order"]))
+}
+
+fn same_run_identity(before: &Value, after: &Value) -> bool {
+    before["threadId"] == after["threadId"] && before["accountId"] == after["accountId"]
+}
+
+fn same_video_recovery(before: &Value, after: &Value, nodes: &[Value]) -> bool {
+    let Some(node_id) = after["startId"].as_str() else { return false; };
+    if after["completionRecoveryOnly"] != true
+        || !same_run_identity(before, after)
+        || !workflow_ids(&after["order"]).eq([node_id])
+        || !workflow_write_ids(after).eq([node_id])
+        || workflow_ids(&after["triggerQueue"]).next().is_some()
+        || !after["loop"].is_null()
+        || !nodes.iter().any(|node| node["id"] == node_id && node["kind"] == "comfy-video")
+    {
+        return false;
+    }
+    let original = &before["steps"][node_id];
+    let resumed = &after["steps"][node_id];
+    original["comfyCancelled"] != true
+        && after["steps"].as_object().is_some_and(|steps| steps.keys().all(|id|
+            id == node_id || before["steps"].get(id) == steps.get(id)))
+        && original["jobId"].as_str().is_some_and(|id| !id.is_empty())
+        && original["jobId"] == resumed["jobId"]
+        // Local H3 uses the job ID alone. Keep the turn key when a saved run has one.
+        && original["turnKey"] == resumed["turnKey"]
+}
+
+fn completed_paid_step(run: &Value, paid: &HashSet<&str>) -> bool {
+    run["steps"].as_object().is_some_and(|steps| steps.iter().any(|(id, step)|
+        paid.contains(id.as_str()) && step["status"] == "done"))
+}
+
+fn consumes_accepted_completion(before: &Value, after: &Value, paid: &HashSet<&str>) -> bool {
+    let queue = before["triggerQueue"].as_array().and_then(|queue| queue.split_first());
+    queue.is_some_and(|(head, remaining)| {
+        head == &after["startId"]
+            && workflow_ids(&after["order"]).next().is_some()
+            && after["triggerQueue"].as_array().is_some_and(|queue| queue == remaining)
+            && workflow_ids(&before["order"]).all(|id| before["steps"][id]["status"] == "done")
+            && completed_paid_step(before, paid)
+    })
+}
+
+fn paid_step_ids<'a>(run: &'a Value, paid: &'a HashSet<&'a str>) -> impl Iterator<Item = &'a str> {
+    run["steps"].as_object().into_iter().flat_map(|steps| steps.keys())
+        .map(String::as_str).filter(move |id| paid.contains(id))
+}
+
+fn accepted_run_checkpoint(
+    before: &Value, after: &Value, nodes: &[Value], paid: &HashSet<&str>, invokes_paid: bool,
+) -> bool {
+    if before["status"] == "stopped" || workflow_run_active(before) && before["completionRecoveryOnly"] == true {
+        return same_video_recovery(before, after, nodes);
+    }
+    if !workflow_run_active(before) || !same_run_identity(before, after) {
+        return false;
+    }
+    if invokes_paid && consumes_accepted_completion(before, after, paid) {
+        return true;
+    }
+    // A free phase cannot add a paid step and later present it as an accepted completion.
+    if paid_step_ids(after, paid).any(|id| before["steps"].get(id).is_none()) {
+        return false;
+    }
+    if !invokes_paid {
+        return true;
+    }
+
+    let waiting_for_queue_head = after["status"] == "waiting"
+        && after["order"].as_array().is_some_and(Vec::is_empty)
+        && workflow_write_ids(after).next().is_none()
+        && after["triggerQueue"] == before["triggerQueue"]
+        && workflow_ids(&after["triggerQueue"]).next() == after["startId"].as_str();
+    if waiting_for_queue_head {
+        return true;
+    }
+    let previous_writes: HashSet<_> = workflow_write_ids(before).collect();
+    before["startId"] == after["startId"] && before["order"] == after["order"]
+        && workflow_write_ids(after).all(|id| !paid.contains(id) || previous_writes.contains(id))
+}
+
+fn requires_run_pro(before: &Value, after: &Value) -> bool {
+    let Some(nodes) = after["nodes"].as_array() else { return false; };
+    let paid: HashSet<_> = nodes.iter().filter(|node| workflow_card_requires_pro(node))
+        .filter_map(|node| node["id"].as_str()).collect();
+    if paid.is_empty() { return false; }
+
+    let earlier: HashMap<_, _> = effective_workflow_runs(before).iter()
+        .filter_map(|run| Some((run["id"].as_str()?, run))).collect();
+    effective_workflow_runs(after).iter().filter(|run| workflow_run_active(run)).any(|run| {
+        let invokes_paid = run["startId"].as_str().into_iter()
+            .chain(workflow_ids(&run["order"]))
+            .chain(workflow_write_ids(run))
+            .any(|node| paid.contains(node));
+        let previous = run["id"].as_str().and_then(|id| earlier.get(id).copied());
+        (invokes_paid || paid_step_ids(run, &paid).next().is_some())
+            && !previous.is_some_and(|old| accepted_run_checkpoint(old, run, nodes, &paid, invokes_paid))
+    })
 }
 
 /// A detach can close gaps in numbered inputs. Binding identity and order stay fixed.
-fn binding_subsequence(before: Option<&Value>, after: Option<&Value>, renumber: bool) -> bool {
+fn binding_subsequence(before: Option<&Value>, after: Option<&Value>, renumber: bool, include: impl Fn(&Value) -> bool) -> bool {
     let Some(after) = after else { return true; };
     let Some(after) = after.as_array() else { return false; };
     let mut previous = before.and_then(Value::as_array).into_iter().flatten();
-    after.iter().enumerate().all(|(index, binding)| previous.any(|old| {
+    after.iter().enumerate().filter(|(_, binding)| include(binding)).all(|(index, binding)| previous.any(|old| {
         if old == binding { return true; }
         if !renumber || binding["slot"].as_u64() != Some(index as u64 + 1) { return false; }
         let mut old = old.clone();
@@ -61,18 +184,19 @@ fn binding_subsequence(before: Option<&Value>, after: Option<&Value>, renumber: 
     }))
 }
 
-fn removes_only_inputs(before: Option<&Value>, after: Option<&Value>, renumber: bool) -> bool {
+fn removes_only_inputs(before: Option<&Value>, after: Option<&Value>, renumber: bool, include: impl Fn(&Value) -> bool) -> bool {
     let Some(after) = after else { return true; };
     let Some(after) = after.as_object() else { return false; };
     after.iter().all(|(port, bindings)| binding_subsequence(before.and_then(|old| old.get(port)), Some(bindings),
-        renumber && matches!(port.as_str(), "image" | "text")))
+        renumber && matches!(port.as_str(), "image" | "text"), &include))
 }
 
 fn consumed_queued_trigger(before: &Value, after: &Value, id: &Value) -> bool {
-    before["runs"].as_array().into_iter().flatten().chain(std::iter::once(&before["run"]))
-        .filter(|run| run["id"].is_string() && run["triggerQueue"][0] == *id)
-        .any(|old| after["runs"].as_array().into_iter().flatten().chain(std::iter::once(&after["run"]))
-            .any(|new| new["id"] == old["id"] && new["startId"] == *id
+    effective_workflow_runs(before).iter()
+        .filter(|run| workflow_run_active(run) && run["triggerQueue"][0] == *id)
+        .any(|old| effective_workflow_runs(after).iter()
+            .any(|new| workflow_run_active(new) && new["id"] == old["id"] && new["startId"] == *id
+                && same_run_identity(old, new)
                 && new["triggerQueue"].as_array().zip(old["triggerQueue"].as_array())
                     .is_some_and(|(next, previous)| previous.split_first().is_some_and(|(_, rest)| next.as_slice() == rest))))
 }
@@ -80,16 +204,21 @@ fn consumed_queued_trigger(before: &Value, after: &Value, id: &Value) -> bool {
 fn definition_changed(before: &Value, after: &Value) -> bool {
     let previous = paid_definition(before);
     let paid_ids: HashSet<_> = previous.iter().filter_map(|node| node["id"].as_str()).collect();
-    // Native content writers stay free for ordinary content. A new output
-    // connection from a workflow card still edits the paid graph.
-    for node in after["nodes"].as_array().into_iter().flatten().filter(|node| node["kind"] == "text") {
+    let from_paid = |binding: &Value| binding["nodeId"].as_str().is_some_and(|id| paid_ids.contains(id));
+    // An ordinary generation or content card is free, but connecting a paid
+    // source changes the automation graph. Existing connections can be removed.
+    for node in after["nodes"].as_array().into_iter().flatten().filter(|node| !workflow_card_requires_pro(node)) {
         if node["id"].as_str().is_some_and(|id| paid_ids.contains(id)) { return true; }
-        let uses_workflow = node["inputs"].as_object().into_iter().flatten().flat_map(|(_, bindings)| bindings.as_array().into_iter().flatten())
-            .any(|binding| binding["nodeId"].as_str().is_some_and(|id| paid_ids.contains(id)));
-        if uses_workflow {
+        let has_paid_source = ["inputs", "savedComfyR2V"].into_iter().flat_map(|key|
+            node[key].as_object().into_iter().flat_map(|ports| ports.values()))
+            .filter_map(Value::as_array).flatten().chain(node["savedComfyAudio"].as_array().into_iter().flatten())
+            .any(from_paid);
+        if has_paid_source {
             let old = before["nodes"].as_array().into_iter().flatten().find(|old| old["id"] == node["id"]);
             if !old.is_some_and(|old| old["textTarget"] == node["textTarget"]
-                && removes_only_inputs(old.get("inputs"), node.get("inputs"), false)) { return true; }
+                && removes_only_inputs(old.get("inputs"), node.get("inputs"), node["kind"] == "generation", from_paid)
+                && removes_only_inputs(old.get("savedComfyR2V"), node.get("savedComfyR2V"), false, from_paid)
+                && binding_subsequence(old.get("savedComfyAudio"), node.get("savedComfyAudio"), false, from_paid)) { return true; }
         }
     }
     let mut previous = previous.into_iter();
@@ -105,19 +234,15 @@ fn definition_changed(before: &Value, after: &Value) -> bool {
         }
         let renumber = matches!(node["kind"].as_str(), Some("generation" | "agent" | "planner"));
         let (Some(old_fields), Some(fields)) = (old.as_object_mut(), node.as_object_mut()) else { return false; };
-        removes_only_inputs(old_fields.remove("inputs").as_ref(), fields.remove("inputs").as_ref(), renumber)
-            && removes_only_inputs(old_fields.remove("savedComfyR2V").as_ref(), fields.remove("savedComfyR2V").as_ref(), false)
-            && binding_subsequence(old_fields.remove("savedComfyAudio").as_ref(), fields.remove("savedComfyAudio").as_ref(), false)
+        removes_only_inputs(old_fields.remove("inputs").as_ref(), fields.remove("inputs").as_ref(), renumber, |_| true)
+            && removes_only_inputs(old_fields.remove("savedComfyR2V").as_ref(), fields.remove("savedComfyR2V").as_ref(), false, |_| true)
+            && binding_subsequence(old_fields.remove("savedComfyAudio").as_ref(), fields.remove("savedComfyAudio").as_ref(), false, |_| true)
             && old == node
     })
 }
 
 fn workflow_save_requires_pro(before: &Value, after: &Value, creates_content: bool) -> bool {
-    creates_content || definition_changed(before, after) || (has_new_run(before, after) && !paid_definition(after).is_empty())
-}
-
-fn workflow_revision_conflict() -> AppError {
-    AppError::Other("工作流已被其他窗口修改，请重新打开项目".into())
+    creates_content || definition_changed(before, after) || requires_run_pro(before, after)
 }
 
 // The schedule and the new run are claimed in the same SQLite transaction.
@@ -160,429 +285,62 @@ pub struct WorkflowSnapshot { revision: i64, document: Value }
 
 fn invalid() -> AppError { AppError::Other("工作流数据无效".into()) }
 
-fn validate_binding_metadata(binding: &Value) -> AppResult<()> {
-    if binding.get("autoConnect").is_some_and(|id| id.as_str().is_none_or(str::is_empty)) { return Err(invalid()); }
-    if let Some(filter) = binding.get("mediaFilter") {
-        let media = filter.as_array().filter(|items| !items.is_empty() && items.len() <= 3).ok_or_else(invalid)?;
-        let mut seen = HashSet::new();
-        for kind in media {
-            let kind = kind.as_str().filter(|kind| matches!(*kind, "image" | "video" | "audio")).ok_or_else(invalid)?;
-            if !seen.insert(kind) { return Err(invalid()); }
-        }
-    }
-    Ok(())
-}
-
-fn control_binding_fields(binding: &Value, fields: &[&str]) -> bool {
-    binding.as_object().is_some_and(|value|
-        value.keys().all(|key| key == "autoConnect" || fields.contains(&key.as_str())))
-}
-
-fn h3_r2v_port(port: &str) -> Option<(&'static str, usize)> {
-    match port {
-        "reference-image" => Some(("image", 9)),
-        "reference-video" => Some(("video", 3)),
-        "r2v-audio" => Some(("audio", 3)),
-        _ => None,
-    }
-}
-
-fn workflow_produces_video(node: &Value) -> bool {
-    matches!(node["kind"].as_str(), Some("comfy-video" | "director3d"))
-        || node["kind"] == "generation" && node["generation"]["media"] == "video"
-        || node["kind"] == "agent" && node["skill"] == "hyperframes"
-}
-
-fn video_audio_receiver(node: &Value, port: &str, parked: bool) -> bool {
-    if parked {
-        return node["kind"] == "generation" && node["generation"]["media"] == "video"
-            && matches!(port, "reference-audio" | "r2v-audio");
-    }
-    if node["kind"] == "comfy-video" {
-        // Inactive H3 sockets survive mode changes.
-        return matches!(port, "reference-audio" | "r2v-audio");
-    }
-    if port != "image" {
-        return false;
-    }
-    let options = &node["generation"]["videoOptions"];
-    node["kind"] == "voice"
-        || node["kind"] == "agent" && node["skill"] == "hyperframes" && node["agentTransport"] == "codex-cli"
-        || node["kind"] == "generation" && node["generation"]["media"] == "video" && options["kind"] != "frames2video"
-            && options["model_version"].as_str().is_none_or(|model| model.is_empty() || model.starts_with("seedance2"))
-}
-
-fn validate_video_audio_binding(
-    binding: &Value,
-    audio: &Value,
-    accepts_audio: bool,
-    nodes: &[Value],
-    assets: &mut HashSet<String>,
-) -> AppResult<()> {
-    if !accepts_audio
-        || ["videoFrame", "groupId", "assetIds", "canvasNodeId", "cellId", "dimension"]
-            .iter().any(|key| binding.get(*key).is_some())
-        || binding["mediaFilter"].as_array().is_some_and(|types| !types.iter().any(|kind| kind == "audio"))
-    {
-        return Err(invalid());
-    }
-    let audio = audio.as_object().filter(|audio| audio.keys().all(|key| key == "assetId")).ok_or_else(invalid)?;
-    if let Some(source) = binding.get("nodeId") {
-        let producer = nodes.iter().find(|card| card["id"] == *source).ok_or_else(invalid)?;
-        if !workflow_produces_video(producer) || binding["portId"] != "image"
-            || !audio.is_empty() || binding.get("assetId").is_some() || binding.get("assetNodeId").is_some()
-        {
-            return Err(invalid());
-        }
-    } else {
-        let asset = audio.get("assetId").and_then(Value::as_str).filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-        if binding.get("portId").is_some() || binding["assetId"].as_str().is_none_or(|id| id.is_empty() || id == asset) {
-            return Err(invalid());
-        }
-        assets.insert(asset.to_owned());
-    }
-    Ok(())
-}
-
-fn validate_image_output(value: &Value, assets: &mut HashSet<String>) -> AppResult<()> {
-    // An asynchronous image output may contain only exact generation-session references.
-    if value.get("assetIds").is_none() && value.get("nodeIds").is_none() { return Err(invalid()); }
-    if let Some(ids) = value.get("nodeIds") {
-        if ids.as_array().is_none_or(|ids| ids.iter().any(|id| id.as_str().is_none_or(str::is_empty))) { return Err(invalid()); }
-    }
-    if let Some(ids) = value.get("assetIds") {
-        for asset in ids.as_array().ok_or_else(invalid)? {
-            assets.insert(asset.as_str().ok_or_else(invalid)?.to_owned());
-        }
-    }
-    Ok(())
-}
-
-fn validate_loop(run: &Value, nodes: &[Value], assets: &mut HashSet<String>) -> AppResult<()> {
-    let Some(state) = run.get("loop") else { return Ok(()); };
-    let owner = state["nodeId"].as_str().ok_or_else(invalid)?;
-    if !nodes.iter().any(|node| node["id"] == owner && node["kind"] == "loop") { return Err(invalid()); }
-    let order = run["order"].as_array().ok_or_else(invalid)?;
-    if !order.contains(&json!(owner)) { return Err(invalid()); }
-    let body = state["bodyIds"].as_array().filter(|body| !body.is_empty()).ok_or_else(invalid)?;
-    let mut ids = HashSet::new();
-    for id in body {
-        let key = id.as_str().ok_or_else(invalid)?;
-        if key == owner || !order.contains(id) || !ids.insert(key) { return Err(invalid()); }
-    }
-    let index = state["index"].as_u64().ok_or_else(invalid)? as usize;
-    let start_index = match state.get("startIndex") {
-        Some(value) => value.as_u64().filter(|index| *index < 100).ok_or_else(invalid)? as usize,
-        None => 0,
-    };
-    let completed = state["completed"].as_array().ok_or_else(invalid)?;
-    if let Some(items) = state.get("items") {
-        let items = items.as_array().filter(|items| !items.is_empty() && items.len() <= 100).ok_or_else(invalid)?;
-        let processed = start_index + completed.len();
-        if start_index >= items.len() || index >= items.len() || !(processed == index || processed == items.len() && index + 1 == items.len()) { return Err(invalid()); }
-        if run["status"] == "done" && processed != items.len() { return Err(invalid()); }
-        for item in items {
-            if !item["text"].is_string() { return Err(invalid()); }
-            for asset in item["assetIds"].as_array().ok_or_else(invalid)? {
-                assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
-            }
-        }
-    } else if index != start_index || !completed.is_empty() || run["status"] == "done" { return Err(invalid()); }
-    for item in completed {
-        let outputs = item["outputs"].as_object().ok_or_else(invalid)?;
-        let steps = item["steps"].as_object().ok_or_else(invalid)?;
-        if outputs.len() != ids.len() || steps.len() != ids.len()
-            || outputs.keys().any(|id| !ids.contains(id.as_str()))
-            || steps.iter().any(|(id, step)| !ids.contains(id.as_str()) || step["status"] != "done") { return Err(invalid()); }
-        for ports in outputs.values() {
-            for value in ports.as_object().ok_or_else(invalid)?.values() {
-                if !matches!(value["type"].as_str(), Some("text" | "image" | "visual-profile" | "session")) { return Err(invalid()); }
-                if value["type"] == "image" {
-                    validate_image_output(value, assets)?;
-                } else if let Some(list) = value.get("assetIds") {
-                    for asset in list.as_array().ok_or_else(invalid)? {
-                        assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
-    // Local history includes frozen inputs and results from multiple runs. Its
-    // cumulative size is not a per-request limit; validate the graph below.
-    if document["schema_version"] != 1 { return Err(invalid()); }
-    let nodes = document["nodes"].as_array().ok_or_else(invalid)?;
-    if nodes.len() > 500 { return Err(invalid()); }
-    let mut ids = HashSet::new();
+// A prior saved document can predate the current validator. Read only the
+// ownership-bearing fields so saving it never needs to revalidate old runs.
+fn saved_workflow_assets(document: &Value) -> HashSet<&str> {
     let mut assets = HashSet::new();
-    let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
-    for node in nodes {
-        let id = node["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("director3d" | "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
-            || !matches!(node["action"].as_str(), Some("describe" | "reuse" | "layers"))
-            || node["x"].as_f64().filter(|v| v.is_finite()).is_none()
-            || node["y"].as_f64().filter(|v| v.is_finite()).is_none()
-            || !node["prompt"].is_string() || !node["provider"].is_string()
-            || !node["trigger"].is_boolean() || !node["outputPorts"].is_array() { return Err(invalid()); }
-        let inputs = node["inputs"].as_object().ok_or_else(invalid)?;
-        if node["kind"] == "planner" && (node["trigger"] != false || inputs.keys().any(|key| key != "text" && key != "image")
-            || node["outputs"].as_object().is_none_or(|outputs| !outputs.is_empty()) || node["outputPorts"].as_array().is_none_or(|ports| !ports.is_empty())) { return Err(invalid()); }
-        if node["kind"] == "trigger" && inputs.keys().any(|key| key != "completion") { return Err(invalid()); }
-        if node.get("triggerCount").is_some_and(|count| node["kind"] != "trigger" || count.as_u64().is_none_or(|count| count > 9999)) { return Err(invalid()); }
-        if node.get("triggerMode").is_some_and(|mode| node["kind"] != "trigger" || !matches!(mode.as_str(), Some("manual" | "daily" | "once" | "completion"))) { return Err(invalid()); }
-        if let Some(schedule) = node.get("triggerSchedule") {
-            if node["kind"] != "trigger" || schedule["id"].as_str().is_none_or(str::is_empty)
-                || schedule["at"].as_u64().is_none_or(|at| at == 0 || at > 8_640_000_000_000_000)
-                || !matches!(schedule["status"].as_str(), Some("armed" | "fired" | "missed" | "failed")) { return Err(invalid()); }
-            if let Some(time) = schedule.get("dailyAt") {
-                let time = time.as_str().ok_or_else(invalid)?.as_bytes();
-                if time.len() != 5 || time[2] != b':' || ![time[0], time[1], time[3], time[4]].iter().all(u8::is_ascii_digit)
-                    || &time[..2] > b"23".as_slice() || &time[3..] > b"59".as_slice() || schedule["status"] != "armed" { return Err(invalid()); }
+    for node in document["nodes"].as_array().into_iter().flatten() {
+        let inputs = [&node["inputs"], &node["savedComfyR2V"]];
+        for binding in inputs.into_iter().filter_map(Value::as_object)
+            .flat_map(|ports| ports.values()).filter_map(Value::as_array).flatten()
+        {
+            assets.extend(binding["assetId"].as_str());
+            assets.extend(binding["videoFrame"]["assetId"].as_str());
+            assets.extend(binding["videoAudio"]["assetId"].as_str());
+            if binding["groupId"].is_string() {
+                assets.extend(binding["assetIds"].as_array().into_iter().flatten().filter_map(Value::as_str));
             }
         }
-        if let Some(seen) = node.get("completionSeen") {
-            if node["kind"] != "trigger" { return Err(invalid()); }
-            let mut unique = HashSet::new();
-            for session in seen.as_array().ok_or_else(invalid)? {
-                if !unique.insert(session.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?) { return Err(invalid()); }
-            }
+        for binding in node["savedComfyAudio"].as_array().into_iter().flatten().filter(|binding| binding.get("videoAudio").is_some()) {
+            assets.extend(binding["assetId"].as_str());
+            assets.extend(binding["videoAudio"]["assetId"].as_str());
         }
-        if node["kind"] == "loop" {
-            if node.get("loopMode").is_some_and(|mode| !matches!(mode.as_str(), Some("images" | "rows" | "count"))) { return Err(invalid()); }
-            if node.get("loopStartItem").is_some_and(|value| value.as_u64().is_none_or(|item| !(1..=100).contains(&item))) { return Err(invalid()); }
-            if node["loopMode"] == "count" {
-                if node["loopCount"].as_u64().is_none_or(|count| !(1..=100).contains(&count)) { return Err(invalid()); }
-            } else if node.get("loopCount").is_some() { return Err(invalid()); }
-            let port = if node["loopMode"] == "count" { "signal" } else if node["loopMode"] == "rows" { "text" } else { "image" };
-            if inputs.keys().any(|key| key != port && key != "signal") { return Err(invalid()); }
-        }
-        if node["kind"] == "text" && node["textSource"].is_string() {
-            if node["textSource"].as_str().is_none_or(str::is_empty) || inputs.keys().any(|key| key != "signal") || node.get("textTarget").is_some() { return Err(invalid()); }
-            if nodes.iter().any(|other| other["id"] != node["id"] && other["textSource"] == node["textSource"]) { return Err(invalid()); }
-        } else if node["kind"] == "text" {
-            if node["textTarget"]["nodeId"].as_str().is_none_or(str::is_empty)
-                || node["textTarget"]["cellId"].as_str().is_none_or(str::is_empty)
-                || inputs.values().filter_map(Value::as_array).map(Vec::len).sum::<usize>() != 1
-                || inputs.keys().any(|key| key != "text" && key != "image") { return Err(invalid()); }
-            if nodes.iter().any(|other| other["id"] != node["id"] && other["kind"] == "text" && other["textTarget"]["nodeId"] == node["textTarget"]["nodeId"] && other["textTarget"]["cellId"] == node["textTarget"]["cellId"]) { return Err(invalid()); }
-            if let Some(axis) = node["textTarget"].get("appendAxis") {
-                if !matches!(axis.as_str(), Some("row" | "column")) || node["textTarget"]["append"] != true { return Err(invalid()); }
-                let cells = node["textTarget"]["axisCellIds"].as_array().filter(|cells| !cells.is_empty()).ok_or_else(invalid)?;
-                let mut unique = HashSet::new();
-                for cell in cells {
-                    let id = cell.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-                    if !unique.insert(id) { return Err(invalid()); }
-                }
-                if node["textTarget"].get("axisOffset").is_some_and(|offset| offset.as_u64().is_none()) { return Err(invalid()); }
-            }
-            if let Some(value) = node["textTarget"].get("cellIds") {
-                let cells = value.as_array().ok_or_else(invalid)?;
-                let mut unique = HashSet::new();
-                for cell in cells {
-                    let id = cell.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-                    if !unique.insert(id) || nodes.iter().any(|other| other["id"] != node["id"] && other["textTarget"]["nodeId"] == node["textTarget"]["nodeId"]
-                        && (other["textTarget"]["cellId"] == *cell || other["textTarget"]["cellIds"].as_array().is_some_and(|ids| ids.contains(cell)))) { return Err(invalid()); }
-                }
-            }
-        }
-        let parked_r2v = node.get("savedComfyR2V").map(|parked| {
-            if node["kind"] != "generation" || node["generation"]["media"] != "video" { return Err(invalid()); }
-            parked.as_object().filter(|inputs| inputs.keys().all(|port| h3_r2v_port(port).is_some())).ok_or_else(invalid)
-        }).transpose()?;
-        let mut deps = Vec::new();
-        for binding in node["savedComfyAudio"].as_array().into_iter().flatten() {
-            if let Some(audio) = binding.get("videoAudio") {
-                validate_binding_metadata(binding)?;
-                validate_video_audio_binding(binding, audio, video_audio_receiver(node, "reference-audio", true), nodes, &mut assets)?;
-                if let Some(original) = binding["assetId"].as_str() { assets.insert(original.to_owned()); }
-            }
-        }
-        for (port, bindings, parked) in inputs.iter().map(|(port, value)| (port, value, false))
-            .chain(parked_r2v.into_iter().flatten().map(|(port, value)| (port, value, true))) {
-            if port == "completion" {
-                if node["kind"] != "trigger" { return Err(invalid()); }
-                for binding in bindings.as_array().ok_or_else(invalid)? {
-                    validate_binding_metadata(binding)?;
-                    if binding.get("canvasNodeId").is_some() {
-                        if binding["canvasNodeId"].as_str().is_none_or(str::is_empty) || binding["cellId"] != "image"
-                            || !control_binding_fields(binding, &["canvasNodeId", "cellId"]) { return Err(invalid()); }
-                        continue;
-                    }
-                    let producer = nodes.iter().find(|source| source["id"] == binding["nodeId"]).ok_or_else(invalid)?;
-                    if matches!(producer["kind"].as_str(), Some("trigger" | "planner")) || producer.get("textSource").is_some()
-                        || !matches!(binding["portId"].as_str(), Some("text" | "image" | "visual-profile" | "iteration"))
-                        || !control_binding_fields(binding, &["nodeId", "portId", "pendingCompletionSession"]) { return Err(invalid()); }
-                    if binding.get("pendingCompletionSession").is_some_and(|session|
-                        session.as_str().is_none_or(str::is_empty) || binding["portId"] != "image"
-                        || !matches!(producer["kind"].as_str(), Some("generation" | "comfy-video"))) { return Err(invalid()); }
-                }
-                continue; // Completion events do not participate in the data dependency DAG.
-            }
-            let local_video = node["kind"] == "comfy-video";
-            let r2v = local_video && node["comfyVideo"]["mode"] == "r2v";
-            let legacy_frames = local_video && matches!(port.as_str(), "first-frame" | "last-frame");
-            let legacy_audio = local_video && port == "reference-audio";
-            let r2v_port = (local_video || parked).then(|| h3_r2v_port(port)).flatten();
-            let typed_port = r2v_port.or_else(|| legacy_audio.then_some(("audio", 1)));
-            let image_port = port == "image" || typed_port.is_some() || legacy_frames;
-            let inactive = parked || r2v_port.is_some() && !r2v || r2v && (legacy_audio || legacy_frames);
-            if !image_port && !matches!(port.as_str(), "text" | "visual-profile" | "signal") { return Err(invalid()); }
-            let bindings = bindings.as_array().ok_or_else(invalid)?;
-            if typed_port.is_some_and(|(_, limit)| bindings.len() > limit) { return Err(invalid()); }
-            for binding in bindings {
-                validate_binding_metadata(binding)?;
-                if typed_port.is_some_and(|(media, _)| media != "image" && binding.get("videoFrame").is_some()
-                    || binding.get("mediaFilter").is_some_and(|filter| filter.as_array().is_none_or(|types| types.len() != 1 || types[0] != media))
-                    || binding.get("portId").is_some_and(|port| port != "image")) { return Err(invalid()); }
-                if port == "signal" {
-                    let producer = nodes.iter().find(|node| node["id"] == binding["nodeId"]).ok_or_else(invalid)?;
-                    if producer["kind"] != "trigger" || binding["portId"] != "signal" || !control_binding_fields(binding, &["nodeId", "portId"]) { return Err(invalid()); }
-                    deps.push(producer["id"].as_str().ok_or_else(invalid)?);
-                    continue;
-                }
-                if binding["portId"] == "signal" { return Err(invalid()); }
-                if let Some(audio) = binding.get("videoAudio") {
-                    validate_video_audio_binding(binding, audio, video_audio_receiver(node, port, parked), nodes, &mut assets)?;
-                }
-                if let Some(frame) = binding.get("videoFrame") {
-                    if !image_port || !matches!(frame["position"].as_str(), Some("first" | "last"))
-                        || ["groupId", "assetIds", "canvasNodeId", "cellId", "dimension"].iter().any(|key| binding.get(*key).is_some())
-                    { return Err(invalid()); }
-                    if let Some(source) = binding.get("nodeId") {
-                        // Generated videos use the legacy "image" output socket, even before a file exists.
-                        let producer = nodes.iter().find(|card| card["id"] == *source).ok_or_else(invalid)?;
-                        // The generic image transport can also carry audio. Only persist a frame for an image receiver.
-                        let accepts_frame = legacy_frames || matches!(r2v_port, Some(("image", _)))
-                            || port == "image" && !local_video && node["kind"] != "voice" && !node["textSource"].is_string()
-                                && (node["kind"] != "text" || node["textTarget"]["image"] == true);
-                        if !workflow_produces_video(producer) || !accepts_frame || binding["portId"] != "image"
-                            || frame.get("assetId").is_some() || binding.get("assetId").is_some() || binding.get("assetNodeId").is_some()
-                            || binding["mediaFilter"].as_array().is_some_and(|types| !types.iter().any(|kind| kind == "image"))
-                        { return Err(invalid()); }
-                    } else {
-                        let frame_asset = frame["assetId"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-                        if binding.get("portId").is_some() || binding["assetId"].as_str().is_none_or(|id| id.is_empty() || id == frame_asset) { return Err(invalid()); }
-                        assets.insert(frame_asset.to_owned());
-                    }
-                }
-                if let Some(dimension) = binding.get("dimension") {
-                    let asset = binding["assetId"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-                    if port != "text" || !dimension["title"].is_string() || !dimension["body"].is_string()
-                        || !(dimension["id"].is_null() || dimension["id"].is_string())
-                        || ["nodeId", "portId", "groupId", "assetIds", "canvasNodeId", "cellId"].iter().any(|key| binding.get(*key).is_some())
-                    { return Err(invalid()); }
-                    assets.insert(asset.to_owned());
-                } else if binding["groupId"].is_string() {
-                    if !image_port || binding.get("nodeId").is_some() || binding.get("assetId").is_some() || binding.get("canvasNodeId").is_some() { return Err(invalid()); }
-                    for asset in binding["assetIds"].as_array().ok_or_else(invalid)? {
-                        assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
-                    }
-                } else if let Some(asset) = binding["assetId"].as_str() {
-                    if !image_port || binding.get("nodeId").is_some() { return Err(invalid()); }
-                    assets.insert(asset.to_owned());
-                } else if binding["canvasNodeId"].is_string() {
-                    if (port != "text" && !image_port) || !binding["cellId"].is_string() || binding.get("nodeId").is_some() { return Err(invalid()); }
-                    if matches!(binding["cellId"].as_str(), Some("*" | "*text" | "*latest" | "*latest-image")) {
-                        if (matches!(binding["cellId"].as_str(), Some("*" | "*latest-image")) && !image_port)
-                            || (matches!(binding["cellId"].as_str(), Some("*text" | "*latest")) && port != "text") { return Err(invalid()); }
-                        for producer in nodes.iter().filter(|node| !inactive && node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"]) {
-                            deps.push(producer["id"].as_str().ok_or_else(invalid)?);
-                        }
-                    }
-                    if let Some(producer) = nodes.iter().filter(|_| !inactive).find(|node| node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"] && (node["textTarget"]["cellId"] == binding["cellId"] || node["textTarget"]["cellIds"].as_array().is_some_and(|ids| ids.contains(&binding["cellId"]))))
-                        .or_else(|| nodes.iter().find(|node| !inactive && node["resultNodeIds"].as_array().is_some_and(|ids| ids.contains(&binding["canvasNodeId"])))) {
-                        deps.push(producer["id"].as_str().ok_or_else(invalid)?);
-                    }
-                } else {
-                    if nodes.iter().any(|node| node["id"] == binding["nodeId"] && node["kind"] == "planner") { return Err(invalid()); }
-                    let producer = binding["nodeId"].as_str().ok_or_else(invalid)?;
-                    if !inactive { deps.push(producer); }
-                    if !binding["portId"].is_string() { return Err(invalid()); }
-                }
-            }
-        }
-        dependencies.insert(id, deps);
-        for value in node["outputs"].as_object().ok_or_else(invalid)?.values() {
-            match value["type"].as_str() {
-                Some("session") if value["nodeIds"].as_array().is_some_and(|ids| ids.iter().all(|id| id.is_string())) => {},
-                Some("image") => validate_image_output(value, &mut assets)?,
-                Some("text") if value["text"].is_string() => {
-                    if let Some(ids) = value.get("assetIds") {
-                        for asset in ids.as_array().ok_or_else(invalid)? {
-                            assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
-                        }
-                    }
-                },
-                Some("visual-profile") if value["profileId"].as_str().is_some_and(|id| !id.is_empty()) && value["version"].as_i64().is_some_and(|v| v > 0) => {},
-                _ => return Err(invalid()),
+        for output in node["outputs"].as_object().into_iter().flat_map(|ports| ports.values()) {
+            if matches!(output["type"].as_str(), Some("text" | "image")) {
+                assets.extend(output["assetIds"].as_array().into_iter().flatten().filter_map(Value::as_str));
             }
         }
     }
-    let mut settled = HashSet::new();
-    while settled.len() < nodes.len() {
-        let before = settled.len();
-        for (id, deps) in &dependencies {
-            if deps.iter().any(|dep| !ids.contains(dep)) { return Err(invalid()); }
-            if deps.iter().all(|dep| settled.contains(dep)) { settled.insert(*id); }
+    for run in effective_workflow_runs(document) {
+        for item in run["loop"]["items"].as_array().into_iter().flatten() {
+            assets.extend(item["assetIds"].as_array().into_iter().flatten().filter_map(Value::as_str));
         }
-        if before == settled.len() { return Err(AppError::Other("工作流包含循环".into())); }
-    }
-    let runs = match document.get("runs") {
-        Some(value) => value.as_array().ok_or_else(invalid)?.iter().collect::<Vec<_>>(),
-        None => if document["run"].is_null() { vec![] } else { vec![&document["run"]] },
-    };
-    let mut run_ids = HashSet::new();
-    let mut schedule_ids = HashSet::new();
-    let mut accesses: Vec<(HashSet<&str>, HashSet<&str>)> = Vec::new();
-    let triggers: HashSet<&str> = nodes.iter().filter(|node| node["kind"] == "trigger").filter_map(|node| node["id"].as_str()).collect();
-    for run in runs {
-        if let Some(schedule) = run.get("scheduleId") {
-            if !schedule_ids.insert(schedule.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?)
-                || !nodes.iter().any(|node| node["id"] == run["startId"] && node["kind"] == "trigger") { return Err(invalid()); }
-        }
-        if let Some(queue) = run.get("triggerQueue") {
-            for id in queue.as_array().ok_or_else(invalid)? {
-                if !nodes.iter().any(|node| node["id"] == *id && node["kind"] == "trigger") { return Err(invalid()); }
+        for item in run["loop"]["completed"].as_array().into_iter().flatten() {
+            for ports in item["outputs"].as_object().into_iter().flat_map(|nodes| nodes.values()) {
+                for output in ports.as_object().into_iter().flat_map(|ports| ports.values()) {
+                    assets.extend(output["assetIds"].as_array().into_iter().flatten().filter_map(Value::as_str));
+                }
             }
-        }
-        validate_loop(run, nodes, &mut assets)?;
-        if run["order"].as_array().is_some_and(|order| order.iter().any(|id| nodes.iter().any(|node| node["id"] == *id && node["kind"] == "planner"))) { return Err(invalid()); }
-        if !matches!(run["status"].as_str(), Some("running" | "waiting" | "done" | "failed" | "stopped"))
-            || !run["id"].is_string() || !run["threadId"].is_string()
-            || !run["steps"].is_object()
-            || run["order"].as_array().ok_or_else(invalid)?.iter().any(|id| id.as_str().is_none_or(|id| !ids.contains(id))) { return Err(invalid()); }
-        if !run_ids.insert(run["id"].as_str().ok_or_else(invalid)?) { return Err(invalid()); }
-        if matches!(run["status"].as_str(), Some("running" | "waiting")) {
-            let locked = run.get("lockedNodeIds").unwrap_or(&run["order"]).as_array().ok_or_else(invalid)?;
-            let mut reads_and_writes = HashSet::new();
-            for id in locked {
-                let id = id.as_str().ok_or_else(invalid)?;
-                if !ids.contains(id) || !reads_and_writes.insert(id) { return Err(invalid()); }
-            }
-            let mut writes = HashSet::new();
-            for id in run.get("writeNodeIds").unwrap_or(&run["order"]).as_array().ok_or_else(invalid)? {
-                let id = id.as_str().ok_or_else(invalid)?;
-                if !reads_and_writes.contains(id) || !writes.insert(id) { return Err(invalid()); }
-            }
-            if run["order"].as_array().ok_or_else(invalid)?.iter().any(|id| !writes.contains(id.as_str().unwrap())) { return Err(invalid()); }
-            writes.retain(|id| !triggers.contains(id));
-            reads_and_writes.retain(|id| !triggers.contains(id));
-            if accesses.iter().any(|(other_access, other_writes)| !writes.is_disjoint(other_access) || !other_writes.is_disjoint(&reads_and_writes)) { return Err(invalid()); }
-            accesses.push((reads_and_writes, writes));
         }
     }
-    Ok(assets)
+    assets
+}
+
+fn ensure_workflow_revision(current: i64, expected: i64) -> AppResult<()> {
+    if current != expected {
+        return Err(AppError::Other("工作流已被其他窗口修改，请重新打开项目".into()));
+    }
+    Ok(())
 }
 
 impl Database {
     fn workflow_get(&self, project_id: &str) -> AppResult<WorkflowSnapshot> {
-        let value: Option<(i64, String)> = {
-            let conn = self.conn.lock().unwrap();
-            conn.query_row("SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?
-        };
+        let value: Option<(i64, String)> = self.with_canvas_reader(|conn| {
+            Ok(conn.query_row(
+                "SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1",
+                [project_id], |r| Ok((r.get(0)?, r.get(1)?)),
+            ).optional()?)
+        })?;
         match value {
             Some((revision, raw)) => Ok(WorkflowSnapshot { revision, document: serde_json::from_str(&raw)? }),
             None => Ok(WorkflowSnapshot { revision: 0, document: json!({"schema_version":1,"nodes":[],"run":null}) }),
@@ -603,12 +361,14 @@ impl Database {
                 return Err(invalid());
             }
         }
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
-        let current: i64 = tx.query_row("SELECT revision FROM canvas_workflows WHERE project_id=?1", [project_id], |r| r.get(0)).optional()?.unwrap_or(0);
-        if current != revision { return Err(workflow_revision_conflict()); }
-        let previous: Option<String> = tx.query_row("SELECT document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |row| row.get(0)).optional()?;
-        let previous = previous.map(|json| serde_json::from_str::<Value>(&json)).transpose()?.unwrap_or(Value::Null);
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, previous): (i64, Option<String>) = tx.query_row(
+            "SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1",
+            [project_id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?.unwrap_or((0, None));
+        ensure_workflow_revision(current, revision)?;
+        let previous = previous.as_deref().map(serde_json::from_str).transpose()?.unwrap_or(Value::Null);
         validate_schedule_claims(&previous, &document)?;
         // Conversation history keeps its native row. Its single visible Agent projection
         // owns placement and visibility, including undo of a removed card.
@@ -632,9 +392,15 @@ impl Database {
             touch_canvas_tx(&tx, project_id, now)?;
             insert_node_tx(&tx, card, now)?;
         }
-        for asset in assets {
-            // Missing assets remain explicit broken inputs; never resurrect deleted files.
-            tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) SELECT ?1,id,strftime('%s','now')*1000 FROM assets WHERE id=?2", params![project_id, asset])?;
+        let existing_assets = saved_workflow_assets(&previous);
+        let added: Vec<_> = assets.iter().filter(|asset| !existing_assets.contains(asset.as_str())).collect();
+        if !added.is_empty() {
+            // An unchanged reference must respect a later explicit project removal.
+            tx.execute(
+                "INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at)
+                 SELECT ?1,a.id,strftime('%s','now')*1000 FROM json_each(?2) wanted JOIN assets a ON a.id=wanted.value",
+                params![project_id, serde_json::to_string(&added)?],
+            )?;
         }
         tx.execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES (?1,?2,?3) ON CONFLICT(project_id) DO UPDATE SET revision=excluded.revision,document_json=excluded.document_json", params![project_id, revision + 1, document.to_string()])?;
         tx.commit()?;
@@ -643,20 +409,38 @@ impl Database {
 }
 
 #[tauri::command]
-pub async fn canvas_workflow_get(paths: State<'_, Arc<LibraryPaths>>, project_id: String) -> AppResult<WorkflowSnapshot> {
-    let path = paths.db.clone();
-    tokio::task::spawn_blocking(move || Database::open_read_only(&path)?.workflow_get(&project_id))
-        .await
-        .map_err(|error| AppError::Other(error.to_string()))?
+pub async fn canvas_workflow_get(db: State<'_, Arc<Database>>, project_id: String) -> AppResult<WorkflowSnapshot> {
+    run_canvas_db(db.inner(), move |db| db.workflow_get(&project_id)).await
 }
 #[tauri::command]
 pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value, created_content: Option<NewCanvasNode>) -> AppResult<i64> {
-    let before = db.workflow_get(&project_id)?;
-    if before.revision != revision { return Err(workflow_revision_conflict()); }
+    save_workflow_with_authorization(db.inner(), project_id, revision, document, created_content, || {
+        require_pro(&auth, &entitlement)
+    }).await
+}
+
+async fn save_workflow_with_authorization<F>(
+    db: &Arc<Database>,
+    project_id: String,
+    revision: i64,
+    document: Value,
+    created_content: Option<NewCanvasNode>,
+    authorize: impl FnOnce() -> F,
+) -> AppResult<i64>
+where
+    F: Future<Output = AppResult<()>>,
+{
+    let before = run_canvas_db(db, {
+        let project_id = project_id.clone();
+        move |db| db.workflow_get(&project_id)
+    }).await?;
+    ensure_workflow_revision(before.revision, revision)?;
     if workflow_save_requires_pro(&before.document, &document, created_content.is_some()) {
-        require_pro(&auth, &entitlement).await?;
+        authorize().await?;
     }
-    db.workflow_save_with_content(&project_id, revision, document, created_content.as_ref())
+    run_canvas_db(db, move |db| {
+        db.workflow_save_with_content(&project_id, revision, document, created_content.as_ref())
+    }).await
 }
 
 #[cfg(test)]
@@ -664,29 +448,309 @@ mod tests {
     use super::*;
     #[test]
     fn paid_edits_and_new_runs_are_distinct_from_accepted_results() {
-        let before=json!({"nodes":[node("paid",json!({}))],"runs":[{"id":"accepted","status":"running"}],"run":null});
+        let before=json!({"nodes":[paid_card()],"runs":[gate_run("accepted", "instruction", "running")],"run":null});
         let mut result=before.clone(); result["nodes"][0]["outputs"]=json!({"image":{"type":"image","assetIds":["result"]}});
         assert_eq!(paid_definition(&before),paid_definition(&result));
-        assert!(!has_new_run(&before,&result));
+        assert!(!requires_run_pro(&before,&result));
         result["nodes"][0]["layoutSize"]=json!({"width":320,"height":156});
         assert_eq!(paid_definition(&before),paid_definition(&result));
         result["nodes"][0]["prompt"]=json!("changed"); assert_ne!(paid_definition(&before),paid_definition(&result));
-        result["runs"]=json!([{"id":"accepted","status":"running"},{"id":"new","status":"running"}]); assert!(has_new_run(&before,&result));
-        result["runs"] = json!([{"id":"accepted","status":"waiting"},{"id":"restored","status":"done"}]);
-        assert!(!has_new_run(&before,&result), "terminal history can be restored without running it");
-        let history = result.clone();
-        result["runs"][1]["status"] = json!("running");
-        assert!(has_new_run(&history,&result), "a terminal run becoming active is a new execution");
+        result["runs"]=json!([gate_run("accepted", "instruction", "done"), gate_run("new", "instruction", "running")]); assert!(requires_run_pro(&before,&result));
         assert!(paid_definition(&json!({"nodes":[{"id":"text","kind":"text"}]})).is_empty());
     }
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    fn workflow_gate_database() -> Arc<Database> {
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        db.lock_conn().unwrap().execute(
+            "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)",
+            [],
+        ).unwrap();
+        db
+    }
+
+    fn paid_card() -> Value {
+        let mut card = node("instruction", json!({}));
+        card["kind"] = json!("instruction");
+        card
+    }
+
+    fn gate_run(id: &str, card_id: &str, status: &str) -> Value {
+        json!({"id":id, "startId":card_id, "threadId":"thread", "order":[card_id],
+            "status":status, "steps":{(card_id):{"status":"pending"}}})
+    }
+
+    async fn save_as_free(db: &Arc<Database>, revision: i64, document: Value) -> AppResult<i64> {
+        save_workflow_with_authorization(db, "p".into(), revision, document, None, || async {
+            Err(AppError::Other("需要 Pro".into()))
+        }).await
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_free_generation_creation_edit_and_mixed_board_run() {
+        let db = workflow_gate_database();
+        let mut doc = json!({"schema_version":1,"nodes":[node("draw",json!({}))],"run":null});
+        assert_eq!(save_as_free(&db, 0, doc.clone()).await.unwrap(), 1);
+        doc["nodes"][0]["prompt"] = json!("changed");
+        assert_eq!(save_as_free(&db, 1, doc.clone()).await.unwrap(), 2);
+
+        doc["nodes"].as_array_mut().unwrap().push(paid_card());
+        assert_eq!(db.workflow_save("p", 2, doc.clone()).unwrap(), 3);
+        let mut run = gate_run("free", "draw", "running");
+        run["lockedNodeIds"] = json!(["draw", "instruction"]);
+        run["writeNodeIds"] = json!(["draw"]);
+        doc["runs"] = json!([run]);
+        doc["run"] = doc["runs"][0].clone();
+        assert_eq!(save_as_free(&db, 3, doc.clone()).await.unwrap(), 4);
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_paid_run_lifecycle_preserves_accepted_checkpoints() {
+        let db = workflow_gate_database();
+        let mut doc = json!({"schema_version":1,"nodes":[paid_card()],"run":null});
+        assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+        doc["run"] = gate_run("paid-history", "instruction", "running");
+        assert_eq!(save_as_free(&db, 1, doc.clone()).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 1);
+
+        assert_eq!(db.workflow_save("p", 1, doc.clone()).unwrap(), 2);
+        doc["run"]["status"] = json!("waiting");
+        assert_eq!(save_as_free(&db, 2, doc.clone()).await.unwrap(), 3);
+        doc["run"]["status"] = json!("done");
+        assert_eq!(save_as_free(&db, 3, doc.clone()).await.unwrap(), 4);
+
+        doc["run"]["status"] = json!("running");
+        assert_eq!(save_as_free(&db, 4, doc.clone()).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 4);
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_ignores_shadow_run_but_protects_new_write_scope() {
+        let db = workflow_gate_database();
+        let mut document = json!({"schema_version":1,"nodes":[node("draw",json!({})),paid_card()],"runs":[]});
+        document["run"] = gate_run("shadow", "instruction", "running");
+        assert_eq!(db.workflow_save("p", 0, document.clone()).unwrap(), 1);
+        document["runs"] = json!([document["run"].clone()]);
+        assert_eq!(save_as_free(&db, 1, document.clone()).await.unwrap_err().to_string(), "需要 Pro");
+
+        let mut run = gate_run("free", "draw", "running");
+        run["lockedNodeIds"] = json!(["draw", "instruction"]);
+        run["writeNodeIds"] = json!(["draw"]);
+        document["runs"] = json!([run]);
+        assert_eq!(save_as_free(&db, 1, document.clone()).await.unwrap(), 2);
+        let mut paid_edit = document.clone();
+        paid_edit["nodes"][1]["prompt"] = json!("new instruction");
+        assert_eq!(save_as_free(&db, 2, paid_edit).await.unwrap_err().to_string(), "需要 Pro");
+        document["runs"][0]["writeNodeIds"] = json!(["draw", "instruction"]);
+        assert_eq!(save_as_free(&db, 2, document).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 2);
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_paid_completions_use_only_accepted_queue_checkpoints() {
+        for previous_paid in [false, true] {
+            let db = workflow_gate_database();
+            let mut trigger = node("trigger", json!({}));
+            trigger["kind"] = json!("trigger");
+            let start = if previous_paid { "instruction" } else { "draw" };
+            let mut run = gate_run("two-phases", start, "running");
+            run["steps"][start]["status"] = json!("done");
+            let mut doc = json!({"schema_version":1,"nodes":[node("draw",json!({})),paid_card(),trigger],"run":run});
+            assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+
+            if !previous_paid {
+                let mut extra_paid_step = doc.clone();
+                extra_paid_step["run"]["steps"]["instruction"] = json!({"status":"done"});
+                assert_eq!(save_as_free(&db, 1, extra_paid_step).await.unwrap_err().to_string(), "需要 Pro");
+            }
+
+            doc["run"]["triggerQueue"] = json!(["trigger"]);
+            assert_eq!(save_as_free(&db, 1, doc.clone()).await.unwrap(), 2);
+            // The completion event stays pending while the target is busy.
+            doc["run"]["status"] = json!("waiting");
+            doc["run"]["startId"] = json!("trigger");
+            doc["run"]["order"] = json!([]);
+            assert_eq!(save_as_free(&db, 2, doc.clone()).await.unwrap(), 3);
+            doc["run"]["status"] = json!("running");
+            doc["run"]["triggerQueue"] = json!([]);
+            doc["run"]["order"] = json!(["trigger","draw"]);
+            doc["run"]["steps"]["trigger"] = json!({"status":"pending"});
+            doc["run"]["steps"]["draw"] = json!({"status":"pending"});
+            let launch = save_as_free(&db, 3, doc).await;
+            if previous_paid {
+                assert_eq!(launch.unwrap(), 4);
+            } else {
+                assert_eq!(launch.unwrap_err().to_string(), "需要 Pro");
+                assert_eq!(db.workflow_get("p").unwrap().revision, 3);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_stopped_video_recovers_only_the_original_request() {
+        for turn_key in [None, Some("original-turn")] {
+            let db = workflow_gate_database();
+            let mut video = node("video", json!({}));
+            video["kind"] = json!("comfy-video");
+            let mut old = gate_run("video-run", "video", "stopped");
+            old["steps"]["video"] = json!({"status":"waiting", "jobId":"video-job"});
+            if let Some(turn_key) = turn_key {
+                old["steps"]["video"]["turnKey"] = json!(turn_key);
+            }
+            let mut doc = json!({"schema_version":1,"nodes":[video],"run":old});
+            assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+
+            doc["run"]["status"] = json!("waiting");
+            doc["run"]["completionRecoveryOnly"] = json!(true);
+            for (key, value) in [("turnKey", "different-turn"), ("jobId", "another-job")] {
+                let mut changed = doc.clone();
+                changed["run"]["steps"]["video"][key] = json!(value);
+                assert_eq!(save_as_free(&db, 1, changed).await.unwrap_err().to_string(), "需要 Pro");
+            }
+            assert_eq!(save_as_free(&db, 1, doc.clone()).await.unwrap(), 2);
+
+            doc["run"]["status"] = json!("running");
+            assert_eq!(save_as_free(&db, 2, doc.clone()).await.unwrap(), 3);
+            doc["run"]["completionRecoveryOnly"] = json!(false);
+            assert_eq!(save_as_free(&db, 3, doc).await.unwrap_err().to_string(), "需要 Pro");
+            assert_eq!(db.workflow_get("p").unwrap().revision, 3);
+        }
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_keeps_legacy_local_video_paid() {
+        let db = workflow_gate_database();
+        let mut video = node("video", json!({}));
+        video["generation"] = json!({"media":"video","localVideo":{"endpoint":"http://127.0.0.1:8188"}});
+        let mut doc = json!({"schema_version":1,"nodes":[video],"run":null});
+        assert_eq!(save_as_free(&db, 0, doc.clone()).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+        doc["run"] = gate_run("legacy-local", "video", "running");
+        assert_eq!(save_as_free(&db, 1, doc).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 1);
+    }
+
+    #[tokio::test]
+    async fn workflow_save_checks_revision_before_and_after_authorization() {
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        db.lock_conn().unwrap().execute(
+            "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", [],
+        ).unwrap();
+        let empty = json!({"schema_version":1,"nodes":[],"run":null});
+        assert_eq!(db.workflow_save("p", 0, empty.clone()).unwrap(), 1);
+        let paid = json!({"schema_version":1,"nodes":[paid_card()],"run":null});
+
+        let calls = std::cell::Cell::new(0);
+        let stale = save_workflow_with_authorization(&db, "p".into(), 0, paid.clone(), None, || async {
+            calls.set(calls.get() + 1);
+            Ok(())
+        }).await.unwrap_err();
+        assert!(stale.to_string().contains("工作流已被其他窗口修改"));
+        assert_eq!(calls.get(), 0);
+
+        let raced = save_workflow_with_authorization(&db, "p".into(), 1, paid, None, || async {
+            calls.set(calls.get() + 1);
+            assert_eq!(db.workflow_save("p", 1, empty.clone()).unwrap(), 2);
+            Ok(())
+        }).await.unwrap_err();
+        assert!(raced.to_string().contains("工作流已被其他窗口修改"));
+        assert_eq!(calls.get(), 1);
+        let saved = db.workflow_get("p").unwrap();
+        assert_eq!(saved.revision, 2);
+        assert_eq!(saved.document, empty);
+    }
+
+    #[test]
+    fn workflow_validation_preserves_unknown_fields_and_reports_typed_paths() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.lock_conn().unwrap().execute(
+            "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)",
+            [],
+        ).unwrap();
+        let mut node = node("durable", json!({}));
+        node["futureMetadata"] = json!({"request":"frozen","values":[1,2,3]});
+        let mut doc = json!({"schema_version":1,"nodes":[node],"run":null,"extra":{"keep":true}});
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+
+        doc["nodes"][0]["kind"] = json!("unregistered");
+        let error = validate(&doc).unwrap_err().to_string();
+        assert!(error.contains("durable") && error.contains("nodes[0].kind"), "{error}");
+        doc["nodes"][0]["kind"] = json!("generation");
+        doc["nodes"][0]["inputs"]["image"] = json!([{"nodeId":"missing","portId":"image"}]);
+        let error = validate(&doc).unwrap_err().to_string();
+        assert!(error.contains("durable") && error.contains("nodes[0].inputs.image[0]"), "{error}");
+    }
+
+    #[test]
+    fn workflow_kahn_accepts_reverse_chain_and_reports_a_cycle_member() {
+        let mut nodes: Vec<_> = (0..500).rev().map(|index| {
+            let inputs = if index == 0 { json!({}) } else {
+                json!({"image":[{"nodeId":format!("n{}", index - 1),"portId":"image"}]})
+            };
+            node(&format!("n{index}"), inputs)
+        }).collect();
+        let document = json!({"schema_version":1, "nodes":nodes, "run":null});
+        assert!(validate(&document).is_ok());
+        nodes[499]["inputs"] = json!({"image":[{"nodeId":"n1","portId":"image"}]});
+        let cyclic = json!({"schema_version":1, "nodes":nodes, "run":null});
+        let error = validate(&cyclic).unwrap_err().to_string();
+        assert!(error.contains("工作流包含循环"), "{error}");
+        assert!(error.contains("n0，nodes[499]") || error.contains("n1，nodes[498]"), "{error}");
+    }
+
+    #[test]
+    fn workflow_asset_delta_preserves_explicit_project_removal() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.lock_conn().unwrap().execute_batch(
+            "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1);
+             INSERT INTO assets(id,name,ext,created_at) VALUES('first','first','png',1),('second','second','png',1),('parked','parked','png',1),
+               ('clip','clip','mp4',1),('audio','audio','wav',1);",
+        ).unwrap();
+        let mut video = node("paid", json!({"image":[{"assetId":"first"}]}));
+        video["generation"] = json!({"media":"video"});
+        video["savedComfyR2V"] = json!({"reference-image":[{"assetId":"parked"}]});
+        video["savedComfyAudio"] = json!([{"assetId":"clip","videoAudio":{"assetId":"audio"}}]);
+        let first = json!({"schema_version":1,"nodes":[video],"run":null});
+        db.workflow_save("p", 0, first.clone()).unwrap();
+        db.lock_conn().unwrap().execute("DELETE FROM project_assets WHERE project_id='p' AND asset_id IN ('first','parked','clip','audio')", []).unwrap();
+        let mut added = first;
+        added["nodes"][0]["inputs"]["image"].as_array_mut().unwrap().push(json!({"assetId":"second"}));
+        db.workflow_save("p", 1, added).unwrap();
+        let conn = db.lock_conn().unwrap();
+        let ids = conn.prepare("SELECT asset_id FROM project_assets WHERE project_id='p' ORDER BY asset_id")
+            .unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ids, ["second"]);
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_allows_cleanup_but_requires_pro_to_reconnect_a_paid_source() {
+        let db = workflow_gate_database();
+        let draw = node("draw", json!({"text":[{"nodeId":"instruction","portId":"text","slot":1}]}));
+        let mut document = json!({"schema_version":1,"nodes":[paid_card(), draw],"run":null});
+        assert_eq!(db.workflow_save("p", 0, document.clone()).unwrap(), 1);
+        document["nodes"][1]["inputs"]["image"] = json!([{"assetId":"free-reference"}]);
+        assert_eq!(save_as_free(&db, 1, document.clone()).await.unwrap(), 2);
+        document["nodes"][0]["x"] = json!(140);
+        document["nodes"][1]["inputs"] = json!({});
+        assert_eq!(save_as_free(&db, 2, document.clone()).await.unwrap(), 3);
+        document["nodes"][1]["inputs"] = json!({"text":[{"nodeId":"instruction","portId":"text","slot":1}]});
+        assert_eq!(save_as_free(&db, 3, document).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 3);
+    }
+
     #[test]
     fn workflow_cleanup_preserves_the_pro_boundary_and_saves_parked_audio_removal() {
         let mut source = node("video", json!({}));
         source["kind"] = json!("comfy-video");
         let audio = json!({"nodeId":"video","portId":"image","videoAudio":{}});
         let mut receiver = node("receiver", json!({"image":[{"nodeId":"video","portId":"image","slot":1},{"assetId":"still","slot":2}]}));
-        receiver["generation"] = json!({"media":"video"});
+        receiver["generation"] = json!({"media":"video","localVideo":{}});
         receiver["savedComfyAudio"] = json!([audio]);
         let before = json!({"schema_version":1,"nodes":[source,receiver],"run":null});
 
@@ -714,7 +778,7 @@ mod tests {
         prompt["nodes"][0]["prompt"] = json!("changed");
         assert!(definition_changed(&before, &prompt));
         let mut added = before.clone();
-        added["nodes"].as_array_mut().unwrap().push(node("new",json!({})));
+        added["nodes"].as_array_mut().unwrap().push(paid_card());
         assert!(definition_changed(&before, &added));
         let mut wire = before.clone();
         wire["nodes"][1]["inputs"]["image"][0]["nodeId"] = json!("different");
@@ -729,18 +793,23 @@ mod tests {
         writer["nodes"].as_array_mut().unwrap().push(text);
         assert!(workflow_save_requires_pro(&before, &writer, false));
         let mut run = before.clone();
-        run["run"] = json!({"id":"new-run","status":"running"});
+        run["run"] = gate_run("new-run", "video", "running");
         assert!(workflow_save_requires_pro(&before, &run, false));
 
         let mut trigger = node("switch", json!({}));
         trigger["kind"] = json!("trigger");
         trigger["triggerCount"] = json!(2);
-        let queued = json!({"nodes":[trigger],"run":{"id":"accepted","triggerQueue":["switch"]}});
+        let mut accepted = gate_run("accepted", "switch", "waiting");
+        accepted["steps"]["switch"]["status"] = json!("done");
+        accepted["triggerQueue"] = json!(["switch"]);
+        let queued = json!({"nodes":[trigger],"run":accepted});
         let mut changed_count = queued.clone();
         changed_count["nodes"][0]["triggerCount"] = json!(1);
         assert!(workflow_save_requires_pro(&queued, &changed_count, false));
-        changed_count["run"] = json!({"id":"accepted","startId":"switch","triggerQueue":[]});
+        changed_count["run"]["triggerQueue"] = json!([]);
         assert!(!workflow_save_requires_pro(&queued, &changed_count, false));
+        changed_count["runs"] = json!([]);
+        assert!(workflow_save_requires_pro(&queued, &changed_count, false), "an ignored legacy run cannot consume a queued trigger");
     }
     #[test]
     fn dimension_wire_roundtrips_and_accepts_another_input() {

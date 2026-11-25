@@ -259,6 +259,20 @@ try {
       if (expected) {
         await live.waitForFunction(() => !!window.finishAction, null, { timeout: 10000 });
         const editor = drawCard.locator('.workflow-prompt-editor .ProseMirror');
+        assert.equal(await live.evaluate(() => window.lockedSource()), direct, 'the execution lock follows data dependencies');
+        await live.waitForFunction(expected => document.querySelector('[data-workflow-card="draw"] .workflow-prompt-editor .ProseMirror')?.isContentEditable === expected, !direct, { timeout: 5000 }).catch(async error => {
+          const state = await live.evaluate(async () => {
+            const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+            const { workflowNodeRun } = await import('/src/lib/canvasWorkflow.ts');
+            const { workflowGenerationActivity } = await import('/src/lib/canvasSessionOutputs.ts');
+            const c = canvasWorkflowController('p');
+            const node = c.document.nodes.find(candidate => candidate.id === 'draw');
+            return { run: workflowNodeRun(c.document, node.id), resultVisible: !!document.querySelector('[data-canvas-node-id="live-result"]'),
+              activity: workflowGenerationActivity(node, workflowNodeRun(c.document, node.id), window.snapshot().nodes, window.store.getState().genJobs),
+              start: c.startingAction(node.id), rendered: document.querySelector('[data-workflow-card="draw"]')?.className };
+          });
+          throw new Error(`Generator editor state did not follow its execution data: ${JSON.stringify(state)}`, { cause: error });
+        });
         assert.equal(await editor.evaluate(el => el.isContentEditable), !direct, 'only a data dependency locks the upstream generator while the downstream executes');
         if (!direct) {
           await editor.fill('为下一次生成修改提示词');

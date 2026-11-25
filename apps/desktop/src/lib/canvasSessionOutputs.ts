@@ -8,9 +8,33 @@ import { generationPromptNodeId } from "./projectNodeIds";
 import { activePromptReferences, isWorkflowGenerationResult, workflowActiveSession, workflowBindingKey, workflowInputAssetId, workflowInputProducers,
   workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowInput, type WorkflowNode, type WorkflowRun } from "./canvasWorkflow";
 
+interface CanvasSnapshotIndex {
+  byId: Map<string, CanvasNode>;
+  order: Map<string, number>;
+  visibleSessions: Map<string, CanvasNode>;
+  outputsByTurn?: Map<string, CanvasNode[]>;
+  sessionOutputsByAsset?: Map<string, CanvasNode[]>;
+  resolvedNotes?: WeakMap<CanvasNotePayload, CanvasNotePayload>;
+}
+
+const snapshotIndexes = new WeakMap<readonly CanvasNode[], CanvasSnapshotIndex>();
+function getCanvasSnapshotIndex(nodes: readonly CanvasNode[]): CanvasSnapshotIndex {
+  const cached = snapshotIndexes.get(nodes);
+  if (cached) return cached;
+  const index: CanvasSnapshotIndex = { byId: new Map(), order: new Map(), visibleSessions: new Map() };
+  nodes.forEach((node, position) => {
+    if (index.byId.has(node.id)) return;
+    index.byId.set(node.id, node);
+    index.order.set(node.id, position);
+    if (node.kind === "prompt" && node.hiddenAt == null) index.visibleSessions.set(node.id, node);
+  });
+  snapshotIndexes.set(nodes, index);
+  return index;
+}
+
 /** Result of the exact submitted turn, independent of other turns in its gallery. */
 export function submittedTurnState(id: string, nodes: readonly CanvasNode[]): "pending" | "done" | "closed" {
-  const turn = nodes.find(node => node.id === id && node.kind === "prompt" && node.hiddenAt == null);
+  const turn = getCanvasSnapshotIndex(nodes).visibleSessions.get(id);
   if (!turn) return "closed";
   const status = payload(turn).status;
   if (status && ["failed", "cancelled", "canceled", "stopped"].includes(status)) return "closed";
@@ -27,7 +51,12 @@ export function completedCanvasSessions(inputs: WorkflowInput[], nodes: readonly
 }
 
 export function canvasSessionCompletionLookup(nodes: readonly CanvasNode[], jobs: Parameters<typeof canvasConversationCards>[1]) {
-  const sessionsById = new Map(nodes.filter(node => node.kind === "prompt" && node.hiddenAt == null).map(node => [node.id, node]));
+  const status = canvasSessionCompletionStatus(nodes, jobs);
+  return (inputs: WorkflowInput[]) => status(inputs).completed;
+}
+
+export function canvasSessionCompletionStatus(nodes: readonly CanvasNode[], jobs: Parameters<typeof canvasConversationCards>[1]) {
+  const sessionsById = getCanvasSnapshotIndex(nodes).visibleSessions;
   let conversations: ReturnType<typeof canvasConversationCards> | undefined;
   return (inputs: WorkflowInput[]) => {
     const sessions = inputs.flatMap(input => {
@@ -41,7 +70,17 @@ export function canvasSessionCompletionLookup(nodes: readonly CanvasNode[], jobs
       conversations ??= canvasConversationCards(nodes, jobs);
       return conversations.cards.get(conversations.aliases.get(source.id) ?? source.id)?.sessions ?? [source];
     });
-    return [...new Set(sessions.filter(session => canvasSessionCompleted(session, nodes)).map(session => session.id))];
+    const completed = new Set<string>();
+    let pending = false;
+    for (const session of sessions) {
+      const phase = payload(session).status;
+      if (phase === "done") {
+        const outputs = canvasSessionImages(session, nodes);
+        if (outputs.some(output => output.hiddenAt == null)) completed.add(session.id);
+        else if (!outputs.length) pending = true; // The terminal signal may precede delivery.
+      } else if (pendingGeneration(phase)) pending = true;
+    }
+    return { completed: [...completed], pending };
   };
 }
 
@@ -57,7 +96,6 @@ const ordinaryImageCard = (node: WorkflowNode) => node.kind === "generation" && 
 const pendingGeneration = (status: unknown) => status === "running" || status === "querying" || status === "queued";
 const workflowMediaOutput = (node: CanvasNode) => node.kind === "asset" && node.role === "output" && !!node.assetId;
 const generationSessions = (node: WorkflowNode) => [...(node.sessionNodeIds ?? []), ...(node.outputs.image?.nodeIds ?? []), workflowActiveSession(node)];
-const activityNodesBySnapshot = new WeakMap<readonly CanvasNode[], Map<string, CanvasNode>>();
 
 export interface WorkflowGenerationActivity {
   running: boolean;
@@ -80,11 +118,7 @@ export function workflowGenerationActivity(node: WorkflowNode, run: WorkflowRun 
   const executing = !!run && workflowRunActive(run) && (step?.status === "running"
     || run.status === "running" && step?.status === "pending" && (run.startId === node.id || !!step.detail));
   if (step?.comfyOptimization && !step.comfyAutoGeneration) return { running: executing };
-  let canvasNodes = activityNodesBySnapshot.get(nodes);
-  if (!canvasNodes) {
-    canvasNodes = new Map(nodes.map(item => [item.id, item]));
-    activityNodesBySnapshot.set(nodes, canvasNodes);
-  }
+  const canvasNodes = getCanvasSnapshotIndex(nodes).byId;
   const sessionId = workflowActiveSession(node);
   const checkpointId = step?.jobId && step.turnKey ? generationPromptNodeId(step.jobId, step.turnKey) : undefined;
   const exactSession = checkpointId ? canvasNodes.get(checkpointId) : undefined;
@@ -213,12 +247,13 @@ export function hiddenWorkflowSessionIds(workflow: readonly WorkflowNode[], node
 /** A connected content destination owns presentation before delivery and across reruns. */
 function contentRoutedWorkflowSourceIds(nodes: readonly CanvasNode[], workflow: readonly WorkflowNode[]) {
   const sources = new Set<string>();
+  const { byId } = getCanvasSnapshotIndex(nodes);
   for (const writer of workflow) {
     const target = writer.textTarget;
     if (!target?.image) continue;
-    const table = nodes.find(node => node.id === target.nodeId && node.kind === "note" && node.hiddenAt == null);
-    if (!table) continue;
-    const note = readCanvasNote(table);
+    const table = byId.get(target.nodeId);
+    if (table?.kind !== "note" || table.hiddenAt != null) continue;
+    const note = noteInput(table).note;
     if (note.note_type !== "text" && note.note_type !== "images") continue;
     if (target.appendAxis ? contentInputAxisIndex(note, target) < 0 : !target.append && !note.cells.flat().some(cell => cell.id === target.cellId)) continue;
     for (const input of writer.inputs.image ?? []) if (input.nodeId && input.portId === "image") sources.add(input.nodeId);
@@ -286,10 +321,6 @@ export function workflowGenerationCardProjection(document: CanvasWorkflow, nodes
   return { anchors, origins, exempt };
 }
 
-// Canvas edits replace the snapshot array, so each immutable snapshot can
-// share one exact-turn output index across its cards and wires.
-const sessionOutputsBySnapshot = new WeakMap<readonly CanvasNode[], Map<string, CanvasNode[]>>();
-
 function sessionOutputKey(projectId: string, jobId: unknown, turnKey: unknown) {
   if (!jobId || !turnKey || typeof jobId === "object" || typeof turnKey === "object") return undefined;
   return JSON.stringify([projectId, jobId, turnKey]);
@@ -305,7 +336,8 @@ export function canvasSessionImages(session: CanvasNode, nodes: readonly CanvasN
 function canvasTurnOutputs(nodes: readonly CanvasNode[], projectId: string | undefined, jobId: unknown, turnKey: unknown) {
   const key = projectId && sessionOutputKey(projectId, jobId, turnKey);
   if (!key) return [];
-  let outputs = sessionOutputsBySnapshot.get(nodes);
+  const index = getCanvasSnapshotIndex(nodes);
+  let outputs = index.outputsByTurn;
   if (!outputs) {
     outputs = new Map();
     for (const node of nodes) {
@@ -317,7 +349,7 @@ function canvasTurnOutputs(nodes: readonly CanvasNode[], projectId: string | und
       if (candidates) candidates.push(node);
       else outputs.set(owner, [node]);
     }
-    sessionOutputsBySnapshot.set(nodes, outputs);
+    index.outputsByTurn = outputs;
   }
   return outputs.get(key)?.slice() ?? [];
 }
@@ -330,8 +362,9 @@ export function latestWorkflowSessionImage(session: CanvasNode, nodes: readonly 
 export function workflowGenerationPreviewIds(source: WorkflowNode, canvas: readonly CanvasNode[]) {
   const output = source.outputs.image;
   if (!output?.nodeIds?.length) return output?.assetIds ?? [];
+  const { visibleSessions } = getCanvasSnapshotIndex(canvas);
   const sessionAssets = output.nodeIds.flatMap(id => {
-    const session = canvas.find(card => card.id === id && card.kind === "prompt" && card.hiddenAt == null);
+    const session = visibleSessions.get(id);
     const latest = session && payload(session).status === "done" ? latestWorkflowSessionImage(session, canvas) : undefined;
     return latest?.assetId ? [latest.assetId] : [];
   });
@@ -360,15 +393,21 @@ export function workflowGenerationResultAnchor(source: WorkflowNode, canvas: rea
     return conversations?.hiddenIds.has(anchor) ? undefined : { nodeId: anchor };
   };
   if (source.kind !== "generation" && source.kind !== "comfy-video") return;
+  const index = getCanvasSnapshotIndex(canvas);
   const sessionId = output.nodeIds?.[0] ?? workflowActiveSession(source);
-  const session = canvas.find(card => card.id === sessionId && card.kind === "prompt" && card.hiddenAt == null);
+  const session = sessionId ? index.visibleSessions.get(sessionId) : undefined;
   const video = videoGenerationCard(source);
   const sameMedia = (card: CanvasNode) => card.outputIsVideo == null ? (video || !canvasOutputIsVideo(card)) : card.outputIsVideo === video;
   const delivered = session ? canvasSessionImages(session, canvas).filter(card => card.hiddenAt == null) : [];
   const current = delivered.filter(sameMedia);
   if (session && !video && !payload(session).generation_group_dissolved && (!delivered.length || current.length)) return presented(session.id);
-  const result = (output.assetIds?.length ? current.find(card => output.assetIds!.includes(card.assetId!)) : current.pop())
-    ?? canvas.find(card => source.resultNodeIds?.includes(card.id) && card.hiddenAt == null && sameMedia(card) && card.assetId && output.assetIds?.includes(card.assetId));
+  const assets = new Set(output.assetIds ?? []);
+  let result = assets.size ? current.find(card => card.assetId && assets.has(card.assetId)) : current.pop();
+  if (!result && assets.size) for (const id of source.resultNodeIds ?? []) {
+    const card = index.byId.get(id);
+    if (card && card.hiddenAt == null && card.assetId && assets.has(card.assetId) && sameMedia(card)
+      && (!result || index.order.get(id)! < index.order.get(result.id)!)) result = card;
+  }
   return result && presented(result.id);
 }
 
@@ -467,23 +506,35 @@ export function reconcileCanvasWorkflowReferences(nodes: WorkflowNode[], canvas:
 /** Keep execution records; only suppress duplicate standalone result presentations. */
 export function containedSessionOutputIds(nodes: readonly CanvasNode[], workflow: readonly WorkflowNode[]) {
   const hidden = new Set<string>();
-  const sessions = nodes.filter(node => node.kind === "prompt" && node.hiddenAt == null);
+  const index = getCanvasSnapshotIndex(nodes), workflowById = new Map(workflow.map(node => [node.id, node]));
+  const outputsForAsset = (assetId: string) => {
+    if (!index.sessionOutputsByAsset) {
+      const grouped = new Map<string, CanvasNode[]>();
+      for (const session of index.visibleSessions.values()) for (const output of canvasSessionImages(session, nodes)) {
+        if (!output.assetId) continue;
+        const entries = grouped.get(output.assetId) ?? [];
+        entries.push(output);
+        grouped.set(output.assetId, entries);
+      }
+      index.sessionOutputsByAsset = grouped;
+    }
+    return index.sessionOutputsByAsset.get(assetId) ?? [];
+  };
   for (const writer of workflow) {
     if (!writer.textTarget?.image) continue;
-    const table = nodes.find(node => node.id === writer.textTarget!.nodeId && node.kind === "note" && node.hiddenAt == null);
-    if (!table) continue;
-    const note = readCanvasNote(table);
+    const table = index.byId.get(writer.textTarget.nodeId);
+    if (table?.kind !== "note" || table.hiddenAt != null) continue;
+    const note = noteInput(table).note;
     if (note.note_type !== "images" && note.note_type !== "text") continue;
     const contained = new Set([writer.textTarget.cellId, ...(writer.textTarget.cellIds ?? [])].flatMap(id => canvasNoteValue(note, id)?.assetIds ?? []));
     for (const input of writer.inputs.image ?? []) {
-      const generator = workflow.find(node => node.id === input.nodeId && node.kind === "generation");
-      const sessionId = generator ? workflowActiveSession(generator) : input.canvasNodeId;
+      const generator = input.nodeId ? workflowById.get(input.nodeId) : undefined;
+      const sessionId = generator?.kind === "generation" ? workflowActiveSession(generator) : input.canvasNodeId;
+      const session = sessionId ? index.visibleSessions.get(sessionId) : undefined;
       // A retained picture in a container is not a live connection to its former session.
-      for (const session of sessions.filter(session => session.id === sessionId || !!input.assetId)) {
-        for (const output of canvasSessionImages(session, nodes)) {
-          if (contained.has(output.assetId!) && (!input.assetId || output.assetId === input.assetId)
-            && (!input.assetNodeId || output.id === input.assetNodeId)) hidden.add(output.id);
-        }
+      const outputs = input.assetId ? outputsForAsset(input.assetId) : session ? canvasSessionImages(session, nodes) : [];
+      for (const output of outputs) {
+        if (contained.has(output.assetId!) && (!input.assetNodeId || output.id === input.assetNodeId)) hidden.add(output.id);
       }
     }
   }
@@ -492,11 +543,15 @@ export function containedSessionOutputIds(nodes: readonly CanvasNode[], workflow
 
 /** Embedded generation is an exact saved turn, never a new model request. */
 export function resolveGenerationCells(note: CanvasNotePayload, nodes: readonly CanvasNode[]): CanvasNotePayload {
+  const index = getCanvasSnapshotIndex(nodes);
+  const notes = index.resolvedNotes ??= new WeakMap();
+  const cached = notes.get(note);
+  if (cached) return cached;
   let changed = false;
   const cells = note.cells.map(row => row.map(cell => {
     const ref = cell.generation_ref;
     if (!ref || cell.content_type !== "image") return cell;
-    const session = nodes.find(node => node.id === ref.session_node_id && node.kind === "prompt" && node.hiddenAt == null);
+    const session = index.visibleSessions.get(ref.session_node_id);
     if (!session || payload(session).status !== "done") return cell;
     const outputs = canvasSessionImages(session, nodes).filter(node => node.hiddenAt == null);
     const output = ref.output_node_id ? outputs.find(node => node.id === ref.output_node_id) : outputs[outputs.length - 1];
@@ -506,5 +561,7 @@ export function resolveGenerationCells(note: CanvasNotePayload, nodes: readonly 
     return { ...cell, text: "@图片1", image_refs: [{ asset_id: output.assetId, token: "@图片1" }],
       generation_ref: { ...ref, output_node_id: output.id } };
   }));
-  return changed ? { ...note, cells, text: cells.map(row => row.map(cell => cell.text).join("\t")).join("\n") } : note;
+  const resolved = changed ? { ...note, cells, text: cells.map(row => row.map(cell => cell.text).join("\t")).join("\n") } : note;
+  notes.set(note, resolved);
+  return resolved;
 }

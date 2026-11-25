@@ -1,5 +1,5 @@
 import { emit } from "@tauri-apps/api/event";
-import { useStore } from "../store";
+import type { WorkflowHostAdapter } from "./workflowHost";
 import { api } from "./api";
 import { isAudioPath } from "./audioMedia";
 import { H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowInputValues, type CanvasWorkflow,
@@ -8,7 +8,7 @@ import type { compileAgentPrompt, compileGenerationPrompt } from "./canvasWorkfl
 import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoElapsed, comfyVideoMode,
   DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, h3R2VInputError, type ComfyVideoInput, type ComfyVideoStatus, type ComfyVideoMode } from "./comfyVideo";
 import { h3OptimizationInstruction } from "./h3PromptOptimization";
-import type { Asset, ProjectCanvasSnapshot } from "./types";
+import type { Asset, CanvasNode, ProjectCanvasSnapshot } from "./types";
 import { voiceApi } from "./voice";
 import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey, type VoiceCardRequest } from "./voiceCard";
 import { DEFAULT_VIDEO_OPTIONS, resolveVideoOptions, videoInputError } from "./videoGeneration";
@@ -32,6 +32,7 @@ export type WorkflowImageSessionInput = {
 /** The controller retains ownership of workflow writes, locks and cancellation. */
 export interface WorkflowCardExecution {
   readonly projectId: string;
+  readonly desktop: WorkflowHostAdapter;
   readonly document: CanvasWorkflow;
   run(id: string): WorkflowRun;
   save(document: CanvasWorkflow): Promise<void>;
@@ -40,8 +41,10 @@ export interface WorkflowCardExecution {
   progress(runId: string, nodeId: string, detail: string, videoProgress?: import("./comfyVideo").ComfyVideoProgress): void;
   finish(runId: string, node: WorkflowNode, outputs: Record<string, WorkflowValue>, ports?: WorkflowNode["outputPorts"]): Promise<void>;
   isStopped(runId: string): boolean;
+  waitForPoll(runId: string, nodeId: string, started: number, interval: number, halted: Halted, status?: "waiting" | "pending"): Promise<boolean>;
   stopBeforeDispatch(runId: string): Promise<void>;
-  resolveInputGenerations(runId: string, node: WorkflowNode, values: WorkflowValue[], halted: Halted): Promise<boolean>;
+  resolveInputGenerations(runId: string, node: WorkflowNode, values: WorkflowValue[], halted: Halted,
+    started?: number, readLatest?: (canvas: CanvasNode[]) => WorkflowValue[]): Promise<boolean>;
   deliverMediaAsset(run: WorkflowRun, node: WorkflowNode, asset: Asset, halted: Halted, resultId?: string): Promise<void>;
   chatResult(runId: string, node: WorkflowNode, step: WorkflowStep, assets: Asset[], halted: Halted): Promise<Record<string, WorkflowValue> | null>;
   localDsResult(runId: string, node: WorkflowNode, step: WorkflowStep, paths: string[], halted: Halted): Promise<Record<string, WorkflowValue> | null>;
@@ -101,8 +104,9 @@ export async function executeVoiceCard(host: WorkflowCardExecution, runId: strin
     await host.step(runId, node.id, { voiceRequest: request });
   }
   let retrySave = recovering;
+  const pollStarted = Date.now();
   while (!halted()) {
-    if (run.accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("请登录原账号后继续取回配音");
+    if (run.accountId !== (host.desktop.getState().cloudAuth?.user_id ?? null)) throw new Error("请登录原账号后继续取回配音");
     let snapshot: Awaited<ReturnType<typeof voiceApi.snapshot>>;
     try { snapshot = await voiceApi.snapshot(host.projectId); }
     catch (error) {
@@ -138,7 +142,7 @@ export async function executeVoiceCard(host: WorkflowCardExecution, runId: strin
       return;
     }
     if (job.status !== "running") throw new Error(job.message);
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (!await host.waitForPoll(runId, node.id, pollStarted, 1000, halted)) return;
   }
 }
 
@@ -149,15 +153,15 @@ export async function runWorkflowComfyVideo(host: WorkflowCardExecution, runId: 
   let jobId = step.jobId;
   let result: ComfyVideoStatus;
   let terminalFailure = false;
+  const pollStarted = Date.now();
   const prepare = async (endpoint: string, mode: ComfyVideoMode, recovery?: { installation?: string | null }) => {
     let environment = await comfyEnvironment(recovery ? "recover" : "prepare", endpoint, undefined, recovery?.installation ?? undefined, mode);
     while (!halted()) {
-      if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后重新运行");
+      if (accountId !== (host.desktop.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后重新运行");
       if (environment.phase === "ready") return environment.endpoint;
       if (environment.phase !== "starting" && environment.phase !== "installing") throw new Error(environment.message);
       host.progress(runId, id, environment.message);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      if (halted()) break;
+      if (!await host.waitForPoll(runId, id, pollStarted, 1000, halted)) break;
       environment = await comfyEnvironment("status", endpoint, undefined, undefined, mode);
     }
     return null;
@@ -171,8 +175,7 @@ export async function runWorkflowComfyVideo(host: WorkflowCardExecution, runId: 
         if (!String(error).includes("本机服务查询暂时中断") || attempt >= 3 || halted()) throw error;
       }
       host.progress(runId, id, "本机服务响应较慢，正在重试查询…");
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      if (halted()) throw new Error("查询已停止");
+      if (!await host.waitForPoll(runId, id, pollStarted, 2000, halted)) throw new Error("原任务等待结束");
     }
   };
   try {
@@ -190,7 +193,7 @@ export async function runWorkflowComfyVideo(host: WorkflowCardExecution, runId: 
         generationRunInput: generationRunInput ?? step.generationRunInput });
       if (halted()) return;
       if (start && !start.current()) { await host.stopBeforeDispatch(runId); return; }
-      if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) {
+      if (accountId !== (host.desktop.getState().cloudAuth?.user_id ?? null)) {
         await host.step(runId, id, { status: "pending", jobId: undefined, error: "账号已切换，请登录原账号后继续生成。" });
         return;
       }
@@ -202,7 +205,7 @@ export async function runWorkflowComfyVideo(host: WorkflowCardExecution, runId: 
     }
     let restarted = false;
     while (!halted()) {
-      if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) {
+      if (accountId !== (host.desktop.getState().cloudAuth?.user_id ?? null)) {
         await host.step(runId, id, { status: "waiting", error: "请登录原账号后继续取回视频" }); return;
       }
       if (result.status === "offline") {
@@ -234,8 +237,7 @@ export async function runWorkflowComfyVideo(host: WorkflowCardExecution, runId: 
       }
       if (result.status === "unknown") { await host.step(runId, id, { status: "waiting", error: result.message }); return; }
       host.progress(runId, id, result.message, result.progress ?? undefined);
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      if (halted()) return;
+      if (!await host.waitForPoll(runId, id, pollStarted, 2000, halted)) return;
       result = await queryStatus(jobId);
     }
   } catch (error) {
@@ -264,7 +266,7 @@ export async function executeLoopCard(host: WorkflowCardExecution, input: CardRu
     const values = structuredClone(workflowInputValues(host.document.nodes, node, readCell));
     const pending = values.image.filter(value => value.nodeIds?.length);
     if (pending.length && !await host.resolveInputGenerations(runId, node, pending, halted)) return;
-    if (pending.length && accountId !== undefined && accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
+    if (pending.length && accountId !== undefined && accountId !== (host.desktop.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
     await prepareMediaInputs(node, node.inputs, values);
     if (halted()) return;
     await resolveVideoCardOutputs(node, values, canvas?.nodes ?? [], host.projectId, halted);
@@ -300,9 +302,11 @@ export async function executeAgentCard(host: WorkflowCardExecution, input: CardR
   } else {
     const agentRunId = step.agentRunId!; // Legacy accepted Cloud runs are read only; new turns use localChat.
     let result;
-    while (!host.isStopped(runId)) {
+    const pollStarted = Date.now();
+    while (!halted()) {
       const current = await api.cloudAgentGet(agentRunId);
-      useStore.getState().openCloudAgentRun(current, { navigate: false });
+      if (halted()) return;
+      host.desktop.getState().openCloudAgentRun(current, { navigate: false });
       if (["failed", "cancelled"].includes(current.status)) {
         const code = current.snapshot.run.error_code;
         const message = code === "unified_agent_text_result_invalid" ? "模型没有返回有效的完整改写文本" : code === "unified_agent_input_invalid" ? "云端未识别文本改写输入，请检查 Worker 版本" : current.snapshot.run.safe_message || "文本改写未完成";
@@ -311,9 +315,9 @@ export async function executeAgentCard(host: WorkflowCardExecution, input: CardR
       if (current.status === "succeeded") { result = current; break; }
       if (current.status.startsWith("awaiting_")) throw new Error("云端未按文本改写模式执行，请检查 Cloud DSH 服务版本");
       host.progress(runId, id, current.status === "queued" ? "Cloud DSH 文本改写排队中" : "Cloud DSH 正在修改文本");
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      if (!await host.waitForPoll(runId, id, pollStarted, 2000, halted)) return;
     }
-    if (host.isStopped(runId) || !result) return;
+    if (halted() || !result) return;
     const payload = result.snapshot.events.find(event => event.type === "text.result")?.display_payload;
     if (payload?.schemaVersion !== 1 || typeof payload.text !== "string" || !payload.text.trim()) throw new Error("Cloud DSH 未返回有效的改写文本，请检查任务结果或服务版本");
     outputs = { text: agentResultValue(payload.text) };
@@ -336,7 +340,7 @@ export async function executeComfyVideoCard(host: WorkflowCardExecution, executi
   referenceImages?: string[]; prompt: string; linkedText: string; generationRunInput?: WorkflowStep["generationRunInput"];
 }) {
   const { runId, node, step, halted, start, values, localVideoMode, referenceImages, prompt, linkedText, generationRunInput } = execution;
-  const account = useStore.getState();
+  const account = host.desktop.getState();
   if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("本地 H3 视频需要有效的 Pro／Studio 权益或测试账号资格");
   const first = (values["first-frame"] ?? []).flatMap(value => value.assetIds ?? []);
   const last = (values["last-frame"] ?? []).flatMap(value => value.assetIds ?? []);
@@ -373,7 +377,7 @@ export async function executeGenerationCard(host: WorkflowCardExecution, input: 
   const generation = video ? { ...node.generation, media: "video" as const, videoOptions: resolveVideoOptions(node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS, orderedAssets) } : undefined;
   const provider = workflowGenerationProvider(node);
   if (!step.jobId) {
-    const issue = workflowProviderIssue(node, useStore.getState());
+    const issue = workflowProviderIssue(node, host.desktop.getState());
     if (issue) throw new WorkflowNodeError(issue.message, node);
   }
   const ratio = generation ? generation.ratio ?? "16:9" : node.ratio;
@@ -434,10 +438,10 @@ export async function executeGenerationCard(host: WorkflowCardExecution, input: 
     await host.save({ ...host.document, nodes: host.document.nodes.map(candidate => candidate.id === id
       ? { ...candidate, activeSessionNodeId: sessionNodeId, sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate) });
     await host.step(runId, id, { status: "running", jobId: identity.jobId, turnKey: identity.turnKey, generationRunInput });
-    const result = await useStore.getState().startGeneration(prompt, orderedAssets, ratio, provider, prompt,
+    const result = await host.desktop.getState().startGeneration(prompt, orderedAssets, ratio, provider, prompt,
       undefined, undefined, undefined, visualProfileId, { projectId: host.projectId, threadId: host.run(runId).threadId }, false, generation, identity);
     if (!result.accepted) throw new Error(result.error || "生成未完成");
-    const turns = useStore.getState().genJobs[identity.jobId]?.turns ?? [];
+    const turns = host.desktop.getState().genJobs[identity.jobId]?.turns ?? [];
     paths = (turns.find(turn => turn.turnKey === identity.turnKey) ?? (turns.length === 1 && !turns[0].turnKey ? turns[0] : undefined))?.images ?? [];
   }
   if (host.isStopped(runId)) return;

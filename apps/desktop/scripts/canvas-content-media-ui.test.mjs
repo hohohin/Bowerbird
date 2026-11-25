@@ -173,8 +173,56 @@ try {
   assert.equal(JSON.parse((await state()).payloadJson).cells[0][1].image_refs[0].asset_id, 'video', 'removing a cell image preserves the table and other cells');
   await mkdir('.tmp/content-media', { recursive: true });
   await page.screenshot({ path: '.tmp/content-media/expanded.png' });
+
+  // Keep the same textarea mounted while a preceding image column is removed and restored.
+  await page.evaluate(() => {
+    const snapshot = window.snapshot();
+    const node = snapshot.nodes.find(item => item.id === 'media-table');
+    const value = JSON.parse(node.payloadJson);
+    const fields = (id, text) => ({ id, text, content_type: 'text' });
+    value.cells = [
+      [{ id: 'mixed-image', text: '', content_type: 'image' }, fields('first', '第一格'), fields('second', '第二格')],
+      [fields('middle-first', '中行首格'), fields('middle-second', '中行第二格'), fields('middle-third', '中行第三格')],
+      [fields('last-first', '末行首格'), fields('last-second', '末行第二格'), fields('target', '目标格')],
+    ];
+    delete value.row_heights;
+    delete value.column_widths;
+    node.height = 360;
+    node.payloadJson = JSON.stringify(value);
+    sessionStorage.removeItem('workflow-p');
+    sessionStorage.setItem('reference-fixture', JSON.stringify(snapshot));
+  });
+  await page.reload();
+  const field = card.locator('[data-canvas-cell="target"] textarea');
+  await field.focus();
+  await field.evaluate(element => { window.originalField = element; });
+  const remove = async (axis, position) => {
+    const control = card.getByRole('button', { name: `删除第 ${position} ${axis}`, exact: true });
+    await control.hover();
+    await control.click();
+  };
+  async function checkFocus(label) {
+    await page.waitForFunction(() => document.activeElement?.closest('[data-canvas-cell]')?.dataset.canvasCell === 'target');
+    assert.equal(await field.getAttribute('aria-label'), label);
+    assert.equal(await field.inputValue(), '目标格');
+    assert.equal(await field.evaluate(element => element === window.originalField), true);
+  }
+  const undo = card.getByRole('button', { name: '撤销删除行列', exact: true });
+  await remove('行', 2);
+  await checkFocus('第 2 行第 3 列');
+  await undo.click();
+  await checkFocus('第 3 行第 3 列');
+  await remove('列', 1);
+  await checkFocus('第 3 行第 2 列');
+  await undo.click();
+  await checkFocus('第 3 行第 3 列');
+  await remove('列', 2);
+  await checkFocus('第 3 行第 2 列');
+  await undo.click();
+  await checkFocus('第 3 行第 3 列');
+
   assert.deepEqual(errors, []);
-  console.log('PASS cell hover/menu/keyboard/hold/Esc, scoped input/output and anchors, image reference/preview/menu/removal, media fit/reload/resize');
+  console.log('PASS cell ports and media, fit/reload/resize, and stable mixed-table focus after row/column deletions and undo');
 } finally {
   await browser.close();
   await server.close();

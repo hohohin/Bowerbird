@@ -4,6 +4,7 @@
 
 ## 查阅
 
+- [2026-11-25 两轮画板改动合入 dev](2026-11-25-canvas-dev-integration.md) 记录两条开发线的冲突决议和合入回归。
 - [2026-11-25 桌面与 Cloud 源码存档](2026-11-25-desktop-cloud-archive.md) 记录探索、素材库、画板、H3、分层候选及 MCP 的本轮验收。
 - [2026-11-25 素材库体验与性能验证](2026-11-25-material-library-performance.md) 记录 30 万条素材概览基准与 Windows 本机验收。
 - [2026-11-24 画板、音频与代码 MCP 源码存档](2026-11-24-canvas-audio-mcp-archive.md) 记录折叠接线、裁剪、分支控制台及 H3 空槽校验。

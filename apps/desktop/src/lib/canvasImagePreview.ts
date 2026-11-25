@@ -10,7 +10,6 @@ export function canvasImagePreviewSize(path: string, displaySize: number, origin
 
 type PreviewRequest = { active: number; promise: Promise<string | null> };
 const requests = new Map<string, PreviewRequest>();
-let queue: Promise<unknown> = Promise.resolve();
 
 /** Share in-flight work only; native cache checks the file fingerprint on every visit. */
 export function requestCanvasImagePreview(path: string, maxSize: number, version = "") {
@@ -18,7 +17,9 @@ export function requestCanvasImagePreview(path: string, maxSize: number, version
   let request = requests.get(key);
   if (!request) {
     const next: PreviewRequest = { active: 0, promise: Promise.resolve(null) };
-    next.promise = queue.then(async () => {
+    // Native limits decode concurrency separately, so cached thumbnails can
+    // return while a different image is being decoded.
+    next.promise = Promise.resolve().then(async () => {
       if (!next.active) return null;
       try {
         const preview = await api.canvasImagePreview(path, maxSize);
@@ -26,9 +27,9 @@ export function requestCanvasImagePreview(path: string, maxSize: number, version
       } catch { return path; }
     }).finally(() => { if (requests.get(key) === next) requests.delete(key); });
     requests.set(key, next);
-    queue = next.promise;
     request = next;
   }
   request.active += 1;
-  return { promise: request.promise, release: () => { request.active -= 1; } };
+  let released = false;
+  return { promise: request.promise, release: () => { if (!released) { released = true; request.active -= 1; } } };
 }

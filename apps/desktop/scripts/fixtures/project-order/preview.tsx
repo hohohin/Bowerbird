@@ -4,6 +4,7 @@ import { Sidebar } from "../../../src/components/Sidebar";
 import { ProjectSection } from "../../../src/components/ProjectSection";
 import { useStore } from "../../../src/store";
 import { api } from "../../../src/lib/api";
+import { registerProjectCanvasCallback } from "../../../src/lib/projectCanvasCallbacks";
 import "../../../src/styles.css";
 
 // Closed synthetic IPC: real components/store, no desktop app or user database.
@@ -68,10 +69,10 @@ w.rename = async (id: string, name: string) => {
   await useStore.getState().reloadProjects();
 };
 w.add = () => rows.push({ ...initial[0], id: "d", name: "新项目", created_at: ++clock, last_opened_at: clock });
-useStore.setState({ projectCanvasFlush: async () => {
+registerProjectCanvasCallback("flush", async () => {
   w.calls.push({ command: "flush" });
   if (w.failFlush) throw new Error("synthetic draft failure");
-} });
+});
 localStorage.setItem("bowerbird.sidebarCollapsed", "1");
 await useStore.getState().reloadProjects();
 createRoot(document.getElementById("root")!).render(

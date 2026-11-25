@@ -368,7 +368,10 @@ try {
     if (window.lesson.getState().guide.sessions.designer.ready) throw Error('wrong project advanced practice');
   });
   const kept=await page.evaluate(()=>window.lesson.getState().guide.sessions.designer.projectId);
-  await page.evaluate(()=>{window.failSave=true;window.store.setState({projectCanvasFlush:async()=>{throw Error('save');}});});
+  await page.evaluate(async()=>{
+    window.failSave=true;
+    (await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush=async()=>{throw Error('save');};
+  });
   await button('暂停入门引导').click(); await page.getByRole('alert').filter({hasText:'草稿尚未保存'}).waitFor();
   await button('收起入门引导').click(); await button('跳过入门引导').click();
   assert.equal(await page.locator('.onboarding-lesson,.onboarding-resume').count(),0);

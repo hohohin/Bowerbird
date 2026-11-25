@@ -171,15 +171,16 @@ const cases = {
     assert.equal(await page.getByRole('button', { name: '收起素材库', exact: true }).getAttribute('aria-expanded'), 'true');
     assert.ok((await panel(page).boundingBox()).x > (await page.locator('.canvas-stage').boundingBox()).x, 'canvas exploration is to the right of the canvas');
     await unchangedBrowser(page, 'p', true, true);
-    await page.evaluate(() => {
-      const flush = window.store.getState().projectCanvasFlush;
-      window.store.getState().registerProjectCanvasFlush(async () => {
+    await page.evaluate(async () => {
+      const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+      const flush = projectCanvasCallbacks.flush;
+      projectCanvasCallbacks.flush = async () => {
         await new Promise(resolve => { window.releaseExploreFlush = () => {
-          window.store.getState().registerProjectCanvasFlush(flush);
+          projectCanvasCallbacks.flush = flush;
           resolve();
         }; });
         await flush?.();
-      });
+      };
     });
     await page.getByRole('button', { name: '返回主页', exact: true }).click();
     await page.waitForFunction(() => !!window.releaseExploreFlush);
@@ -236,15 +237,16 @@ const cases = {
     await unchangedBrowser(page, 'p');
   },
   'canvas-save-failure': async page => {
-    await page.evaluate(() => {
-      window.store.getState().registerProjectCanvasFlush(async () => { throw new Error('隔离验证：画板保存失败'); });
+    await page.evaluate(async () => {
+      const { projectCanvasCallbacks } = await import('/src/lib/projectCanvasCallbacks.ts');
+      projectCanvasCallbacks.flush = async () => { throw new Error('隔离验证：画板保存失败'); };
     });
     await page.getByRole('button', { name: '返回主页', exact: true }).click();
     await page.getByText('隔离验证：画板保存失败', { exact: true }).waitFor();
     await unchangedBrowser(page, 'p');
     assert.equal(await page.locator('.canvas-workspace').isVisible(), true, 'failed save retains the current canvas');
     assert.equal(await page.evaluate(() => window.calls.slice(window.exploreCallsStart).some(call => call.command === 'set_active_project')), false, 'failed save never changes native capture scope');
-    await page.evaluate(() => window.store.getState().registerProjectCanvasFlush(null));
+    await page.evaluate(async () => { (await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush = null; });
     await page.getByRole('button', { name: '返回主页', exact: true }).click();
     await page.getByRole('region', { name: '项目管理' }).waitFor();
     await unchangedBrowser(page, null, false);
@@ -255,6 +257,7 @@ try {
   for (const [name, run] of Object.entries(cases)) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     page.setDefaultTimeout(10000);
+    page.setDefaultNavigationTimeout(60000);
     const errors = [], remote = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', route => {

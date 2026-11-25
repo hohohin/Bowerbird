@@ -29,11 +29,13 @@ try {
   await dialog.getByText('/picked/BowerbirdLibrary',{exact:true}).waitFor();
   await dialog.getByText('12 个文件 · 24.0 MB · 2 个项目目录',{exact:true}).waitFor();
   assert.equal(await count('file_workspace_move_schedule'),0);
-  await page.evaluate(()=>window.store.getState().registerProjectCanvasFlush(async()=>{throw new Error('画板保存失败');}));
+  await page.evaluate(async()=>{
+    (await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush=async()=>{throw new Error('画板保存失败');};
+  });
   await dialog.getByRole('button',{name:'确认并重启迁移',exact:true}).click();
   await dialog.getByRole('alert').filter({hasText:'画板保存失败'}).waitFor();
   assert.equal(await count('file_workspace_move_schedule'),0);assert.equal(await count('restart_app'),0);
-  await page.evaluate(()=>window.store.getState().registerProjectCanvasFlush(null));
+  await page.evaluate(async()=>{(await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush=null;});
   await dialog.getByRole('button',{name:'选择目标文件夹…',exact:true}).click();
   await dialog.getByText('/picked/BowerbirdLibrary',{exact:true}).waitFor();
   await mkdir('.tmp/file-workspace-move',{recursive:true});

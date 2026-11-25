@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { dreaminaCliVersion } from "../src/lib/genProviders.ts";
 import {
   awaitGenerationComposerIntent,
   captureGenerationSubmissionAuthority,
@@ -68,7 +69,6 @@ test("a deferred prompt compile keeps the provider and visual profile from the s
 // Execute the production store actions with a deferred provider command.
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { dreaminaCliVersion } from "../src/lib/genProviders.ts";
 import { acquireCreativeSubmission } from "../src/lib/creativeGeneration.ts";
 
 function startupHarness() {

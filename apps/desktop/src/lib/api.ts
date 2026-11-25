@@ -265,6 +265,10 @@ export const api = {
     invoke<CanvasNode>("project_canvas_node_create", { value }),
   projectCanvasNodeUpdate: (nodeId: string, value: CanvasNodeLayoutUpdate) =>
     invoke<CanvasNode | null>("project_canvas_node_update", { nodeId, value }),
+  projectCanvasNodesBatchCreate: (projectId: string, values: NewCanvasNode[], groups?: { value: NewCanvasGroup; nodeIds: string[] }[]) =>
+    invoke<{ nodes: CanvasNode[]; groups: CanvasGroup[] }>("project_canvas_nodes_batch_create", { projectId, values, groups }),
+  projectCanvasNodesBatchUpdate: (projectId: string, updates: { nodeId: string; value: CanvasNodeLayoutUpdate }[], groups?: CanvasGroup[]) =>
+    invoke<void>("project_canvas_nodes_batch_update", { projectId, updates, groups }),
   projectCanvasNoteUpdate: (nodeId: string, payloadJson: string) =>
     invoke<CanvasNode>("project_canvas_note_update", { nodeId, payloadJson }),
   projectCanvasNodeRemove: (nodeId: string) =>

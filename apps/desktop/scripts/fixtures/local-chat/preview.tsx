@@ -14,9 +14,11 @@ import "./preview.css";
 
 install(window);
 installCatalogPagingMock(window);
-const entitlement = (enabled: boolean) => ({ plan: enabled ? "pro" : "free", policy: { can_use_byo: enabled, can_use_cloud: true, max_parallel_jobs: 3 }, balances: { daily: 0, sub: 0, topup: 0 } });
+const toolbarAccount = new URLSearchParams(location.search).has("toolbar-pro") ? "local-chat-toolbar-fixture" : undefined;
+const entitlement = (enabled: boolean) => ({ plan: enabled ? "pro" : "free", policy: { can_use_byo: enabled, can_use_cloud: true, max_parallel_jobs: 3 }, balances: { daily: 0, sub: 0, topup: 0 },
+  ...(toolbarAccount ? { user_id: toolbarAccount, tier: enabled ? "pro" : "free", offline_state: "fresh" } : {}) });
 useStore.setState({ projects: projects as any, activeProjectId: inspect().activeProjectId, assets: assets as any, boardOpen: false,
-  settings: inspect().settings, cloudAuth: { logged_in: true, cloud_available: true } as any, cloudEntitlement: entitlement(true) as any,
+  settings: inspect().settings, cloudAuth: { logged_in: true, cloud_available: true, ...(toolbarAccount ? { user_id: toolbarAccount } : {}) } as any, cloudEntitlement: entitlement(true) as any,
   activeGenProvider: "codex", codexHealth: { ok: true, reason: "" }, dreaminaHealth: { ok: true, reason: "" } });
 
 function Fixture() {
