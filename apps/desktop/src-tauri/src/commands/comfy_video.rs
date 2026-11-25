@@ -151,7 +151,7 @@ pub(crate) async fn json_response(request: reqwest::RequestBuilder) -> AppResult
 }
 async fn parse_json_response(response: reqwest::Response) -> AppResult<Value> {
     let code = response.status();
-    let body: Value = response.json().await.map_err(|_| error("ComfyUI 返回了无法识别的响应"))?;
+    let body: Value = response.json().await.map_err(|e| if e.is_timeout() || e.is_body() { error("本机服务查询暂时中断") } else { error("ComfyUI 返回了无法识别的响应") })?;
     if !code.is_success() { return Err(error(format!("ComfyUI 请求失败（{code}）：{}", body.to_string().chars().take(1500).collect::<String>()))); }
     Ok(body)
 }
@@ -273,7 +273,7 @@ async fn check_workflow(http: &reqwest::Client, base: &str, mode: Mode, has_audi
     for (class,field,model,label) in [("UNETLoader","unet_name",if reference {REFERENCE_UNET} else {UNET},"视频主模型"),("CLIPLoader","clip_name",CLIP,"文本理解模型"),("VAELoader","vae_name",VAE,"画面解码模型"),("VAELoader","vae_name",AUDIO,"音频解码模型"),("LoraLoaderModelOnly","lora_name",LORA,"8 步加速模型")] {
         if reference && model == LORA { continue; }
         if !info[class]["input"]["required"][field][0].as_array().is_some_and(|list| list.iter().any(|v| v.as_str() == Some(model))) {
-            return Err(error(format!("缺少{label}，需要下载完整的 H3 模型包")));
+            return Err(error(format!("缺少{label}，请补充缺失模型，已有环境与模型直接复用")));
         }
     }
     Ok(())
@@ -387,7 +387,7 @@ async fn submit_prompt(http: &reqwest::Client, path: &Path, record: &mut Record,
     owner()?;
     record.submitted = true; save(path,record)?;
     let response = http.post(format!("{base}/prompt")).json(&json!({"prompt":prompt,"client_id":request,"extra_data":{"bowerbird_request_id":request,"workflow":record.input.mode.workflow()}}))
-        .timeout(Duration::from_secs(5)).send().await.map_err(|e| error(format!("提交结果未知：{e}")))?;
+        .timeout(Duration::from_secs(25)).send().await.map_err(|e| error(format!("提交结果未知：{e}")))?;
     let code = response.status();
     let response: Value = response.json().await.map_err(|_| error("提交结果未知，请继续查询原任务"))?;
     if !code.is_success() {
@@ -416,24 +416,29 @@ async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path:
     if let Some(message) = &record.failure { return Ok(status("failed",message)); }
     if !record.submitted { return Ok(status("failed","尚未提交到 ComfyUI，请停止后重新运行")); }
     let base = endpoint(&record.input.endpoint)?;
-    let response = match http.get(format!("{base}/queue")).timeout(Duration::from_secs(8)).send().await {
-        Ok(response) => response,
-        Err(e) if e.is_connect() || super::comfy_setup::video_abort_detected(&base) => {
-            // Only restart services on ports owned by the Bowerbird video launcher.
-            if base == "http://127.0.0.1:18189" || base == "http://127.0.0.1:18188" {
-                let mut offline = status("offline", "本机视频服务已断开。");
-                offline.original_service = Some((base, record.input.mode, record.installation.clone()));
-                return Ok(offline);
-            }
-            return Err(error("无法连接此任务使用的本机 ComfyUI 服务，原任务记录已保留。"));
+    let query = |url: String| http.get(url).timeout(Duration::from_secs(18));
+    let offline = || {
+        let mut result = status("offline", "本机视频服务已断开。");
+        if matches!(base.as_str(), "http://127.0.0.1:18188" | "http://127.0.0.1:18189") {
+            result.original_service = Some((base.clone(), record.input.mode, record.installation.clone()));
         }
-        Err(e) => return Err(error(format!("查询本机视频队列失败：{e}"))),
+        result
+    };
+    let response = match query(format!("{base}/queue")).send().await {
+        Ok(response) => response,
+        Err(e) if e.is_connect() || super::comfy_setup::video_abort_detected(&base) => return Ok(offline()),
+        Err(_) => return Err(error("本机服务查询暂时中断")),
     };
     let queue = parse_json_response(response).await?;
     if !queue["queue_running"].is_array() || !queue["queue_pending"].is_array() {
         return Err(error("原视频服务返回了无法识别的队列，原任务记录已保留。"));
     }
-    let history = json_response(http.get(match &record.prompt_id { Some(id) => format!("{base}/history/{id}"), None => format!("{base}/history?max_items=500") })).await?;
+    let response = match query(match &record.prompt_id { Some(id) => format!("{base}/history/{id}"), None => format!("{base}/history?max_items=500") }).send().await {
+        Ok(response) => response,
+        Err(e) if e.is_connect() || super::comfy_setup::video_abort_detected(&base) => return Ok(offline()),
+        Err(_) => return Err(error("本机服务查询暂时中断")),
+    };
+    let history = parse_json_response(response).await?;
     if record.prompt_id.is_none() {
         record.prompt_id = queue["queue_running"].as_array().into_iter().flatten().chain(queue["queue_pending"].as_array().into_iter().flatten())
             .find(|item| request_match(item,request)).and_then(|item| item[1].as_str()).map(str::to_owned)

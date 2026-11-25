@@ -5,7 +5,7 @@ import { ensureDailyCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { assertBodySize, readJsonBody, assertReferenceImages, corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
-import { LAYER_SERVICES, validateLayerRequest, type LayerOptions } from "../_shared/layer-contract.ts";
+import { layerDecompositionOptions, LAYER_SERVICES, validLayerOutputLimit, validLayerSize, validateLayerRequest, type LayerOptions } from "../_shared/layer-contract.ts";
 import { validateVideoInput, videoService, type CloudVideoOptions, type VideoReference, type AudioReference, type VideoInput } from "../_shared/video-contract.ts";
 
 const BUCKET = "generation-temp";
@@ -217,8 +217,13 @@ async function createJob(
     if (result.error || !row) throw new ApiError("invalid_request", "视频积分预授权失败：请检查积分和服务配置");
     held = { holdId: String(row.hold_id), estimated: Number(row.estimated_amount), pricingVersion: Number(row.pricing_version) };
   } else {
+    const layer = body.layer_options;
+    const explicitLayerLimit = layer?.operation === "decompose" &&
+      (layer.max_images !== undefined || layer.text_recognition !== undefined)
+      ? layerDecompositionOptions(layer).max_images : undefined;
     const result = await admin.rpc("credit_hold_bcoin_image", { p_user_id: userId, p_idempotency_key: body.idempotency_key,
-      p_service: service, p_reference_count: body.reference_images?.length ?? 0, p_size: body.layer_options?.size ?? null });
+      p_service: service, p_reference_count: body.reference_images?.length ?? 0, p_size: layer?.size ?? null,
+      ...(explicitLayerLimit !== undefined ? { p_max_images: explicitLayerLimit } : {}) });
     const row = result.data?.[0];
     if (result.error || !row) throw new ApiError(result.error?.details === "insufficient_credits" ? "insufficient_credits" : "invalid_request", "图片 Bcoin 预授权失败，请检查余额和参数");
     held = { holdId: String(row.hold_id), estimated: Number(row.estimated_amount), pricingVersion: Number(row.pricing_version) };
@@ -352,13 +357,31 @@ Deno.serve(async (request) => {
     let response: Response;
     if (action === "video_capabilities") response = jsonResponse({ reference_audio: true }, 200, cors);
     else if (action === "layer_quote") {
+      const size = raw.size === undefined ? "auto" : raw.size;
+      const maxImages = raw.max_images;
+      const editReferenceCount = raw.edit_reference_count === undefined ? 1 : raw.edit_reference_count;
+      if (!validLayerSize(size) || (maxImages !== undefined && !validLayerOutputLimit(maxImages)) ||
+          typeof editReferenceCount !== "number" || !Number.isInteger(editReferenceCount) || editReferenceCount < 0 || editReferenceCount > 10) {
+        throw new ApiError("invalid_request", "分层报价参数无效");
+      }
       const prices = await admin.from("service_costs").select("service,unit_cost,active,parameters").in("service", [...LAYER_SERVICES]);
       if (prices.error) throw new ApiError("internal_error", "分层价格读取失败", true);
-      response = jsonResponse({ status: "quoted", services: LAYER_SERVICES.map(service => {
+      const services = await Promise.all(LAYER_SERVICES.map(async service => {
         const row = prices.data?.find(row => row.service === service);
-        const available = !!row?.active && row.parameters?.pricing_ready === true && Number(row.unit_cost) > 0;
-        return { service, available, credits: available ? row!.unit_cost : null };
-      }) }, 200, cors);
+        if (!row?.active || row.parameters?.pricing_ready !== true || Number(row.unit_cost) <= 0) {
+          return { service, available: false, credits: null };
+        }
+        const decompose = service === "image_layer_decompose";
+        const quote = await admin.rpc("quote_bcoin_image", {
+          p_service: service, p_reference_count: decompose ? 1 : editReferenceCount, p_size: size,
+          ...(decompose && maxImages !== undefined ? { p_max_images: maxImages } : {}),
+        });
+        if (quote.error || !quote.data) throw new ApiError("internal_error", "分层价格读取失败", true);
+        const price = quote.data;
+        return { service, available: true, credits: price.credits, input_credits: price.input_credits ?? 0,
+          ...(decompose ? { max_images: price.max_outputs, small_layer_cost: price.small_layer_cost, large_layer_cost: price.large_layer_cost } : {}) };
+      }));
+      response = jsonResponse({ status: "quoted", layer_protocol: 2, services }, 200, cors);
     }
     else if (action === "get" || (!action && jobId)) response = await actionGet(admin, user.id, jobId, cors);
     else if (action === "get_by_key") {

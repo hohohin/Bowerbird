@@ -19,7 +19,7 @@ import { createPortal } from "react-dom";
 import { shallow } from "zustand/shallow";
 import { Clapperboard, Images, List, MessageCirclePlus, Palette, Play, Repeat2, Sparkles, Square, Timer, Workflow, X, Copy, CopyPlus, ImagePlus, MousePointer2, CalendarClock, CheckCheck, Pin, PinOff } from "lucide-react";
 import { api } from "../lib/api";
-import { comfyVideoMode, DEFAULT_COMFY_VIDEO } from "../lib/comfyVideo";
+import { copyComfyDiagnostic, comfyVideoMode, DEFAULT_COMFY_VIDEO } from "../lib/comfyVideo";
 import { startComposerLocalVideo } from "../lib/composerLocalVideo";
 import { activeCanvasNameCounts, assignCanvasCardNames, canvasCardNameError } from "../lib/canvasCardNames";
 import { CanvasCardName } from "./CanvasCardName";
@@ -292,6 +292,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   const genJobs = useStore(state => state.genJobs);
   const chatSummaries = useProjectChatSummaries(projectId);
   const activeVideoJobs = useStore(state => Object.values(state.genJobs).filter(job => job.media === "video" && job.running).map(job => job.id), shallow);
+  const [savingH3Preference, setSavingH3Preference] = useState(false);
   const h3AutoOptimize = useStore(state => state.settings?.h3_auto_optimize_prompt === true);
   const quote = useSnapshot(chatQuote.store), dsh = useSnapshot(chatDshStatus.store);
   const [voiceIssue, setVoiceIssue] = useState<string | null>("正在检查本机配音环境…");
@@ -305,6 +306,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const chat = node.kind !== "agent" ? undefined : node.chatConversationId ? chatSummaries[node.chatConversationId]
         : Object.values(chatSummaries).find(chat => chat.projectId === projectId && chat.nodeId === node.id);
       const issue = workflowProviderIssue(node, state, chat?.provider, quote, dsh);
+      // Let H3 cards explain the Pro requirement when the user starts a run.
+      if (issue?.settings === "account" && (node.kind === "comfy-video" || isH3ImageCard(node))) continue;
       if (issue) byId.set(node.id, issue);
       else if (node.kind === "voice" && voiceIssue) byId.set(node.id, { message: voiceIssue });
       else if (node.kind === "comfy-video" && comfyIssues[comfyCheckKey(node)] !== null) {
@@ -454,6 +457,12 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const type = material?.audio ? "audio" : material?.video ? "video" : workflowAssetMedia(assets.find(asset => asset.id === id));
       return !type || (media ? media === type : source.mediaFilter?.includes(type));
     });
+  }
+  function h3ReferencePending(input: WorkflowInput) {
+    return !!input.nodeId && nodeById.has(input.nodeId) && !sourceImages({ ...input, videoFrame: undefined }).length;
+  }
+  function h3ReferenceCount(input: WorkflowInput, media?: keyof typeof H3_R2V_INPUT_PORTS) {
+    return h3ReferenceAssets(input, media).length || Number(h3ReferencePending(input));
   }
   function inputMediaLabel(binding: WorkflowInput) {
     if (binding.videoFrame) return "图片";
@@ -1311,7 +1320,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     const missing = (node.kind === "generation" || node.kind === "agent")
       ? current.filter(input => canvasWorkflowInputState(input, graphNodes, nodes) === "missing").sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))[0] : undefined;
     const connected = missing ? current.map(input => input === missing ? { ...binding, slot: missing.slot } : input) : [...current, binding];
-    if (r2vLimit && (connected.length > r2vLimit || connected.flatMap(input => h3ReferenceAssets(input, r2vMedia)).length > r2vLimit)) {
+    if (r2vLimit && (connected.length > r2vLimit || connected.reduce((n, input) => n + h3ReferenceCount(input, r2vMedia), 0) > r2vLimit)) {
       notifyError(null, `${port?.label ?? "此输入"}最多接入 ${r2vLimit} 个素材`); return;
     }
     const documentSource = source.canvasNodeId && graphNodes.find(card => card.id === source.canvasNodeId && card.kind === "note" && readCanvasNote(card).note_type === "document");
@@ -2000,12 +2009,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const generationCard = node.kind === "generation" || localVideo;
       const lastGenerationInput = generationCard ? lastGenerationRunInput(document, node.id) : undefined;
       const localMode = localVideo ? comfyVideoMode(node.comfyVideo) : undefined;
-      const r2vCounts = localMode === "r2v" ? {
-        referenceImageCount: (node.inputs[H3_R2V_INPUT_PORTS.image] ?? []).reduce((n, input) =>
-          n + (input.nodeId && input.videoFrame ? 1 : h3ReferenceAssets(input, "image").length), 0),
-        referenceVideoCount: (node.inputs[H3_R2V_INPUT_PORTS.video] ?? []).flatMap(input => h3ReferenceAssets(input, "video")).length,
-        referenceAudioCount: (node.inputs[H3_R2V_INPUT_PORTS.audio] ?? []).flatMap(input => h3ReferenceAssets(input, "audio")).length,
-      } : undefined;
+      const countR2VInputs = (media: keyof typeof H3_R2V_INPUT_PORTS) => (node.inputs[H3_R2V_INPUT_PORTS[media]] ?? [])
+        .reduce((n, input) => n + h3ReferenceCount(input, media), 0);
+      const r2vCounts = localMode === "r2v" ? { referenceImageCount: countR2VInputs("image"),
+        referenceVideoCount: countR2VInputs("video"), referenceAudioCount: countR2VInputs("audio") } : undefined;
       let generationAction = "运行";
       if (lastGenerationInput?.prompt === node.prompt) {
         const current = generationInputNode(node, document.nodes);
@@ -2349,7 +2356,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           </div>}
           {localVideo && <ComfyVideoCard node={node} prompt={original} onPromptChange={updateOriginal} modelControl={videoControls}
                 disabled={busy} readCurrentPrompt={readCurrentPrompt}
-                assets={assets} inputImages={h3ReferenceAssets} onChange={changes => patch(node.id, changes)} optimizationActions={optimizationActions} />}
+                assets={assets} inputImages={h3ReferenceAssets} referencePending={h3ReferencePending} onChange={changes => patch(node.id, changes)} optimizationActions={optimizationActions} />}
           {(node.kind === "generation" || node.kind === "agent" && !hasAgentMessages) && <WorkflowPromptEditor fitContent={videoCard || localImage} cardNames={cardNames} node={{ ...node, prompt: original, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} disabled={busy && !creating} readCurrentPrompt={readCurrentPrompt} onChange={updateOriginal}
             onUndoConnection={node.kind === "generation" ? () => onUndoGenerationConnection(node.id) : undefined} />}
           {localImage && optimizationActions}
@@ -2400,7 +2407,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           {failure && !failure.dismissed && <p className="workflow-error" role="alert">
             {userErrorMessage(failure.diagnostic?.message ?? step?.error, "这一步未完成，请查看问题并重试。")}
             {failure.diagnostic && <button onClick={() => controller.showIssue(failure.diagnostic!)}>查看问题</button>}
-            {h3 && <button onClick={() => handle(navigator.clipboard.writeText(failure.diagnostic ? workflowDiagnosticReport(failure.diagnostic) : step?.error ?? "生成失败").then(() => notifySuccess("错误信息已复制")))}>复制错误信息</button>}
+            {h3 && <button onClick={() => handle(copyComfyDiagnostic(failure.diagnostic ? workflowDiagnosticReport(failure.diagnostic) : step?.error ?? "生成失败").then(() => notifySuccess("错误信息已复制")))}>复制错误信息</button>}
             <button onClick={() => controller.dismissCardFailure(failure.key)}>关闭提示</button>
           </p>}
           {imageFailure && <p className="workflow-error" role="alert">
@@ -2441,9 +2448,11 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
               {node.kind !== "agent" && <button disabled={!!step?.comfyStopping} aria-label="停止工作流" title={node.kind === "comfy-video" ? "取消排队或中断本次生成" : "停止工作流"} onClick={() => handle(controller.stop(activeWorkflow.id))}><Square size={12} /></button>}
             </> : node.kind !== "agent" && node.kind !== "trigger" && <>
               {(localVideo || localImage) && <label className="workflow-video-auto-optimize" title="运行前通过 Cloud DSH 优化一次提示词，可能消耗 Bowerbird 积分。" onPointerDown={event => event.stopPropagation()}>
-                <input type="checkbox" aria-label="自动优化提示词" checked={h3AutoOptimize} disabled={busy} onChange={event => {
+                <input type="checkbox" aria-label="自动优化提示词" checked={h3AutoOptimize} disabled={busy || savingH3Preference} onChange={event => {
+                  setSavingH3Preference(true);
                   void useStore.getState().updateSettings({ h3_auto_optimize_prompt: event.target.checked })
-                    .catch(error => notifyError(error, "自动优化设置未保存"));
+                    .catch(error => { console.error("h3.auto_optimize.save_failed", { error }); notifyError(error, "自动优化设置未保存"); })
+                    .finally(() => setSavingH3Preference(false));
                 }} />
                 {h3AutoOptimize ? "AUTO" : "自动优化提示词"}
               </label>}
@@ -2499,7 +2508,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       <div className="workflow-diagnostic-buttons"><button onClick={() => locateIssue(issue.nodeId)}>定位出错卡片</button>
         {deliveryRunIds.has(issue.runId ?? "") && <button onClick={() => handle(controller.continue(issue.runId))}>重试写入内容卡</button>}
         {issueSourceId && (document.nodes.some(node => node.id === issueSourceId) || graphNodes.some(node => node.id === issueSourceId && node.hiddenAt == null)) && <button onClick={() => locateIssue(issueSourceId)}>定位来源</button>}
-        <button onClick={() => handle(navigator.clipboard.writeText(workflowDiagnosticReport(issue)).then(() => notifySuccess("诊断信息已复制")))}>复制诊断信息</button>
+        <button onClick={() => handle((document.nodes.find(n => n.id === issue.nodeId)?.kind === "comfy-video" ? copyComfyDiagnostic(workflowDiagnosticReport(issue)) : navigator.clipboard.writeText(workflowDiagnosticReport(issue))).then(() => notifySuccess("诊断信息已复制")))}>复制诊断信息</button>
       </div>
       <details><summary>诊断详情</summary><pre>{workflowDiagnosticReport(issue)}</pre></details>
     </section>, diagnosticTarget)}

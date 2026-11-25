@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { loadSourceScript } from "./fixtures/explorer/source-script.mjs";
 import { readFile } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
@@ -21,7 +22,7 @@ try {
     ? route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="blue"/></svg>' })
     : route.fulfill({ contentType: "text/html", body: '<a href="/pin/1"><img id="source" width="100" height="100" draggable="false" src="/small.png" srcset="/small.png 1x, /large.png 2x"></a>' }));
   await source.addInitScript(await readFile("../extension/candidate-utils.js", "utf8"));
-  await source.addInitScript(await readFile("src-tauri/src/commands/source_browser_drag.js", "utf8"));
+  await source.addInitScript(await loadSourceScript("src-tauri/src/commands/source_browser_drag.js"));
   await source.goto("https://fixture.example/");
   const injected = await source.locator("#source").evaluate(image => {
     const { left, top, width, height } = image.getBoundingClientRect();
@@ -42,10 +43,10 @@ try {
   await page.waitForFunction(() => window.calls.some(c => c.command === "open_source_browser"));
   const explore = await page.getByRole("button", { name: "探索", exact: true }).boundingBox();
   const projects = await page.getByRole("button", { name: "项目", exact: true }).boundingBox();
-  assert.ok(explore.x < projects.x);
+  assert.ok(projects.x < explore.x);
   const browserPanel = await page.getByRole("complementary", { name: "探索面板" }).boundingBox();
   const library = await page.locator('[aria-label="探索采集素材"]').boundingBox();
-  assert.ok(browserPanel.x + browserPanel.width <= library.x, "browser is a left panel beside the existing main page");
+  assert.ok(library.x + library.width <= browserPanel.x, "browser is a right panel beside the existing main page");
   assert.equal(await page.evaluate(() => window.primaryPage === document.querySelector('[aria-label="主页面草稿"]')), true);
   // Native image drags can advertise Files alongside the explorer metadata.
   // Mount the global importer too: its window capture listener runs before React.
@@ -103,7 +104,7 @@ try {
   // Menus can move after their first render or hide without unmounting.
   await page.evaluate(() => { document.querySelector("#overlap-menu").style.left = "10000px"; });
   await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
-  await page.evaluate(() => { document.querySelector("#overlap-menu").style.left = "30px"; });
+  await page.evaluate(() => { document.querySelector("#overlap-menu").style.left = document.querySelector("[data-source-browser-viewport]").getBoundingClientRect().left + "px"; });
   await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === false);
   await page.evaluate(() => { document.querySelector("#overlap-menu").style.display = "none"; });
   await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
@@ -119,6 +120,7 @@ try {
     const host = document.createElement("div"); host.id = "sidebar-overlay-test";
     host.style.cssText = `position:fixed;left:${viewport.left - 50}px;top:${viewport.top}px;height:300px;width:50px`;
     const drawer = document.createElement("aside"); drawer.className = "app-sidebar is-auto-hide is-auto-hidden";
+    drawer.style.cssText = `position:fixed;left:${viewport.left + 5}px;top:${viewport.top}px;width:50px;height:300px;transform:none;`;
     host.append(drawer); document.body.append(host);
     drawer.classList.remove("is-auto-hidden");
   });
@@ -131,10 +133,14 @@ try {
   await page.getByText("未能识别拖入的素材，请重新拖动网页图片或视频", { exact: true }).last().waitFor();
   await page.evaluate(() => { window.hold = true; });
   await drop(); await drop();
-  await page.waitForFunction(() => window.release);
-  assert.equal((await calls("capture_source_browser_image")).length, 1);
-  await page.evaluate(() => { window.store.setState({ activeProjectId: "p", projects: [{ id: "p", name: "新项目", provisional: true, kind: "blank" }] }); window.hold = false; window.release(); });
-  await page.waitForFunction(() => !document.querySelector('[aria-label="探索采集素材"]').textContent.includes("采集中"));
+  await page.waitForFunction(() => Object.keys(window.captureResolvers).length === 2);
+  assert.equal((await calls("capture_source_browser_image")).length, 2, "both image slots can run in the original project");
+  await page.evaluate(() => {
+    window.store.setState({ activeProjectId: "p", projects: [{ id: "p", name: "新项目", provisional: true, kind: "blank" }] });
+    window.hold = false;
+    for (const release of Object.values(window.captureResolvers)) release();
+  });
+  await page.getByRole("button", { name: "采集记录", exact: true }).locator(".explorer-capture-count").waitFor({ state: "hidden" });
   assert.equal(await page.locator('[data-asset-id="captured"]').count(), 0, "old project completion must not populate new project");
   await drop();
   await page.locator('[data-asset-id="captured"]').waitFor();
@@ -167,7 +173,7 @@ try {
   await failureNotice.waitFor();
   const notice = await failureNotice.boundingBox();
   const native = await page.locator("[data-source-browser-viewport]").boundingBox();
-  assert.ok(notice.x >= native.x + native.width, "capture errors stay outside the native view");
+  assert.ok(notice.x + notice.width <= native.x, "capture errors stay outside the native view");
   await page.getByRole("button", { name: "采集记录", exact: true }).click();
   const captureHistory = page.getByRole("dialog", { name: "采集记录", exact: true });
   await captureHistory.getByText("模拟网站拒绝图片", { exact: true }).waitFor();
@@ -189,11 +195,11 @@ try {
   assert.equal((await calls("open_source_browser")).length, 1, "reopening only shows the existing webview");
   assert.equal((await calls("navigate_source_browser")).length, navigations);
   assert.equal((await calls("reload_source_browser")).length, 0);
-  assert.equal(await page.getByRole("textbox", { name: "网页地址" }).inputValue(), "https://huaban.com/");
+  assert.equal(await page.getByLabel("网页地址", { exact: true }).inputValue(), "https://huaban.com/");
   assert.equal(await page.getByRole("textbox", { name: "主页面草稿" }).inputValue(), "保留主页面状态");
   assert.equal(await page.evaluate(() => window.primaryPage === document.querySelector('[aria-label="主页面草稿"]')), true);
   assert.deepEqual(errors, []);
-  console.log("PASS explorer entry, side-by-side collection, sites, modal occlusion, drop validation, duplicate guard, frozen project, provisional materialize, errors, resize and close.");
+  console.log("PASS explorer entry, side-by-side collection, sites, modal occlusion, drop validation, parallel image capture, frozen project, provisional materialize, errors, resize and close.");
 } catch (error) {
   console.log(JSON.stringify({ errors, calls: await page.evaluate(() => window.calls?.slice(-12) ?? []).catch(() => []) }));
   await page.screenshot({ path: ".tmp/explorer-failure.png" }).catch(() => {});

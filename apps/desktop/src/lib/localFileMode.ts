@@ -51,7 +51,7 @@ export function createLocalFileMode(paneId = "main") {
     return result;
   }
   const store = create<Memory & {
-    open: boolean; query: string; mode: FileMode; globalRequest: number;
+    open: boolean; query: string; queryReset: number; mode: FileMode; globalRequest: number;
     navigationHost: HTMLDivElement | null;
     contextProjectId: string | null;
     setProjectContext: (id: string | null) => void;
@@ -67,27 +67,28 @@ export function createLocalFileMode(paneId = "main") {
     setQuery: (query: string) => void;
   }>((set, get) => ({
     ...navigation(null),
-    open: false, query: "", mode: "all", globalRequest: 0, navigationHost: null, contextProjectId: null,
+    open: false, query: "", queryReset: 0, mode: "all", globalRequest: 0, navigationHost: null, contextProjectId: null,
     setProjectContext: contextProjectId => set(state => {
       if (state.contextProjectId === contextProjectId) return state;
       const restored = navigation(contextProjectId);
       return {
-        ...restored, contextProjectId, query: "",
+        ...restored, contextProjectId, query: "", queryReset: state.queryReset + 1,
         generatedFilter: restored.media === "audios" || restored.media === "texts" ? null : state.generatedFilter,
       };
     }),
-    setSidebarMode: sidebarMode => set(state => state.sidebarMode === sidebarMode ? state : { sidebarMode, query: "" }),
+    setSidebarMode: sidebarMode => set(state => state.sidebarMode === sidebarMode ? state
+      : { sidebarMode, query: "", queryReset: state.queryReset + 1 }),
     setSidebarCollapsed: sidebarCollapsed => set({ sidebarCollapsed }),
     selectHierarchy: hierarchyTarget => set(state => state.sidebarMode === "hierarchy"
       && JSON.stringify(state.hierarchyTarget) === JSON.stringify(hierarchyTarget) ? state
-      : { hierarchyTarget, sidebarMode: "hierarchy", query: "", open: true }),
+      : { hierarchyTarget, sidebarMode: "hierarchy", query: "", queryReset: state.queryReset + 1, open: true }),
     generatedFilter: null,
     setGeneratedFilter: generatedFilter => set({ generatedFilter }),
     setMedia: media => set(state => ({ media, generatedFilter: media === "audios" || media === "texts" ? null : state.generatedFilter })),
     setMode: mode => set({ mode }),
     openBrowser: () => { get().selectHierarchy({ kind: "folders", folderId: null }); get().setOpen(true); },
     setOpen: value => set(state => ({ open: typeof value === "function" ? value(state.open) : value })),
-    setQuery: query => set({ query }),
+    setQuery: query => set(state => query === "" ? { query, queryReset: state.queryReset + 1 } : { query }),
   }));
   store.subscribe((state, previous) => {
     const { sidebarMode, sidebarCollapsed, hierarchyTarget, media, contextProjectId } = state;

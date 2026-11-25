@@ -107,9 +107,25 @@ fn prepare_image(paths: &LibraryPaths, db: &Database, asset_id: &str) -> AppResu
 #[serde(rename_all = "kebab-case")]
 enum SearchStatus { Preparing, WaitingLogin, Searching, Submitted, Error }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum SearchFailure { HandoffFailed, ImageRejected, SearchTimeout, WaitExpired, LensUnavailable }
+
+impl SearchFailure {
+    fn message(self) -> &'static str {
+        match self {
+            Self::HandoffFailed => "图片未能交给搜索网页，请重新发起以图搜图。",
+            Self::ImageRejected => "网页未能接收这张图片，请重新发起以图搜图。",
+            Self::SearchTimeout => "网页尚未完成图片搜索，请检查网络后重试。",
+            Self::WaitExpired => "此次搜图等待已结束，请重新发起以图搜图。",
+            Self::LensUnavailable => "未找到 Pinterest 图片搜索入口。请在网页上手动打开 Pinterest 镜头并选择图片。",
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Notice { request_id: String, status: SearchStatus, message: Option<String> }
+struct Notice { request_id: String, status: SearchStatus, reason: Option<SearchFailure> }
 
 fn emit(app: &AppHandle, request_id: &str, status: SearchStatus, message: Option<&str>) {
     let _ = app.emit_to("main", SEARCH_EVENT, serde_json::json!({ "requestId": request_id, "status": status, "message": message }));
@@ -221,7 +237,7 @@ fn inject(browser: &Webview) {
         "base64": image.map_or("", |image| image.base64.as_str()),
         "mime": image.map_or("image/png", |image| image.mime), "name": image.map_or("search.png", |image| image.name),
         "documentAfter": document_after, "handedOff": pending.handed_off});
-    let script = include_str!("source_browser_pinterest.js")
+    let script = super::source_browser::site_rules::render(include_str!("source_browser_pinterest.js"))
         .replace("__BOWERBIRD_PINTEREST_REQUEST__", &payload.to_string())
         .replace("__BOWERBIRD_PINTEREST_BRIDGE__", &format!("bowerbird-pinterest://{token}"));
     if let Err(error) = browser.eval(&script) {
@@ -252,9 +268,10 @@ pub fn on_notice(app: &AppHandle, url: &Url, token: &str) {
     let mut searches = state.0.lock().unwrap();
     if !searches.receive(&notice) { return; }
     drop(searches);
-    // Remote-page messages are untrusted diagnostics, never user-facing HTML or paths.
-    let message = matches!(notice.status, SearchStatus::Error).then_some("图片搜索未完成，请重试");
-    if matches!(notice.status, SearchStatus::Error) { tracing::warn!(message = ?notice.message, "Pinterest page reported failure"); }
+    let message = if matches!(notice.status, SearchStatus::Error) {
+        tracing::warn!(reason = ?notice.reason, rules_version = super::source_browser::site_rules::VERSION, "Pinterest page reported failure");
+        Some(notice.reason.map_or("图片搜索未完成，请重试", SearchFailure::message))
+    } else { None };
     emit(app, &notice.request_id, notice.status, message);
 }
 
@@ -290,7 +307,7 @@ mod tests {
         assert!(state.begin("one"));
         assert!(state.prepare("one", image()));
         assert!(state.navigate("one", 1));
-        let notice = |request_id: &str, status| Notice { request_id: request_id.into(), status, message: None };
+        let notice = |request_id: &str, status| Notice { request_id: request_id.into(), status, reason: None };
         assert!(!state.receive(&notice("old", SearchStatus::Searching)));
         assert!(state.pending.as_ref().unwrap().image.is_some());
         assert!(state.receive(&notice("one", SearchStatus::Searching)));

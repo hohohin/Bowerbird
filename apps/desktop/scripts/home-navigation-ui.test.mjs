@@ -216,13 +216,13 @@ try {
   assert.equal(await leftPane.getByRole('tablist', { name: '素材视图切换条', exact: true }).getByRole('tab', { name: '全部素材', exact: true }).getAttribute('aria-selected'), 'true', 'split-pane Tab affects only its active pane');
   await rightPane.getByRole('button', { name: '关闭此栏', exact: true }).click();
   await page.getByRole('button', { name: '探索', exact: true }).click();
-  await page.getByRole('textbox', { name: '网页地址', exact: true }).waitFor();
+  await page.getByLabel('网页地址', { exact: true }).waitFor();
   await page.waitForFunction(() => window.calls.some(c => c.command === 'open_source_browser'));
-  await page.getByRole('button', { name: '收起浏览器', exact: true }).click();
+  await library.click();
   await nav.waitFor();
   assert.equal(await library.getAttribute('aria-current'), 'page');
   await projects.click();
-  assert.equal(await page.getByRole('textbox', { name: '网页地址', exact: true }).isVisible(), false);
+  assert.equal(await page.getByLabel('网页地址', { exact: true }).isVisible(), false);
   assert.deepEqual(errors, []); assert.deepEqual(remote, []);
   console.log('PASS production App home navigation: centered peer pages, preserved browse state, native-scope/provisional routes, failures, menus, explorer, Tab, dark/light layouts');
 } catch (error) { console.error('page errors', errors); console.error((await page.locator('body').innerText()).slice(-2000)); throw error; }

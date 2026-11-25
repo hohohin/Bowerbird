@@ -2,7 +2,7 @@
 //! no SQLite connection is opened on a network share.
 use super::{data::Label, LocalClassifier, Status};
 use crate::{
-    core::{external_files, paths::LibraryPaths},
+    core::{external_files, file_workspace::ensure_hidden_dir, paths::LibraryPaths},
     db::Database,
 };
 use rusqlite::params;
@@ -643,12 +643,13 @@ impl Session {
         // Validate existing data before falling back; corruption is never treated as no permission.
         let record = read(&storage_root)?;
         let prepare = |storage: &Path| -> std::io::Result<()> {
-            fs::create_dir_all(storage.join(".bowerbird"))?;
-            if !fs::canonicalize(storage.join(".bowerbird"))?.starts_with(fs::canonicalize(storage)?) {
+            let metadata = storage.join(".bowerbird");
+            ensure_hidden_dir(&metadata)?;
+            if !fs::canonicalize(&metadata)?.starts_with(fs::canonicalize(storage)?) {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "分类数据目录不能链接到目标文件夹之外"));
             }
             if storage.join(RECORD).exists() { fs::OpenOptions::new().write(true).open(storage.join(RECORD))?; }
-            let probe = storage.join(".bowerbird").join(format!("{}.probe", uuid::Uuid::new_v4()));
+            let probe = metadata.join(format!("{}.probe", uuid::Uuid::new_v4()));
             let file = fs::OpenOptions::new().write(true).create_new(true).open(&probe)?;
             drop(file); fs::remove_file(probe)
         };

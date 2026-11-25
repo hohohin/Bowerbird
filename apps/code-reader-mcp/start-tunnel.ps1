@@ -4,8 +4,10 @@
   [string]$TunnelId,
   [string]$TunnelClient = 'tunnel-client',
   [string]$ControlPlaneProxy = '',
+  [switch]$UseSystemProxy,
   [string]$KeyFile = '',
   [switch]$UpdateSnapshot,
+  [switch]$ReuseRunning,
   [switch]$RestartTunnel,
   [switch]$Configure,
   [switch]$EnsureGemini
@@ -13,6 +15,14 @@
 
 $ErrorActionPreference = 'Stop'
 $proxyArgs = @()
+if ($UseSystemProxy -and -not $ControlPlaneProxy) {
+  $destination = [Uri]'https://api.openai.com'
+  $resolved = [Net.WebRequest]::GetSystemWebProxy().GetProxy($destination)
+  if ($resolved -and $resolved -ne $destination) {
+    if (-not $resolved.IsLoopback) { throw '自动选择仅支持本机代理；其他代理请显式指定 -ControlPlaneProxy。' }
+    $ControlPlaneProxy = $resolved.AbsoluteUri.TrimEnd('/')
+  }
+}
 if ($ControlPlaneProxy) {
   $proxyUri = $null
   if (-not [Uri]::TryCreate($ControlPlaneProxy, [UriKind]::Absolute, [ref]$proxyUri) -or
@@ -30,6 +40,20 @@ $tunnelCommand = (Get-Command $TunnelClient -CommandType Application -ErrorActio
 $launcher = Join-Path $PSScriptRoot 'run.mjs'
 $profileName = 'bowerbird-code-reader-' + $TunnelId
 $profileDir = Join-Path $PSScriptRoot '.local/profiles'
+function Find-ProjectTunnel {
+  Get-CimInstance Win32_Process -Filter "Name = 'tunnel-client.exe'" | Where-Object {
+    $_.ExecutablePath -eq $tunnelCommand -and $_.CommandLine -match '^(?:"[^"]+"|\S+)\s+run(?:\s|$)' -and
+      $_.CommandLine -match ('(?:^|\s)--profile(?:=|\s+)"?' + [regex]::Escape($profileName) + '"?(?=\s|$)')
+  }
+}
+if ($ReuseRunning) {
+  $running = @(Find-ProjectTunnel)
+  if ($running.Count -gt 1) { throw '发现多个同项目隧道，请先关闭多余窗口。' }
+  if ($running.Count -eq 1) {
+    Write-Host 'The GPT tunnel is already running.'
+    return
+  }
+}
 if (-not $UpdateSnapshot -and -not (Test-Path -LiteralPath (Join-Path $PSScriptRoot '.local/snapshot.json'))) {
   throw '先运行 node apps/code-reader-mcp/export.mjs 生成本地快照。'
 }
@@ -66,12 +90,14 @@ try {
   if ($UpdateSnapshot) {
     & $nodeCommand (Join-Path $PSScriptRoot 'export.mjs')
     if ($LASTEXITCODE -ne 0) { throw '快照导出失败，现有隧道继续使用原快照。' }
-    $targets = @(Get-CimInstance Win32_Process -Filter "Name = 'tunnel-client.exe'" | Where-Object {
-      $_.ExecutablePath -eq $tunnelCommand -and $_.CommandLine -match ([regex]::Escape($profileName) + '(?![A-Za-z0-9_-])') -and $_.CommandLine -match '\brun\b'
-    })
+  }
+  if ($UpdateSnapshot -or $RestartTunnel) {
+    $targets = @(Find-ProjectTunnel)
     if ($targets.Count -gt 1) { throw '发现多个同项目隧道，请先关闭多余窗口。' }
     if ($targets.Count -eq 1) {
-      if ($RestartTunnel) { Stop-Process -Id $targets[0].ProcessId -ErrorAction Stop }
+      $runningProxy = ''
+      if ($targets[0].CommandLine -match '(?:^|\s)--control-plane\.http-proxy(?:=|\s+)"?([^"\s]+)') { $runningProxy = $Matches[1].TrimEnd('/') }
+      if ($RestartTunnel -or $runningProxy -ne $ControlPlaneProxy.TrimEnd('/')) { Stop-Process -Id $targets[0].ProcessId -ErrorAction Stop }
       else { $reuseTunnel = $true }
     }
   }

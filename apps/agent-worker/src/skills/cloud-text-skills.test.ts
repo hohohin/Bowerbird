@@ -1,5 +1,5 @@
 import { test } from "node:test";
-import { deepEqual, equal, ok, throws } from "node:assert/strict";
+import { deepEqual, equal, match, ok, throws } from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -73,6 +73,19 @@ test("H3 optimization carries only the presence of a recording in all video mode
   equal(resolveCloudTextSkill(request())!.parameters.audioReference, undefined);
   for (const audioReference of [false, "true", { assetId: "hidden" }]) {
     throws(() => resolveCloudTextSkill(request("h3-video-prompt", { ...parameters, audioReference })), /cloud_text_skill/);
+  }
+});
+
+test("Ref2VA rewrite assigns the recording to a speaker and the spoken words to the supplied new dialogue", () => {
+  const line = "<d>[Chinese] 明天十点见。</d>";
+  for (const params of [{ ...parameters, audioReference: true },
+    { ...parameters, mode: "r2v", firstFrameCount: 0, referenceImageCount: 1, referenceVideoCount: 0, referenceAudioCount: 1 }]) {
+    const goal = request("h3-video-prompt", params);
+    const prompt = textRewritePrompt(goal, `借用 <Audio 1> 的音色说：${line}`, resolveCloudTextSkill(goal));
+    match(prompt, /`subject_definitions`[^\n]*\(S1\)[^\n]*<Audio 1>/);
+    match(prompt, /`retention_analysis`[^\n]*attribute transfer[^\n]*timbre, vocal tone, and delivery style only[^\n]*不复述、不延续/);
+    match(prompt, /`detailed_description`[^\n]*\(S1\)[^\n]*<Audio 1>[^\n]*<d>\[Chinese\]/);
+    ok(prompt.includes(line));
   }
 });
 

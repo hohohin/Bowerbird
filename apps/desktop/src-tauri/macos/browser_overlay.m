@@ -19,7 +19,7 @@
 }
 @end
 
-bool bb_browser_overlay(void *raw, double x, double y, double width, double height, double cut) {
+bool bb_browser_overlay(void *raw, double x, double y, double width, double height, double cut, bool left) {
     WKWebView *browser = (__bridge WKWebView *)raw;
     if (!browser.superview) return false;
     BBSourceBrowserOverlay *host;
@@ -39,6 +39,7 @@ bool bb_browser_overlay(void *raw, double x, double y, double width, double heig
     CGPoint points[] = {{x+cut,y},{x+width,y},{x+width,y+height},{x+cut,y+height},{x,y+height-cut},{x,y+cut}};
     host.hole = [NSBezierPath bezierPath];
     for (int i = 0; i < 6; i++) {
+        if (left) points[i].x = x + width - (points[i].x - x);
         if (!browser.isFlipped) points[i].y = NSHeight(browser.bounds) - points[i].y;
         if (i == 0) [host.hole moveToPoint:NSPointFromCGPoint(points[i])];
         else [host.hole lineToPoint:NSPointFromCGPoint(points[i])];
@@ -52,4 +53,10 @@ bool bb_browser_overlay(void *raw, double x, double y, double width, double heig
     mask.path = path; mask.fillRule = kCAFillRuleEvenOdd;
     CGPathRelease(path); browser.layer.mask = mask;
     return true;
+}
+
+bool bb_browser_go_history(void *raw, bool back) {
+    WKWebView *browser = (__bridge WKWebView *)raw;
+    if (back) return browser.canGoBack && [browser goBack] != nil;
+    return browser.canGoForward && [browser goForward] != nil;
 }

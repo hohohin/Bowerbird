@@ -449,6 +449,7 @@ pub fn ingest_dir(paths: &LibraryPaths, db: &Database, dir: &Path) -> AppResult<
 /// 浏览器扩展已经在浏览器登录态内取到图片字节；桌面端只负责落临时文件并走标准入库。
 /// 这条路径避免桌面端二次下载丢失 Cookie / 授权头 / 页面会话。
 const MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
+const IMAGE_ACCEPT: &str = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
 
 /// 浏览器扩展已经在浏览器登录态内取到图片字节；桌面端只负责落临时文件并走标准入库。
 /// 这条路径避免桌面端二次下载丢失 Cookie / 授权头 / 系统代理（Pinterest 等站必需）。
@@ -593,7 +594,7 @@ pub async fn ingest_from_url(
     url: &str,
     source_url: Option<&str>,
 ) -> AppResult<Asset> {
-    let resp = tokio::time::timeout(Duration::from_secs(30), download_response(url, source_url))
+    let resp = tokio::time::timeout(Duration::from_secs(30), download_response(url, source_url, IMAGE_ACCEPT))
         .await.map_err(|_| AppError::Media("图片下载超时，请重新采集".into()))??;
     if !resp.status().is_success() {
         return Err(AppError::Media(format!(
@@ -664,7 +665,7 @@ pub async fn ingest_from_url(
 
 // Resolve, reject mixed/non-public DNS answers, and pin the entire connection to
 // the approved addresses. Repeat for each redirect; a proxy must not resolve instead.
-async fn download_response(raw: &str, source_url: Option<&str>) -> AppResult<reqwest::Response> {
+pub(crate) async fn download_response(raw: &str, source_url: Option<&str>, accept: &str) -> AppResult<reqwest::Response> {
     let mut url = reqwest::Url::parse(raw).map_err(|_| AppError::Media("图片地址无效".into()))?;
     for _ in 0..6 {
         validate_remote_url(url.as_str())?;
@@ -680,7 +681,7 @@ async fn download_response(raw: &str, source_url: Option<&str>) -> AppResult<req
             .build().map_err(|error| AppError::Media(error.to_string()))?;
         let mut request = client.get(url.clone())
             .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 Bowerbird/0.1")
-            .header(ACCEPT, "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
+            .header(ACCEPT, accept);
         if let Some(referer) = source_url.filter(|value| is_http_url(value)) {
             request = request.header(REFERER, referer);
         }

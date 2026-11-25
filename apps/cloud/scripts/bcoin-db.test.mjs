@@ -133,6 +133,35 @@ try {
    assert.equal((await q('select * from credit_hold_bcoin_image($1,$2,$3,0,null)',[user,key,service]))[0].hold_id,held.hold_id);
    await q("select credit_rollback($1,'offline-test')",[held.hold_id]);
  }
- console.log('Bcoin catalogue, legacy migration, vouchers, classification, payment replay, refund and Seedream 5.5 checks passed');
+ const normalQuote=await quote('image_seedream55',3);
+ await migrate('0102');
+ assert.deepEqual(await quote('image_seedream55',3),normalQuote);
+ assert.equal((await q("select * from credit_hold_bcoin_image($1,'priced','image_hd',2,null)",[user]))[0].hold_id,rehold.hold_id);
+ assert.equal((await q("select * from credit_hold_bcoin_image($1,'layers','image_layer_decompose',1,'auto')",[user]))[0].estimated_amount,170);
+ const legacyLayerQuote=await quote('image_layer_decompose',1,'auto');
+ assert.equal(legacyLayerQuote.credits,170);
+ assert.equal(legacyLayerQuote.max_outputs,17);
+ assert.equal(legacyLayerQuote.small_layer_cost,5);
+ assert.equal(legacyLayerQuote.large_layer_cost,10);
+ assert.equal(legacyLayerQuote.input_credits,0);
+ const quoteLayers=async limit=>(await q("select quote_bcoin_image('image_layer_decompose',1,'auto',$1) r",[limit]))[0].r;
+ for(const [limit,credits] of [[2,18],[17,138],[30,242],[60,482],[100,802]]) {
+   const candidate=await quoteLayers(limit);
+   assert.equal(candidate.max_outputs,limit);
+   assert.equal(candidate.credits,credits);
+   assert.equal(candidate.input_credits,2);
+   assert.equal(candidate.pricing_version,20261124);
+ }
+ for(const limit of [1,101]) await assert.rejects(()=>quoteLayers(limit));
+ assert.equal((await quote('image_layer_edit',0,'auto')).credits,20);
+ assert.equal((await quote('image_layer_edit',1,'1K')).credits,10);
+ assert.equal((await quote('image_layer_edit',1,'2K')).credits,20);
+ assert.equal((await quote('image_layer_edit',2,'1K')).credits,12);
+ assert.equal((await quote('image_layer_edit',10,'2K')).credits,38);
+ await assert.rejects(()=>quote('image_layer_edit',11,'2K'));
+ for(const signature of ['quote_bcoin_image(text,integer,text,integer)','credit_hold_bcoin_image(uuid,text,text,integer,text,integer)']) {
+   assert.equal((await q("select has_function_privilege('authenticated',$1,'EXECUTE') allowed",[signature]))[0].allowed,false);
+ }
+ console.log('Bcoin catalogue, legacy migration, vouchers, classification, payment replay, refund and Seedream 5.5 pricing passed');
 } finally { await db.close(); }
 function awaitOrderMissing(){return 'cccccccc-cccc-4ccc-cccc-cccccccccccc';}

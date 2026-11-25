@@ -51,6 +51,10 @@ async function installMock() {
           if(window.holdSubmission)await new Promise(resolve=>{window.finishSubmission=resolve;});
           return {status:'queued',message:'已加入本机队列'};
         }
+        if(window.transientPolls > 0) {
+          window.transientPolls--;
+          throw new Error('本机服务查询暂时中断');
+        }
         if(window.comfyMode==='disconnect') throw new Error('模拟连接中断');
         if(window.comfyMode==='queued')return {status:'queued',message:'已加入本机队列'};
         if(window.comfyMode==='running')return {status:'running',message:'正在生成视频',progress:window.comfyProgress};
@@ -411,9 +415,10 @@ try {
   assert.equal(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('comfy-calls')).filter(call=>call.action==='start').length),submittedCount,'detect/reload never resubmits');
   // Real step counts, phase reset, failed cancellation and confirmed interruption.
   await page.reload();await card.waitFor();await installMock();
-  await page.evaluate(()=>{window.environmentPhase='ready';window.comfyMode='running';window.comfyProgress={label:'生成视频',value:3,max:8};});
+  await page.evaluate(()=>{window.environmentPhase='ready';window.comfyMode='running';window.transientPolls=2;window.comfyProgress={label:'生成视频',value:3,max:8};});
   const generate=card.getByRole('button',{name:/^(运行|重试)$/});
   await generate.click();
+  await status.getByText('本机服务响应较慢，正在重试查询…',{exact:true}).waitFor();
   const progress=status.getByLabel('本地视频当前阶段进度',{exact:true});
   await status.getByText('正在生成视频',{exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('.comfy-progress-bar')?.getAttribute('aria-valuenow')==='37.5');

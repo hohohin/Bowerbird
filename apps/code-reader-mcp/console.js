@@ -7,6 +7,8 @@ const rows = document.querySelector('#branches');
 const snapshot = document.querySelector('#snapshot');
 const jobLine = document.querySelector('#job');
 const reload = document.querySelector('#reload');
+const publishCurrent = document.querySelector('#publish-current');
+const refreshServices = document.querySelector('#refresh-services');
 const time = iso => new Date(iso).toLocaleString('zh-CN', { hour12: false });
 async function api(url, options) {
   const response = await fetch('/api/' + url, options);
@@ -34,7 +36,64 @@ function renderSnapshot(data) {
   }
 }
 function busy(value) {
-  for (const control of document.querySelectorAll('button,input')) control.disabled = value;
+  for (const control of document.querySelectorAll('#publish-current,#reload,#branches button,#branches input')) control.disabled = value;
+}
+function serviceSummary(service, processDetails) {
+  if (service.process === 'multiple') return ['检测到多个实例'];
+  if (service.process === 'unknown') return ['无法读取进程状态'];
+  if (service.process === 'stopped') return ['当前未发现服务进程'];
+  return processDetails;
+}
+function gptDetails(service) {
+  if (service.reason === 'health_unavailable') return ['本机隧道管理接口暂不可用'];
+  const control = service.controlPlane;
+  const messages = [];
+  if (control) {
+    messages.push(control.state === 'polling' ? '控制面轮询中' : control.state === 'backoff' ? '控制面等待重试' : '控制面状态待确认');
+    if (control.reason !== 'unknown') messages.push(control.reason);
+    if (control.consecutiveFailures !== null) messages.push('连续失败 ' + control.consecutiveFailures + ' 次');
+  }
+  messages.push(({ healthy: '代理正常', unhealthy: '代理异常', disabled: '代理未启用', direct: '直连' })[service.proxy] ?? '代理状态待确认');
+  messages.push(({ discovered: 'MCP 已发现', failed: 'MCP 发现失败' })[service.discovery] ?? 'MCP 尚未观察到发现请求');
+  return messages;
+}
+function geminiDetails(service) {
+  const messages = [
+    ({ healthy: '本机 HTTP 正常', unhealthy: '本机 HTTP 异常', stopped: 'HTTP 子进程未运行', multiple: '检测到多个 HTTP 子进程' })[service.http],
+    ({ connected: 'SSH 连接已建立', connecting: 'SSH 正在连接', stopped: 'SSH 转发未运行', multiple: '检测到多个 SSH 转发' })[service.ssh] ?? 'SSH 状态待确认',
+  ];
+  if (service.interface) messages.push('网卡 ' + service.interface);
+  if (service.interfaceUnavailable) messages.push('绑定网卡不可用');
+  if (service.config === 'invalid') messages.push('端口配置无效，探测默认端口');
+  if (service.snapshot?.event === 'snapshot-rejected') {
+    const reason = ({ size_limit: '超过大小限制', invalid_snapshot: '校验失败', read_error: '读取失败' })[service.snapshot.reason];
+    messages.push('最近快照读取被拒绝' + (reason ? '（' + reason + '）' : ''));
+  } else if (service.snapshot?.event === 'snapshot-loaded') messages.push('已加载快照');
+  return messages.filter(Boolean);
+}
+function renderService(id, service, details) {
+  const card = document.getElementById(id);
+  const badge = card.querySelector('.service-state');
+  badge.dataset.state = service.state;
+  badge.textContent = ({ healthy: '正常', degraded: '连接中或异常', stopped: '未运行' })[service.state];
+  card.querySelector('.service-detail').textContent = serviceSummary(service, details(service)).join(' · ');
+}
+let serviceTimer;
+async function loadServices() {
+  clearTimeout(serviceTimer);
+  refreshServices.disabled = true;
+  try {
+    const { gpt, gemini } = await api('services');
+    renderService('gpt-service', gpt, gptDetails);
+    renderService('gemini-service', gemini, geminiDetails);
+  } catch {
+    for (const id of ['gpt-service', 'gemini-service']) {
+      renderService(id, { state: 'degraded' }, () => ['无法读取运行状态，将自动重试']);
+    }
+  } finally {
+    refreshServices.disabled = false;
+    serviceTimer = setTimeout(loadServices, 5000);
+  }
 }
 function renderJob(job) {
   busy(job.status === 'running');
@@ -53,6 +112,16 @@ async function status() {
   if (state.job.status === 'running') timer = setTimeout(() => status().catch(fail), 400);
 }
 function fail(error) { busy(false); jobLine.textContent = error.message; }
+async function exportSnapshot(selection) {
+  busy(true);
+  jobLine.textContent = '正在准备导出快照…';
+  try {
+    const job = await api('export', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(selection) });
+    renderJob(job);
+    await status();
+  } catch (error) { fail(error); }
+}
 async function load() {
   busy(true);
   const branches = await api('branches');
@@ -74,15 +143,7 @@ async function load() {
     const action = el('td');
     const button = el('button', '更新快照');
     button.setAttribute('aria-label', '更新快照 ' + entry.branch);
-    button.onclick = async () => {
-      busy(true);
-      try {
-        const job = await api('export', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ branch: entry.branch, revision: entry.revision, clean: !entry.current || clean.checked }) });
-        renderJob(job);
-        await status();
-      } catch (error) { fail(error); }
-    };
+    button.onclick = () => exportSnapshot({ branch: entry.branch, revision: entry.revision, clean: !entry.current || clean.checked });
     action.append(button);
     row.append(name, revision, el('td', time(entry.committedAt)), options, action);
     rows.append(row);
@@ -91,4 +152,7 @@ async function load() {
   await status();
 }
 reload.onclick = () => load().catch(fail);
+publishCurrent.onclick = () => exportSnapshot({ current: true });
+refreshServices.onclick = loadServices;
+void loadServices();
 load().catch(fail);

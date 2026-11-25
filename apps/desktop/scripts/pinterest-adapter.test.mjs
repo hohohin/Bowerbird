@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { loadSourceScript, sourceSiteRules } from "./fixtures/explorer/source-script.mjs";
+import { writeFile } from "node:fs/promises";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-const adapter = await readFile(process.env.BOWERBIRD_PINTEREST_ADAPTER_PATH || "src-tauri/src/commands/source_browser_pinterest.js", "utf8");
+const adapterPath = process.env.BOWERBIRD_PINTEREST_ADAPTER_PATH || "src-tauri/src/commands/source_browser_pinterest.js";
+const adapter = await loadSourceScript(adapterPath);
 const coverageOutput = process.env.BOWERBIRD_PINTEREST_COVERAGE_PATH;
 const coverageEntries = [];
 const coveredPages = new Set();
 const pixels = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6Qy4AAAAASUVORK5CYII=";
-const script = (requestId = "first", documentAfter = 0, handedOff = false) => adapter
+const script = (requestId = "first", documentAfter = 0, handedOff = false, template = adapter) => template
   .replace("__BOWERBIRD_PINTEREST_REQUEST__", JSON.stringify({ requestId, base64: handedOff ? '' : pixels, mime: "image/png", name: "search.png", documentAfter, handedOff }))
   .replace("__BOWERBIRD_PINTEREST_BRIDGE__", "bowerbird-pinterest://fixture")
   + (coverageOutput ? "\n//# sourceURL=bowerbird-pinterest-adapter.js" : "");
@@ -242,8 +244,22 @@ try {
   await missing.evaluate(script());
   await missing.clock.fastForward(31_000);
   assert.equal(await missing.evaluate(() => window.notices.at(-1)?.status), "error");
+  assert.equal(await missing.evaluate(() => window.notices.at(-1)?.reason), "lens-unavailable");
   assert.equal(await missing.evaluate(() => window.uploads.length), 0, "a Pin creation input must never receive the image");
   await missing.close();
+
+  const renamed = await pageFor('<button aria-label="Search using your image">Search</button>');
+  await renamed.evaluate(() => {
+    document.querySelector('button').onclick = () => {
+      document.body.insertAdjacentHTML('beforeend', '<input id="lens-file-upload" data-test-id="lens-file-upload" type="file">');
+      document.querySelector('input').onchange = () => history.pushState({}, '', '/lens-search/');
+    };
+  });
+  const renamedRules = { ...sourceSiteRules, pinterest: { ...sourceSiteRules.pinterest, lensButtonLabels: ['Search using your image'] } };
+  await renamed.evaluate(script('renamed-lens', 0, false, await loadSourceScript(adapterPath, renamedRules)));
+  await renamed.clock.runFor(1500);
+  assert.deepEqual(await renamed.evaluate(() => window.notices.map(notice => notice.status)), ['searching', 'submitted']);
+  await renamed.close();
   console.log("Pinterest adapter: exact origin, top frame and unsupported page passed");
 } finally {
   try {

@@ -11,6 +11,7 @@ import { startBrowserDrag, finishBrowserDrag } from "./fixtures/explorer/native-
 import { parseExplorerImage } from "../src/lib/explorer.ts";
 const root = path.resolve("../..");
 const directory = path.join(root, ".tmp", "explorer-native-" + Date.now());
+const useNativePointer = process.argv.includes("--native-pointer");
 await mkdir(directory, { recursive: true });
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6Qy4AAAAASUVORK5CYII=", "base64");
 const video = await readFile("src-tauri/tests/fixtures/media/fragmented.mp4");
@@ -44,9 +45,10 @@ await serve(1559, (req, res) => {
 let child; let browser; let sourceBrowser;
 async function start() {
   child = spawn(path.resolve(process.argv.slice(2).find(arg => !arg.startsWith("--")) || "src-tauri/target-local-classification/debug/examples/explorer_smoke.exe"), [], {
-    windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: !useNativePointer, stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, PATH: path.resolve("src-tauri/target-local-classification/debug") + ";" + process.env.PATH,
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "", BOWERBIRD_EXPLORER_TEST_DEBUG_PORT: "9558",
+      BOWERBIRD_EXPLORER_TEST_VISIBLE: useNativePointer ? "1" : undefined,
       BOWERBIRD_EXPLORER_TEST_DATA_DIR: path.join(directory, "sites"), BOWERBIRD_EXPLORER_TEST_MAIN_DATA_DIR: path.join(directory, "main") }
   });
   let output = ""; child.stderr.on("data", data => { output += data; });
@@ -78,6 +80,168 @@ async function stop(main) {
   await browser.close().catch(() => {}); browser = null; child = null;
   await sourceBrowser?.close().catch(() => {}); sourceBrowser = null;
 }
+
+async function verifyLocationVisibility(main, source) {
+  const original = source.url();
+  await main.evaluate(async () => {
+    window.nativeLocations = [];
+    const handler = window.__TAURI_INTERNALS__.transformCallback(event => window.nativeLocations.push(event.payload));
+    await window.__TAURI_INTERNALS__.invoke("plugin:event|listen", { event: "source-browser://location", target: { kind: "Any" }, handler });
+  });
+  const bounds = { x: 300, y: 100, width: 750, height: 600 };
+  const resize = visible => main.evaluate(({bounds, visible}) => window.__TAURI_INTERNALS__.invoke("resize_source_browser", {bounds, visible}), {bounds, visible});
+  const hide = () => main.evaluate(() => window.__TAURI_INTERNALS__.invoke("hide_source_browser"));
+  const open = () => main.evaluate(({bounds, url}) => window.__TAURI_INTERNALS__.invoke("open_source_browser", {bounds, url}), {bounds, url: original});
+  const changeLocation = url => source.evaluate(url => history.replaceState(null, "", url), url);
+  const waitForLocation = url => main.waitForFunction(url => window.nativeLocations.includes(url), url, { timeout: 3000 });
+  const verifyTransition = async (suspend, resume, suffix) => {
+    const url = new URL(suffix, original).href;
+    await suspend();
+    await changeLocation(url);
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    assert.ok(!(await main.evaluate(url => window.nativeLocations.includes(url), url)), `hidden WebView reported ${suffix}`);
+    await resume();
+    await waitForLocation(url);
+  };
+  const visibleUrl = new URL("#visible", original).href;
+  await changeLocation(visibleUrl);
+  await waitForLocation(visibleUrl);
+  await verifyTransition(() => resize(false), () => resize(true), "#occluded");
+  await verifyTransition(hide, open, "#collapsed");
+  await changeLocation(original);
+  await waitForLocation(original);
+  const locations = await main.evaluate(() => window.nativeLocations.filter(url => new URL(url).hash));
+  assert.deepEqual(locations.map(url => new URL(url).hash), ["#visible", "#occluded", "#collapsed"]);
+  console.log("PASS native SPA address observation pauses on occlusion and collapse, then resumes on both show paths");
+}
+
+async function verifyNativeHistory(main, source) {
+  const original = source.url();
+  const invoke = command => main.evaluate(command => window.__TAURI_INTERNALS__.invoke(command), command);
+  await assert.rejects(invoke("source_browser_forward"), /没有可前往的下一页/);
+  await source.evaluate(() => history.pushState(null, "", "#native-history"));
+  await invoke("source_browser_back");
+  await source.waitForURL(original);
+  await invoke("source_browser_forward");
+  await source.waitForURL(new URL("#native-history", original).href);
+  await assert.rejects(invoke("source_browser_forward"), /没有可前往的下一页/);
+  await invoke("source_browser_back");
+  await source.waitForURL(original);
+  console.log("PASS native back and forward use the WebView2 history and report the forward boundary");
+}
+
+async function verifyNativePointer(main, source) {
+  const invoke = (command, params = {}) => main.evaluate(({command, params}) => window.__TAURI_INTERNALS__.invoke(command, params), {command, params});
+  const pointer = (x, y, action) => invoke("smoke_native_pointer", {x, y, action});
+  await pointer(0, 0, "focus");
+  const traceInput = () => {
+    window.nativePointerInput = [];
+    for (const name of ["pointerdown", "pointerup", "click", "wheel"]) {
+      document.addEventListener(name, event => {
+        if (event.isTrusted) window.nativePointerInput.push({
+          name, target: event.target.id || event.target.tagName, x: event.clientX, y: event.clientY,
+          screenX: event.screenX, screenY: event.screenY,
+        });
+      }, true);
+    }
+  };
+  await main.evaluate(traceInput);
+  await source.evaluate(traceInput);
+  let bounds = { x: 300, y: 100, width: 680, height: 580 };
+  let side;
+  const resize = (visible, masked = true) => invoke("resize_source_browser", {
+    bounds: { ...bounds, ...(masked && {overlay: {x: side === "left" ? 0 : bounds.width - 18, y: 200, width: 18, height: 80, cut: 4, side}}) }, visible,
+  });
+  await source.evaluate(() => {
+    document.body.style.minHeight = "2600px";
+    const button = document.createElement("button");
+    button.id = "native-click-probe";
+    button.textContent = "Website button";
+    button.style.cssText = "position:fixed;top:28px;right:8px;z-index:1";
+    window.nativeClicks = 0;
+    button.addEventListener("click", event => { if (event.isTrusted) window.nativeClicks++; });
+    document.body.append(button);
+  });
+  let clicks = 0;
+  const clickAndScroll = async label => {
+    await source.waitForFunction(({width, height}) => innerWidth === width && innerHeight === height, bounds);
+    const rect = await source.locator("#native-click-probe").boundingBox();
+    const x = bounds.x + rect.x + rect.width / 2;
+    const y = bounds.y + rect.y + rect.height / 2;
+    const scroll = await source.evaluate(() => scrollY);
+    await pointer(x, y, "click");
+    await pointer(x, y, "scroll");
+    try {
+      await source.waitForFunction(count => window.nativeClicks === count, ++clicks, {timeout: 3000});
+      await source.waitForFunction(start => scrollY > start, scroll, {timeout: 3000});
+    } catch (error) {
+      const describe = () => ({events: window.nativePointerInput, screenX, screenY, devicePixelRatio, scrollY, clickCount: window.nativeClicks});
+      console.log(JSON.stringify({label, expected: {x, y, rect}, main: await main.evaluate(describe), source: await source.evaluate(describe)}));
+      throw error;
+    }
+    console.log(`PASS Windows input click and scroll ${label}`);
+  };
+  await resize(true);
+  await clickAndScroll("after opening");
+  await resize(false);
+  await main.evaluate(() => { const dialog = document.createElement("dialog"); dialog.id = "native-test-dialog"; document.body.append(dialog); dialog.showModal(); });
+  await main.evaluate(() => { document.querySelector("#native-test-dialog").close(); document.querySelector("#native-test-dialog").remove(); });
+  await resize(true);
+  await clickAndScroll("after closing a dialog");
+  bounds = {...bounds, width: 460};
+  await resize(true);
+  await clickAndScroll("after changing the width");
+
+  const clickTab = async side => {
+    const left = side === "left" ? bounds.x : bounds.x + bounds.width - 18;
+    const top = bounds.y + 200;
+    await main.evaluate(({left, top}) => {
+      const button = document.createElement("button");
+      button.id = "native-tab-probe";
+      button.style.cssText = `position:fixed;left:${left}px;top:${top}px;width:18px;height:80px`;
+      window.nativeTabClicked = false;
+      button.addEventListener("click", event => { if (event.isTrusted) window.nativeTabClicked = true; });
+      document.body.append(button);
+    }, {left, top});
+    await pointer(left + 9, top + 40, "click");
+    await main.waitForFunction(() => window.nativeTabClicked, undefined, {timeout: 3000});
+    console.log(`PASS Windows input reaches the main WebView through the ${side} panel handle cutout`);
+    await main.evaluate(() => document.querySelector("#native-tab-probe").remove());
+  };
+  await clickTab("right");
+
+  // Exercise the viewport changes a project switch can cause while keeping the same child view.
+  side = "left";
+  bounds = {...bounds, x: 600, y: 75, height: 600};
+  await resize(true);
+  await clickTab("left");
+  await source.locator("#native-click-probe").evaluate(button => {
+    Object.assign(button.style, {left: "3px", right: "auto", width: "14px", height: "20px", padding: "0", overflow: "hidden"});
+  });
+  await clickAndScroll("above the left cutout after repositioning the viewport");
+  await source.locator("#native-click-probe").evaluate(button => { button.style.top = "292px"; });
+  await clickAndScroll("below the left cutout");
+  await source.locator("#image").scrollIntoViewIfNeeded();
+  const image = await source.locator("#image").boundingBox();
+  const drag = await startBrowserDrag(source, image.x + 30, image.y + 30);
+  try {
+    assert.ok(drag.data.items.some(item => item.mimeType === "application/x-bowerbird-explorer"));
+  } finally {
+    await drag.session.send("Input.dispatchDragEvent", {type: "dragCancel", x: 0, y: 0, data: drag.data});
+    await drag.session.send("Input.dispatchMouseEvent", {type: "mouseReleased", x: 0, y: 0, button: "left", buttons: 0});
+    await drag.session.detach();
+  }
+  await clickAndScroll("after browser image drag");
+
+  await source.evaluate(() => {
+    document.querySelector("#native-click-probe").remove();
+    document.body.style.removeProperty("min-height");
+    scrollTo(0, 0);
+  });
+  bounds = { x: 300, y: 100, width: 750, height: 600 };
+  await resize(true, false);
+}
+
 async function visualGeometry(page) {
   const card = page.locator('[data-explorer-drag-visual] .card[data-ready]');
   await card.waitFor();
@@ -133,7 +297,10 @@ try {
   let { main, source } = await start();
   assert.equal(await source.locator("h1").textContent(), "logged out");
   await assert.rejects(main.evaluate(() => window.__TAURI_INTERNALS__.invoke("smoke_capture", { url: "http://127.0.0.1:1559/protected.png" })), /401/);
+  await verifyLocationVisibility(main, source);
+  await verifyNativeHistory(main, source);
   await source.getByText("Login", { exact: true }).click(); await source.getByText("logged in", { exact: true }).waitFor();
+  if (useNativePointer) await verifyNativePointer(main, source);
   // Source-generated data crosses into the second isolated WebView through CDP.
   // This exercises each browser's real drag handling, not Windows' OS drag loop.
   await main.evaluate(() => {
@@ -186,7 +353,7 @@ try {
   assert.equal(videoPayload.imageUrl, 'http://127.0.0.1:1559/video.mp4');
   assert.equal(videoPayload.posterUrl, 'http://127.0.0.1:1559/protected.png');
   await main.waitForFunction(id => window.nativeDragEvents.some(event => event.phase === 'start' && event.id === id && event.mediaKind === 'video'), videoPayload.dragId);
-  assert.equal(await main.evaluate(async id => (await window.__TAURI_INTERNALS__.invoke('smoke_drag_notices')).some(n => n.start && n.id === id), videoPayload.dragId), false, 'video never starts the image pre-analysis handler');
+  await main.waitForFunction(async id => (await window.__TAURI_INTERNALS__.invoke('smoke_drag_notices')).some(n => n.start && n.id === id && n.mediaKind === 'video'), videoPayload.dragId);
   await finishBrowserDrag(await main.context().newCDPSession(main), { items: videoDrag.data.items.filter(item => item.mimeType === 'text/plain'), dragOperationsMask: 1 }, 100, 200);
   const videoText = await main.evaluate(() => window.droppedText);
   const parsedVideo = parseExplorerImage({ getData: type => type === 'text/plain' ? videoText : '' });

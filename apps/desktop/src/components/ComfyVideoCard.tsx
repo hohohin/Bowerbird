@@ -7,13 +7,14 @@ import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { comfyAudioHint, H3_AUDIO_LABEL, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, H3_R2V_LIMITS, H3_R2V_REFERENCE_HINT, H3_VIDEO_MODES, H3_VIDEO_RESOLUTIONS, type ComfyEnvironment, type ComfyVideoOptions, type ComfyVideoMode, type ComfyVideoProgress } from "../lib/comfyVideo";
+import { comfyAudioHint, comfyAudioLabel, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, H3_R2V_LIMITS, H3_R2V_REFERENCE_HINT, H3_VIDEO_MODES, H3_VIDEO_RESOLUTIONS, type ComfyVideoOptions, type ComfyVideoMode, type ComfyVideoProgress } from "../lib/comfyVideo";
 import { isAudioAsset } from "../lib/audioMedia";
 import { api } from "../lib/api";
+import { useComfyEnvironment } from "../lib/comfyEnvironmentState";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError } from "../lib/notify";
 import type { Asset } from "../lib/types";
-import { H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowFrameLabel, type WorkflowNode } from "../lib/canvasWorkflow";
+import { H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowBindingKey, workflowFrameLabel, type WorkflowInput, type WorkflowNode } from "../lib/canvasWorkflow";
 import { workflowAssetMedia } from "../lib/workflowCanvasCapabilities";
 import { isVideoAsset, isVideoPath } from "../lib/videoGeneration";
 import "./ComfyVideoCard.css";
@@ -27,7 +28,7 @@ const H3_RATIOS = RATIOS.filter(ratio => ["9:16", "16:9", "4:3", "3:4", "1:1"].i
 const R2V_GROUPS = [
   { media: "image", label: "参考图片", Icon: Images, tag: "Picture" },
   { media: "video", label: "参考视频", Icon: Film, tag: "Video" },
-  { media: "audio", label: "独立录音", Icon: AudioLines, tag: "Audio" },
+  { media: "audio", label: "参考音频", Icon: AudioLines, tag: "Audio" },
 ] as const;
 
 function EnvironmentAction({ label, disabled, hint, onClick }: {
@@ -68,65 +69,18 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   const endpoint = imageMode ? H3_IMAGE_ENDPOINT : options.endpoint;
   const dialog = useRef<HTMLDialogElement>(null);
   const dot = useRef<HTMLButtonElement>(null);
-  const [environment, setEnvironment] = useState<ComfyEnvironment>();
-  const [connectionError, setConnectionError] = useState("");
-  const [checking, setChecking] = useState(true);
   const [directory, setDirectory] = useState<string>();
-  const [refresh, setRefresh] = useState(0);
-  const [acting, setActing] = useState(false);
   const [driverOpening, setDriverOpening] = useState(false);
-  const actionInFlight = useRef(false);
-  const latest = useRef({ mode, options, onChange, disabled, environment }); latest.current = { mode, options, onChange, disabled, environment };
-  const request = useRef(0);
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; request.current++; }; }, []);
-  function accept(state: ComfyEnvironment) {
-    if (state.mode && state.mode !== latest.current.mode) return;
-    setEnvironment(state); setConnectionError("");
-    if (comfyEnvironmentReady(state)) dialog.current?.close();
-    if (!imageMode && state.phase === "ready" && state.endpoint !== latest.current.options.endpoint && !latest.current.disabled) {
-      latest.current.onChange({ comfyVideo: { ...latest.current.options, endpoint: state.endpoint } });
+  const [pickerError, setPickerError] = useState("");
+  const { environment, error, checking, acting, check } = useComfyEnvironment(mode, endpoint, directory);
+  const connectionError = pickerError || error;
+  useEffect(() => {
+    if (connectionError || !environment || (environment.mode && environment.mode !== mode)) return;
+    if (comfyEnvironmentReady(environment)) dialog.current?.close();
+    if (!imageMode && environment.phase === "ready" && environment.endpoint !== options.endpoint && !disabled) {
+      onChange({ comfyVideo: { ...options, endpoint: environment.endpoint } });
     }
-  }
-  useEffect(() => {
-    if (actionInFlight.current) return;
-    const token = ++request.current;
-    setChecking(true);
-    const timer = window.setTimeout(() => {
-      comfyEnvironment("detect", endpoint, directory, undefined, mode).then(state => {
-        if (mounted.current && request.current === token) accept(state);
-      }).catch(error => { if (mounted.current && request.current === token) setConnectionError(String(error)); })
-        .finally(() => { if (mounted.current && request.current === token) setChecking(false); });
-    }, 250);
-    return () => { window.clearTimeout(timer); request.current++; };
-  }, [endpoint, directory, refresh, disabled, mode]);
-  useEffect(() => {
-    if (environment?.phase !== "installing" && environment?.phase !== "starting") return;
-    let stopped = false;
-    let timer: number;
-    async function poll() {
-      try { const state = await comfyEnvironment("status", endpoint, undefined, undefined, latest.current.mode); if (!stopped) accept(state); }
-      catch (error) { if (!stopped) setConnectionError(String(error)); }
-      if (!stopped) timer = window.setTimeout(poll, 1000);
-    }
-    timer = window.setTimeout(poll, 1000);
-    return () => { stopped = true; window.clearTimeout(timer); };
-  }, [environment?.phase, mode, endpoint]);
-  useEffect(() => {
-    let timer: number | undefined;
-    const refreshEnvironment = () => {
-      window.clearTimeout(timer);
-      const token = request.current;
-      // Focusing the app can be the pointer-down of the Install click itself.
-      // Let that click finish before deciding whether an idle refresh is needed.
-      timer = window.setTimeout(() => {
-        if (token !== request.current || actionInFlight.current || ["installing", "starting"].includes(latest.current.environment?.phase ?? "")) return;
-        setChecking(true); setRefresh(value => value + 1);
-      }, 250);
-    };
-    window.addEventListener("focus", refreshEnvironment);
-    return () => { window.clearTimeout(timer); window.removeEventListener("focus", refreshEnvironment); };
-  }, []);
+  }, [connectionError, environment, mode, imageMode, options, disabled, onChange]);
   const ready = comfyEnvironmentReady(environment) && (!environment?.mode || environment.mode === mode) && !connectionError;
   const preparing = environment?.phase === "installing" || environment?.phase === "starting";
   const existing = environment?.existing ?? [];
@@ -158,42 +112,25 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
     : `${failed ? `${message}。` : ""}点击下载并安装所需环境，已下载的资源会校验后继续使用。`);
   useEffect(() => { onStatusChange?.({ ready: ready && !checking && !acting, checking, message }); }, [ready, checking, acting, message, onStatusChange]);
   async function selectExisting() {
-    if (actionInFlight.current) return;
-    const selected = await open({ directory: true, multiple: false, title: "选择已有 ComfyUI" }).catch(error => {
-      if (mounted.current) setConnectionError(String(error));
-      return null;
-    });
-    if (typeof selected !== "string" || !mounted.current || actionInFlight.current) return;
-    actionInFlight.current = true;
-    request.current++;
-    setActing(true);
+    setPickerError("");
     try {
-      const state = await comfyEnvironment("select_existing", endpoint, undefined, selected, mode);
-      if (mounted.current) { setDirectory(undefined); accept(state); }
+      const selected = await open({ directory: true, multiple: false, title: "选择已有 ComfyUI" });
+      if (typeof selected !== "string") return;
+      await check.run("select_existing", selected);
+      setDirectory(undefined);
     } catch (error) {
-      if (mounted.current) setConnectionError(String(error));
-    } finally {
-      actionInFlight.current = false;
-      if (mounted.current) { setChecking(false); setActing(false); if (mode !== latest.current.mode) setRefresh(value => value + 1); }
+      setPickerError(String(error));
     }
   }
   async function install() {
-    if (actionDisabled || actionInFlight.current) return;
-    if (recheck) { setChecking(true); setRefresh(value => value + 1); return; }
-    actionInFlight.current = true;
-    request.current++; setChecking(false); setActing(true); setConnectionError("");
+    if (actionDisabled) return;
+    setPickerError("");
+    if (recheck) { void check.refresh(true); return; }
+    if (needsDriver) setDriverOpening(true);
     try {
-      if (needsDriver) setDriverOpening(true);
-      const state = await comfyEnvironment(needsDriver ? "driver" : environment?.canAddModels ? "install" : canPrepare ? "prepare" : "install", endpoint, directory, undefined, mode);
-      if (mounted.current) {
-        accept(state);
-        if (needsDriver && state.driverDownload) await openExternal(state.driverDownload.url);
-      }
-    } catch (error) {
-      if (mounted.current) setEnvironment(previous => previous ? { ...previous, phase: "failed", message: String(error) } : previous);
+      await check.run(needsDriver ? "driver" : environment?.canAddModels ? "install" : canPrepare ? "prepare" : "install", undefined, openExternal);
     } finally {
-      actionInFlight.current = false;
-      if (mounted.current) { setChecking(false); setActing(false); setDriverOpening(false); if (mode !== latest.current.mode) setRefresh(value => value + 1); }
+      setDriverOpening(false);
     }
   }
   return <>
@@ -201,7 +138,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
       aria-label={imageMode && checking ? "本地部署工作流：正在检测环境" : ready ? "本地部署工作流：环境就绪" : "本地部署工作流：环境未就绪，打开环境设置"}
       aria-haspopup="dialog" aria-controls={panelId} title={message} onClick={() => { if (!ready) {
         dialog.current?.showModal();
-        if (!actionInFlight.current && !preparing) { setChecking(true); setRefresh(value => value + 1); }
+        if (!acting && !preparing) { setPickerError(""); void check.refresh(); }
       } }}>
       {imageMode ? (checking ? <Ellipsis size={14} aria-hidden="true" /> : ready ? <Check size={14} aria-hidden="true" /> : <CircleAlert size={14} aria-hidden="true" />) : composer && (!ready || checking) ? <><CircleAlert size={13} aria-hidden="true" /><span className="environment-full">{checking ? "正在检测环境…" : "环境未就绪，点击配置"}</span><span className="environment-short">{checking ? "检测中…" : "配置环境"}</span></> : <span aria-hidden="true" />}
     </button>
@@ -220,16 +157,16 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
       <details><summary>MiniMax H3 使用许可</summary><p>点击安装即同意以下许可（含适用地区及用途限制）。许可与来源文件将保存在安装目录的 licenses 文件夹。</p><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 180, overflow: "auto" }}>{imageMode ? imageLicense : h3License}</pre></details>
       {environment && !ready && !existing.length && !environment.installed && !preparing && <small>下载 {gb(environment.downloadBytes)} · 需空闲 {gb(environment.requiredBytes)}</small>}
       {environment?.phase === "installing" && <>
-        <progress aria-label="环境下载进度" max={environment.totalBytes || 1} value={environment.completedBytes} />
-        <small>{gb(environment.completedBytes)} / {gb(environment.totalBytes)} · 关闭面板后继续安装</small>
+        <progress aria-label="环境下载进度" max={environment.downloadBytes || 1} value={environment.completedBytes} />
+        <small>{gb(environment.completedBytes)} / {gb(environment.downloadBytes)} · 关闭面板后继续安装</small>
       </>}
       <div className="comfy-environment-actions">
         <EnvironmentAction label="选择已有 ComfyUI" disabled={disabled || checking || acting || preparing}
           hint={busyHint || "保存已有 ComfyUI 的位置，供下次检测和启动使用。"} onClick={() => void selectExisting()} />
         <EnvironmentAction label="安装位置" disabled={disabled || checking || acting || preparing || ready}
           hint={busyHint || "选择安装位置后，应用会创建独立目录并检查磁盘空间。"} onClick={async () => {
-          try { const selected = await open({ directory: true, multiple: false, title: "选择本地部署工作流的安装位置" }); if (typeof selected === "string" && selected !== directory) { setChecking(true); setDirectory(selected); } }
-          catch (error) { setConnectionError(String(error)); }
+          try { const selected = await open({ directory: true, multiple: false, title: "选择本地部署工作流的安装位置" }); if (typeof selected === "string") { setPickerError(""); setDirectory(selected); } }
+          catch (error) { setPickerError(String(error)); }
         }} />
         <EnvironmentAction label={actionLabel} disabled={actionDisabled} hint={actionHint} onClick={() => void install()} />
       </div>
@@ -237,15 +174,17 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   </>;
 }
 
-export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, disabled, assets, inputImages, readCurrentPrompt, onChange, optimizationActions }: {
+export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, disabled, assets, inputImages, referencePending, readCurrentPrompt, onChange, optimizationActions }: {
   prompt: string; onPromptChange: (prompt: string) => void;
   optimizationActions?: React.ReactNode; modelControl: React.ReactNode; node: WorkflowNode; disabled: boolean; assets: Asset[];
-  inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput, media?: keyof typeof H3_R2V_INPUT_PORTS) => string[];
+  inputImages: (input: WorkflowInput, media?: keyof typeof H3_R2V_INPUT_PORTS) => string[];
+  referencePending: (input: WorkflowInput) => boolean;
   onChange: (patch: Partial<WorkflowNode>) => void;
   readCurrentPrompt: () => string;
 }) {
   const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
   const mode = comfyVideoMode(options);
+  const audioLabel = comfyAudioLabel(mode);
   const ports = mode === "frames" ? ["first-frame", "last-frame"] : mode === "reference" ? ["first-frame"] : [];
   const audioBindings = node.inputs[H3_VIDEO_AUDIO_PORT] ?? [];
   const audioIds = audioBindings.flatMap(input => inputImages(input));
@@ -276,10 +215,12 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
     const limit = H3_R2V_LIMITS[media], drop = ++audioDrop.current;
     const current = () => drop === audioDrop.current && !latestCard.current.disabled && comfyVideoMode(latestCard.current.node.comfyVideo) === "r2v"
       && latestCard.current.node.inputs[port] === previous;
-    const bound = (previous ?? []).flatMap(input => inputImages(input, media));
+    const sources = (previous ?? []).map(input => ({ input, ids: inputImages(input, media) }));
+    const bound = sources.flatMap(source => source.ids);
     const additions = [...new Set(ids)].filter(id => !bound.includes(id));
     if (!additions.length) return;
-    if (bound.length + additions.length > limit || (previous?.length ?? 0) + additions.length > limit) {
+    const used = sources.reduce((count, { ids, input }) => count + (ids.length || Number(referencePending(input))), 0);
+    if (Math.max(used, sources.length) + additions.length > limit) {
       notifyError(null, `${label}最多接入 ${limit} 个素材`); return;
     }
     try {
@@ -316,10 +257,8 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
       const bindings = node.inputs[port] ?? [];
       const ids = bindings.flatMap(input => inputImages(input));
       const asset = assets.find(asset => asset.id === ids[0]);
+      const { path, originalImage } = frameImagePaths(asset);
       const video = isVideoAsset(asset);
-      const originalImage = video ? undefined : asset?.store_path;
-      const cover = isVideoPath(asset?.thumb_path) ? undefined : asset?.thumb_path;
-      const path = cover || originalImage;
       const frameLabel = bindings[0]?.videoFrame && workflowFrameLabel(bindings[0].videoFrame);
       const framePlaceholder = video && !path && frameLabel;
       return <div key={port} className="h3-frame-group"><div className="comfy-frame-slot" aria-label={`${label}输入`}
@@ -350,11 +289,16 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
     {mode === "r2v" && <div className="comfy-r2v-groups">
       {R2V_GROUPS.map(({ media, label, Icon, tag }) => {
         const port = H3_R2V_INPUT_PORTS[media], bindings = node.inputs[port] ?? [];
-        const resolved = bindings.map(input => inputImages(input, media));
-        const counts = resolved.map((ids, i) => bindings[i].nodeId && bindings[i].videoFrame ? 1 : ids.length);
-        const count = counts.reduce((sum, size) => sum + size, 0);
-        const showTags = media !== "audio" || !node.inputs[H3_R2V_INPUT_PORTS.video]?.length;
-        let nextIndex = 1;
+        let count = 0;
+        const items = bindings.flatMap(binding => {
+          const ids = inputImages(binding, media);
+          const pending = !ids.length && referencePending(binding);
+          return (ids.length ? ids : [undefined]).map(id => ({
+            binding, id, pending, number: id || pending ? `<${tag} ${++count}>` : undefined, hasSiblings: ids.length > 1,
+          }));
+        });
+        const showTags = media !== "audio" || !node.inputs[H3_R2V_INPUT_PORTS.video]?.some(
+          input => inputImages(input, "video").length || referencePending(input));
         return <div key={port} className="comfy-audio-input" role="group" aria-label={`${label}输入`}
           onDragOver={event => { if (!disabled && getDragAssets()) { event.preventDefault(); event.stopPropagation(); } }}
           onDrop={event => {
@@ -364,17 +308,37 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
           }}>
           <div className="comfy-audio-row"><Icon size={14} aria-hidden="true" /><span>{label}</span>
             <span className="comfy-audio-source">{bindings.length ? `${count} / ${H3_R2V_LIMITS[media]}` : `拖入或连接 · 最多 ${H3_R2V_LIMITS[media]} 个`}</span></div>
-          {bindings.map((binding, index) => {
-            const ids = resolved[index];
-            const name = ids.map(id => assets.find(asset => asset.id === id)?.name ?? "素材").join("、") || "等待上游素材";
-            const tags = Array.from({ length: counts[index] }, () => `<${tag} ${nextIndex++}>`).join(" ");
-            return <div className="comfy-audio-row comfy-r2v-source" key={index}>
-              {showTags && tags && <small title={tags}>{tags}</small>}
-              <span className="comfy-audio-source" title={name}>{binding.videoFrame && `${workflowFrameLabel(binding.videoFrame)} · `}{name}</span>
-              <button type="button" aria-label={`断开${label}来源 ${index + 1}`} disabled={disabled} onPointerDown={event => event.stopPropagation()}
-                onClick={() => onChange({ inputs: { ...node.inputs, [port]: bindings.filter(item => item !== binding) } })}><X size={14} /></button>
+          {!!items.length && <div className={media === "image" ? "comfy-r2v-pictures" : "comfy-r2v-list"}>{items.map(({ binding, id, pending, number, hasSiblings }, index) => {
+            const asset = assets.find(item => item.id === id);
+            const name = asset?.name || (id ? "素材" : pending ? "等待上游素材" : "无匹配素材");
+            const frame = binding.videoFrame && workflowFrameLabel(binding.videoFrame);
+            const key = `${workflowBindingKey(binding)}:${id ?? ""}`;
+            const disconnect = <button type="button" aria-label={`断开${label}来源 ${index + 1}`} title={`断开 ${name}`}
+              disabled={disabled} onPointerDown={event => event.stopPropagation()} onClick={() => {
+                const remaining = id && hasSiblings
+                  ? bindings.map(item => item === binding ? { ...item, excludedAssetIds: [...(item.excludedAssetIds ?? []), id] } : item)
+                  : bindings.filter(item => item !== binding);
+                onChange({ inputs: { ...node.inputs, [port]: remaining } });
+              }}><X size={14} /></button>;
+            const caption = <span className="comfy-audio-source" title={name}>{frame && `${frame} · `}{name}</span>;
+            if (media === "image") {
+              const { path, originalImage } = frameImagePaths(asset);
+              return <div key={key} className="comfy-r2v-picture" title={name}>
+                <div className="comfy-r2v-picture-frame">
+                  {path ? <ComfyFrameThumbnail label={name} path={path} previewPath={originalImage || path} />
+                    : <span className="comfy-frame-placeholder">{pending ? "待输入" : frame || "暂无预览"}</span>}
+                  {number && <small className="comfy-picture-tag">{number}</small>}{disconnect}
+                </div>{caption}
+              </div>;
+            }
+            const cover = media === "video" && imageCover(asset);
+            return <div className="comfy-audio-row comfy-r2v-source" key={key}>
+              {media === "video" && <span className="comfy-r2v-video-cover" aria-hidden="true">
+                {cover ? <img alt="" src={comfyImageSrc(cover)} draggable={false} /> : <Film size={14} />}
+              </span>}
+              {showTags && number && <small>{number}</small>}{caption}{disconnect}
             </div>;
-          })}
+          })}</div>}
         </div>;
       })}
       <small>{H3_R2V_REFERENCE_HINT}</small>
@@ -385,7 +349,7 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
       readCurrentValue={readCurrentPrompt} onValueChange={onPromptChange} />
     </div>
     <div className="comfy-prompt-actions">{optimizationActions}</div>
-    {mode !== "r2v" && <div className="comfy-audio-input" role="group" aria-label={H3_AUDIO_LABEL}
+    {mode !== "r2v" && <div className="comfy-audio-input" role="group" aria-label={audioLabel}
       onDragOver={event => {
         if (!disabled && getDragAssets()) { event.preventDefault(); event.stopPropagation(); }
       }}
@@ -396,27 +360,33 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
       }}>
       <div className="comfy-audio-row">
         <AudioLines size={14} aria-hidden="true" />
-        <span>{H3_AUDIO_LABEL}</span>
+        <span>{audioLabel}</span>
         <span className="comfy-audio-source" title={audio?.name}>
-          {audio?.name ?? (audioBindings.length ? "等待读取音频" : "（可选，如角色声音）")}
+          {audio?.name ?? (audioBindings.length ? "等待读取音频" : "拖入或连接录音（可选）")}
         </span>
-        {audioBindings.length > 0 && <button type="button" aria-label="断开参考音频" title="断开参考音频"
+        {audioBindings.length > 0 && <button type="button" aria-label={`断开${audioLabel}`} title={`断开${audioLabel}`}
           disabled={disabled} onPointerDown={event => event.stopPropagation()}
           onClick={() => onChange({ inputs: { ...node.inputs, [H3_VIDEO_AUDIO_PORT]: [] } })}><X size={14} /></button>}
       </div>
-      {audioBindings.length > 0 && <small>{comfyAudioHint(mode)}</small>}
+      <small>{comfyAudioHint(mode)}</small>
     </div>}
   </section>;
 }
 
+const comfyImageSrc = (file: string) => file.startsWith("data:") ? file : convertFileSrc(file);
+const imageCover = (asset?: Asset) => isVideoPath(asset?.thumb_path) ? undefined : asset?.thumb_path;
+function frameImagePaths(asset?: Asset) {
+  const originalImage = isVideoAsset(asset) ? undefined : asset?.store_path;
+  return { path: imageCover(asset) || originalImage, originalImage };
+}
+
 function ComfyFrameThumbnail({ label, path, previewPath }: { label: string; path: string; previewPath: string }) {
   const [preview, setPreview] = useState(false);
-  const src = (file: string) => file.startsWith("data:") ? file : convertFileSrc(file);
   return <>
-    <img className="comfy-frame-thumbnail" alt={label} src={src(path)} draggable={false} tabIndex={0}
+    <img className="comfy-frame-thumbnail" alt={label} src={comfyImageSrc(path)} draggable={false} tabIndex={0}
       onPointerEnter={() => setPreview(true)} onPointerLeave={() => setPreview(false)}
       onFocus={() => setPreview(true)} onBlur={() => setPreview(false)}
       onKeyDown={event => { if (event.key === "Escape" && preview) { event.stopPropagation(); setPreview(false); } }} />
-    {preview && <img className="comfy-frame-preview" src={src(previewPath)} alt="" aria-hidden="true" draggable={false} />}
+    {preview && <img className="comfy-frame-preview" src={comfyImageSrc(previewPath)} alt="" aria-hidden="true" draggable={false} />}
   </>;
 }

@@ -97,6 +97,24 @@ try {
   await card('ref-one').click({ modifiers: ['Control'] }); await card('ref-two').click({ modifiers: ['Control'] });
   assert.equal(await card('ref-one').getAttribute('aria-pressed'), 'true'); assert.equal(await card('ref-two').getAttribute('aria-pressed'), 'true');
   assert.equal(await card('child-0').getAttribute('aria-pressed'), 'false');
+  await page.evaluate(() => {
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === 'local_classification_labels') return [{ id: 'tag', name: '测试标签' }];
+      if (command === 'local_classification_example') { window.tagWrite = args; return; }
+      return invoke(command, args);
+    };
+  });
+  const tagsTrigger = page.locator('.catalog-selection').getByRole('button', { name: '标签', exact: true });
+  await tagsTrigger.click();
+  const tags = page.getByRole('dialog', { name: '编辑标签', exact: true });
+  await tags.getByText('已选 1 项素材', { exact: true }).waitFor();
+  await tags.getByRole('radio', { name: '测试标签', exact: true }).check();
+  await tags.getByRole('button', { name: '添加标签', exact: true }).click();
+  await tags.getByText('添加标签「测试标签」完成 · 已处理 1 项', { exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.tagWrite.assetIds), ['root-0'], 'tagging applies to the asset shared by both references');
+  await tags.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.waitForFunction(() => document.activeElement?.textContent.trim() === '标签');
   await page.locator('.catalog-selection').getByRole('button', { name: '添加到文件夹', exact: true }).click();
   await dialog().getByText('另一目录', { exact: true }).click(); await dialog().getByRole('button', { name: '添加', exact: true }).click();
   await dialog().waitFor({ state: 'detached' });

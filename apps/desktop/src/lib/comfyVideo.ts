@@ -18,7 +18,7 @@ export const H3_VIDEO_MODES = [
 ] as const;
 export type ComfyVideoMode = typeof H3_VIDEO_MODES[number]["value"];
 export const H3_R2V_LIMITS = { image: 9, video: 3, audio: 3 } as const;
-export const H3_R2V_REFERENCE_HINT = "用 <Picture 1>、<Video 1>、<Audio 1> 指代素材。音频先编视频原声，再编独立录音。";
+export const H3_R2V_REFERENCE_HINT = `用 <Picture 1>、<Video 1>、<Audio 1> 指代素材。音频先编视频原声，再编独立录音。${comfyAudioHint("r2v")}`;
 export interface ComfyVideoOptions {
   mode?: ComfyVideoMode;
   endpoint: string;
@@ -41,9 +41,13 @@ export interface ComposerLocalVideoRequest extends H3VideoReferences { prompt: s
 export function localVideoFrames(references: Asset[]) {
   return references.filter(asset => /\.(png|jpe?g|webp|bmp)(?:[?#].*)?$/i.test(asset.store_path ?? ""));
 }
-export const H3_AUDIO_LABEL = "参考音频";
+export function comfyAudioLabel(mode: ComfyVideoMode) {
+  return mode === "frames" || mode === "text" ? "原声引导" : "参考音频";
+}
 export function comfyAudioHint(mode: ComfyVideoMode) {
-  return mode === "reference" ? "用 <Audio 1> 指代录音的音色。" : "录音从第 0 秒参与生成，超出视频时长的部分会被裁掉。";
+  if (mode === "reference") return "可借用 <Audio 1> 的音色和语调说新台词。";
+  if (mode === "r2v") return "角色可借用参考音频的音色和语调说新台词。";
+  return "从第 0 秒沿用录音内容与节奏。仅借音色说新台词，请切换到单图或 R2V。";
 }
 export function h3R2VInputError(images: number, videos: number, audios: number, requireReference = true): string | null {
   if (images > H3_R2V_LIMITS.image || videos > H3_R2V_LIMITS.video || audios > H3_R2V_LIMITS.audio)
@@ -79,6 +83,11 @@ export interface ComfyVideoStatus { status: "queued" | "running" | "offline" | "
 export function comfyVideo(action: "start" | "status" | "cancel", projectId: string, requestId: string, input?: ComfyVideoInput) {
   return invoke<ComfyVideoStatus>("comfy_video", { action, projectId, requestId, input: input ?? null });
 }
+export async function copyComfyDiagnostic(report: string) {
+  const log = await invoke<string>("comfy_video_log_tail").catch(() => "");
+  await navigator.clipboard.writeText(report + (log || ""));
+}
+
 export function checkComfyVideo(endpoint: string, mode: ComfyVideoMode = "frames") { return invoke<string>("comfy_video_check", { endpoint, mode }); }
 
 export type ComfyEnvironmentMode = ComfyVideoMode | "image" | "edit";

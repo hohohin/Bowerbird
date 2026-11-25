@@ -4,6 +4,12 @@
 (() => {
   if (window.__bowerbirdExplorerInstalled) return;
   window.__bowerbirdExplorerInstalled = true;
+  const rules = __BOWERBIRD_SITE_RULES__;
+  const pin = rules.pinterest;
+  const testId = value => `[data-test-id="${value}"]`;
+  const pinWrapper = testId(pin.pinWrapper);
+  const pinOverlay = testId(pin.hoverOverlay);
+  const pinDecorations = pin.hoverDecorations.map(testId).join(", ");
   let pressed = null;
   let pointerStarted = false;
   const bridge = "__BOWERBIRD_DRAG_BRIDGE__";
@@ -56,12 +62,11 @@
   }
   function pinterestHoverCard(target) {
     if (location.origin !== "https://www.pinterest.com" && location.origin !== "https://pinterest.com") return null;
-    return target.closest('[data-test-id="pin-card-hover-overlay"]')?.closest('[data-test-id="pinWrapper"]') || null;
+    return target.closest(pinOverlay)?.closest(pinWrapper) || null;
   }
   function pinHoverDecoration(element, pinCard) {
     // These are Pinterest's image washes, not a general translucent-panel bypass.
-    return !!pinCard && element.closest('[data-test-id="pinWrapper"]') === pinCard
-      && element.matches('[data-test-id="pin-card-hover-overlay-top-wash"], [data-test-id="pin-card-hover-overlay-gradient-full"]');
+    return !!pinCard && element.closest(pinWrapper) === pinCard && element.matches(pinDecorations);
   }
   function transparentColor(color) {
     return color === "transparent" || ((color.startsWith("rgba(") || color.includes("/")) && /[,/]\s*0(?:\.0*)?%?\)$/.test(color));
@@ -81,7 +86,7 @@
     return true;
   }
   function reachableMedia(target, media, stack, point, pinCard) {
-    if (pinCard && media.closest('[data-test-id="pinWrapper"]') !== pinCard) return false;
+    if (pinCard && media.closest(pinWrapper) !== pinCard) return false;
     if (!layersExposeMedia(media, stack, point, pinCard)) return false;
     // Only empty overlays in the same local card may stand in for its media.
     for (let card = target, depth = 0; card && card !== document.body && depth < 4; card = card.parentElement, depth++) {

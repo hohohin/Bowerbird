@@ -76,8 +76,15 @@ try {
   await page.waitForFunction(() => !window.store.getState().projectRoutePending);
   assert.equal(await canvas.isVisible(), true, 'failed save keeps the project open');
   await page.evaluate(() => window.store.setState({ projectCanvasFlush: window.originalFlush }));
-  await page.getByRole('button', { name: '探索', exact: true }).click();
+  await page.getByRole('button', { name: '侧边探索', exact: true }).click();
+  await page.getByRole('region', { name: '探索浏览器', exact: true }).waitFor();
+  await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await nav.waitFor();
+  const exploration = nav.getByRole('button', { name: '探索', exact: true });
+  await exploration.click();
+  await page.reload();
+  await page.getByRole('region', { name: '探索浏览器', exact: true }).waitFor();
+  assert.equal(await exploration.getAttribute('aria-current'), 'page');
   await library.click();
   await expectHome('library');
   await page.reload();

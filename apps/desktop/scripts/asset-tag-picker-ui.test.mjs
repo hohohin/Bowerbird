@@ -30,7 +30,8 @@ try {
     window.tagWrites = [];window.failTags = false;window.holdWrite = false;window.failRead = false;
     const invoke = window.__TAURI_INTERNALS__.invoke;
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
-      if (command === 'local_classification_labels') {
+      if (command === 'local_classification_status') return { enabled: false, busy: false, supported: true, installed: true, model: '' };
+      if (command === 'local_classification_labels' || command === 'project_classification_labels') {
         if (window.failRead) throw 'Error database internal failed';
         return structuredClone(window.tagLabels);
       }
@@ -121,8 +122,17 @@ try {
   await page.screenshot({ path: '.tmp/asset-tag-picker/narrow.png', animations: 'disabled' });
   const bounds = await popup.boundingBox();assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 520 && bounds.y + bounds.height <= 800, JSON.stringify(bounds));
   assert.equal(await page.evaluate(() => window.tagWrites.every(w => w.assetIds.length === 1 && w.assetIds[0] === 'review-two')), true);
+  await popup.getByRole('button', { name: '标签管理…', exact: true }).click();
+  const management = page.getByRole('dialog', { name: '标签管理', exact: true });
+  await management.waitFor();
+  await popup.waitFor({ state: 'detached' });
+  await management.getByRole('button', { name: '关闭', exact: true }).press('Escape');
+  await management.waitFor({ state: 'detached' });
+  assert.equal(await detail.isVisible(), true);
+  assert.equal(await add.evaluate(el => el === document.activeElement), true);
   if (embedded) {
     await page.setViewportSize({ width: 1440, height: 960 });
+    await add.click();
     await page.evaluate(() => { window.holdWrite = true; window.releaseTagWrite = null; });
     await popup.getByRole('checkbox', { name: '摄影', exact: true }).click();
     await page.waitForFunction(() => !!window.releaseTagWrite);

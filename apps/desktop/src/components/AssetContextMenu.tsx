@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ClipboardCopy, FileText, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, Pin, ScanSearch, Scan, Trash2, Ungroup } from "lucide-react";
+import { ClipboardCopy, FileText, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, Pin, ScanSearch, Scan, Tags, Trash2, Ungroup } from "lucide-react";
 import { useStore } from "../store";
 import { understandEngineUsable } from "../lib/entitlement";
 import { api } from "../lib/api";
@@ -16,6 +16,7 @@ import type { Asset } from "../lib/types";
 import { videoSourceKey } from "../lib/videoSourceKey";
 import { isAudioAsset } from "../lib/audioMedia";
 import { AssetTransferMenuItems, useAssetTransferDialogs } from "./AssetTransferMenuItems";
+import { BatchAssetTagDialog } from "./AssetTagPicker";
 import { BatchAddToProjectsDialog } from "./BatchAddToProjectsDialog";
 import { CanvasAssetDeleteDialog } from "./CanvasAssetDeleteDialog";
 import { CanvasSelectionMenuItems } from "./CanvasSelectionMenuItems";
@@ -46,6 +47,7 @@ const ICONS = {
   clipboard: <ClipboardCopy size={13} />,
   message: <MessageSquare size={13} />,
   "file-text": <FileText size={13} />,
+  tags: <Tags size={13} />,
 };
 
 /** 单选双列，多选单列；全局素材库、画布和嵌入式工作区共用。 */
@@ -71,6 +73,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; external: boolean; localPath?: string } | null>(null);
   const [mediaPreview, setMediaPreview] = useState<{ asset: Asset; path: string; projectId: string | null; openTranscript: boolean } | null>(null);
   const [assignCollectionIds, setAssignCollectionIds] = useState<SelectionOperation | null>(null);
+  const [tagSelection, setTagSelection] = useState<string[] | null>(null);
   const [projectPickIds, setProjectPickIds] = useState<SelectionOperation | null>(null);
   const [pendingCanvasDelete, setPendingCanvasDelete] = useState<{ assetIds: string[]; projectId: string | null; localPaths?: Record<string, string>; onComplete?: () => void } | null>(null);
   const transfer = useAssetTransferDialogs();
@@ -98,9 +101,8 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
   useEffect(() => {
     if (!menu?.libraryProjectId) return;
     let alive = true;
-    api.projectCanvasGet(menu.libraryProjectId).then(snapshot => {
+    api.projectCanvasHasAsset(menu.libraryProjectId, menu.assetId).then(available => {
       if (!alive) return;
-      const available = snapshot.nodes.some(node => node.kind === "asset" && node.assetId === menu.assetId && node.hiddenAt == null);
       setCanvasLibraryCheck({ menu, status: available ? "available" : "unavailable" });
     }).catch(() => { if (alive) setCanvasLibraryCheck({ menu, status: "failed" }); });
     return () => { alive = false; };
@@ -122,6 +124,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
     {mediaPreview && <LibraryVideoPreview {...mediaPreview} sourceKey={videoSourceKey(mediaPreview.asset)}
       onClose={() => setMediaPreview(null)} />}
     {assignCollectionIds && <CollectionAssignDialog assetIds={assignCollectionIds.ids} onSaved={assignCollectionIds.onComplete} onClose={() => setAssignCollectionIds(null)} />}
+    {tagSelection && <BatchAssetTagDialog assetIds={tagSelection} onClose={() => setTagSelection(null)} />}
     {transfer.dialogs}
     {pendingCanvasDelete && <CanvasAssetDeleteDialog target={pendingCanvasDelete} onComplete={pendingCanvasDelete.onComplete} onClose={() => setPendingCanvasDelete(null)} />}
     {renameTarget && <RenameDialog open assetId={renameTarget.id} currentName={renameTarget.name} external={renameTarget.external} localPath={renameTarget.localPath} onClose={() => setRenameTarget(null)} />}
@@ -249,6 +252,7 @@ export function AssetContextMenu({ selection }: { selection?: AssetMenuHostSelec
       case "layers": host.navigate(); store.openLayerEditor(assetId); break;
       case "history": close(); host.navigate(); void store.viewGenerationHistory(assetId); break;
       case "assign": setAssignCollectionIds({ ids: targetIds, onComplete }); close(); break;
+      case "edit-tags": setTagSelection(targetIds); close(); break;
       case "project-picker": setProjectPickIds({ ids: targetIds, onComplete }); close(); break;
       case "reveal": void revealAssetFolder(assetId, feedback); break;
       case "open-system": if (storePath) void openAssetWithSystem(storePath, feedback); break;

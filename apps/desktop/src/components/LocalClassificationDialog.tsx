@@ -1,6 +1,6 @@
 import { userErrorMessage } from "../lib/userError";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { globalClassification, localClassification, mergeClassificationProgress, projectClassification, type ClassificationLabel, type LocalClassificationStatus } from "../lib/localClassification";
 import { folderClassification } from "../lib/folderClassification";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -13,6 +13,9 @@ import { ClassificationDiagnostics } from "./ClassificationDiagnostics";
 import { ClassificationLabelDetails, classificationOrigin } from "./ClassificationLabelDetails";
 import { materialCatalog } from "../lib/materialCatalog";
 import { VideoTextTags } from "./VideoTextTags";
+import { VIDEO_TEXT_TAGGING_ENABLED } from "../lib/featureFlags";
+import { compareTagNames } from "../lib/materialCatalogOrder";
+import { TacticalSelect } from "./TacticalSelect";
 
 function VideoTaggingTarget({ projectId }: { projectId: string | null }) {
   const [query, setQuery] = useState("");
@@ -96,17 +99,60 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
   </section>;
 }
 
-export function LocalClassificationDialog({ onClose, projectId, folder, globalScope = false, globalPaths, selectedFiles, onFilter, initialView = "classification" }: { onClose: () => void; projectId?: string; folder?: { root: string; recursive: boolean }; globalScope?: boolean; globalPaths?: string[]; selectedFiles?: Set<string>; onFilter?: (id: string) => void; initialView?: "classification" | "labels" }) {
-  const [target, setTarget] = useState(folder);
-  return <ClassificationSettings key={target?.root ?? "library"} projectId={projectId} allowFolderSelection={!!folder} globalScope={globalScope && !target} globalPaths={globalPaths} initialView={initialView} onClose={onClose} folder={target} selectedFiles={target?.root === folder?.root ? selectedFiles : undefined} onFilter={target?.root === folder?.root ? onFilter : undefined} onTarget={setTarget} />;
+type LabelAction = { id: string; action: "edit" | "delete" };
+type LabelNavigation = (label: Pick<ClassificationLabel, "id" | "name">) => void;
+type ClassificationError = { step: string; reason: unknown; fallback?: string };
+const CLASSIFICATION_BILLING = "每张成功获得标签的图片扣 1 Bcoin，包含必要的补标签。分类失败或未获得标签时退回预留积分。";
+
+function classificationErrorMessage({ step, reason, fallback }: ClassificationError) {
+  const summary = String(reason);
+  const settingsFailure = /CLASSIFICATION_(?:AUTO|START)_SETTINGS/i.test(summary);
+  if ((settingsFailure || step === "local_classification_enable")
+    && /readonly|read-only|write.protected|os error 19\b|只读/i.test(summary)) {
+    return "分类设置无法写入，请检查设置文件或资料库是否为只读。";
+  }
+  if (settingsFailure) {
+    return userErrorMessage(reason, "无法保存云端分类设置，请检查设置文件是否可写后重试。");
+  }
+  if (step === "local_classification_enable") {
+    if (/CLASSIFICATION_AUTO_DATABASE/i.test(summary)) {
+      return userErrorMessage(reason, "无法更新资料库中的自动处理状态，请重新打开资料库后重试。");
+    }
+    if (/CLASSIFICATION_AUTO_WORKER/i.test(summary)) {
+      return "自动处理状态暂时无法确认，请关闭并重新打开标签管理查看状态。";
+    }
+  }
+  return userErrorMessage(reason, fallback);
 }
 
-function ClassificationSettings({ onClose, folder, globalScope, globalPaths, selectedFiles, onFilter, onTarget, initialView, allowFolderSelection, projectId }: {
+function ErrorDetails({ failure }: { failure: ClassificationError }) {
+  if (!import.meta.env.DEV) return null;
+  const { step, reason } = failure;
+  const summary = reason instanceof Error ? reason.toString() : typeof reason === "object" && reason !== null
+    ? String((reason as Record<string, unknown>).message ?? (reason as Record<string, unknown>).error ?? reason)
+    : String(reason);
+  return <details className="text-xs">
+    <summary className="cursor-pointer text-muted">查看错误详情</summary>
+    <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-panel2 p-2">{step}: {summary?.slice(0, 2000)}</pre>
+  </details>;
+}
+
+export function LocalClassificationDialog({ onClose, projectId, folder, globalScope = false, globalPaths, selectedFiles, onFilter, initialView = "classification", initialLabelAction, onNavigateToLabel }: {
+  onClose: () => void; projectId?: string; folder?: { root: string; recursive: boolean };
+  globalScope?: boolean; globalPaths?: string[]; selectedFiles?: Set<string>; onFilter?: (id: string) => void;
+  initialView?: "classification" | "labels"; initialLabelAction?: LabelAction; onNavigateToLabel?: LabelNavigation;
+}) {
+  const [target, setTarget] = useState(folder);
+  return <ClassificationSettings key={JSON.stringify([target?.root, projectId])} projectId={projectId} allowFolderSelection={!!folder} globalScope={globalScope && !target} globalPaths={globalPaths} initialView={initialView} onClose={onClose} folder={target} selectedFiles={target?.root === folder?.root ? selectedFiles : undefined} onFilter={target?.root === folder?.root ? onFilter : undefined} onTarget={setTarget} initialLabelAction={initialLabelAction} onNavigateToLabel={onNavigateToLabel} />;
+}
+
+function ClassificationSettings({ onClose, folder, globalScope, globalPaths, selectedFiles, onFilter, onTarget, initialView, allowFolderSelection, projectId, initialLabelAction, onNavigateToLabel }: {
   allowFolderSelection: boolean; projectId?: string;
   globalScope: boolean; globalPaths?: string[];
   onClose: () => void; folder?: { root: string; recursive: boolean }; selectedFiles?: Set<string>; onFilter?: (id: string) => void;
   onTarget: (folder: {root:string; recursive:boolean} | undefined) => void;
   initialView: "classification" | "labels";
+  initialLabelAction?: LabelAction; onNavigateToLabel?: LabelNavigation;
 }) {
   const view = initialView;
   const [recursive, setRecursive] = useState(folder?.recursive ?? false);
@@ -122,7 +168,12 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [enabled, setEnabled] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<ClassificationError | null>(null);
+  const [refreshError, setRefreshError] = useState<ClassificationError | null>(null);
+  const [query, setQuery] = useState("");
+  const [labelFilter, setLabelFilter] = useState("all");
+  const [labelOrder, setLabelOrder] = useState("default");
+  const [moreId, setMoreId] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
   const [selectedLabels, setSelectedLabels] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState<ClassificationLabel[]>([]);
@@ -130,6 +181,8 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
   const [confirmRescan, setConfirmRescan] = useState(false);
   const [notice, setNotice] = useState("");
   const lock = useRef(false);
+  const refreshFailed = useRef(false);
+  const pendingLabelAction = useRef(initialLabelAction);
   const statusRead = useRef(0);
   const progressVersion = useRef(0);
   const latestProgress = useRef<LocalClassificationStatus | null>(null);
@@ -148,7 +201,15 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
       setStatus(version !== progressVersion.current && latestProgress.current
         ? mergeClassificationProgress(nextStatus, latestProgress.current) : nextStatus);
       setLabels(nextLabels);
-    } catch (error) { if (request === statusRead.current) throw error; }
+      setRefreshError(null);
+      refreshFailed.current = false;
+    } catch (reason) {
+      if (request !== statusRead.current) return;
+      const step = "refresh (classification status / labels)";
+      if (!refreshFailed.current) console.error(`[LocalClassificationDialog] ${step}`, reason);
+      refreshFailed.current = true;
+      setRefreshError({ step, reason });
+    }
   }
   useEffect(() => {
     let active = true;
@@ -156,9 +217,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
     const poll = async () => {
       if (fetching || lock.current) return;
       fetching = true;
-      try {
-        await refresh();
-      } catch (e) { if (active) setError(String(e)); }
+      try { await refresh(); }
       finally { fetching = false; }
     };
     void poll();
@@ -172,18 +231,32 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
     return () => { active = false; statusRead.current++; window.clearInterval(timer); void unlisten.then(stop => stop()); };
   }, []);
 
-  async function action(fn: () => Promise<unknown>) {
+  async function action(step: string, fn: () => Promise<unknown>, fallback = "分类操作未完成，请稍后重试。") {
     if (lock.current) return;
-    lock.current = true; statusRead.current++; setWorking(true); setError("");
-    try { await fn(); await refresh(); }
-    catch (e) { setError(String(e)); }
+    lock.current = true; statusRead.current++; setWorking(true); setError(null);
+    try { await fn(); }
+    catch (reason) {
+      console.error(`[LocalClassificationDialog] ${step}`, reason);
+      setError({ step, reason, fallback });
+      return;
+    }
     finally { lock.current = false; setWorking(false); }
+    void refresh();
   }
   function edit(label?: ClassificationLabel) {
     setEditorOpen(true);
     setEditing(label?.id ?? null); setName(label?.name ?? "");
     setDescription(label?.description ?? ""); setEnabled(label?.enabled ?? true);
   }
+  useEffect(() => {
+    const target = pendingLabelAction.current;
+    if (!target) return;
+    const label = labels.find(item => item.id === target.id);
+    if (!label) return;
+    pendingLabelAction.current = undefined;
+    if (target.action === "edit") edit(label);
+    else requestDelete([label]);
+  }, [labels]);
   const busy = working || !!status?.busy;
   const canRun = !!status && !busy;
   const canMatch = canRun;
@@ -192,24 +265,30 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
     && (!!status?.global_scope === globalScope || (!folder && status?.phase === "downloading"));
   const showProgress = status && sameTarget;
   const jevResults = status?.jev_progress && <JevResults key={status.jev_progress.asset.id} progress={status.jev_progress} />;
-  async function ensureCloud() {
-    if (!(await local.jevConfig()).enabled) await useStore.getState().updateSettings({ jev_image_classification_enabled: true });
-  }
-  async function startClassification(options: { tagId?: string; pendingOnly?: boolean } = {}) {
-    await ensureCloud();
-    await local.start(options);
+  function startClassification(options: { tagId?: string; pendingOnly?: boolean } = {}) {
+    return local.start({ ...options, ensureCloud: true });
   }
   function requestClassification() {
     if (!canRun) return;
-    if (reclassify) { setError(""); setConfirmRescan(true); }
-    else void action(() => startClassification({ pendingOnly: true }));
+    if (reclassify) { setError(null); setConfirmRescan(true); }
+    else void action("classification_start", () => startClassification({ pendingOnly: true }));
   }
+  const visibleLabels = useMemo(() => {
+    const needle = query.trim().replace(/^#\s*/, "").normalize("NFKC").toLocaleLowerCase();
+    const result = labels.filter(label =>
+      (labelFilter === "all" || (labelFilter === "empty" ? label.count === 0 : label.enabled === (labelFilter === "enabled")))
+      && (!needle || `${label.name}\n${label.description}`.normalize("NFKC").toLocaleLowerCase().includes(needle)));
+    if (labelOrder === "count") result.sort((a, b) => b.count - a.count);
+    if (labelOrder === "name") result.sort((a, b) => compareTagNames(a.name, b.name));
+    return result;
+  }, [labels, query, labelFilter, labelOrder]);
   const checkedLabels = labels.filter((label) => selectedLabels.has(label.id));
+  const checkedVisibleCount = visibleLabels.filter(label => selectedLabels.has(label.id)).length;
   function requestDelete(targets: ClassificationLabel[]) {
-    setError(""); setNotice(""); setDeleting(targets);
+    setError(null); setNotice(""); setDeleting(targets);
   }
   async function deleteLabels() {
-    await action(async () => {
+    await action("classification_delete_labels", async () => {
       await local.deleteLabels(deleting.map((label) => label.id));
       if (deleting.some((label) => label.id === editing)) setEditorOpen(false);
       if (!folder && deleting.some((label) => useStore.getState().smartFilter === `tag:${label.name}`)) setSmartFilter(null);
@@ -219,11 +298,22 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
       setDeleting([]);
     });
   }
+  function navigateToLabel(label: ClassificationLabel) {
+    if (onNavigateToLabel) onNavigateToLabel(label);
+    else if (folder || globalScope) onFilter?.(label.id);
+    else setSmartFilter(`tag:${label.name}`);
+    onClose();
+  }
+  const actionMessage = error ? classificationErrorMessage({
+    ...error,
+    fallback: deleting.length ? "未能删除标签，请稍后重试。"
+      : confirmRescan ? "未能开始重新分类，请稍后重试。" : error.fallback,
+  }) : "";
   const targetName = folder ? "指定文件夹" : globalScope ? "全局素材" : projectId ? `项目 · ${projectName || "当前项目"}` : "素材库";
   const runControls = <div className="classification-run-controls">
     <div className="classification-run-buttons">
       <button className="app-modal-button is-primary classification-start" disabled={!canRun} onClick={requestClassification}>进行分类</button>
-      {status?.busy && sameTarget && <button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止</button>}
+      {status?.busy && sameTarget && <button className="app-modal-button" disabled={working} onClick={() => void action("classification_stop", () => local.stop())}>停止</button>}
     </div>
     <label className="classification-run-option">
       <input type="checkbox" checked={reclassify} disabled={busy} onChange={e => setReclassify(e.target.checked)} />
@@ -231,14 +321,16 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
     </label>
   </div>;
 
-  return <><ModalShell title={view === "labels" ? "管理分类数据" : "自动分类"} width="md" className="classification-panel" onClose={onClose} preventClose={deleting.length > 0 || confirmRescan}
+  return <><ModalShell title={view === "labels" ? "标签管理" : "自动分类"} width="md" className="classification-panel" onClose={onClose} preventClose={deleting.length > 0 || confirmRescan}
     description={view === "classification" ? "使用云端分类，优先匹配已有标签。" : undefined}
     footer={view === "labels" ? <div className="classification-run-footer">
       <div className="classification-run-target">
         <span className="text-xs text-muted">分类目标</span>
         <p className="text-sm font-medium" title={folder?.root ?? targetName}>{targetName}</p>
         {folder && <p className="text-xs text-muted" title={folder.root}>{folder.root}</p>}
-        {showProgress && status.busy && <p role="status" className="text-xs text-muted">{userErrorMessage(status.message, "正在分类…")}</p>}
+        {showProgress && status.message && <p role="status" className="text-xs text-muted">
+          {userErrorMessage(status.message, status.busy ? "正在分类…" : status.last_error ? "本轮分类未完成，请稍后重试。" : "本轮处理结束")}
+        </p>}
       </div>
       {runControls}
     </div> : undefined}>
@@ -249,31 +341,44 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
           <label className="flex items-center gap-2"><input type="checkbox" checked={recursive} disabled={busy} onChange={e => setRecursive(e.target.checked)} />包含子文件夹</label></>}
         {allowFolderSelection && <div className="flex gap-2">
           {folder && <button className="app-modal-button" disabled={busy} onClick={() => onTarget(undefined)}>选择素材库</button>}
-          <button className="app-modal-button" disabled={busy} onClick={() => void action(async () => {
+          <button className="app-modal-button" disabled={busy} onClick={() => void action("folder_classification_view", async () => {
             const path = await open({ directory: true, multiple: false });
             if (typeof path === "string") { const view = await folderClassification.view(path); onTarget({ root: view.root, recursive: view.record.recursive }); }
           })}>选择目标文件夹</button>
         </div>}
         {status?.folder_root && status.busy && <p role="status" className="text-xs break-all">正在分类文件夹：{status.folder_root}</p>}
-        {status?.busy && !sameTarget && <div className="space-y-2"><p role="status">另一分类范围的任务正在运行，完成或停止后可处理当前目标。</p><button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止当前任务</button></div>}
+        {status?.busy && !sameTarget && <div className="space-y-2"><p role="status">另一分类范围的任务正在运行，完成或停止后可处理当前目标。</p><button className="app-modal-button" disabled={working} onClick={() => void action("classification_stop", () => local.stop())}>停止当前任务</button></div>}
       </section>}
-      {error && <p role="alert" className="text-red-400">{userErrorMessage(error, "分类操作未完成，请稍后重试。")}</p>}
+      {error && !deleting.length && !confirmRescan && <>
+        <p role="alert" className="text-red-400">{actionMessage}</p>
+        <ErrorDetails failure={error} />
+      </>}
+      {refreshError && <div className="space-y-1">
+        <p role="status" className="text-xs text-muted">分类状态或标签暂时无法刷新，将自动重试。</p>
+        <ErrorDetails failure={refreshError} />
+      </div>}
       {!folder && !globalScope && <section aria-label="新素材自动分类" className="classification-section rounded-lg border border-edge p-3 space-y-2">
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={status?.enabled ?? false} disabled={!status || working || (!status.enabled && status.busy)}
-            onChange={(e) => { const enabled = e.target.checked; void action(async () => { if (enabled) await ensureCloud(); await localClassification.enable(enabled); }); }} />
+            onChange={(e) => {
+              const enabled = e.target.checked;
+              void action("local_classification_enable", async () => {
+                const persisted = await localClassification.enable(enabled);
+                setStatus(current => current && { ...current, enabled: persisted });
+              }, "未能保存自动处理设置，请稍后重试。");
+            }} />
           自动处理新素材
         </label>
         <p className="text-xs text-muted">全库设置：自动分类新采集、导入及生成的图片。</p>
-        <p className="text-xs text-muted">使用云端分类，每张成功获得标签扣 1 Bcoin，包含必要的补标签；无法判断或请求失败不收费。</p>
+        <p className="text-xs text-muted">{CLASSIFICATION_BILLING}</p>
       </section>}
-      <ClassificationPlayback status={showProgress ? status : null} />
-      {import.meta.env.DEV && showProgress && status && <ClassificationDiagnostics status={status} />}
+      {(view === "classification" || (showProgress && status.busy)) && <ClassificationPlayback status={showProgress ? status : null} />}
+      {import.meta.env.DEV && showProgress && (view === "classification" || status.busy) && <ClassificationDiagnostics status={status} />}
       {view === "classification" && <section aria-label="云端分类" className="classification-section rounded-lg border border-edge p-4 space-y-3">
         <div className="space-y-1">
           <h3 className="classification-heading font-medium"><Cloud size={15} aria-hidden="true" />云端分类</h3>
           <p className="text-xs text-muted">优先匹配已有标签，没有合适类别时再补充新标签。</p>
-          <p className="text-xs text-muted">每张成功分类扣 1 Bcoin；无法判断或失败会退回积分。</p>
+          <p className="text-xs text-muted">{CLASSIFICATION_BILLING}</p>
         </div>
         {runControls}
         {folder && <p className="text-xs text-muted">按需扫描当前文件夹，关闭面板后任务继续。</p>}
@@ -292,15 +397,15 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
       {editorOpen && <section className="classification-label-editor classification-section space-y-2 rounded-lg border border-edge bg-panel2/50 p-3">
         <h3 className="font-medium">{editing ? "编辑分类标签" : "新建分类标签"}</h3>
         <input aria-label="标签名称" className="w-full rounded border border-edge bg-panel2 px-3 py-2" maxLength={40}
-          autoFocus placeholder="例如：水彩植物、手工感包装" value={name} onChange={(e) => setName(e.target.value)} />
+          data-modal-autofocus autoFocus placeholder="例如：水彩植物、手工感包装" value={name} onChange={(e) => setName(e.target.value)} />
         <textarea aria-label="分类说明" className="w-full rounded border border-edge bg-panel2 px-3 py-2" rows={2} maxLength={600}
           placeholder="可选：描述你想收进此标签的素材，尤其是风格或个人命名。" value={description} onChange={(e) => setDescription(e.target.value)} />
         <label className="flex items-center gap-2"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />允许自动匹配此标签</label>
         <div className="flex flex-wrap gap-2">
-          <button className="app-modal-button" disabled={working || !name.trim()} onClick={() => void action(async () => {
+          <button className="app-modal-button" disabled={working || !name.trim()} onClick={() => void action("classification_save_label", async () => {
             await local.save(editing, name, description, enabled); setEditorOpen(false);
           })}>保存标签</button>
-          <button className="app-modal-button" disabled={!canMatch || !name.trim() || !enabled} onClick={() => void action(async () => {
+          <button className="app-modal-button" disabled={!canMatch || !name.trim() || !enabled} onClick={() => void action("classification_save_label / classification_start", async () => {
             const id = await local.save(editing, name, description, enabled);
             setEditing(id);
             await startClassification({ tagId: id }); setEditorOpen(false);
@@ -311,63 +416,99 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
 
       <section className="space-y-2">
         {notice && <p role="status" className="text-xs text-muted">{notice}</p>}
-        {labels.length > 0 && <div className="flex flex-wrap items-center gap-3">
+        {labels.length > 0 && <div className="classification-label-filters">
+          <input type="search" aria-label="搜索标签" placeholder="搜索标签名或说明"
+            value={query} onChange={e => setQuery(e.target.value)} />
+          <TacticalSelect aria-label="筛选标签" value={labelFilter} onValueChange={setLabelFilter}>
+            <option value="all">全部标签</option>
+            <option value="enabled">已启用</option>
+            <option value="disabled">已停用</option>
+            <option value="empty">空标签</option>
+          </TacticalSelect>
+          <TacticalSelect aria-label="标签排序" value={labelOrder} onValueChange={setLabelOrder}>
+            <option value="default">默认排序</option>
+            <option value="count">数量降序</option>
+            <option value="name">拼音 A–Z</option>
+          </TacticalSelect>
+        </div>}
+        {(visibleLabels.length > 0 || checkedLabels.length > 0) && <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-xs">
-            <input type="checkbox" checked={checkedLabels.length === labels.length} disabled={busy}
-              ref={(input) => { if (input) input.indeterminate = checkedLabels.length > 0 && checkedLabels.length < labels.length; }}
-              onChange={(e) => setSelectedLabels(e.target.checked ? new Set(labels.map((label) => label.id)) : new Set())} />
-            全选标签
+            <input type="checkbox" checked={visibleLabels.length > 0 && checkedVisibleCount === visibleLabels.length} disabled={busy || !visibleLabels.length}
+              ref={(input) => { if (input) input.indeterminate = checkedVisibleCount > 0 && checkedVisibleCount < visibleLabels.length; }}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setSelectedLabels(current => {
+                  const next = new Set(current);
+                  for (const label of visibleLabels) {
+                    if (checked) next.add(label.id); else next.delete(label.id);
+                  }
+                  return next;
+                });
+              }} />
+            {query.trim() || labelFilter !== "all" ? "全选当前结果" : "全选标签"}
           </label>
-          <span className="text-xs text-muted">已选 {checkedLabels.length} 个</span>
+          <span className="text-xs text-muted">已选 {checkedLabels.length} 个
+            {checkedLabels.length > checkedVisibleCount && ` · ${checkedLabels.length - checkedVisibleCount} 个不在当前结果`}
+          </span>
           <button className="app-modal-button is-danger" disabled={busy || checkedLabels.length === 0}
             onClick={() => requestDelete(checkedLabels)}>删除所选标签</button>
         </div>}
         {status?.busy && labels.length > 0 && <p className="text-xs text-muted">请先停止当前任务，再删除标签。</p>}
-        {labels.length === 0 && <p className="text-muted py-3">还没有标签。识别图片后会自动发现，也可以先创建。</p>}
+        {status && labels.length === 0 && <p className="text-muted py-3">还没有标签。识别图片后会自动发现，也可以先创建。</p>}
+        {labels.length > 0 && visibleLabels.length === 0 && <p className="text-muted py-3">没有符合当前条件的标签。</p>}
         <div className="classification-label-list divide-y divide-edge">
-          {labels.map((label) => <div key={label.id} className="classification-label-row py-2 space-y-1" data-selected={selectedLabels.has(label.id) || undefined}>
-            <div className="flex flex-wrap items-center gap-2">
+          {visibleLabels.map((label) => <div key={label.id} className="classification-label-row px-1 py-2 space-y-1" data-selected={selectedLabels.has(label.id) || undefined}>
+            <div className="classification-label-summary">
               <input type="checkbox" aria-label={`选择标签 ${label.name}`} checked={selectedLabels.has(label.id)} disabled={busy}
                 onChange={(e) => setSelectedLabels((current) => {
                   const next = new Set(current);
                   if (e.target.checked) next.add(label.id); else next.delete(label.id);
                   return next;
                 })} />
-              <button className="text-cold font-medium" disabled={!!folder && !onFilter} title={folder && !onFilter ? "在本机文件中打开该目录后可按标签筛选" : undefined} onClick={() => { if (folder || globalScope) onFilter?.(label.id); else setSmartFilter(`tag:${label.name}`); onClose(); }}>#{label.name}</button>
-              <span className="text-xs text-muted">{label.count} 张{!label.enabled && " · 已停用自动匹配"}</span>
+              <div className="min-w-0">
+                <button className="max-w-full truncate text-left text-cold font-medium" disabled={(!!folder || globalScope) && !onFilter} title={folder && !onFilter ? "在本机文件中打开该目录后可按标签筛选" : `#${label.name}`} onClick={() => navigateToLabel(label)}>#{label.name}</button>
+                {label.description && <p className="truncate text-xs text-muted" title={label.description}>{label.description}</p>}
+              </div>
+              <span className="classification-label-meta text-xs text-muted">{label.count} 张 <span>{label.enabled ? "已启用" : "已停用"}</span></span>
+              <button className="app-modal-button" disabled={working} onClick={() => edit(label)}>编辑</button>
+              <button className="app-modal-button" aria-label={`更多操作 ${label.name}`} aria-expanded={moreId === label.id}
+                onClick={() => setMoreId(current => current === label.id ? null : label.id)}>更多</button>
+            </div>
+            {moreId === label.id && <div className="classification-label-actions">
               <span className="text-xs text-muted">{classificationOrigin(label)}</span>
-              <button className="text-xs text-cold" aria-label={`查看标签 ${label.name} 的详情`} aria-expanded={detailId === label.id}
+              <button className="app-modal-button" aria-label={`查看标签 ${label.name} 的详情`} aria-expanded={detailId === label.id}
                 onClick={() => setDetailId(current => current === label.id ? null : label.id)}>详情</button>
-              <button className="text-xs" onClick={() => edit(label)}>编辑</button>
+              <button className="app-modal-button" disabled={!canMatch || !label.enabled}
+                onClick={() => void action("classification_start", () => startClassification({ tagId: label.id }))}>寻找匹配</button>
+              {selected.size > 0 && <>
+                <button className="app-modal-button" disabled={working}
+                  onClick={() => void action("classification_example", () => local.example(label.id, [...selected], true))}>加入所选 {selected.size} 张作为示例</button>
+                <button className="app-modal-button" disabled={working}
+                  onClick={() => void action("classification_example", () => local.example(label.id, [...selected], false))}>排除所选素材</button>
+              </>}
               <button className="text-xs text-red-400 disabled:opacity-40" aria-label={`删除标签 ${label.name}`} disabled={busy}
                 onClick={() => requestDelete([label])}>删除</button>
-              <button className="text-xs disabled:opacity-40" disabled={!canMatch || !label.enabled} onClick={() => void action(() => startClassification({ tagId: label.id }))}>寻找匹配</button>
-              {selected.size > 0 && <>
-                <button className="text-xs text-cold" disabled={working} onClick={() => void action(() => local.example(label.id, [...selected], true))}>加入所选 {selected.size} 张作为示例</button>
-                <button className="text-xs" disabled={working} onClick={() => void action(() => local.example(label.id, [...selected], false))}>排除所选素材</button>
-              </>}
-            </div>
-            {label.description && <p className="text-xs text-muted">{label.description}</p>}
-            {detailId === label.id && <ClassificationLabelDetails key={label.id} label={label} root={folder?.root} />}
+            </div>}
+            {moreId === label.id && detailId === label.id && <ClassificationLabelDetails key={label.id} label={label} root={folder?.root} />}
           </div>)}
         </div>
       </section>
     </div>
-    {view === "labels" && !folder && !globalScope && <VideoTaggingTarget key={projectId ?? ""} projectId={projectId ?? null}/>}
+    {VIDEO_TEXT_TAGGING_ENABLED && view === "labels" && !folder && !globalScope && <VideoTaggingTarget key={projectId ?? ""} projectId={projectId ?? null}/>}
   </ModalShell>
     <ConfirmDialog open={confirmRescan} title="确认重新分类" danger
       message={<>此操作会删除当前范围内参与重分类素材的已有自动标签，再重新分类，是否确认？已有人工归类的素材会跳过，人工正反例及来源不明的旧版归属会保留。
-        {error && <span role="alert" className="block text-red-400">{userErrorMessage(error, "分类设置未保存，请稍后重试。")}</span>}
+        {error && <span role="alert" className="block text-red-400">{actionMessage}</span>}
       </>}
       confirmLabel={working ? "正在开始…" : "确认并进行分类"} confirmDisabled={!canRun}
-      onConfirm={() => { if (canRun) void action(async () => { await startClassification({ pendingOnly: false }); setConfirmRescan(false); }); }}
-      onCancel={() => { if (!lock.current) { setConfirmRescan(false); setError(""); } }} />
+      onConfirm={() => { if (canRun) void action("classification_start", async () => { await startClassification({ pendingOnly: false }); setConfirmRescan(false); }); }}
+      onCancel={() => { if (!lock.current) { setConfirmRescan(false); setError(null); } }} />
     <ConfirmDialog open={deleting.length > 0} title={deleting.length === 1 ? `删除标签「${deleting[0].name}」` : `删除 ${deleting.length} 个标签`}
       message={<>
         {folder ? "将从此文件夹的分类记录中移除这些标签，并删除相关示例、排除记录和待匹配任务。仅影响上述分类范围，独立分类目录和素材库不受影响。" : "将从本机全局索引（含历史素材）中移除这些标签，并删除相关示例、排除记录和待匹配任务。各目录的独立分类记录保留。"}素材文件会保留，此操作无法撤销。后续重新识别仍可能生成同名标签。
-        {error && <span role="alert" className="block text-red-400">{userErrorMessage(error, "分类设置未保存，请稍后重试。")}</span>}
+        {error && <span role="alert" className="block text-red-400">{actionMessage}</span>}
       </>}
       confirmLabel={working ? "正在删除…" : "确认删除"} danger confirmDisabled={busy}
-      onConfirm={() => void deleteLabels()} onCancel={() => { if (!lock.current) { setDeleting([]); setError(""); } }} />
+      onConfirm={() => void deleteLabels()} onCancel={() => { if (!lock.current) { setDeleting([]); setError(null); } }} />
   </>;
 }

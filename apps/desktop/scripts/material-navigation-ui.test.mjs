@@ -260,8 +260,8 @@ try {
   await page.keyboard.press('Tab'); await page.getByRole('region',{name:'平铺浏览全部图片',exact:true}).waitFor();
   await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   await page.keyboard.press('Tab'); await region('tags').waitFor();
-  await sources.getByRole('button',{name:'管理标签',exact:true}).click();
-  const classification=page.getByRole('dialog',{name:'管理分类数据',exact:true});
+  await sources.getByRole('button',{name:'标签管理',exact:true}).click();
+  const classification=page.getByRole('dialog',{name:'标签管理',exact:true});
   await classification.getByText('项目 · 引用布局合成验收',{exact:true}).waitFor();
   await classification.press('q');
   assert.equal(await tab('项目素材').getAttribute('aria-selected'),'true','dialog owns its keys');

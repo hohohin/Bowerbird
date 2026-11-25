@@ -46,7 +46,9 @@ try {
  assert.equal(await page.getByRole('button',{name:'复制到收集箱',exact:true}).isEnabled(),true);
  await page.getByRole('button',{name:'更多文件操作',exact:true}).click();
  await page.getByRole('button',{name:'自动分类此文件夹'}).click();
- await page.getByRole('dialog',{name:'自动分类',exact:true}).getByRole('button',{name:'加入所选 1 张作为示例'}).click();
+ const firstClassification=page.getByRole('dialog',{name:'自动分类',exact:true});
+ await firstClassification.getByRole('button',{name:'更多操作 自然',exact:true}).click();
+ await firstClassification.getByRole('button',{name:'加入所选 1 张作为示例'}).click();
  await page.waitForFunction(()=>window.calls.some(c=>c.command==='folder_classification_edit'));
  assert.deepEqual(await page.evaluate(()=>window.calls.filter(c=>c.command==='folder_classification_edit').at(-1).args.ids),['folder-picture-2']);
  await page.keyboard.press('Escape');
@@ -84,6 +86,7 @@ try {
  await dialog.getByRole('button',{name:'进行分类',exact:true}).click();
  await page.waitForFunction(()=>window.calls.some(c=>c.command==='folder_classification_start'));
  assert.deepEqual(await page.evaluate(()=>window.calls.find(c=>c.command==='folder_classification_start').args),{root:'/pictures',recursive:true,pendingOnly:true,tagId:null});
+ await dialog.getByRole('button',{name:'更多操作 自然',exact:true}).click();
  await dialog.getByRole('button',{name:'加入所选 1 张作为示例'}).click();
  await page.waitForFunction(()=>window.calls.some(c=>c.command==='folder_classification_edit'));
  await page.waitForFunction(()=>window.calls.filter(c=>c.command==='folder_classification_edit').length===2);
@@ -94,8 +97,8 @@ try {
  await page.getByRole('button',{name:'other.png',exact:true}).waitFor();
  await page.evaluate(()=>{window.modelInstalled=false;});
  await page.getByRole('button',{name:'更多文件操作',exact:true}).click();
- await page.getByRole('button',{name:'管理分类数据',exact:true}).click();
- const management=page.getByRole('dialog',{name:'管理分类数据',exact:true});
+ await page.getByRole('button',{name:'标签管理',exact:true}).click();
+ const management=page.getByRole('dialog',{name:'标签管理',exact:true});
  await management.getByText('/pictures',{exact:true}).waitFor();
  assert.equal(await management.getByRole('button',{name:'下载本地模型',exact:true}).count(),0);
  await management.getByRole('button',{name:'选择目标文件夹',exact:true}).waitFor();
@@ -123,7 +126,8 @@ try {
  assert.equal(await page.locator('.folder-tag-bar').count(),0);
  await tagButton('风景灵感长标签');
  assert.equal(await page.locator('.library-tag-menu').getByRole('button',{name:'风景灵感长标签',exact:true}).getAttribute('aria-pressed'),'true');
- await tagButton('管理标签');
+ await tagButton('标签管理');
+ await management.getByRole('button',{name:'更多操作 风景灵感长标签',exact:true}).click();
  await management.getByRole('button',{name:'删除标签 风景灵感长标签',exact:true}).click();
  await page.getByText('独立分类目录和素材库不受影响。',{exact:false}).waitFor();
  await page.getByRole('button',{name:'确认删除',exact:true}).click();

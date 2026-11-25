@@ -9,6 +9,7 @@ const errors = []; page.on("pageerror", error => errors.push(error.message));
 const dialog = page.getByRole("dialog", { name: "分层编辑", exact: true });
 const confirm = page.getByRole("dialog", { name: "转为可编辑文字", exact: true });
 const inline = dialog.getByLabel("画布文字内容");
+const cloudRecognitionLabel = "识别文字后编辑（云端）";
 const textMessage = "把该图层转变为空白文字对象（沿用框体）。转变后会丢失原图样式及文本内容。可使用本机字体进行替换。";
 const imageMessage = textMessage;
 try {
@@ -23,7 +24,7 @@ try {
   await dialog.locator('[data-layer-id="circle"]').dblclick();
   await confirm.getByRole("tab", { name: "创建空白文字对象", exact: true }).click();
   assert.equal(await confirm.locator("p").textContent(), imageMessage);
-  await confirm.getByRole("tab", { name: "识别文字后编辑", exact: true }).click();
+  await confirm.getByRole("tab", { name: cloudRecognitionLabel, exact: true }).click();
   assert.equal(await confirm.getByRole("button", { name: "确认", exact: true }).isDisabled(), true);
   assert.ok(!(await confirm.textContent()).includes("沿用云端图像理解的计费与次数限制"));
   await page.keyboard.press("ArrowRight");
@@ -69,10 +70,16 @@ try {
   assert.equal(await dialog.getByLabel("文字内容", { exact: true }).inputValue(), "", "one undo clears the whole inline edit session");
   await dialog.locator('[data-layer-id="title"]').dblclick();
   await inline.fill("可编辑文字\nBOWERBIRD");
-  await dialog.getByLabel("文字字体").selectOption("SimSun");
+  await dialog.getByRole("combobox", { name: "文字字体", exact: true }).click();
+  await page.getByRole("option", { name: "SimSun", exact: true }).click();
   await dialog.getByLabel("文字字号").fill("30");
   await dialog.getByLabel("文字字距").fill("3");
-  await dialog.getByLabel("文字对齐").selectOption("center");
+  const alignment = dialog.getByRole("combobox", { name: "文字对齐", exact: true });
+  await alignment.evaluate(node => node.scrollIntoView({ block: "center", behavior: "instant" }));
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await alignment.click();
+  await page.getByRole("option", { name: "居中", exact: true }).click();
+  assert.equal(await alignment.textContent(), "居中");
   await dialog.getByLabel("文字颜色").fill("#ff0000");
   await page.evaluate(() => { window.store.setState({ layerWorkspaceIds: new Set() }); window.failSave = true; });
   await dialog.getByRole("button", { name: "保存图层工程", exact: true }).click();
@@ -109,7 +116,7 @@ try {
   await dialog.getByRole("button", { name: "暂时退出", exact: true }).click();
   await page.getByRole("button", { name: "打开分层编辑", exact: true }).click();
   await dialog.getByLabel("文字内容", { exact: true }).waitFor();
-  assert.equal(await dialog.getByLabel("文字字体").inputValue(), "SimSun");
+  assert.equal(await dialog.getByRole("combobox", { name: "文字字体", exact: true }).textContent(), "SimSun");
   assert.equal(await dialog.getByLabel("文字内容", { exact: true }).inputValue(), "可编辑文字\nBOWERBIRD!");
   await dialog.getByRole("button", { name: "恢复原图片层" }).click();
   assert.equal(await dialog.locator('[data-layer-id="title"] img').getAttribute("src"), original);
@@ -130,7 +137,7 @@ try {
   await inline.waitFor();
   assert.equal(await confirm.count(), 0, "saved text switches back without conversion confirmation");
   assert.equal(await inline.inputValue(), "可编辑文字\nBOWERBIRD!");
-  assert.equal(await dialog.getByLabel("文字字体").inputValue(), "SimSun");
+  assert.equal(await dialog.getByRole("combobox", { name: "文字字体", exact: true }).textContent(), "SimSun");
   assert.equal(await dialog.getByLabel("文字颜色").inputValue(), "#ff0000");
   assert.equal(await dialog.getByLabel("文字字距").inputValue(), "3");
   await inline.fill("再次修改");
@@ -161,7 +168,7 @@ try {
   // Explicit recognition persists its original key, then recovers without a duplicate create.
   await dialog.getByRole("button", { name: "标题文字", exact: true }).dblclick();
   await page.evaluate(() => { window.textDisconnect = true; });
-  await confirm.getByRole("tab", { name: "识别文字后编辑", exact: true }).click();
+  await confirm.getByRole("tab", { name: cloudRecognitionLabel, exact: true }).click();
   await confirm.getByRole("button", { name: "确认", exact: true }).click();
   await dialog.getByRole("button", { name: "继续取回文字识别" }).waitFor();
   assert.equal(await page.evaluate(() => window.saved().textPending.allowCreate), true);
@@ -179,14 +186,14 @@ try {
   await page.keyboard.press("Escape");
   await dialog.getByRole("button", { name: "圆形装饰", exact: true }).dblclick();
   await page.evaluate(() => { window.failSave = true; });
-  await confirm.getByRole("tab", { name: "识别文字后编辑", exact: true }).click();
+  await confirm.getByRole("tab", { name: cloudRecognitionLabel, exact: true }).click();
   await confirm.getByRole("button", { name: "确认", exact: true }).click();
   await dialog.getByRole("alert").filter({ hasText: "模拟磁盘保存失败" }).waitFor();
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "layer_text_request" && c.args.request.action === "create").length), 0);
   // No detected text keeps the raster intact and unlocks the blank conversion option.
   await page.evaluate(() => { window.failSave = false; window.noText = true; });
   await dialog.getByRole("button", { name: "圆形装饰", exact: true }).dblclick();
-  await confirm.getByRole("tab", { name: "识别文字后编辑", exact: true }).click();
+  await confirm.getByRole("tab", { name: cloudRecognitionLabel, exact: true }).click();
   await confirm.getByRole("button", { name: "确认", exact: true }).click();
   await page.waitForFunction(() => window.saved().textPending === null && window.calls.some(c => c.command === "layer_text_request" && c.args.request.action === "create"));
   assert.equal(await dialog.locator('[data-layer-id="circle"] img').count(), 1);
@@ -195,6 +202,61 @@ try {
   await confirm.getByRole("tab", { name: "创建空白文字对象", exact: true }).click();
   await confirm.getByRole("button", { name: "确认", exact: true }).click();
   assert.equal(await inline.inputValue(), "");
+
+  // Native OCR arrives with the raster in the split result and can be used offline.
+  await page.evaluate(() => {
+    const document = structuredClone(window.documentFixture);
+    document.layers[2].textRecognition = {
+      text: "RED BLUE\n第二行",
+      lines: [
+        { bounding_box: { absolute: [140, 85, 310, 115] }, runs: [
+          { text: "RED ", style: { similar_font_family: "arial", foreground_color: "#FF0000", bold: true, italic: true, underline: true } },
+          { text: "BLUE", style: { similar_font_family: "Fixture Missing Font", foreground_color: "#0000FF", bold: false, strikethrough: true, shadow: true } },
+        ] },
+        { bounding_box: { absolute: [140, 124, 250, 154] }, runs: [
+          { text: "第二行", style: { similar_font_family: "SimSun", foreground_color: "#FF0000", bold: true } },
+        ] },
+      ],
+    };
+    sessionStorage.setItem("layer-workspace", JSON.stringify({ document, pending: null }));
+  });
+  await page.reload();
+  await page.evaluate(() => { window.store.setState({ cloudAuth: { logged_in: false, cloud_available: false } }); });
+  await page.getByRole("button", { name: "打开分层编辑", exact: true }).click();
+  await dialog.getByRole("button", { name: "转为可编辑文字", exact: true }).click();
+  await inline.waitFor();
+  assert.equal(await confirm.count(), 0);
+  assert.equal(await inline.inputValue(), "RED BLUE\n第二行");
+  assert.equal(await dialog.getByLabel("文字字号").inputValue(), "30", "infer font size from line bounds");
+  assert.equal(await dialog.getByRole("combobox", { name: "文字字体", exact: true }).textContent(), "Arial");
+  assert.equal(await dialog.getByRole("button", { name: "斜体", exact: true }).getAttribute("aria-pressed"), "mixed");
+  await dialog.getByText(/Fixture Missing Font/).waitFor();
+  await inline.fill("+RED BLUE\n第二行");
+  await page.keyboard.press("Escape");
+  await dialog.getByRole("button", { name: "保存图层工程", exact: true }).click();
+  const native = await page.evaluate(async () => {
+    const layer = window.saved().document.layers[2];
+    const { paintLayerText } = await import("/src/lib/layerDocument.ts");
+    const canvas = document.createElement("canvas"); canvas.width = layer.text.boxWidth; canvas.height = layer.text.boxHeight;
+    const ctx = canvas.getContext("2d");
+    paintLayerText(ctx, layer.text);
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let red = 0, blue = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i] > 180 && pixels[i + 2] < 60 && pixels[i + 3] > 127) red++;
+      if (pixels[i + 2] > 180 && pixels[i] < 60 && pixels[i + 3] > 127) blue++;
+    }
+    return { text: layer.text, red, blue, recognitionCalls: window.calls.filter(call => call.command === "layer_text_request").length };
+  });
+  assert.equal(native.recognitionCalls, 0);
+  assert.ok(native.red > 50 && native.blue > 50, "Canvas renders the mixed original colors");
+  assert.equal(native.text.runs[0].start, 5);
+  assert.equal(native.text.runs[0].strikethrough, true);
+  assert.equal(native.text.runs[0].shadow, true);
+  await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+  await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+  await dialog.getByRole("button", { name: "标题文字", exact: true }).dblclick();
+  assert.equal(await inline.inputValue(), "RED BLUE\n第二行", "native recognition works from layer double-click after undo");
   assert.deepEqual(errors, []);
-  console.log("PASS badges, both conversion options, offline text, inline input/IME, Ctrl+Z, fonts, persistence/export, cached switching, OCR recovery/no duplicate, save-before-submit and empty recognition");
+  console.log("PASS badges, conversion and inline edits, OCR recovery, native OCR with mixed text styles, font fallback and zero extra Cloud calls");
 } finally { await browser.close(); await server.close(); }

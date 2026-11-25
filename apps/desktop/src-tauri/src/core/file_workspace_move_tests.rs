@@ -41,6 +41,14 @@ fn migration_preserves_files_identity_project_and_rewrites_structured_references
     let payload:String=f.db.conn.lock().unwrap().query_row("SELECT draft_json FROM project_canvases WHERE project_id='p'",[],|r|r.get(0)).unwrap();let payload:serde_json::Value=serde_json::from_str(&payload).unwrap();
     assert_eq!(payload["reference"],new);assert_eq!(payload["text"],format!("说明 {}",old.display()));
     let record:serde_json::Value=serde_json::from_slice(&fs::read(Path::new(&new).parent().unwrap().join(".bowerbird/a.json")).unwrap()).unwrap();assert_eq!(record["reference"],new);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
+
+        let attributes = fs::metadata(Path::new(&new).parent().unwrap().join(".bowerbird")).unwrap().file_attributes();
+        assert_ne!(attributes & FILE_ATTRIBUTE_HIDDEN.0, 0);
+    }
     assert!(f.index.join("library.db").is_file());
     let reopened=FileWorkspace::open(f.index.join("file-workspace.json"),f.root.join("unused")).unwrap();assert_eq!(reopened.proposed_root(),view.target);
 }

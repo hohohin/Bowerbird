@@ -33,6 +33,13 @@ try {
   await open();
   assert.equal(await root().getByRole('menuitem', { name: '编辑', exact: true }).locator('svg[viewBox="0 0 1024 1024"]').count(), 1);
   await close();
+  await page.locator('#trigger').click();
+  await root().getByRole('menuitem', { name: '编辑标签', exact: true }).click();
+  const tagDialog = page.getByRole('dialog', { name: '编辑标签', exact: true });
+  await tagDialog.getByText('已选 1 项素材', { exact: true }).waitFor();
+  await tagDialog.getByRole('textbox', { name: '搜索标签', exact: true }).press('Escape');
+  await tagDialog.waitFor({ state: 'detached' });
+  assert.equal(await page.locator('#trigger').evaluate(el => el === document.activeElement), true);
   await open('canvas-mixed');
   for (const name of ['调整层级', '整理', '添加到对话框']) {
     assert.equal(await page.getByRole('menuitem', { name, exact: true }).isEnabled(), true);
@@ -79,6 +86,10 @@ try {
     await open(kind);
     const menu = page.getByRole('menu', { name: '已选 2 项素材的操作', exact: true });
     for (const name of ['重命名', '打开图片详情', '反推提示词', '编辑', '用选中的内容新建文件夹', '移入已有文件夹']) assert.equal(await menu.getByRole('menuitem', { name, exact: true }).count(), 0);
+    await menu.getByRole('menuitem', { name: '编辑标签', exact: true }).click();
+    await tagDialog.getByText('已选 2 项素材', { exact: true }).waitFor();
+    await tagDialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await open(kind);
     await menu.getByRole('menuitem', { name: '批量反推', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Bowerbird Cloud', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => window.describe.splice(0).map(v => v.id)), ['a1', 'a2']);
@@ -149,6 +160,20 @@ try {
   assert.deepEqual([await root().boundingBox(), await deletion().boundingBox()].map(box => box.height),
     beforeHeight, 'library and group checks preserve the open menu dimensions');
   await close();
+  for (const [status, title] of [
+    ['unavailable', '请先将图片拖到当前画布'],
+    ['failed', '无法检查画布状态，请重新打开菜单'],
+  ]) {
+    await page.evaluate(status => { window.holdCanvasCheck = false; window.holdGroupCheck = false; window.canvasCheck = status; }, status);
+    await open('generated');
+    await root().getByRole('menuitem', { name: '删除', exact: true }).click();
+    await canvasLibraryCheck.and(deletion().locator(`[title="${title}"]`)).waitFor();
+    assert.equal(await canvasLibraryCheck.isEnabled(), false);
+    await close();
+  }
+  assert.deepEqual(await page.evaluate(() => window.calls.filter(({ command }) =>
+    command === 'project_canvas_has_asset' || command === 'project_canvas_get')), Array.from({ length: 3 }, () =>
+    ({ command: 'project_canvas_has_asset', args: { projectId: 'p1', assetId: 'a1' } })));
   for (const kind of ['video', 'audio', 'mixed', 'external']) {
     await open(kind);
     if (kind !== 'external') for (const name of ['反推提示词', '批量反推', '编辑', '分层编辑', '复制图片']) assert.equal(await page.getByRole('menuitem', { name, exact: true }).count(), 0);

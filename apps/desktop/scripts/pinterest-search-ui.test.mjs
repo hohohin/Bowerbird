@@ -68,24 +68,28 @@ try {
   await page.getByRole("status").filter({ hasText: "正在搜索相似图片" }).waitFor({ state: "hidden" });
   await emit(first.requestId, "preparing");
   assert.equal(await page.getByRole("status").filter({ hasText: "正在准备搜图" }).count(), 0, "terminal events cannot regress");
+  const hidesWhileOpen = (await calls("hide_source_browser")).length;
   await detailSearch.click(); await waitStart(2);
   const second = (await calls("start_pinterest_image_search"))[1].args;
   assert.notEqual(second.requestId, first.requestId, "repeated image searches get distinct identities");
   await emit(first.requestId, "error", "旧请求失败");
   assert.equal(await page.getByText("旧请求失败", { exact: true }).count(), 0);
   await emit(second.requestId, "waiting-login");
+  assert.equal((await calls("hide_source_browser")).length, hidesWhileOpen, "starting a search in the open browser does not hide it");
   await page.getByRole("button", { name: "收起浏览器", exact: true }).click();
   assert.equal((await calls("cancel_pinterest_image_search")).at(-1).args.requestId, second.requestId);
-  await page.getByRole("button", { name: "探索", exact: true }).click();
+  await page.getByRole("button", { name: "侧边探索", exact: true }).click();
   await page.waitForTimeout(150);
   assert.equal((await calls("start_pinterest_image_search")).length, 2, "reopening does not silently resubmit a cancelled image");
   for (const operation of ["花瓣", "返回上一页", "前往下一页", "刷新"]) {
     const before = (await calls("start_pinterest_image_search")).length;
+    const hidesBeforeAction = (await calls("hide_source_browser")).length;
     await detailSearch.click(); await waitStart(before + 1);
     const current = (await calls("start_pinterest_image_search")).at(-1).args;
     const button = operation === "刷新" ? page.locator('.source-browser-nav').getByRole("button", { name: operation, exact: true }) : page.getByRole("button", { name: operation, exact: true });
     await button.click();
     await page.waitForFunction(id => window.calls.some(call => call.command === "cancel_pinterest_image_search" && call.args.requestId === id), current.requestId);
+    assert.equal((await calls("hide_source_browser")).length, hidesBeforeAction, "cancelling search during manual navigation does not hide the browser");
   }
   const beforeRouteChange = (await calls("start_pinterest_image_search")).length;
   await detailSearch.click(); await waitStart(beforeRouteChange + 1);
@@ -144,6 +148,18 @@ try {
   assert.equal(await page.evaluate(() => window.originalWorkspace.isConnected), true, "the project canvas stays mounted during image search");
   assert.equal(await page.evaluate(() => document.querySelector(".canvas-plane").getAttribute("style")), await page.evaluate(() => window.originalCamera), "returning retains the canvas camera");
 
+  await page.getByRole("button", { name: "返回主页", exact: true }).click();
+  const homeNav = page.getByRole("navigation", { name: "首页", exact: true });
+  await homeNav.getByRole("button", { name: "素材库", exact: true }).click();
+  await page.locator(".library-home").waitFor();
+  await page.evaluate(() => window.store.getState().openDetail("a"));
+  const beforeHomeSearch = (await calls("start_pinterest_image_search")).length;
+  await detailSearch.click();
+  await waitStart(beforeHomeSearch + 1);
+  assert.equal(await homeNav.getByRole("button", { name: "探索", exact: true }).getAttribute("aria-current"), "page");
+  assert.equal(await page.evaluate(() => window.store.getState().activeProjectId), null);
+  assert.equal((await calls("open_source_browser")).length, 1, "the home search reuses the native browser opened in the canvas");
+
   // Connected reference entries search the underlying asset, without changing the selected files.
   await page.goto("http://127.0.0.1:1818/scripts/fixtures/connected-collections/preview.html");
   await page.locator('[data-collection-id="child"]').click();
@@ -157,7 +173,7 @@ try {
   assert.equal(await reference.getAttribute("aria-pressed"), "true");
   assert.equal(await other.getAttribute("aria-pressed"), "true");
   assert.deepEqual(errors, []);
-  console.log("PASS Pinterest detail, ordinary/multi/connected menus, retained route/selection, login status, one-shot submission, cancellation, stale events and themes");
+  console.log("PASS Pinterest detail, home and canvas routing, ordinary/multi/connected menus, retained selection, login status, one-shot submission, cancellation, stale events and themes");
 } catch (error) {
   await page.screenshot({ path: ".tmp/pinterest-search/failure.png" });
   throw error;

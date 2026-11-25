@@ -5,7 +5,7 @@ import { ScreenshotMenu } from "./ScreenshotMenu";
 import { QuickTransfer } from "./QuickTransferPanel";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { MediaTypeFilter } from "./MediaTypeFilter";
-import { useStore } from "../store";
+import { useStore, type LibraryHomeView } from "../store";
 import { useActiveLibraryModeStore, useActiveLibraryPane } from "../lib/libraryPane";
 import { api } from "../lib/api";
 import { folderConnections, navigateConnectedFolder } from "../lib/folderConnections";
@@ -29,7 +29,7 @@ export function Toolbar({
   canvasMode: boolean;
   onCanvasModeChange: (active: boolean) => void;
   onCreateCreative?: (blank: boolean) => void;
-  onHomeViewChange?: (view: "library" | "projects") => void;
+  onHomeViewChange?: (view: LibraryHomeView) => void;
   onExplore?: () => void;
   exploring?: boolean;
   localFilesOpen?: boolean;
@@ -52,9 +52,9 @@ export function Toolbar({
   const projectRoutePending = useStore(s => s.projectRoutePending);
   const setColorFilter = useStore((s) => s.setColorFilter);
   const toolbarRef = useRef<HTMLElement>(null);
-  const homeNavigation = !canvasMode || exploring;
+  const homeNavigation = !canvasMode;
   const tactical = homeNavigation;
-  const showLibraryActions = canvasMode || exploring || homeView === "library";
+  const showLibraryActions = canvasMode || homeView === "library";
   const changeHomeView = onHomeViewChange ?? useStore.getState().setLibraryHomeView;
 
   useEffect(() => {
@@ -142,12 +142,12 @@ export function Toolbar({
   return (
     <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? " canvas-tactical" : " is-library"}${tactical ? " library-tactical" : ""}${homeNavigation ? " has-home-navigation" : ""}${exploring ? " is-exploring" : ""}${localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
       <div className="app-topbar-leading">
-        {canvasMode && !exploring && <button type="button" className="app-button-dark"
+        {canvasMode && <button type="button" className="app-button-dark"
           aria-label={canvasLibraryOpen ? "收起素材库" : "打开素材库"} title={canvasLibraryOpen ? "收起素材库" : "打开素材库"}
           aria-expanded={canvasLibraryOpen} disabled={projectRoutePending} onClick={toggleCanvasLibrary}>
           <Images size={15} aria-hidden="true"/><span className="app-topbar-button-label">素材库</span>
         </button>}
-        {showLibraryActions && (!canvasMode || exploring || canvasLibraryOpen) && <div className="app-topbar-import">
+        {showLibraryActions && (!canvasMode || canvasLibraryOpen) && <div className="app-topbar-import">
           <button type="button" data-import-trigger data-tour="import-folder" onClick={connectFolder} disabled={busy}
             className="app-button-dark disabled:opacity-50" aria-label={busy ? "连接中" : "建立连接"} title="建立连接">
             {busy ? <LoaderCircle size={15} className="animate-spin" /> : <Link2 size={15} />}
@@ -155,14 +155,13 @@ export function Toolbar({
           </button>
         </div>}
         <QuickTransfer showTrigger={showLibraryActions} />
-        {showLibraryActions && onExplore && <button type="button" data-tour="explore" className="app-button-dark" aria-pressed={exploring}
-          onClick={onExplore} aria-label="探索" title="浏览灵感网站，拖图采集到素材库"><Compass size={15} /><span className="app-topbar-button-label">探索</span></button>}
         {canvasMode && (
           <button
             type="button"
             className="app-button-dark canvas-mode-toggle is-active"
             title="返回主页"
             aria-label="返回主页"
+            disabled={projectRoutePending}
             onClick={() => onCanvasModeChange(false)}
           >
             <ArrowLeft size={15} />
@@ -178,6 +177,9 @@ export function Toolbar({
         <button type="button" data-tour="new-creation" aria-current={!canvasMode && homeView === "projects" ? "page" : undefined} disabled={projectRoutePending} onClick={() => changeHomeView("projects")}>
           <LayoutDashboard size={15} aria-hidden="true"/><span>项目</span>
         </button>
+        <button type="button" data-tour="explore" aria-current={homeView === "explore" ? "page" : undefined} disabled={projectRoutePending} onClick={() => changeHomeView("explore")}>
+          <Compass size={15} aria-hidden="true"/><span>探索</span>
+        </button>
       </nav>}
 
       <div className="app-topbar-actions" aria-label="视图与账号">
@@ -186,6 +188,10 @@ export function Toolbar({
           <MediaTypeFilter />
 
         </div>}
+        {canvasMode && onExplore && <button type="button" data-tour="explore" className="app-button-dark"
+          aria-pressed={exploring} disabled={projectRoutePending} onClick={onExplore} aria-label="侧边探索" title="侧边探索">
+          <Compass size={15} aria-hidden="true"/><span className="app-topbar-button-label">侧边探索</span>
+        </button>}
         <ScreenshotMenu />
         <SidebarAccount placement="topbar" />
       </div>

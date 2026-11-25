@@ -142,7 +142,7 @@ fn write_record(conn: &Connection, item: &Item, map: &HashMap<String,String>) ->
     if let Some(analyses)=value["analyses"].as_array_mut() {for analysis in analyses {if let Some(raw)=analysis["payload"].as_str() {if let Ok(mut payload)=serde_json::from_str::<serde_json::Value>(raw) {rewrite_json_with(&mut payload,&|s|map.get(&path_key(Path::new(s))).cloned());analysis["payload"]=serde_json::json!(serde_json::to_string(&payload)?);}}}}
     value["file"]=serde_json::json!(item.target.file_name().unwrap().to_string_lossy());value["sha256"]=serde_json::json!(item.hash);
     let record=item.target.parent().unwrap().join(".bowerbird").join(format!("{}.json",item.id));
-    no_links(&record)?;fs::create_dir_all(record.parent().unwrap())?;
+    no_links(&record)?;ensure_hidden_dir(record.parent().unwrap())?;
     let bytes=serde_json::to_vec_pretty(&value)?;
     if record.exists() {if fs::read(&record)?!=bytes {return Err(invalid(format!("目标随图资料已有不同内容，不会覆盖：{}",record.display())));}return Ok(());}
     let mut output=fs::OpenOptions::new().write(true).create_new(true).open(record)?;output.write_all(&bytes)?;output.sync_all()?;Ok(())

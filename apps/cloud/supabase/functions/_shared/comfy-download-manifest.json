@@ -30,6 +30,11 @@
       "file": "portable.7z",
       "size": 2018444114,
       "sha256": "496afd18790ec685d99ebba2edf200d7371a29fbdd3a992bb0f4f52f244a6874"
+    },
+    {
+      "file": "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "size": 20970379616,
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779"
     }
   ]
 }

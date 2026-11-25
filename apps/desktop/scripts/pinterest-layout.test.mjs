@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { loadSourceScript } from './fixtures/explorer/source-script.mjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 import { lensFixture, imageFor } from './fixtures/pinterest-layout/page.mjs';
@@ -10,11 +11,11 @@ const baseline = process.env.BOWERBIRD_PINTEREST_LAYOUT_BASELINE === '1';
 const path = process.env.BOWERBIRD_PINTEREST_LAYOUT_PATH || 'src-tauri/src/commands/source_browser_pinterest_layout.js';
 let layout = '';
 if (!baseline) {
-  try { layout = await readFile(path, 'utf8'); }
+  try { layout = await loadSourceScript(path); }
   catch (error) { if (error.code !== 'ENOENT') throw error; console.log('Layout adapter absent: running the unmodified Lens baseline'); }
 }
 const [candidates, drag] = await Promise.all([
-  readFile('../extension/candidate-utils.js', 'utf8'), readFile('src-tauri/src/commands/source_browser_drag.js', 'utf8'),
+  readFile('../extension/candidate-utils.js', 'utf8'), loadSourceScript('src-tauri/src/commands/source_browser_drag.js'),
 ]);
 const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--disable-features=OverlayScrollbar'] });
 const results = [];

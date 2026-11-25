@@ -204,7 +204,7 @@ try {
 
   // Closing the browser is not a route change; accepted classifications remain visible.
   await drop(21); await pending(21);
-  await page.getByRole("button", { name: "探索", exact: true }).click();
+  await page.getByRole("button", { name: "收起浏览器", exact: true }).click();
   assert.equal(await card(21).count(), 1);
   await finish(21, ["关闭探索后仍可见"]);
   await stage(21, "hold");
@@ -269,7 +269,7 @@ try {
     el.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer, clientX: 750, clientY: 350 }));
   });
   await dragVisual.locator(".card").waitFor();
-  await page.getByRole("button", { name: "探索", exact: true }).click();
+  await page.getByRole("button", { name: "收起浏览器", exact: true }).click();
   await dragVisual.waitFor({ state: "detached" });
   assert.equal(await cards.count(), 0, "closing exploration cancels an uncommitted carry");
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === "claim_source_browser_analysis").length), claimsBeforeCancel);

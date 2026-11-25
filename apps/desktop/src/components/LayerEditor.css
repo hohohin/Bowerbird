@@ -17,7 +17,14 @@
 .layer-object { position: absolute; touch-action: none; user-select: none; }
 .layer-object img { width: 100%; height: 100%; pointer-events: none; }
 .layer-object.is-selected { outline: 2px solid #88abff; outline-offset: -1px; }
-.layer-resize { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; background: #88abff; border: 1px solid white; cursor: nwse-resize; touch-action: none; }
+.layer-resize { position: absolute; z-index: 1; width: 12px; height: 12px; background: #88abff; border: 1px solid white; touch-action: none; }
+.layer-resize[data-corner="bottom-right"] { right: 0; bottom: 0; cursor: nwse-resize; }
+.layer-resize[data-corner="top-left"] { top: 0; left: 0; cursor: nwse-resize; }
+.layer-resize[data-corner="top-right"] { top: 0; right: 0; cursor: nesw-resize; }
+.layer-resize[data-corner="bottom-left"] { bottom: 0; left: 0; cursor: nesw-resize; }
+.layer-snap-guide { position: absolute; z-index: 2; background: #88abff; pointer-events: none; }
+.layer-snap-guide.is-vertical { top: 0; height: 100%; }
+.layer-snap-guide.is-horizontal { left: 0; width: 100%; }
 .layer-controls { padding: 18px; display: flex; flex-direction: column; gap: 14px; border-left: 1px solid var(--bb-line); overflow: auto; font-size: 12px; }
 .layer-controls label { display: flex; flex-direction: column; gap: 6px; }
 .layer-controls input:not([type=range]), .layer-controls textarea, .layer-controls :is(select, .tactical-select-trigger) { width: 100%; border: 1px solid var(--bb-line-hover); background: var(--bb-surface-muted); border-radius: 6px; padding: 7px; }
@@ -36,6 +43,7 @@
 .layer-inline-text { position: absolute; inset: 0; transform-origin: top left; display: block; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; outline: 0; background: transparent; resize: none; overflow: hidden; white-space: pre-wrap; word-break: break-all; user-select: text; cursor: text; }
 .layer-inline-text::placeholder { color: #777; opacity: .7; }
 .layer-convert-confirm.app-modal-backdrop { z-index: 91; }
+.layer-select-menu.tactical-select-menu { z-index: 92; }
 .layer-convert-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--bb-line); }
 .layer-convert-tabs button { padding: 12px 8px; border-bottom: 2px solid transparent; font-size: 13px; font-weight: 500; color: var(--bb-ink-soft); }
 .layer-convert-tabs button[aria-selected=true] { border-bottom-color: currentColor; color: var(--bb-ink); }

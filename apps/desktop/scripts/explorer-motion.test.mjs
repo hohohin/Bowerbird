@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { loadSourceScript } from "./fixtures/explorer/source-script.mjs";
 import { readFile, mkdir } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
@@ -43,7 +44,8 @@ try {
   await mkdir(".tmp/explorer-motion", { recursive: true });
   // Real Chromium dragstart: source pickup, transparent replacement and cancel.
   const source = await browser.newPage({ viewport: { width: 560, height: 650 } });
-  for (const file of ["../extension/candidate-utils.js", "src/lib/explorerDragVisual.js", "src-tauri/src/commands/source_browser_drag.js"]) await source.addInitScript(await readFile(file, "utf8"));
+  for (const file of ["../extension/candidate-utils.js", "src/lib/explorerDragVisual.js"]) await source.addInitScript(await readFile(file, "utf8"));
+  await source.addInitScript(await loadSourceScript("src-tauri/src/commands/source_browser_drag.js"));
   await source.route("https://source.test/**", route => route.fulfill(route.request().resourceType() === "image"
     ? { contentType: "image/svg+xml", body: svg }
     : { contentType: "text/html; charset=utf-8", body: '<meta charset="utf-8"><body style="background:#f2f4f0;padding:50px;font:16px system-ui"><h2>探索灵感</h2><img src="/image.png" width="200" height="240"></body>' }));

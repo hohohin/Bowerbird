@@ -23,13 +23,8 @@ export function removeWorkflowNodes(nodes: WorkflowNode[], removedIds: Iterable<
 export async function retryWorkflowSave(controller: CanvasWorkflowController) {
   const nodes = removeWorkflowNodes(controller.document.nodes);
   if (JSON.stringify(nodes) !== JSON.stringify(controller.document.nodes)) {
-    const before = controller.document;
-    try { await controller.edit(nodes); }
-    catch (error) {
-      // The blocked save queue rejects after edit has updated the optimistic document.
-      // Validation/lock errors before that point must still propagate.
-      if (controller.document === before) throw error;
-    }
+    await controller.edit(nodes);
+    return;
   }
   await controller.retrySave();
 }

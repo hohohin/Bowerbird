@@ -13,6 +13,10 @@ try {
   await page.getByRole("button", { name: "打开右键菜单", exact: true }).click();
   await page.getByRole("menuitem", { name: "分层编辑", exact: true }).click();
   await dialog.getByRole("button", { name: "开始拆分" }).waitFor();
+  await dialog.getByText(/最多预留 242 Bcoin/).waitFor();
+  await dialog.getByRole("combobox", { name: "最大图层数" }).click();
+  await page.getByRole("option", { name: "60 张", exact: true }).click();
+  await dialog.getByText(/最多预留 482 Bcoin/).waitFor();
   await dialog.getByLabel("拆分要求").fill("拆出标题文字与圆形装饰");
   // Submission response loss is recovered using the persisted idempotency key.
   await page.evaluate(() => { window.submitDisconnect = true; });
@@ -20,6 +24,8 @@ try {
   await dialog.getByRole("button", { name: "继续取回原任务" }).waitFor();
   const request = await page.evaluate(() => window.saved().pending.request);
   assert.equal(request.layer_options.operation, "decompose");
+  assert.equal(request.layer_options.max_images, 60);
+  assert.equal(request.layer_options.text_recognition, true);
   assert.equal(request.reference_images.length, 1);
   await page.reload();
   await page.getByRole("button", { name: "打开分层编辑", exact: true }).click();
@@ -71,10 +77,44 @@ try {
   }, exported);
   assert.equal(mismatch, false, "export pixels must match the edited composition");
   await dialog.getByLabel("图层修改要求").fill("把文字改为圆形装饰");
+  await dialog.getByRole("combobox", { name: "图层修改上下文" }).click();
+  await page.getByRole("option", { name: "附带底图", exact: true }).click();
+  await dialog.getByText(/预计 22 Bcoin/).waitFor();
   await dialog.getByRole("button", { name: "修改选中图层" }).click();
   await page.waitForFunction(() => window.saved().pending === null && window.saved().document.layers[1].dataUrl === window.documentFixture.layers[1].dataUrl);
+  assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem("layer-job")).reference_images.length), 2);
   const edited = await page.evaluate(() => window.saved().document.layers[1]);
   assert.equal(edited.x, 220); assert.equal(edited.opacity, .55);
+  await dialog.getByRole("button", { name: "复制图层", exact: true }).click();
+  assert.equal(await dialog.getByLabel("图层名称").inputValue(), "标题文字 副本");
+  await dialog.getByRole("button", { name: "删除图层", exact: true }).click();
+  assert.equal(await dialog.getByRole("button", { name: "标题文字 副本", exact: true }).count(), 0);
+  assert.equal(await dialog.getByRole("button", { name: "重做", exact: true }).isDisabled(), true);
+  await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+  await dialog.getByRole("button", { name: "标题文字 副本", exact: true }).waitFor();
+  await dialog.getByRole("button", { name: "重做", exact: true }).click();
+  assert.equal(await dialog.getByRole("button", { name: "标题文字 副本", exact: true }).count(), 0);
+  await dialog.getByRole("button", { name: "新建空白文字层" }).click();
+  await dialog.getByLabel("画布文字内容").fill("自定义标题");
+  await dialog.getByLabel("导入图层图片").setInputFiles({ name: "本地圆形.png", mimeType: "image/png", buffer: Buffer.from(await page.evaluate(() => window.documentFixture.layers[1].dataUrl.split(",")[1]), "base64") });
+  await dialog.getByRole("button", { name: "本地圆形", exact: true }).waitFor();
+  await dialog.getByRole("button", { name: "AI 生成透明元素层" }).click();
+  await dialog.getByLabel("透明元素描述").fill("生成带水滴的花瓶");
+  await dialog.getByRole("button", { name: "生成透明元素", exact: true }).click();
+  await dialog.getByRole("button", { name: "AI 透明元素", exact: true }).waitFor();
+  const generated = await page.evaluate(() => JSON.parse(sessionStorage.getItem("layer-job")));
+  assert.equal(generated.layer_options.operation, "generate");
+  assert.deepEqual(generated.reference_images, []);
+  await dialog.getByRole("button", { name: "重新拆分", exact: true }).click();
+  await dialog.getByRole("button", { name: "开始重新拆分" }).click();
+  const resplit = page.getByRole("dialog", { name: "重新拆分原图？" });
+  await resplit.getByRole("button", { name: "取消" }).click();
+  await dialog.getByRole("button", { name: "AI 透明元素", exact: true }).waitFor();
+  await dialog.getByRole("button", { name: "开始重新拆分" }).click();
+  await resplit.getByRole("button", { name: "确认重新拆分" }).click();
+  await dialog.getByRole("button", { name: "AI 透明元素", exact: true }).waitFor({ state: "hidden" });
+  await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+  await dialog.getByRole("button", { name: "AI 透明元素", exact: true }).waitFor();
   await dialog.getByRole("button", { name: "保存图层工程", exact: true }).click();
   await page.screenshot({ path: ".tmp/layer-editor.png" });
   await dialog.getByRole("button", { name: "暂时退出", exact: true }).click();
@@ -85,6 +125,36 @@ try {
   await dialog.getByRole("button", { name: "拆分服务待开放" }).waitFor();
   assert.equal(await dialog.getByRole("button", { name: "拆分服务待开放" }).isDisabled(), true);
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === "layer_cloud_request" && !call.args.request.action).length), 0);
+  await dialog.getByRole("button", { name: "暂时退出", exact: true }).click();
+  await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 2048;
+    const context = canvas.getContext("2d");
+    const pixels = context.createImageData(canvas.width, canvas.height);
+    let state = 0x12345678;
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+      pixels.data[i] = state & 255; pixels.data[i + 1] = state >>> 8 & 255; pixels.data[i + 2] = state >>> 16 & 255; pixels.data[i + 3] = 128;
+    }
+    context.putImageData(pixels, 0, 0);
+    window.sourceOverride = canvas.toDataURL("image/png");
+    window.enabled = true;
+  });
+  await page.getByRole("button", { name: "打开分层编辑", exact: true }).click();
+  await dialog.getByRole("button", { name: "开始拆分", exact: true }).click();
+  const compression = page.getByRole("dialog", { name: "压缩后上传？" });
+  await compression.getByRole("button", { name: "安全压缩后上传" }).waitFor();
+  assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === "layer_cloud_request" && !call.args.request.action).length), 0);
+  await compression.getByRole("button", { name: "安全压缩后上传" }).click();
+  await page.waitForFunction(() => window.layerJob()?.reference_images[0]?.base64.length > 4 * 1024 * 1024);
+  assert.deepEqual(await page.evaluate(async () => {
+    const image = new Image();
+    const { base64 } = window.layerJob().reference_images[0];
+    image.src = `data:image/png;base64,${base64}`; await image.decode();
+    const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1;
+    const context = canvas.getContext("2d"); context.drawImage(image, 0, 0, 1, 1);
+    return [atob(base64).length <= 10 * 1024 * 1024, image.naturalWidth < 2048, context.getImageData(0, 0, 1, 1).data[3]];
+  }), [true, true, 128]);
   assert.deepEqual(errors, []);
-  console.log("PASS: menu, persisted recovery, no repeat submission, drag/resize/undo/order/visibility/opacity, reopen, save failure, frozen project, PNG composition, alpha-layer AI replacement");
+  console.log("PASS: dynamic quote, persisted recovery, drag/resize/order/visibility, save failure, frozen project, contextual edit, local layers, transparent generation and reversible resplit");
 } finally { await browser.close(); await server.close(); }

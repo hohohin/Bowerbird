@@ -6,7 +6,7 @@ import { useCatalogPins } from "./catalogPins";
 import { useStore } from "../store";
 import type { ThumbnailScope } from "./thumbnailSize";
 
-export type LibraryBrowsePosition = { active: string | null; top: number; alphabetic: boolean; color: string | null; query: string; generatedFilter: string | null };
+export type LibraryBrowsePosition = { active: string | null; top: number; alphabetic: boolean; color: string | null; query: string; generatedFilter: string | null; captureRevision?: number };
 export function createLibraryPane(id: string, mode = createLocalFileMode(id)) {
   return { id, mode, positions: new Map<string, LibraryBrowsePosition>(), preferences: create<{
     width: number; setWidth: (width: number) => void;

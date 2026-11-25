@@ -1,10 +1,22 @@
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
+use crate::core::settings::SettingsState;
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
 
 pub const MODEL_ID: &str = "qwen3.5-0.8b-q4km-f16/b10809/v1";
+
+fn set_local_enabled(conn: &Connection, enabled: bool) -> AppResult<()> {
+    let updated = conn.execute(
+        "UPDATE local_classification_state SET enabled=?1 WHERE id=1",
+        [enabled],
+    )?;
+    if updated != 1 {
+        return Err(rusqlite::Error::QueryReturnedNoRows.into());
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ImageVersion {
@@ -269,11 +281,24 @@ impl Database {
     }
 
     pub fn set_local_enabled(&self, enabled: bool) -> AppResult<()> {
-        self.conn.lock().unwrap().execute(
-            "UPDATE local_classification_state SET enabled=?1 WHERE id=1",
-            [enabled],
-        )?;
-        Ok(())
+        set_local_enabled(&self.conn.lock().unwrap(), enabled)
+    }
+
+    pub(crate) fn set_local_enabled_with_cloud(
+        &self,
+        settings: &SettingsState,
+        enabled: bool,
+    ) -> AppResult<()> {
+        // The semantic search worker already takes the database lock before the settings lock.
+        let mut conn = self.conn.lock().map_err(|_| {
+            AppError::Other("无法访问分类数据库，请重新启动应用。".into())
+        })?;
+        if !enabled {
+            return set_local_enabled(&conn, false);
+        }
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        set_local_enabled(&tx, true)?;
+        settings.enable_jev_image_classification(|| Ok(tx.commit()?))
     }
 
     pub fn save_local_label(
@@ -512,11 +537,22 @@ impl Database {
     }
 
     pub fn local_example(&self, tag: &str, assets: &[String], positive: bool) -> AppResult<()> {
+        self.local_example_with_options(tag, assets, positive, false)
+    }
+
+    pub fn local_example_with_options(
+        &self,
+        tag: &str,
+        assets: &[String],
+        positive: bool,
+        assigned_only: bool,
+    ) -> AppResult<()> {
         if assets.is_empty() || assets.len() > 100 {
             return Err(AppError::Other("请选择 1–100 张示例素材".into()));
         }
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        let mut changed = false;
         for asset in assets {
             if positive {
                 tx.execute(
@@ -525,17 +561,24 @@ impl Database {
                 )?;
                 tx.execute("INSERT INTO asset_tags(asset_id,tag_id,origin) VALUES(?1,?2,'manual') ON CONFLICT(asset_id,tag_id) DO UPDATE SET origin='manual'",params![asset,tag])?;
             } else {
-                let fixed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM tags WHERE id=?1 AND name='#ai生成') AND EXISTS(SELECT 1 FROM analyses WHERE asset_id=?2 AND kind='replication_source')", params![tag,asset], |r| r.get(0))?;
-                if fixed { return Err(AppError::Other("视频复刻素材的 #ai生成 标签不能取消".into())); }
-                tx.execute(
+                let removed = tx.execute(
                     "DELETE FROM asset_tags WHERE asset_id=?1 AND tag_id=?2",
                     params![asset, tag],
                 )?;
+                if assigned_only && removed == 0 {
+                    continue;
+                }
+                let fixed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM tags WHERE id=?1 AND name='#ai生成') AND EXISTS(SELECT 1 FROM analyses WHERE asset_id=?2 AND kind='replication_source')", params![tag,asset], |r| r.get(0))?;
+                if fixed { return Err(AppError::Other("视频复刻素材的 #ai生成 标签不能取消".into())); }
                 tx.execute(
                     "INSERT OR IGNORE INTO local_tag_rejections VALUES(?1,?2)",
                     params![asset, tag],
                 )?;
             }
+            changed = true;
+        }
+        if !changed {
+            return Ok(());
         }
         tx.execute(
             "UPDATE local_classification_state SET revision=revision+1 WHERE id=1",

@@ -1,9 +1,13 @@
-//! 素材库整体迁移：把 images / thumbnails / library.db 搬到新根目录，
+//! 素材库整体迁移：把 images / thumbnails / layers / library.db 搬到新根目录，
 //! 并改写 DB 内的绝对路径前缀。迁移只复制、不删除旧文件，切换后保留原库。
 
 use std::path::{Path, PathBuf};
 
-use crate::core::{external_files::fingerprint, settings::SettingsState};
+use crate::core::{
+    external_files::fingerprint,
+    file_workspace::{hide_existing_internal_dir, is_internal_dir_name},
+    settings::SettingsState,
+};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -259,6 +263,9 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> AppResult<()> {
         }
         if kind.is_dir() {
             fs::create_dir(&to)?;
+            if is_internal_dir_name(&entry.file_name().to_string_lossy()) {
+                hide_existing_internal_dir(&to);
+            }
             copy_dir_recursive(&from, &to)?;
         } else if kind.is_file() {
             let mut input = fs::File::open(&from)?;
@@ -615,6 +622,12 @@ mod tests {
         let paths = LibraryPaths::init(old_root.clone()).unwrap();
         std::fs::create_dir_all(old_root.join("layers")).unwrap();
         std::fs::write(old_root.join("layers/document.json"), b"layer-workspace").unwrap();
+        let revision = ulid::Ulid::new().to_string();
+        let layer_directory = old_root.join("layers").join(&revision);
+        std::fs::create_dir(&layer_directory).unwrap();
+        std::fs::write(layer_directory.join("manifest.json"), b"layer-manifest").unwrap();
+        let raster = "7".repeat(64) + ".png";
+        std::fs::write(layer_directory.join(&raster), b"layer-raster").unwrap();
         let db = Database::open(&paths.db).unwrap();
         db.migrate().unwrap();
         db.insert_asset(&Asset {
@@ -655,6 +668,11 @@ mod tests {
             )
             .unwrap();
             conn.execute(
+                "INSERT INTO analyses (id, asset_id, kind, payload) VALUES ('layer-workspace', 'asset-1', 'layer_workspace', ?1)",
+                [&revision],
+            )
+            .unwrap();
+            conn.execute(
                 "INSERT INTO task_queue (id, kind, payload, created_at) VALUES ('task-1', 'generation', ?1, 0)",
                 [&payload],
             )
@@ -676,7 +694,13 @@ mod tests {
             std::fs::read(new_root.join("layers/document.json")).unwrap(),
             b"layer-workspace"
         );
+        let migrated_layers = new_root.join("layers").join(&revision);
+        assert_eq!(std::fs::read(migrated_layers.join("manifest.json")).unwrap(), b"layer-manifest");
+        assert_eq!(std::fs::read(migrated_layers.join(&raster)).unwrap(), b"layer-raster");
         let new_db = Database::open(&new_root.join("library.db")).unwrap();
+        assert_eq!(new_db.conn.lock().unwrap().query_row(
+            "SELECT payload FROM analyses WHERE kind='layer_workspace'", [], |row| row.get::<_, String>(0),
+        ).unwrap(), revision);
         let rewritten: Option<String> = new_db
             .conn
             .lock()
@@ -691,7 +715,8 @@ mod tests {
         let rewritten = rewritten.unwrap();
         assert!(rewritten.starts_with(new_path.as_ref()), "{rewritten:?}");
         for (table, column) in JSON_PATH_COLUMNS {
-            let sql = format!("SELECT {column} FROM {table} LIMIT 1");
+            let filter = if table == "analyses" { " WHERE kind='generation_meta'" } else { "" };
+            let sql = format!("SELECT {column} FROM {table}{filter} LIMIT 1");
             let rewritten_json: String = new_db
                 .conn
                 .lock()

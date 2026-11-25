@@ -4,22 +4,33 @@ import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { ToastViewport } from "../../../src/components/ToastViewport";
+import { useExplorerCaptures } from "../../../src/lib/explorerCaptureHistory";
 import type { Asset } from "../../../src/lib/types";
 import { useStore } from "../../../src/store";
 const w = window as any;
 const capturedAssets = new Map<string, Asset>();
 w.calls = []; w.callbacks = {}; w.pending = {}; w.deliveries = []; w.failDelivery = false;
 w.store = useStore;
+w.captureHistory = useExplorerCaptures;
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.__TAURI_INTERNALS__ = {
   convertFileSrc: (path: string) => path,
   transformCallback: (callback: any) => { const id = Object.keys(w.callbacks).length + 1; w.callbacks[id] = callback; return id; },
   unregisterCallback: () => {},
   invoke: async (command: string, args: any = {}) => {
-    w.calls.push({ command, args });
+    const queuedBeforeAuthorization = command === "authorize_source_browser_capture"
+      ? useExplorerCaptures.getState().records.length : undefined;
+    w.calls.push({ command, args, queuedBeforeAuthorization });
     if (command === "plugin:event|listen") return w.calls.length;
     if (command === "claim_source_browser_analysis") return false;
-    if (command === "capture_source_browser_image") return new Promise((resolve, reject) => { w.pending[args.captureId] = { resolve, reject, args }; });
+    if (command === "authorize_source_browser_capture") return `CAPTURE_PROOF_${args.dragId}`;
+    if (command === "navigate_source_browser") { w.browserUrl = args.url; return null; }
+    if (command === "capture_source_browser_image") {
+      if (w.browserUrl && new URL(w.browserUrl).origin !== new URL(args.pageUrl).origin && args.admission !== `CAPTURE_PROOF_${args.dragId}`) {
+        throw "来源页面已切换，请返回来源并重新拖入。";
+      }
+      return new Promise((resolve, reject) => { w.pending[args.captureId] = { resolve, reject, args }; });
+    }
     if (command === "cancel_source_browser_capture") {
       if (w.failCancel) throw "HTTP 500 https://secret.fixture/?token=CANCEL_SECRET";
       if (w.refuseCancel) return false;
@@ -65,7 +76,7 @@ function Fixture() {
   const [opened, setOpened] = useState(true);
   return <div className="app-shell" style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
     <ToastViewport /><button onClick={() => setOpened(value => !value)}>切换探索</button>
-    <ExploreWorkspace url="https://www.pinterest.com/" open={opened} onClose={() => setOpened(false)}>
+    <ExploreWorkspace layout="canvas" url="https://www.pinterest.com/" open={opened} onClose={() => setOpened(false)}>
       <div data-canvas-stage data-project-drop-id="p" style={{ flex: 1, padding: 30 }}>画板</div>
     </ExploreWorkspace>
   </div>;

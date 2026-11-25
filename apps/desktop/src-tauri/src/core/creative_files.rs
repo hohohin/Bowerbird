@@ -77,7 +77,7 @@ fn sidecar(source: &Path, id: &str, value: &Value) -> AppResult<PathBuf> {
     // Never recreate a disconnected share or a missing image directory.
     let parent = source.parent().filter(|p| p.is_dir()).ok_or_else(|| AppError::Other("图片目录不可用".into()))?;
     let metadata = parent.join(".bowerbird");
-    fs::create_dir_all(&metadata)?;
+    super::file_workspace::ensure_hidden_dir(&metadata)?;
     if !fs::canonicalize(&metadata)?.starts_with(fs::canonicalize(parent)?) {
         return Err(AppError::Other("创作资料目录不能链接到图片文件夹之外".into()));
     }

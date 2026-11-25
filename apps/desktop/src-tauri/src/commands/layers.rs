@@ -12,7 +12,13 @@ use ulid::Ulid;
 use rusqlite::OptionalExtension;
 
 const MAX_WORKSPACE: usize = 256 * 1024 * 1024;
+const MAX_LAYERS: usize = 100;
+const MAX_HISTORY: usize = 30;
+const HISTORY_DOCUMENTS: [&str; 2] = ["documents", "redoDocuments"];
 static WORKFLOW_EXPORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+mod storage;
+use storage::{load_workspace, save_workspace};
 
 fn workflow_export_key(source: &str, document: &Value) -> String {
     let mut hash = Sha256::new();
@@ -37,24 +43,106 @@ fn invalid() -> AppError {
 
 pub(super) fn image_bytes(url: &str) -> Result<Vec<u8>, AppError> {
     let (head, encoded) = url.split_once(',').ok_or_else(invalid)?;
-    if !matches!(head, "data:image/png;base64" | "data:image/jpeg;base64")
-        || encoded.len() > 42 * 1024 * 1024
-    {
+    let mime = head.strip_prefix("data:").and_then(|head| head.strip_suffix(";base64")).ok_or_else(invalid)?;
+    decode_image(mime, encoded)
+}
+
+fn decode_image(mime: &str, encoded: &str) -> Result<Vec<u8>, AppError> {
+    if encoded.len() > (30_usize * 1024 * 1024).div_ceil(3) * 4 {
         return Err(invalid());
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|_| invalid())?;
-    let format = image::guess_format(&bytes).map_err(|_| invalid())?;
-    if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
+    validate_image(mime, &bytes)?;
+    Ok(bytes)
+}
+
+fn validate_image(mime: &str, bytes: &[u8]) -> Result<(), AppError> {
+    let format = image::guess_format(bytes).map_err(|_| invalid())?;
+    if !matches!((mime, format), ("image/png", image::ImageFormat::Png) | ("image/jpeg", image::ImageFormat::Jpeg)) {
         return Err(invalid());
     }
     let (width, height) =
-        image::ImageReader::with_format(std::io::Cursor::new(&bytes), format).into_dimensions()?;
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), format).into_dimensions()?;
     if width == 0 || height == 0 || width as u64 * height as u64 > 36_000_000 {
         return Err(invalid());
     }
-    Ok(bytes)
+    Ok(())
+}
+
+fn is_color(value: &Value) -> bool {
+    value.as_str().is_some_and(|color| color.len() == 7
+        && color.starts_with('#')
+        && color[1..].bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+fn is_font(value: &Value, maximum: usize) -> bool {
+    value.as_str().is_some_and(|font| !font.is_empty() && font.len() <= maximum)
+}
+
+const TEXT_STYLES: [&str; 5] = ["bold", "italic", "underline", "strikethrough", "shadow"];
+
+fn optional_text_flags(value: &Value, fields: &[&str]) -> bool {
+    fields.iter().all(|field| value.get(field).is_none_or(Value::is_boolean))
+}
+
+fn valid_text_runs(text: &Value) -> bool {
+    let Some(runs) = text.get("runs") else { return true; };
+    let Some(runs) = runs.as_array() else { return false; };
+    let length = text["content"].as_str().unwrap_or_default().encode_utf16().count() as u64;
+    if runs.len() as u64 > length { return false; }
+    let mut previous_end = 0;
+    runs.iter().all(|run| {
+        let Some(start) = run["start"].as_u64() else { return false; };
+        let Some(end) = run["end"].as_u64() else { return false; };
+        let ordered = start >= previous_end && end > start && end <= length;
+        previous_end = end;
+        ordered && run.get("fontFamily").is_none_or(|font| is_font(font, 256))
+            && run.get("color").is_none_or(is_color)
+            && optional_text_flags(run, &TEXT_STYLES)
+    })
+}
+
+fn valid_ocr_bounds(value: &Value, width: u64, height: u64) -> bool {
+    let rectangle = |bounds: &Value, max_x: u64, max_y: u64| {
+        let Some(points) = bounds.as_array().filter(|points| points.len() == 4) else { return false; };
+        match (points[0].as_u64(), points[1].as_u64(), points[2].as_u64(), points[3].as_u64()) {
+            (Some(left), Some(top), Some(right), Some(bottom)) => {
+                left < right && top < bottom && right <= max_x && bottom <= max_y
+            }
+            _ => false,
+        }
+    };
+    let absolute = value.get("absolute");
+    let normalized = value.get("normalized");
+    (absolute.is_some() || normalized.is_some())
+        && absolute.is_none_or(|item| rectangle(item, width, height))
+        && normalized.is_none_or(|item| rectangle(item, 1000, 1000))
+}
+
+fn valid_recognition(value: &Value, width: u64, height: u64) -> bool {
+    let valid_text = |value: &Value| value.as_str().is_some_and(|text| !text.trim().is_empty() && text.encode_utf16().count() <= 5000);
+    if !valid_text(&value["text"]) { return false; }
+    let Some(lines) = value["lines"].as_array().filter(|lines| !lines.is_empty() && lines.len() <= 200) else { return false; };
+    let mut run_count = 0;
+    let mut text_length = 0;
+    lines.iter().all(|line| {
+        let Some(runs) = line["runs"].as_array().filter(|runs| !runs.is_empty()) else { return false; };
+        run_count += runs.len();
+        run_count <= 1000 && valid_ocr_bounds(&line["bounding_box"], width, height) && runs.iter().all(|run| {
+            let style = &run["style"];
+            run["text"].as_str().is_some_and(|text| {
+                text_length += text.encode_utf16().count();
+                !text.is_empty() && !text.contains(['\r', '\n']) && text_length <= 5000
+            })
+                && style.is_object()
+                && style.get("similar_font_family").is_none_or(|font| font.as_str().is_some_and(|name| !name.trim().is_empty() && name.encode_utf16().count() <= 200))
+                && style.get("foreground_color").is_none_or(is_color)
+                && optional_text_flags(style, &TEXT_STYLES)
+                && optional_text_flags(style, &["translucent"])
+        })
+    })
 }
 
 fn validate_document(doc: &Value, check_images: bool) -> Result<(), AppError> {
@@ -69,7 +157,7 @@ fn validate_document(doc: &Value, check_images: bool) -> Result<(), AppError> {
             || h > 6000
             || w * h > 36_000_000
             || layers.is_empty()
-            || layers.len() > 17
+            || layers.len() > MAX_LAYERS
         {
             return Err(invalid());
         }
@@ -98,6 +186,11 @@ fn validate_document(doc: &Value, check_images: bool) -> Result<(), AppError> {
             if check_images {
                 image_bytes(layer["dataUrl"].as_str().ok_or_else(invalid)?)?;
             }
+            if !layer["textRecognition"].is_null()
+                && (index == 0 || !valid_recognition(&layer["textRecognition"], w, h))
+            {
+                return Err(invalid());
+            }
             for field in ["text", "textBackup"] {
                 let text = &layer[field];
                 if text.is_null() {
@@ -108,16 +201,12 @@ fn validate_document(doc: &Value, check_images: bool) -> Result<(), AppError> {
                     || text["content"]
                         .as_str()
                         .is_none_or(|s| s.chars().count() > 5000)
-                    || text["fontFamily"]
-                        .as_str()
-                        .is_none_or(|s| s.is_empty() || s.len() > 256)
+                    || !is_font(&text["fontFamily"], 256)
                     || !text["bold"].is_boolean()
                     || !matches!(text["align"].as_str(), Some("left" | "center" | "right"))
-                    || text["color"].as_str().is_none_or(|s| {
-                        s.len() != 7
-                            || !s.starts_with('#')
-                            || !s[1..].bytes().all(|b| b.is_ascii_hexdigit())
-                    })
+                    || !is_color(&text["color"])
+                    || !optional_text_flags(text, &TEXT_STYLES)
+                    || !valid_text_runs(text)
                 {
                     return Err(invalid());
                 }
@@ -142,38 +231,39 @@ fn validate_document(doc: &Value, check_images: bool) -> Result<(), AppError> {
 }
 
 pub(super) fn validate_workspace(value: &Value) -> Result<(), AppError> {
+    validate_workspace_impl(value, true)
+}
+
+fn validate_workspace_impl(value: &Value, check_images: bool) -> Result<(), AppError> {
+    if !value.is_object() { return Err(invalid()); }
     let doc = &value["document"];
-    validate_document(doc, true)?;
+    validate_document(doc, check_images)?;
     if !value["history"].is_null() {
         let history = &value["history"];
         let images = history["images"].as_array().ok_or_else(invalid)?;
-        let documents = history["documents"].as_array().ok_or_else(invalid)?;
-        if images.len() > 510 || documents.len() > 30 {
+        if images.len() > HISTORY_DOCUMENTS.len() * MAX_HISTORY * MAX_LAYERS {
             return Err(invalid());
         }
-        for image in images {
-            image_bytes(image.as_str().ok_or_else(invalid)?)?;
-        }
-        for snapshot in documents {
-            if snapshot.is_null() {
-                return Err(invalid());
+        if check_images {
+            for image in images {
+                image_bytes(image.as_str().ok_or_else(invalid)?)?;
             }
-            validate_document(snapshot, false)?;
-            for layer in snapshot["layers"].as_array().ok_or_else(invalid)? {
-                let index = layer["image"].as_i64().ok_or_else(invalid)?;
-                if index < 0 {
-                    let current_index = index
-                        .checked_neg()
-                        .and_then(|v| v.checked_sub(1))
-                        .ok_or_else(invalid)? as usize;
-                    if !doc["layers"]
-                        .as_array()
-                        .is_some_and(|layers| current_index < layers.len())
-                    {
+        }
+        let current_count = doc["layers"].as_array().map_or(0, Vec::len);
+        for field in HISTORY_DOCUMENTS {
+            let Some(stack) = history.get(field) else {
+                if field == "documents" { return Err(invalid()); }
+                continue;
+            };
+            let documents = stack.as_array().filter(|docs| docs.len() <= MAX_HISTORY).ok_or_else(invalid)?;
+            for snapshot in documents {
+                validate_document(snapshot, false)?;
+                for layer in snapshot["layers"].as_array().ok_or_else(invalid)? {
+                    let index = layer["image"].as_i64().ok_or_else(invalid)?;
+                    let valid = if index < 0 { index.unsigned_abs() <= current_count as u64 } else { (index as usize) < images.len() };
+                    if !valid {
                         return Err(invalid());
                     }
-                } else if index as usize >= images.len() {
-                    return Err(invalid());
                 }
             }
         }
@@ -203,76 +293,11 @@ pub(super) fn validate_workspace(value: &Value) -> Result<(), AppError> {
         {
             return Err(invalid());
         }
-        image_bytes(&format!(
-            "data:image/jpeg;base64,{}",
-            pending["image"]["base64"].as_str().unwrap()
-        ))?;
+        if check_images {
+            decode_image("image/jpeg", pending["image"]["base64"].as_str().unwrap())?;
+        }
     }
     Ok(())
-}
-
-fn save_workspace(
-    paths: &LibraryPaths,
-    db: &Database,
-    asset_id: &str,
-    workspace: &Value,
-) -> Result<(), AppError> {
-    if db.get_asset(asset_id)?.is_none() {
-        return Err(AppError::Other("原素材已不存在".into()));
-    }
-    let bytes = serde_json::to_vec(workspace)?;
-    if bytes.len() > MAX_WORKSPACE {
-        return Err(invalid());
-    }
-    validate_workspace(workspace)?;
-    let directory = paths.root.join("layers");
-    std::fs::create_dir_all(&directory)?;
-    // Immutable file + transactional pointer swap: interruption never truncates the last save.
-    let name = format!("{}.json", Ulid::new());
-    let file = directory.join(&name);
-    {
-        use std::io::Write;
-        let mut output = std::fs::File::create(&file)?;
-        output.write_all(&bytes)?;
-        output.sync_all()?;
-    }
-    let result = (|| -> Result<Vec<String>, AppError> {
-        let mut conn = db.conn.lock().unwrap();
-        let transaction = conn.transaction()?;
-        let previous = {
-            let mut statement = transaction.prepare(
-                "SELECT payload FROM analyses WHERE asset_id=?1 AND kind='layer_workspace'",
-            )?;
-            let rows = statement.query_map([asset_id], |row| row.get::<_, String>(0))?;
-            rows.collect::<Result<Vec<_>, _>>()?
-        };
-        transaction.execute(
-            "DELETE FROM analyses WHERE asset_id=?1 AND kind='layer_workspace'",
-            [asset_id],
-        )?;
-        transaction.execute("INSERT INTO analyses(id,asset_id,kind,payload,created_at) VALUES(?1,?2,'layer_workspace',?3,?4)", rusqlite::params![Ulid::new().to_string(), asset_id, name, chrono::Utc::now().timestamp()])?;
-        transaction.commit()?;
-        Ok(previous)
-    })();
-    match result {
-        Ok(previous) => {
-            for old in previous {
-                if safe_name(&old) {
-                    let _ = std::fs::remove_file(directory.join(old));
-                }
-            }
-            Ok(())
-        }
-        Err(error) => {
-            let _ = std::fs::remove_file(file);
-            Err(error)
-        }
-    }
-}
-
-fn safe_name(name: &str) -> bool {
-    name.strip_suffix(".json")
-        .is_some_and(|id| id.parse::<Ulid>().is_ok())
 }
 
 #[tauri::command]
@@ -299,25 +324,7 @@ pub async fn layer_workspace_load(
 ) -> Result<Option<Value>, AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || {
-        let row = db
-            .list_analyses_by_asset(&asset_id)?
-            .into_iter()
-            .find(|row| row.kind == "layer_workspace");
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        if !safe_name(&row.payload) {
-            return Err(invalid());
-        }
-        let file = paths.root.join("layers").join(row.payload);
-        if std::fs::metadata(&file)?.len() > MAX_WORKSPACE as u64 {
-            return Err(invalid());
-        }
-        let value = serde_json::from_slice(&std::fs::read(file)?)?;
-        validate_workspace(&value)?;
-        Ok(Some(value))
-    })
+    tokio::task::spawn_blocking(move || load_workspace(&paths, &db, &asset_id))
     .await
     .map_err(|error| AppError::Other(error.to_string()))?
 }
@@ -331,7 +338,7 @@ pub async fn layer_workspace_save(
 ) -> Result<(), AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || save_workspace(&paths, &db, &asset_id, &workspace))
+    tokio::task::spawn_blocking(move || save_workspace(&paths, &db, &asset_id, workspace))
         .await
         .map_err(|error| AppError::Other(error.to_string()))?
 }
@@ -395,7 +402,7 @@ fn export_layer_asset(paths: &LibraryPaths, db: &Database, asset_id: String, doc
         )?;
         asset.name = name;
         asset.origin_path = None;
-        save_workspace(&paths, &db, &asset.id, &workspace)?;
+        save_workspace(&paths, &db, &asset.id, workspace)?;
         if let Some(key) = export_key {
             db.insert_analysis(&crate::core::library::Analysis { id: Ulid::new().to_string(), asset_id: asset.id.clone(), kind: "workflow_layer_product".into(), payload: key, provider: None, created_at: None })?;
         }
@@ -506,6 +513,8 @@ mod tests {
         layer["id"] = json!("text");
         layer["background"] = json!(false);
         layer["text"] = json!({"content":"可编辑\nBowerbird","fontFamily":"SimSun","fontSize":20,"color":"#ff0000","bold":false,"align":"left","lineHeight":1.2,"letterSpacing":0,"boxWidth":100,"boxHeight":100});
+        layer["text"]["runs"] = json!([{"start":0,"end":3,"italic":true,"underline":true,"strikethrough":false,"shadow":true}]);
+        layer["textRecognition"] = json!({"text":"可编辑","lines":[{"bounding_box":{"absolute":[0,0,34,12],"normalized":[0,0,340,120]},"runs":[{"text":"可编辑","style":{"similar_font_family":"SimSun","foreground_color":"#FF0000","bold":false,"italic":true,"underline":true,"strikethrough":false,"shadow":true,"translucent":false}}]}]});
         let workspace = json!({"document":{"schemaVersion":1,"width":100,"height":100,"layers":[base,layer]},"pending":null});
         assert!(validate_workspace(&workspace).is_ok());
         // Workflow layer export must keep a background in slot zero, even when hidden.
@@ -541,6 +550,7 @@ mod tests {
         assert!(validate_workspace(&broken).is_err());
         let mut empty_text = workspace.clone();
         empty_text["document"]["layers"][1]["text"]["content"] = json!("");
+        empty_text["document"]["layers"][1]["text"].as_object_mut().unwrap().remove("runs");
         assert!(validate_workspace(&empty_text).is_ok());
         let mut image_mode = workspace.clone();
         image_mode["document"]["layers"][1]["textBackup"] =
@@ -556,16 +566,19 @@ mod tests {
             ("color", json!("red")),
             ("boxWidth", json!(100000)),
             ("content", json!(false)),
+            ("italic", json!("yes")),
+            ("runs", json!([{"start":0,"end":4},{"start":3,"end":5}])),
         ] {
             let mut invalid_text = workspace.clone();
             invalid_text["document"]["layers"][1]["text"][key] = value;
             assert!(validate_workspace(&invalid_text).is_err());
         }
+        let mut bad_ocr = workspace;
+        bad_ocr["document"]["layers"][1]["textRecognition"]["lines"][0]["bounding_box"]["absolute"] = json!([0,0,101,10]);
+        assert!(validate_workspace(&bad_ocr).is_err());
     }
     #[test]
     fn rejects_escaping_and_invalid_workspaces() {
-        assert!(!safe_name("../secret.json"));
-        assert!(safe_name(&format!("{}.json", Ulid::new())));
         assert!(validate_workspace(
             &json!({"document":{"schemaVersion":1,"width":999999,"height":10,"layers":[]}})
         )
@@ -619,8 +632,8 @@ mod tests {
     }
     #[test]
     fn saves_revisions_and_preserves_last_good_workspace() {
-        let root = std::env::temp_dir().join(format!("bowerbird-layers-test-{}", Ulid::new()));
-        let paths = LibraryPaths::init(root.clone()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let paths = LibraryPaths::init(root.path().to_path_buf()).unwrap();
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
         db.conn
@@ -629,27 +642,188 @@ mod tests {
             .execute("INSERT INTO assets(id,name) VALUES('source','source')", [])
             .unwrap();
         let first = json!({"document":null,"pending":{"request":{"idempotency_key":"one"},"userId":"owner"}});
-        save_workspace(&paths, &db, "source", &first).unwrap();
-        let row = db.list_analyses_by_asset("source").unwrap().pop().unwrap();
-        assert_eq!(
-            serde_json::from_slice::<Value>(
-                &std::fs::read(paths.root.join("layers").join(row.payload)).unwrap()
-            )
-            .unwrap(),
-            first
-        );
-        assert!(save_workspace(&paths, &db, "source", &json!({"document":{"width":0}})).is_err());
+        let old_name = format!("{}.json", Ulid::new());
+        let workspace_root = paths.root.join("layers");
+        std::fs::create_dir_all(&workspace_root).unwrap();
+        std::fs::write(workspace_root.join(&old_name), serde_json::to_vec(&first).unwrap()).unwrap();
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO analyses(id, asset_id, kind, payload) VALUES('old', 'source', 'layer_workspace', ?1)",
+            [&old_name],
+        ).unwrap();
+        assert_eq!(load_workspace(&paths, &db, "source").unwrap(), Some(first.clone()));
+        assert!(save_workspace(&paths, &db, "source", json!({"document":{"width":0}})).is_err());
+        assert_eq!(load_workspace(&paths, &db, "source").unwrap(), Some(first.clone()));
         let second = json!({"document":null,"pending":null});
-        save_workspace(&paths, &db, "source", &second).unwrap();
+        db.conn.lock().unwrap().execute_batch(
+            "CREATE TRIGGER fail_layer_save BEFORE INSERT ON analyses WHEN NEW.kind='layer_workspace'
+             BEGIN SELECT RAISE(ABORT, 'fixture'); END;"
+        ).unwrap();
+        assert!(save_workspace(&paths, &db, "source", second.clone()).is_err());
+        assert_eq!(load_workspace(&paths, &db, "source").unwrap(), Some(first));
+        assert_eq!(std::fs::read_dir(&workspace_root).unwrap().count(), 1);
+        db.conn.lock().unwrap().execute_batch("DROP TRIGGER fail_layer_save").unwrap();
+
+        save_workspace(&paths, &db, "source", second.clone()).unwrap();
+        assert_eq!(load_workspace(&paths, &db, "source").unwrap(), Some(second));
         assert_eq!(db.list_analyses_by_asset("source").unwrap().len(), 1);
-        assert_eq!(
-            std::fs::read_dir(paths.root.join("layers"))
-                .unwrap()
-                .count(),
-            1
-        );
-        assert!(save_workspace(&paths, &db, "missing", &first).is_err());
-        drop(db);
-        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(std::fs::read_dir(&workspace_root).unwrap().count(), 1);
+        assert!(!workspace_root.join(old_name).exists());
+        assert!(save_workspace(&paths, &db, "missing", json!({"document":null})).is_err());
+    }
+
+    fn raster(size: u32, marker: u8) -> String {
+        let mut pixels = image::RgbaImage::new(size, size);
+        pixels.put_pixel(0, 0, image::Rgba([marker, 0, 0, 255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(pixels).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png.into_inner()))
+    }
+
+    fn document_with_images(size: u32, images: Vec<String>) -> Value {
+        let layers: Vec<_> = images.into_iter().enumerate().map(|(index, data_url)| {
+            let mut layer = json!({
+                "id":format!("layer-{index}"),"name":"图层","description":"",
+                "background":index==0,"visible":true,"opacity":1,"x":0,"y":0,"width":size,"height":size,
+            });
+            layer["dataUrl"] = Value::String(data_url);
+            layer
+        }).collect();
+        let mut document = json!({"schemaVersion":1,"width":size,"height":size});
+        document["layers"] = Value::Array(layers);
+        document
+    }
+
+    #[test]
+    fn directory_persists_large_layer_history_and_frozen_cloud_references() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = LibraryPaths::init(root.path().to_path_buf()).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name) VALUES('source','source')", []).unwrap();
+        let document = document_with_images(128, (0..100).map(|marker| raster(128, marker)).collect());
+        let mut snapshot = document.clone();
+        for (index, layer) in snapshot["layers"].as_array_mut().unwrap().iter_mut().enumerate() {
+            layer.as_object_mut().unwrap().remove("dataUrl");
+            layer["image"] = json!(-1 - index as i64);
+        }
+        snapshot["layers"][2]["image"] = json!(0);
+        let cloud_ref = document["layers"][0]["dataUrl"].as_str().unwrap().split_once(',').unwrap().1;
+        let workspace = json!({
+            "document":document,"pending":{"request":{"reference_images":[{"mime":"image/png","base64":cloud_ref}]},"userId":"u"},
+            "history":{"images":[raster(128, 101)],"documents":[snapshot],"redoDocuments":[snapshot]}
+        });
+        let mut too_many = workspace.clone();
+        let mut extra = too_many["document"]["layers"][1].clone();
+        extra["id"] = json!("layer-100");
+        too_many["document"]["layers"].as_array_mut().unwrap().push(extra);
+        assert!(validate_workspace(&too_many).is_err());
+        save_workspace(&paths, &db, "source", workspace.clone()).unwrap();
+        assert_eq!(load_workspace(&paths, &db, "source").unwrap(), Some(workspace.clone()));
+        let row = db.list_analyses_by_asset("source").unwrap().pop().unwrap();
+        let directory = paths.root.join("layers").join(row.payload);
+        let manifest = std::fs::read_to_string(directory.join("manifest.json")).unwrap();
+        assert!(!manifest.contains("data:image/png"));
+        assert!(!manifest.contains(cloud_ref));
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 102);
+
+        let manifest: Value = serde_json::from_str(&manifest).unwrap();
+        let media = directory.join(manifest["workspace"]["document"]["layers"][0]["dataUrl"].as_str().unwrap());
+        std::fs::write(media, b"tampered").unwrap();
+        assert!(load_workspace(&paths, &db, "source").is_err());
+        save_workspace(&paths, &db, "source", workspace).unwrap();
+        assert!(load_workspace(&paths, &db, "source").unwrap().is_some());
+        assert!(!directory.exists());
+    }
+
+    #[cfg(windows)]
+    fn memory_working_set() -> (usize, usize) {
+        #[repr(C)]
+        struct Counters {
+            size: u32,
+            page_faults: u32,
+            peak: usize,
+            resident: usize,
+            rest: [usize; 6],
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn K32GetProcessMemoryInfo(handle: windows::Win32::Foundation::HANDLE, counters: *mut Counters, size: u32) -> i32;
+        }
+        let size = std::mem::size_of::<Counters>() as u32;
+        let mut counters = Counters { size, page_faults: 0, peak: 0, resident: 0, rest: [0; 6] };
+        unsafe {
+            assert_ne!(K32GetProcessMemoryInfo(windows::Win32::System::Threading::GetCurrentProcess(), &mut counters, size), 0);
+        }
+        (counters.resident, counters.peak)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "manual isolated benchmark, run each BOWERBIRD_LAYER_BENCH_FORMAT in a separate process"]
+    fn benchmark_fifty_2k_layer_save() {
+        let mode = std::env::var("BOWERBIRD_LAYER_BENCH_FORMAT").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let paths = LibraryPaths::init(root.path().to_path_buf()).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name) VALUES('source','source')", []).unwrap();
+
+        let images: Vec<_> = (1..=50_u32).map(|seed| {
+            let mut pixels = image::RgbaImage::new(2048, 2048);
+            let mut state = seed;
+            // Partly transparent full-size frames with a deterministic high-detail region.
+            for y in 0..512 {
+                for x in 0..512 {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                    pixels.put_pixel(x, y, image::Rgba(state.to_le_bytes()));
+                }
+            }
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(pixels).write_to(&mut png, image::ImageFormat::Png).unwrap();
+            format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png.into_inner()))
+        }).collect();
+        let mut workspace = json!({"pending":null});
+        workspace["document"] = document_with_images(2048, images);
+        let mut snapshot = workspace["document"].as_object().unwrap().iter().filter(|(key, _)| *key != "layers")
+            .map(|(key, value)| (key.clone(), value.clone())).collect::<serde_json::Map<_, _>>();
+        let snapshots: Vec<Value> = workspace["document"]["layers"].as_array().unwrap().iter().enumerate().map(|(index, layer)| {
+            let mut properties: serde_json::Map<_, _> = layer.as_object().unwrap().iter().filter(|(key, _)| *key != "dataUrl")
+                .map(|(key, value)| (key.clone(), value.clone())).collect();
+            properties.insert("image".into(), json!(-1 - index as i64));
+            Value::Object(properties)
+        }).collect();
+        snapshot.insert("layers".into(), json!(snapshots));
+        workspace["history"] = json!({ "images": [], "documents": vec![Value::Object(snapshot); 30] });
+
+        let (before, before_peak) = memory_working_set();
+        let output = paths.root.join("layers");
+        let start = std::time::Instant::now();
+        match mode.as_str() {
+            "legacy" => {
+                use std::io::Write;
+                std::fs::create_dir_all(&output).unwrap();
+                // Historical JSON write path after lifting its layer-count cap for the comparison.
+                let bytes = serde_json::to_vec(&workspace).unwrap();
+                assert!(bytes.len() <= MAX_WORKSPACE);
+                validate_workspace(&workspace).unwrap();
+                let mut output = std::fs::File::create(output.join("legacy.json")).unwrap();
+                output.write_all(&bytes).unwrap();
+                output.sync_all().unwrap();
+            }
+            "directory" => save_workspace(&paths, &db, "source", workspace).unwrap(),
+            _ => panic!("use legacy or directory"),
+        }
+        let elapsed = start.elapsed();
+        let (_, peak) = memory_working_set();
+        fn directory_bytes(path: &std::path::Path) -> u64 {
+            std::fs::read_dir(path).unwrap().map(|entry| {
+                let entry = entry.unwrap();
+                let metadata = entry.metadata().unwrap();
+                if metadata.is_dir() { directory_bytes(&entry.path()) } else { metadata.len() }
+            }).sum()
+        }
+        println!("{mode}: elapsed_ms={}, baseline_rss={}, baseline_peak_rss={}, peak_rss={}, disk_bytes={}", elapsed.as_millis(), before, before_peak, peak, directory_bytes(&output));
     }
 }

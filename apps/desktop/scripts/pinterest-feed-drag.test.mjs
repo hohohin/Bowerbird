@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { loadSourceScript } from './fixtures/explorer/source-script.mjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 import { startBrowserDrag, finishBrowserDrag } from './fixtures/explorer/native-drag.mjs';
@@ -9,8 +10,8 @@ const output = process.env.BOWERBIRD_PINTEREST_FEED_OUTPUT || '.tmp/pinterest-fe
 await mkdir(output, { recursive: true });
 const [candidates, drag, layout] = await Promise.all([
   readFile('../extension/candidate-utils.js', 'utf8'),
-  readFile(process.env.BOWERBIRD_EXPLORER_DRAG_PATH || 'src-tauri/src/commands/source_browser_drag.js', 'utf8'),
-  readFile('src-tauri/src/commands/source_browser_pinterest_layout.js', 'utf8'),
+  loadSourceScript(process.env.BOWERBIRD_EXPLORER_DRAG_PATH || 'src-tauri/src/commands/source_browser_drag.js'),
+  loadSourceScript('src-tauri/src/commands/source_browser_pinterest_layout.js'),
 ]);
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const results = [];

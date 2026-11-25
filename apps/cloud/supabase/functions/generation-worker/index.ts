@@ -4,6 +4,7 @@
 
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
+import { LAYER_MAX_OUTPUTS } from "../_shared/layer-contract.ts";
 import { corsHeaders } from "../_shared/limits.ts";
 
 const BUCKET = "generation-temp";
@@ -236,6 +237,12 @@ async function actionComplete(
   const mime = typeof body.mime === "string" ? body.mime : null;
   const bytes = Number(body.bytes ?? 0);
   const sha256 = typeof body.sha256 === "string" ? body.sha256 : null;
+  const layerPixels = status === "succeeded" && leasedJob.service === "image_layer_decompose" ? body.layerPixels : null;
+  if (status === "succeeded" && leasedJob.service === "image_layer_decompose" &&
+      (!Array.isArray(layerPixels) || !layerPixels.length || layerPixels.length > LAYER_MAX_OUTPUTS ||
+        layerPixels.some(value => !Number.isSafeInteger(value) || value < 1 || value > 36_000_000))) {
+    throw new ApiError("invalid_request", "图层结算像素无效");
+  }
   if (status === "succeeded") {
     if (leasedJob.service.startsWith("image_layer_") !== (mime === "application/json")) throw new ApiError("invalid_request", "图层产物与服务不匹配");
     if (mime === "application/json" && bytes > 256 * 1024 * 1024) throw new ApiError("invalid_request", "图层包超出大小限制");
@@ -250,7 +257,7 @@ async function actionComplete(
     p_lease_id: leaseId,
     p_status: status,
     ...(isVideo ? { p_completion_tokens: status === "succeeded" ? body.completionTokens : null } : {}),
-    ...(!isVideo ? { p_layer_pixels: status === "succeeded" && leasedJob.service === "image_layer_decompose" ? body.layerPixels ?? null : null } : {}),
+    ...(!isVideo ? { p_layer_pixels: layerPixels } : {}),
     p_output_object_key: objectKey,
     p_output_mime: mime,
     p_output_bytes: status === "succeeded" ? bytes : null,

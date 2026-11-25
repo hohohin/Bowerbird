@@ -78,7 +78,7 @@ export interface SourceBrowserBounds {
   y: number;
   width: number;
   height: number;
-  overlay?: { x: number; y: number; width: number; height: number; cut?: number };
+  overlay?: { x: number; y: number; width: number; height: number; cut?: number; side?: "left" | "right" };
 }
 
 export interface CanvasFrequentAssetsResult {
@@ -245,6 +245,8 @@ export const api = {
     invoke<ProjectCanvas>("project_canvas_ensure", { projectId }),
   projectCanvasGet: (projectId: string) =>
     invoke<ProjectCanvasSnapshot>("project_canvas_get", { projectId }),
+  projectCanvasHasAsset: (projectId: string, assetId: string) =>
+    invoke<boolean>("project_canvas_has_asset", { projectId, assetId }),
   projectCanvasVisibleNodes: (projectId: string, nodeIds: string[]) =>
     invoke<CanvasNode[]>("project_canvas_visible_nodes", { projectId, nodeIds }),
   projectCanvasRename: (projectId: string, title: string) =>
@@ -346,7 +348,7 @@ export const api = {
   layerTextRequest: (request: { action: "get_by_key" | "create"; idempotency_key: string; image?: import("./layerDocument").TextRecognitionPending["image"] }) => invoke<{ status: string; text?: string; error?: { message?: string } }>("layer_text_request", { request }),
   layerWorkspaceSave: (assetId: string, workspace: import("./layerDocument").LayerWorkspace) => invoke<void>("layer_workspace_save", { assetId, workspace }),
   layerExport: (assetId: string, document: import("./layerDocument").LayerDocument, dataUrl: string, projectId: string | null, workflow = false) => invoke<Asset>("layer_export", { assetId, document, dataUrl, projectId, workflow }),
-  layerCloudRequest: (request: import("./layerDocument").LayerRequest | { action: string; idempotency_key?: string; job_id?: string }) => invoke<{ status: string; progress?: number; services?: { service: string; available: boolean; credits: number | null }[]; error?: { message: string }; layer_result?: { document?: import("./layerDocument").LayerDocument; image?: string } }>("layer_cloud_request", { request }),
+  layerCloudRequest: (request: import("./layerDocument").LayerRequest | { action: string; idempotency_key?: string; job_id?: string } | { action: "layer_quote"; size?: import("./layerDocument").LayerRequest["layer_options"]["size"]; max_images?: number; edit_reference_count?: number }) => invoke<{ status: string; progress?: number; layer_protocol?: number; services?: { service: string; available: boolean; credits: number | null; input_credits?: number; max_images?: number; small_layer_cost?: number; large_layer_cost?: number }[]; error?: { message: string }; layer_result?: { document?: import("./layerDocument").LayerDocument; image?: string } }>("layer_cloud_request", { request }),
 
   // 浏览
   canvasFrequentAssets: (projectId?: string | null) => invoke<CanvasFrequentAssetsResult>("canvas_frequent_assets", { projectId: projectId ?? null }),
@@ -507,8 +509,10 @@ export const api = {
     invoke<void>("cancel_pinterest_image_search", { requestId }),
   resizeSourceBrowser: (bounds: SourceBrowserBounds, visible?: boolean, dimmed?: boolean) =>
     invoke<void>("resize_source_browser", { bounds, visible, dimmed }),
-  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string, mediaKind?: "image" | "video", captureId?: string, skipClassification?: boolean) =>
-    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}), ...(mediaKind ? { mediaKind } : {}), ...(captureId ? { captureId } : {}), ...(skipClassification ? { skipClassification } : {}) }),
+  authorizeSourceBrowserCapture: (imageUrl: string, pageUrl: string, dragId: string, mediaKind?: "image" | "video") =>
+    invoke<string | null>("authorize_source_browser_capture", { imageUrl, pageUrl, dragId, ...(mediaKind ? { mediaKind } : {}) }),
+  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string, mediaKind?: "image" | "video", captureId?: string, skipClassification?: boolean, admission?: string) =>
+    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}), ...(mediaKind ? { mediaKind } : {}), ...(captureId ? { captureId } : {}), ...(skipClassification ? { skipClassification } : {}), ...(admission ? { admission } : {}) }),
   cancelSourceBrowserCapture: (captureId: string) => invoke<boolean>("cancel_source_browser_capture", { captureId }),
   claimSourceBrowserAnalysis: (dragId: string, imageUrl: string, pageUrl: string) =>
     invoke<boolean>("claim_source_browser_analysis", { dragId, imageUrl, pageUrl }),
@@ -654,6 +658,7 @@ export const api = {
   extensionFolderPath: () => invoke<string>("extension_folder_path"),
   // 设置
   getSettings: () => invoke<AppSettings>("get_settings"),
+  setH3AutoOptimize: (enabled: boolean) => invoke<void>("set_h3_auto_optimize", { enabled }),
   updateSettings: (settings: AppSettings, applyScreenshotShortcuts = false) =>
     invoke<SettingsSaveReceipt | null | void>("update_settings", { settings, applyScreenshotShortcuts }),
   libraryRoot: () => invoke<string>("library_root"),

@@ -57,17 +57,17 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 useStore.setState({ assets: [], total: 0, projects: withSidebar ? [{ id: "p", name: "探索侧栏测试", kind: "blank" } as any] : [], activeProjectId: withSidebar ? "p" : null, projectRoutePending: false,
-  projectRouteRevision: 0, settings: {}, mode: "browse", boardOpen: false, projectCanvasFlush: async () => {} });
+  projectRouteRevision: 0, settings: {}, mode: "browse", boardOpen: false, libraryHomeView: "library", projectCanvasFlush: async () => {} });
 function Fixture() {
-  const [opened, setOpened] = useState(false);
+  const opened = useStore(state => state.libraryHomeView === "explore");
   const [dialog, setDialog] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   return <div className="app-shell flex flex-col" style={{ height: "100vh" }}><ToastViewport /><FileDropImport />
     <Toolbar canvasMode={false} onCanvasModeChange={() => {}} onCreateCreative={() => {}} onRefresh={async () => {}}
-      onExplore={() => { setUrl("https://www.pinterest.com/"); setOpened(v => !v); }} exploring={opened} />
+      onHomeViewChange={view => { if (view === "explore") setUrl("https://www.pinterest.com/"); useStore.getState().setLibraryHomeView(view); }} exploring={opened} />
     <button onClick={() => setDialog(v => !v)}>测试弹窗</button>
-    <div className="relative min-h-0 flex flex-1">{withSidebar && <Sidebar />}<ExploreWorkspace url={url} open={opened} onClose={() => setOpened(false)}>
+    <div className="relative min-h-0 flex flex-1">{withSidebar && <Sidebar />}<ExploreWorkspace url={url} open={opened} onClose={() => useStore.getState().setLibraryHomeView("library")}>
       <input aria-label="主页面草稿" defaultValue="" />
       <div className="min-h-0 flex-1"><MasonryGrid onOpenPreview={asset => setPreview(asset.thumb_path || null)} /></div>
     </ExploreWorkspace></div>

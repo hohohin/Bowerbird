@@ -4,6 +4,7 @@ $previousKey = $env:CONTROL_PLANE_API_KEY
 $events = [System.Collections.Generic.List[string]]::new()
 $exportFails = $false
 $hasTunnel = $true
+$runningProxy = ''
 function Get-Command {
   param($Name, $CommandType, $ErrorAction)
   if ($Name -eq 'node') { [pscustomobject]@{ Source = 'Invoke-FixtureNode' } }
@@ -12,9 +13,16 @@ function Get-Command {
 }
 function Get-CimInstance {
   param($ClassName, $Filter)
-  if ($hasTunnel) { [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = 'run --profile bowerbird-code-reader-tunnel_fixture'; ProcessId = 123 } }
-  [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = 'run --profile other'; ProcessId = 456 }
-  [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = 'run --profile bowerbird-code-reader-tunnel_fixture_other'; ProcessId = 789 }
+  if ($hasTunnel) { [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = ('"Invoke-FixtureTunnel" run --profile "bowerbird-code-reader-tunnel_fixture" ' + $runningProxy); ProcessId = 123 } }
+  [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = '"Invoke-FixtureTunnel" run --profile other'; ProcessId = 456 }
+  [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = '"Invoke-FixtureTunnel" run --profile bowerbird-code-reader-tunnel_fixture_other'; ProcessId = 789 }
+  [pscustomobject]@{ ExecutablePath = 'Invoke-FixtureTunnel'; CommandLine = '"Invoke-FixtureTunnel" doctor --profile bowerbird-code-reader-tunnel_fixture --explain run'; ProcessId = 912 }
+}
+function Test-Path {
+  param($LiteralPath, $PathType)
+  if ($LiteralPath -match '[\\/]\.local[\\/]snapshot\.json$') { return $true }
+  if ($PathType) { return Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath -PathType $PathType }
+  Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath
 }
 function Stop-Process {
   param($Id, $ErrorAction)
@@ -52,10 +60,25 @@ try {
     if ($env:CONTROL_PLANE_API_KEY -ne 'fixture-original-key') { throw 'Environment not restored on invalid key' }
   }
   [IO.File]::WriteAllText($keyFile, 'MCP_UPDATE_KEY=fixture-file-key')
+  $runningProxy = '--control-plane.http-proxy http://127.0.0.1:7890'
+  $events.Clear()
+  & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -KeyFile $keyFile -UpdateSnapshot -ControlPlaneProxy http://127.0.0.1:7897
+  if (($events -join ',') -ne 'export,stop,doctor,run') { throw 'A changed proxy must replace the old tunnel' }
+  $runningProxy = '--control-plane.http-proxy=http://127.0.0.1:7897'
+  $events.Clear()
+  & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -KeyFile $keyFile -UpdateSnapshot -ControlPlaneProxy http://127.0.0.1:7897
+  if (($events -join ',') -ne 'export') { throw 'An unchanged proxy must reuse the tunnel' }
+  $runningProxy = ''
   $events.Clear()
   & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -KeyFile $keyFile -UpdateSnapshot -RestartTunnel
   if (($events -join ',') -ne 'export,stop,doctor,run') { throw 'Explicit restart sequence failed' }
+  $events.Clear()
+  & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -KeyFile $keyFile -ReuseRunning
+  if ($events.Count) { throw 'Run button must leave a running tunnel alone' }
   $hasTunnel = $false
+  $events.Clear()
+  & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -KeyFile $keyFile -ReuseRunning
+  if (($events -join ',') -ne 'doctor,run') { throw 'Run button must start a stopped tunnel without exporting' }
   $events.Clear()
   & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -KeyFile $keyFile -UpdateSnapshot
   if (($events -join ',') -ne 'export,doctor,run') { throw 'A stopped tunnel must start after export' }

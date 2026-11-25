@@ -9,7 +9,7 @@ use ulid::Ulid;
 pub async fn layer_export_font_names(
     fonts: Vec<String>,
 ) -> Result<std::collections::HashMap<String, String>, AppError> {
-    if fonts.len() > 17 || fonts.iter().any(|font| font.len() > 256) {
+    if fonts.len() > 1000 || fonts.iter().any(|font| font.len() > 256) {
         return Err(AppError::Other("导出字体参数无效".into()));
     }
     tokio::task::spawn_blocking(move || {
@@ -29,7 +29,12 @@ pub async fn layer_export_font_names(
     .map_err(|error| AppError::Other(error.to_string()))
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn postscript_font_name(family: &str) -> Option<String> {
+    super::layer_text::macos_fonts::postscript_name(family)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn postscript_font_name(_: &str) -> Option<String> {
     None
 }
@@ -310,6 +315,15 @@ mod tests {
     fn resolves_installed_font_postscript_names() {
         assert_eq!(postscript_font_name("Arial").as_deref(), Some("ArialMT"));
         assert!(postscript_font_name("Microsoft YaHei").is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolves_english_and_chinese_postscript_names() {
+        assert_eq!(postscript_font_name("Helvetica").as_deref(), Some("Helvetica"));
+        let installed = super::super::layer_text::installed_fonts().unwrap();
+        let chinese = installed.iter().find(|font| font.starts_with("PingFang") || font.starts_with("Songti")).unwrap();
+        assert!(postscript_font_name(chinese).is_some());
     }
 
     #[test]

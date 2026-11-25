@@ -146,6 +146,9 @@ windows = { version = "0.61", features = [
   "Win32_UI_Shell_Common",
 ] }
 
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 # --- 发布优化 ---
 [profile.release]
 panic = "abort"

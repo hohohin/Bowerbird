@@ -14,7 +14,7 @@ function Preview() {
   const [tags, setTags] = useState<AssetTag[]>([{ name: "时装", source: "manual", origin: "manual" }]);
   return <main style={{ padding: 24 }}>
     <button title="重播展开动效" onClick={() => { setOpen(true); setVersion(v => v + 1); }}>重开详情</button>
-    {open && <div role="dialog" aria-label="图片与会话预览" onKeyDown={event => { if (event.key === "Escape") setOpen(false); }}>
+    {open && <div role="dialog" aria-label="图片与会话预览" onKeyDown={event => { if (event.key === "Escape" && event.currentTarget.contains(event.target as Node)) setOpen(false); }}>
       <section role="region" aria-label="图片详情" style={{ width: 300, maxWidth: "100%", marginTop: 40, padding: 20, background: "var(--bb-surface)" }}>
         <button aria-label="关闭预览" onClick={() => setOpen(false)}>关闭</button>
         <AssetTagPicker key={version} assetId="review-two" tags={tags} onChange={setTags}/>

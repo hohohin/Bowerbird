@@ -48,7 +48,7 @@ H3 图片卡和视频卡在原文框下复用 `H3OptimizationActions` 和 `H3Pro
 
 ## 添加普通单选下拉
 
-多选标签使用 [AssetTagPicker.tsx](../../apps/desktop/src/components/AssetTagPicker.tsx)：详情领域组件，接素材 ID、当前 `AssetTag[]` 与刷新回调；宿主按素材 ID 设置 key。复用 `localClassification.labels/save/example`、`api.listAssetTags`、`OverlayScrollArea` 与工业菜单。字母归组与比较统一来自 [materialCatalogOrder.ts](../../apps/desktop/src/lib/materialCatalogOrder.ts) 的 `catalogInitial/compareTagNames`，不要重建拼音边界。包含新建／归属写入，不作为无业务通用下拉。
+单素材详情使用 [AssetTagPicker.tsx](../../apps/desktop/src/components/AssetTagPicker.tsx)，接素材 ID、当前 `AssetTag[]` 与刷新回调，宿主按素材 ID 设置 key。多选工具栏和素材右键共用同文件的 `BatchAssetTagDialog`，接收冻结的素材 ID 列表。两者共用标签名称查找、按需创建、`localClassification.labels/save/example` 和 `OverlayScrollArea`。批量写入按 100 项分批，失败后在弹窗内重试会沿用同一标签和已提交进度。字母归组与比较统一来自 [materialCatalogOrder.ts](../../apps/desktop/src/lib/materialCatalogOrder.ts) 的 `catalogInitial/compareTagNames`。
 
 - **用途／关键词：** select、listbox、选项组、方向键、输入定位、禁用。
 - **入口：** [TacticalSelect.tsx](../../apps/desktop/src/components/TacticalSelect.tsx) 的 `TacticalSelect`／`TacticalSelectProps`；传 `<option>`／`<optgroup>`，接 `onValueChange`，值统一为字符串。解析、方向导航与定位由同目录 [tacticalSelectLogic.ts](../../apps/desktop/src/components/tacticalSelectLogic.ts) 提供，消费者优先用组件。
@@ -145,14 +145,15 @@ H3 图片卡和视频卡在原文框下复用 `H3OptimizationActions` 和 `H3Pro
 
 ## 面板边缘把手与退出按钮
 
-- **入口／用途：** [PanelEdgeHandle.tsx](../../apps/desktop/src/components/PanelEdgeHandle.tsx) 提供窄页签、退出按钮、拖动握柄和 separator 语义。默认 tab 外观保留素材库样式；探索使用 overlay 切角外观（14.4×76px，上关闭／下拖动，不显示 ESC 小字），保留 Escape 快捷键。
-- **实用证据：** `CanvasLibraryResize` 与 `ExploreWorkspace` 共用该组件和 `.canvas-library-*` 样式。前者仍拥有素材库的宽度、动画与持久化；后者拥有探索宽度、原生网页遮挡和关闭状态；探索页签由宿主 CSS 放在面板内侧，viewport 保持完整宽度；`SourceBrowserPanel.boundsFor` 量取页签精确足迹与 SVG 切角值，交给 [source_browser_overlay.rs](../../apps/desktop/src-tauri/src/commands/source_browser_overlay.rs) 的受限局部裁剪／命中穿透。Windows 原生验证通过，Mac 遮罩实现待本机验收。
+- **入口／用途**　[PanelEdgeHandle.tsx](../../apps/desktop/src/components/PanelEdgeHandle.tsx) 提供窄页签、退出按钮、拖动握柄和 separator 语义。默认 tab 沿用素材库样式。探索使用 14.4 × 76 px 的 overlay 切角外观，画板中上方关闭、下方拖动，支持 Escape。一级探索收起素材流时，同一页签显示展开文字。
+- **实用证据**　`CanvasLibraryResize` 与 `ExploreWorkspace` 共用该组件和 `.canvas-library-*` 样式。各宿主管理宽度和开合状态。探索把手位于网页左边缘内侧，`SourceBrowserPanel.boundsFor` 量取实际矩形、贴边方向和切角值，交给原生局部裁剪和命中透传。Windows 已实测，Mac 待实机验收。[原生遮罩](../../apps/desktop/src-tauri/src/commands/source_browser_overlay.rs)
+- **探索非模态浮层**　[SourceBrowserPopover](../../apps/desktop/src/components/SourceBrowserPopover.tsx) 接收顶栏按钮、标题与关闭回调。右侧网页布局下优先利用网页左侧空间，宽度不足时按实际相交避让。浮层复用应用 Portal，支持 Esc、关闭后焦点恢复及外点关闭。采集记录和快捷站点设置各自负责内容和状态。
 - **范围／状态：可跨模块复用。** 宿主提供 `grip` 的鼠标／键盘行为、宽度 ARIA 值与 `onClose`，不共用业务状态；关闭的页签通过宿主隐藏或 `collapsed` 退出 Tab 顺序。
 
 ## 记忆探索浏览器的上次网址
 
 - 入口：[sourceDiscovery.ts](../../apps/desktop/src/lib/sourceDiscovery.ts) 的 `readLastSourceAddress`／`rememberSourceAddress`，共用 `normalizeSourceAddress` 与既有本机存储键。`App` 在首次显式打开探索时读取，`SourceBrowserPanel` 随真实地址变化保存。
-- 边界：只存最新的有效 HTTP(S) 网址，不是历史列表、页面快照或跨窗口路由状态。原生 `source-browser://location` 补齐 SPA 地址变化，加载状态继续由原 status 事件负责；存储不可用不阻断浏览。
+- 边界：本机存储只保留最新的有效 HTTP(S) 网址。地址栏补全使用 `SourceBrowserPanel` 在本会话维护的访问记录。原生 `source-browser://location` 补齐 SPA 地址变化，加载状态沿用 status 事件。存储不可用时仍可浏览。
 
 ## 给图片加统一悬浮定位动效
 
@@ -206,9 +207,11 @@ H3 图片卡和视频卡在原文框下复用 `H3OptimizationActions` 和 `H3Pro
 
 - **用途／关键词：** 目录切换、整栏转场、catalog、素材栏、减少动态效果。
 - **导航** — [LibrarySidebar.tsx](../../apps/desktop/src/components/LibrarySidebar.tsx) 常驻于主页、画板和文本工作区共用的素材库壳层。Q 切回层级，E 切入全局标签，Tab 在画板内开合抽屉。项目行通过 `useProjectAssetDrop` 与全局项目右键菜单复用操作。
+- **标签管理** — [LibraryCatalog.tsx](../../apps/desktop/src/components/LibraryCatalog.tsx) 由两种侧栏模式或 [CatalogTagIndex.tsx](../../apps/desktop/src/components/CatalogTagIndex.tsx) 的右键菜单打开共用 [LocalClassificationDialog](../../apps/desktop/src/components/LocalClassificationDialog.tsx)。弹窗使用打开时的浏览项目范围，可按标签 ID 直开编辑或删除确认。点弹窗里的标签名会关闭弹窗、展开当前栏的全局标签模式、清除名称搜索并调用既有分区定位。
 - **投影外观：** `LibraryControlProjection` 与 `LibraryProjection.css` 覆盖在既有 `.file-view-heading`。导航与旁侧控件保留指针锚定，窄栏由 `LibraryFloatingControls` 收纳。选中标签一直可读，较长项目名截断并保留完整可访问名称。
 - **路由和搜索** — [LibraryCatalog.tsx](../../apps/desktop/src/components/LibraryCatalog.tsx) 把目录树和 `CatalogTagIndex` 挂到稳定的侧栏。右侧由 `CategorizedLibrary` 或 `ConnectedCollections` 复用 `VirtualCatalog`，项目和连接目录按分段读取。文件夹多选保留目录条目身份，项目总览按素材身份去重。
 - **实用证据：** [LibraryHome.tsx](../../apps/desktop/src/components/LibraryHome.tsx) 和 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 共用该入口。
+- **探索素材流**　[ExploreLibrary.tsx](../../apps/desktop/src/components/ExploreLibrary.tsx) 以独立素材栏身份复用 `LibraryCatalog` 和 `VirtualCatalog`。目录点击更新浏览范围，进入画板仍由宿主决定。紧凑密度与显隐只应用于探索，采集回执在匹配的项目、文件夹、标签或全库范围优先展示本次素材。
 - **范围／状态：可跨模块复用（已有素材目录）。** 接口沿用 `CategorizedLibrary` props，DOM 与动画绑定目录侧栏及 `all/tags/collections` 语义；不能作为通用路由转场容器。内部 `floatSidebar` 等是模块内部专用，不独立导入或复制成其他板块动效。
 - **验证：** `test:library:navigation` 覆盖悬浮导航几何、来源查询、视角独立切换、Q／E／F／Tab、深浅主题、分栏与项目菜单。`library-tab-memory-ui.test.mjs` 验证重启和跨项目返回。`material-catalog-ui.test.mjs` 和 `folder-view-parity-ui.test.mjs` 验证搜索覆盖、清空与位置恢复。`canvas-library-projection-ui.test.mjs` 核对 480px 抽屉和筛选收纳。
 

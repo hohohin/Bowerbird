@@ -143,14 +143,28 @@ try {
     const snapshot = window.snapshot();
     const drafts = JSON.parse(sessionStorage.getItem('reference-drafts'));
     const video = drafts.find(asset => asset.id === 'clip');
-    const thumb = document.createElement('canvas').toDataURL();
+    const picture = (sky, hills) => {
+      const canvas = document.createElement('canvas'); canvas.width = 160; canvas.height = 100;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = sky; ctx.fillRect(0, 0, 160, 100);
+      ctx.fillStyle = '#f3dcb3'; ctx.beginPath(); ctx.arc(45, 30, 15, 0, 2 * Math.PI); ctx.fill();
+      ctx.fillStyle = hills; ctx.beginPath(); ctx.moveTo(0, 72); ctx.lineTo(47, 50); ctx.lineTo(93, 69);
+      ctx.lineTo(131, 40); ctx.lineTo(160, 60); ctx.lineTo(160, 100); ctx.lineTo(0, 100); ctx.fill();
+      return canvas.toDataURL();
+    };
+    const thumbs = [picture('#87a6b0', '#476b64'), picture('#b77e6e', '#6c484d')];
+    const thumb = thumbs[0];
     const original = window.store.getState().assets.find(asset => asset.id === 'existing').store_path;
+    const longNames = ['reference'.repeat(12) + '.png', '长文件名'.repeat(30) + '.png'];
     drafts.push({ ...video, id: 'covered-clip', name: '带封面的视频', thumb_path: thumb },
-      { id: 'photo', name: '普通图片', ext: 'svg', source: 'external', store_path: original, thumb_path: thumb });
+      { id: 'photo', name: '普通图片', ext: 'svg', source: 'external', store_path: original, thumb_path: thumb },
+      ...longNames.map((name, i) => ({ id: 'long-' + i, name, ext: 'png', source: 'external', store_path: original, thumb_path: thumbs[i] })),
+      { ...video, id: 'long-clip', name: '片段'.repeat(60) + '.mp4', thumb_path: thumb },
+      { id: 'long-audio', name: 'recording'.repeat(12) + '.wav', ext: 'wav', source: 'external', store_path: '/recording.wav' });
     sessionStorage.setItem('reference-drafts', JSON.stringify(drafts));
     sessionStorage.setItem('reference-fixture', JSON.stringify({ ...snapshot, nodes: [], edges: [] }));
     sessionStorage.setItem('workflow-p', JSON.stringify({ revision: 0, document: { schema_version: 1, nodes, run: null } }));
-    return { thumb, original };
+    return { thumb, thumbs, original, longNames };
   });
   await page.reload();
   const workflowCard = id => page.locator(`[data-workflow-card="${id}"]`);
@@ -188,6 +202,7 @@ try {
   await referenceImages.getByText('1 / 9', { exact: true }).waitFor();
   await referenceImages.getByText('<Picture 1>', { exact: true }).waitFor();
   await referenceImages.getByText('首帧画面 · 等待上游素材', { exact: true }).waitFor();
+  await referenceImages.getByText('待输入', { exact: true }).waitFor();
   await dragVideoWire('a', { x: 1190, y: 450 });
   await page.getByRole('menu', { name: '添加下游', exact: true }).getByRole('menuitem', { name: '图片生成', exact: true }).click();
   await option('引用首帧画面').click();
@@ -219,6 +234,13 @@ try {
   await referenceImages.getByText('1 / 9', { exact: true }).waitFor();
   await referenceImages.getByText('<Picture 1>', { exact: true }).waitFor();
   await workflowCard('b').getByRole('group', { name: '参考视频输入' }).getByText('带封面的视频', { exact: true }).waitFor();
+  await checkFrameImages(referenceImages, cover.thumb, cover.thumb);
+  const videoCover = workflowCard('b').locator('.comfy-r2v-video-cover');
+  assert.equal(await videoCover.locator('img').getAttribute('src'), cover.thumb);
+  await setVideoOutput('clip');
+  await referenceImages.getByText('首帧画面', { exact: true }).waitFor();
+  assert.equal(await referenceImages.locator('img').count(), 0);
+  await videoCover.locator('svg').waitFor();
   for (const mode of ['首尾帧', '单图']) {
     await chooseMode(mode);
     await setVideoOutput('covered-clip');
@@ -234,7 +256,85 @@ try {
       ? { ...node, inputs: { ...node.inputs, 'first-frame': [{ assetId: 'photo' }] } } : node));
   });
   await checkFrameImages(frameSlot, cover.thumb, cover.original);
+  await chooseMode('多素材参考（R2V）');
+  await referenceImages.getByRole('button', { name: '断开参考图片来源 1' }).click();
+  await page.evaluate(async () => (await import('/src/lib/dragPayload.ts')).setDragAssets(['long-0', 'long-1']));
+  await referenceImages.dispatchEvent('drop');
+  await page.evaluate(async () => (await import('/src/lib/dragPayload.ts')).setDragAssets(null));
+  await referenceImages.getByText('2 / 9', { exact: true }).waitFor();
+  for (const name of cover.longNames) await referenceImages.getByText(name, { exact: true }).waitFor();
+  await page.evaluate(async () => {
+    const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    const producer = { ...newWorkflowNode('generation', 2400, 0, 'codex'), id: 'photos',
+      outputs: { image: { type: 'image', assetIds: ['long-0', 'long-1'] } } };
+    await c.edit([...c.document.nodes.map(n => n.id === 'b' ? { ...n, inputs: {
+      'reference-image': [{ nodeId: 'photos', portId: 'image' }],
+      'reference-video': [{ assetId: 'long-clip' }],
+      'r2v-audio': [{ assetId: 'long-audio' }, { nodeId: 'photos', portId: 'image', mediaFilter: ['audio'] }],
+    } } : n), producer]);
+  });
+  const b = workflowCard('b');
+  const audioGroup = b.getByRole('group', { name: '参考音频输入' });
+  await audioGroup.getByText('1 / 3', { exact: true }).waitFor();
+  await audioGroup.getByText('无匹配素材', { exact: true }).waitFor();
+  const tiles = referenceImages.locator('.comfy-r2v-picture');
+  for (const [i, name] of cover.longNames.entries()) {
+    await tiles.nth(i).getByText(name, { exact: true }).waitFor();
+    assert.equal(await tiles.nth(i).getAttribute('title'), name);
+    await tiles.nth(i).getByText(`<Picture ${i + 1}>`, { exact: true }).waitFor();
+    await checkFrameImages(tiles.nth(i), cover.thumbs[i], cover.original);
+  }
+  const layout = await b.evaluate(el => {
+    const card = el.getBoundingClientRect();
+    return {
+      within: [...el.querySelectorAll('.comfy-video-card,.comfy-audio-input,.comfy-audio-row,.comfy-r2v-picture,.comfy-r2v-source button')].every(child => {
+        const { left, right } = child.getBoundingClientRect();
+        return left >= card.left && right <= card.right + 1;
+      }),
+      truncated: [...el.querySelectorAll('.comfy-r2v-picture > .comfy-audio-source,.comfy-r2v-source > .comfy-audio-source')].filter(
+        child => child.scrollWidth > child.clientWidth && getComputedStyle(child).textOverflow === 'ellipsis').length,
+    };
+  });
+  assert.deepEqual(layout, { within: true, truncated: 4 });
+  await audioGroup.getByRole('button', { name: '断开参考音频来源 2' }).click();
+  await b.screenshot({ path: `${directory}/r2v-gallery.png` });
+  await tiles.first().getByRole('button', { name: '断开参考图片来源 1' }).click();
+  await referenceImages.getByText('1 / 9', { exact: true }).waitFor();
+  assert.equal(await tiles.count(), 1);
+  await tiles.first().getByText(cover.longNames[1], { exact: true }).waitFor();
+  await tiles.first().getByText('<Picture 1>', { exact: true }).waitFor();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes
+    .find(n => n.id === 'b').inputs['reference-image'][0].excludedAssetIds?.includes('long-0'));
+  await page.reload();
+  await tiles.first().getByText(cover.longNames[1], { exact: true }).waitFor();
+  assert.equal(await tiles.count(), 1);
+  const submittedImages = await page.evaluate(async () => {
+    const { workflowInputValues, filterDisconnectedReferences, h3RunReferences } = await import('/src/lib/canvasWorkflow.ts');
+    const { nodes } = JSON.parse(sessionStorage.getItem('workflow-p')).document;
+    const b = nodes.find(n => n.id === 'b');
+    return h3RunReferences(filterDisconnectedReferences(b.inputs, workflowInputValues(nodes, b)), 'r2v')[0];
+  });
+  assert.deepEqual(submittedImages, ['long-1']);
+  await page.evaluate(async () => (await import('/src/lib/dragPayload.ts')).setDragAssets(['existing', 'a', 'b', 'c', 'd', 'long-0']));
+  await referenceImages.dispatchEvent('drop');
+  await page.evaluate(async () => (await import('/src/lib/dragPayload.ts')).setDragAssets(null));
+  await referenceImages.getByText('7 / 9', { exact: true }).waitFor();
+  const lastThumb = tiles.last().locator('.comfy-frame-thumbnail');
+  await lastThumb.focus();
+  const enlarged = tiles.last().locator('.comfy-frame-preview');
+  await enlarged.evaluate(img => img.decode());
+  assert.ok(await enlarged.evaluate(img => {
+    const box = img.getBoundingClientRect();
+    img.style.pointerEvents = 'auto';
+    const visible = document.elementFromPoint(box.x + box.width / 2, box.y + box.height * .75) === img;
+    img.style.removeProperty('pointer-events');
+    return visible;
+  }), 'a second-row keyboard preview paints above the first-row tiles');
+  await lastThumb.press('Escape');
+  await enlarged.waitFor({ state: 'detached' });
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'import_image_bytes').length), 0);
-  console.log('PASS: static video boundary pixels, dynamic H3 frame wires, R2V references, covered and coverless frame previews, reload, disconnect and undo');
+  console.log('PASS: video boundary pixels, dynamic H3 frame wires, R2V gallery previews, ellipsis, per-item disconnect, reload and undo');
 } catch (error) { console.error(error); throw error; }
 finally { await browser.close(); await server.close(); }

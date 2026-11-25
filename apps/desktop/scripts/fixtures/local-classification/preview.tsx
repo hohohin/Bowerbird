@@ -3,6 +3,10 @@ import { createRoot } from "react-dom/client";
 import { LocalClassificationDialog } from "../../../src/components/LocalClassificationDialog";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
+import "../../../src/components/TacticalMenus.css";
+import "../../../src/components/ManagementTactical.css";
+import "../../../src/components/IndustrialTheme.css";
+import "../../../src/components/IndustrialMenus.css";
 
 const w = window as any;
 w.getSmartFilter = () => useStore.getState().smartFilter;
@@ -25,7 +29,7 @@ w.__TAURI_INTERNALS__ = {
   unregisterCallback: (id: number) => { delete w.callbacks[id]; },
   convertFileSrc: (path: string) => path, invoke: async (command: string, args: any) => {
   w.calls.push({ command, args });
-  if (w.failure === command) throw new Error("合成错误：请重试");
+  if (w.failure === command) throw w.failureReason ?? new Error("合成错误：请重试");
   switch (command) {
     case "plugin:event|listen": w.listeners[args.handler] = args.handler; return args.handler;
     case "plugin:event|unlisten": delete w.listeners[args.eventId]; return;
@@ -41,6 +45,7 @@ w.__TAURI_INTERNALS__ = {
     case "global_classification_start":
     case "folder_classification_start":
     case "local_classification_start":
+      if (args.ensureCloud && !args.install) w.settings.jev_image_classification_enabled = true;
       w.classificationStatus.run_id = crypto.randomUUID();
       w.classificationStatus.recent_results = [];
       w.classificationStatus.recent_cloud_handoffs = [];
@@ -66,7 +71,11 @@ w.__TAURI_INTERNALS__ = {
       w.classificationStatus.message = "正在下载向量匹配模型（约 834 MB）"; return;
     case "local_classification_vector_uninstall":
       w.classificationStatus.vector_installed = false; w.classificationStatus.message = "向量匹配模型已卸载"; return;
-    case "local_classification_enable": w.classificationStatus.enabled = args.enabled; return;
+    case "local_classification_enable":
+      if (args.enabled) w.settings.jev_image_classification_enabled = true;
+      w.classificationStatus.enabled = args.enabled;
+      if (w.failRefreshAfterEnable) w.failure = "local_classification_status";
+      return args.enabled;
     case "local_classification_save_label": {
       const id = args.id ?? `label-${w.labels.length}`;
       const label = { ...args, id, count: 0 };

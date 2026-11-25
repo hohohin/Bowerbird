@@ -43,6 +43,7 @@ pub struct CatalogFilter {
     pub query: Option<String>,
     pub generated: Option<bool>,
     pub color: Option<String>,
+    pub first_asset_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -101,11 +102,20 @@ impl CatalogFilter {
         let group = generation_display_group("'asset:'||a.id");
         let (condition, values) = self.sql()?;
         let eligible = gallery_eligible();
-        let mut bindings = values.clone();
+        let mut bindings = Vec::new();
+        let (group_first, page_first) = match &self.first_asset_id {
+            Some(id) => {
+                bindings.push(Value::Text(id.clone()));
+                ("a.id=? DESC, ", "a.id=? DESC, ")
+            }
+            None => ("", ""),
+        };
+        bindings.extend(values.iter().cloned());
         bindings.extend(values);
+        if let Some(id) = &self.first_asset_id { bindings.push(Value::Text(id.clone())); }
         // Keep the main scan on the existing date index. Ordinary library items
         // do not participate in window sorting or materialize full asset rows.
-        Ok((format!("WITH {provenance}, generated AS (SELECT a.id,ROW_NUMBER() OVER (PARTITION BY {group} ORDER BY a.created_at DESC,a.id DESC) AS generation_rank FROM assets a INDEXED BY idx_assets_generation_session_id WHERE {condition} AND {eligible}) SELECT {columns} FROM assets a INDEXED BY idx_assets_catalog_order WHERE {condition} AND (NOT {eligible} OR a.id IN (SELECT id FROM generated WHERE generation_rank=1)) ORDER BY a.created_at DESC,a.id LIMIT ? OFFSET ?"), bindings))
+        Ok((format!("WITH {provenance}, generated AS (SELECT a.id,ROW_NUMBER() OVER (PARTITION BY {group} ORDER BY {group_first}a.created_at DESC,a.id DESC) AS generation_rank FROM assets a INDEXED BY idx_assets_generation_session_id WHERE {condition} AND {eligible}) SELECT {columns} FROM assets a INDEXED BY idx_assets_catalog_order WHERE {condition} AND (NOT {eligible} OR a.id IN (SELECT id FROM generated WHERE generation_rank=1)) ORDER BY {page_first}a.created_at DESC,a.id LIMIT ? OFFSET ?"), bindings))
     }
 
     pub(super) fn sql(&self) -> AppResult<(String, Vec<Value>)> {
@@ -310,9 +320,10 @@ impl Database {
         filter: &CatalogFilter,
         context_project: Option<&str>,
     ) -> AppResult<CatalogOverview> {
-        let collections = self.list_collections()?;
         let gallery_count = gallery_count();
         let (condition, values) = filter.sql()?;
+        let flat = filter.kind == "all";
+        let collections = if flat { Vec::new() } else { self.list_collections()? };
         let conn = self.browser_connection();
         with_gallery_cache(&conn, true, |conn, provenance| {
             let total = conn.query_row(
@@ -320,6 +331,18 @@ impl Database {
                 params_from_iter(&values),
                 |r| r.get(0),
             )?;
+            if flat {
+                return Ok(CatalogOverview {
+                    total,
+                    untagged: 0,
+                    catalog: MaterialCatalog {
+                        tags: Vec::new(),
+                        collections,
+                        prompts: Vec::new(),
+                        tag_asset_ids: BTreeMap::new(),
+                    },
+                });
+            }
             let untagged = if filter.media == "images" {
                 conn.query_row(&format!("WITH {provenance} SELECT {gallery_count} FROM assets a WHERE {condition} AND NOT EXISTS(SELECT 1 FROM asset_tags t WHERE t.asset_id=a.id)"), params_from_iter(&values), |r| r.get(0))?
             } else {
@@ -506,6 +529,19 @@ mod tests {
             media: "images".into(),
             ..Default::default()
         }
+    }
+    #[test]
+    fn explorer_capture_order_stays_inside_the_filtered_scope_and_pages() {
+        let db = fixture();
+        let base = CatalogFilter { kind: "tags".into(), id: Some("a".into()), ..filter() };
+        assert_eq!(db.catalog_ids(&base, 0, 10).unwrap(), ["a", "b"]);
+        let capture = CatalogFilter { first_asset_id: Some("b".into()), ..base };
+        assert_eq!(db.catalog_ids(&capture, 0, 1).unwrap(), ["b"]);
+        assert_eq!(db.catalog_ids(&capture, 1, 1).unwrap(), ["a"]);
+        assert_eq!(db.catalog_page(&capture, 0, 1).unwrap()[0].id, "b");
+        assert_eq!(db.catalog_overview(&capture, None).unwrap().total, 2);
+        let project = CatalogFilter { project_id: Some("p".into()), ..capture };
+        assert_eq!(db.catalog_ids(&project, 0, 10).unwrap(), ["a"]);
     }
     #[test]
     fn project_sections_match_filtered_pages_and_flag_shared_assets() {
@@ -754,20 +790,35 @@ mod tests {
         assert_eq!(paged, ids);
         assert!(db.catalog_page(&f, 4, 60).unwrap().is_empty());
         assert_eq!(db.catalog_page(&f, -4, -1).unwrap().len(), 1);
-        let overview = db.catalog_overview(&f, None).unwrap();
+    }
+
+    #[test]
+    fn flat_overview_skips_metadata_and_tags_overview_keeps_it() {
+        let db = fixture();
+        let collection = db.save_collection_node(None, "Collection", None).unwrap();
+        db.conn.lock().unwrap().execute_batch(r#"
+            INSERT INTO task_queue(id,kind,payload,created_at,project_id)
+            VALUES('example','generation','{"prompt":"A test prompt"}',1,'p');
+        "#).unwrap();
+
+        let flat = db.catalog_overview(&filter(), Some("p")).unwrap();
+        assert_eq!(flat.total, 4);
+        assert_eq!(flat.untagged, 0);
+        assert!(flat.catalog.tags.is_empty());
+        assert!(flat.catalog.collections.is_empty());
+        assert!(flat.catalog.prompts.is_empty());
+        assert!(flat.catalog.tag_asset_ids.is_empty());
+
+        let tags_filter = CatalogFilter { kind: "tags".into(), ..filter() };
+        let overview = db.catalog_overview(&tags_filter, Some("p")).unwrap();
         assert_eq!(overview.total, 4);
         assert_eq!(overview.untagged, 2);
         assert!(overview.catalog.tag_asset_ids.is_empty());
-        assert_eq!(
-            overview
-                .catalog
-                .tags
-                .iter()
-                .find(|t| t.id == "a")
-                .unwrap()
-                .count,
-            2
-        );
+        assert_eq!(overview.catalog.collections[0].id, collection);
+        assert_eq!(overview.catalog.prompts, ["A test prompt"]);
+        let tag = overview.catalog.tags.iter().find(|tag| tag.id == "a").unwrap();
+        assert_eq!(tag.count, 2);
+        assert_eq!(tag.project_count, 1);
     }
     #[test]
     fn counts_ids_and_pages_share_filters_and_project_visibility() {
@@ -986,11 +1037,12 @@ mod tests {
         let start = std::time::Instant::now();
         let summary = db.catalog_overview(&filter(), None).unwrap();
         assert_eq!(summary.total, 300_004);
-        assert!(summary.catalog.tag_asset_ids.is_empty());
         eprintln!(
-            "300k summary: {:?}; response bytes={}",
+            "300k summary kind=all: {:?}; response bytes={}",
             start.elapsed(),
             serde_json::to_vec(&summary).unwrap().len()
         );
+        assert!(summary.catalog.tags.is_empty());
+        assert!(summary.catalog.tag_asset_ids.is_empty());
     }
 }

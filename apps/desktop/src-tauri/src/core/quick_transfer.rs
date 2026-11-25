@@ -1,5 +1,5 @@
 //! Durable incoming originals. Transfer bytes stay outside the indexed directory until verified.
-use super::{external_files, library::Asset, paths::LibraryPaths};
+use super::{external_files, file_workspace::ensure_hidden_dir, library::Asset, paths::LibraryPaths};
 use crate::{
     db::Database,
     error::{AppError, AppResult},
@@ -124,8 +124,8 @@ impl QuickTransferStore {
             journal,
             uploads: BTreeMap::new(),
         };
-        ensure_directory(&store.journal)?;
-        ensure_directory(&store.staging)?;
+        ensure_directory(&store.journal, true)?;
+        ensure_directory(&store.staging, false)?;
         store.check_directories()?;
         store.load_records()?;
         Ok(store)
@@ -387,8 +387,13 @@ fn regular_file(path: &Path) -> AppResult<fs::Metadata> {
     }
     Ok(metadata)
 }
-fn ensure_directory(path: &Path) -> AppResult<()> {
-    if !path.exists() {
+fn ensure_directory(path: &Path, hidden: bool) -> AppResult<()> {
+    if hidden {
+        if path.exists() && !path.is_dir() {
+            return Err(invalid("收件目录位置已变化，请重新选择"));
+        }
+        ensure_hidden_dir(path)?;
+    } else if !path.exists() {
         fs::create_dir(path)?;
     }
     if !path.is_dir() || fs::canonicalize(path)? != path {

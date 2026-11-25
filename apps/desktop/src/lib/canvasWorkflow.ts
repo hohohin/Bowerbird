@@ -1,5 +1,5 @@
 import { contentTableRows, type ContentTable } from "./contentTable.ts";
-import { H3_AUDIO_LABEL, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_R2V_LIMITS, type ComfyVideoMode } from "./comfyVideo.ts";
+import { comfyAudioLabel, comfyVideoMode, DEFAULT_COMFY_VIDEO, H3_R2V_LIMITS, type ComfyVideoMode } from "./comfyVideo.ts";
 import type { VideoOptions } from "./videoGeneration";
 import { workflowTriggerMode } from "./workflowTriggerSchedule.ts";
 import { H3_IMAGE } from "./genProviders.ts";
@@ -276,7 +276,7 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
     ];
     return [...(mode !== "text" ? [{ id: "first-frame", label: mode === "reference" ? "参考图" : "首帧", type: "image" as const }] : []),
       ...(mode === "frames" ? [{ id: "last-frame", label: "尾帧（可选）", type: "image" as const }] : []), { id: "text", label: "文本", type: "text" },
-      { id: H3_VIDEO_AUDIO_PORT, label: H3_AUDIO_LABEL, type: "image" }];
+      { id: H3_VIDEO_AUDIO_PORT, label: comfyAudioLabel(mode), type: "image" }];
   }
   if (node.kind === "loop") return node.loopMode === "count" ? [] : node.loopMode === "rows" ? [{ id: "text", label: "内容行", type: "text" }] : [{ id: "image", label: "图片列表", type: "image" }];
   if (node.kind === "instruction") return [{ id: "image", label: "图片", type: "image" }];

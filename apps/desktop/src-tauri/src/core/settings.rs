@@ -7,7 +7,7 @@ use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 /// 自动命名与基础描述模板；分类由独立本地模型处理。
 pub const DEFAULT_AUTO_ANALYZE_PROMPT: &str = "请描述这张图片并取名。严格按照以下格式回复：\
@@ -303,8 +303,36 @@ impl SettingsState {
             new_settings.library_root = settings.library_root.clone();
             new_settings.library_id = settings.library_id.clone();
             new_settings.pending_library_move = settings.pending_library_move.clone();
+            // Automatic processing can enable Jev independently of a frontend snapshot.
+            new_settings.jev_image_classification_enabled |= settings.jev_image_classification_enabled;
             *settings = new_settings;
         })
+    }
+
+    pub(crate) fn enable_jev_image_classification(
+        &self,
+        commit: impl FnOnce() -> AppResult<()>,
+    ) -> AppResult<()> {
+        let mut current = self.settings.write().map_err(|_| {
+            AppError::Other("无法读取分类设置，请重新启动应用。".into())
+        })?;
+        if current.jev_image_classification_enabled {
+            return commit();
+        }
+        let mut next = current.clone();
+        next.jev_image_classification_enabled = true;
+        super::file_workspace::write_json(&self.path, &next)?;
+        if let Err(error) = commit() {
+            if let Err(restore_error) = super::file_workspace::write_json(&self.path, &*current) {
+                *current = next;
+                return Err(AppError::Other(format!(
+                    "分类数据库更新失败，云端分类设置也无法恢复。{error} / {restore_error}"
+                )));
+            }
+            return Err(error);
+        }
+        *current = next;
+        Ok(())
     }
 
     /// Serialize read-modify-write and publish memory only after replacing the file.
@@ -434,6 +462,19 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    #[ignore = "requires a local settings snapshot; writes only to a temporary copy"]
+    fn h3_local_settings_snapshot_roundtrip() {
+        let path = std::env::var_os("BOWERBIRD_TEST_SETTINGS_SNAPSHOT").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let copy = root.path().join("settings.json");
+        std::fs::copy(path, &copy).unwrap();
+        for enabled in [true, false, true] {
+            let state = SettingsState::init(copy.clone()).unwrap();
+            state.update_with(|s| s.h3_auto_optimize_prompt = enabled).unwrap();
+            assert_eq!(SettingsState::init(copy.clone()).unwrap().get().h3_auto_optimize_prompt, enabled);
+        }
+    }
     #[test]
     fn h3_auto_optimize_defaults_off_and_persists() {
         let old: AppSettings = serde_json::from_str("{}").unwrap();

@@ -24,6 +24,24 @@ pub async fn get_settings(state: State<'_, SettingsState>) -> Result<AppSettings
     Ok(state.get())
 }
 
+fn save_error(error: AppError) -> AppError {
+    tracing::error!(error = ?error, "settings.save_failed");
+    #[cfg(windows)]
+    if let AppError::Io(io) = &error {
+        match io.raw_os_error() {
+            Some(32 | 33) => return AppError::Other("设置文件正被占用，请稍后重试。".into()),
+            Some(5) => return AppError::Other("无法写入设置文件，请检查应用数据目录的写入权限后重试。".into()),
+            _ => {}
+        }
+    }
+    error
+}
+
+#[tauri::command]
+pub fn set_h3_auto_optimize(state: State<'_, SettingsState>, enabled: bool) -> Result<(), AppError> {
+    state.update_with(|settings| settings.h3_auto_optimize_prompt = enabled).map_err(save_error)
+}
+
 /// 全量覆盖设置并持久化到 settings.json。
 #[tauri::command]
 pub async fn update_settings(
@@ -41,9 +59,9 @@ pub async fn update_settings(
         super::screenshot::replace_shortcuts(&window, &app, &shortcuts, || {
             state.update_preferences(settings, true)
         })
-        .map_err(AppError::Other)?;
+        .map_err(AppError::Other).map_err(save_error)?;
     } else {
-        state.update(settings)?;
+        state.update(settings).map_err(save_error)?;
     }
     let scope_changed = included_generated != state.semantic_index_preferences().include_generated;
     let semantic_index_error = semantic.preferences_changed(&app, &db, scope_changed);

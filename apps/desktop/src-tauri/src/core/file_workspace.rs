@@ -27,6 +27,48 @@ pub fn default_root(executable: &Path) -> AppResult<PathBuf> {
         .ok_or_else(|| AppError::Other("无法确定安装目录的同级位置".into()))
 }
 
+pub(super) fn is_internal_dir_name(name: &str) -> bool {
+    name == ".bowerbird" || name.starts_with(".bowerbird-")
+}
+
+pub(super) fn ensure_hidden_dir(path: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(path)?;
+    hide_existing_internal_dir(path);
+    Ok(())
+}
+
+pub(super) fn hide_existing_internal_dir(_path: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::{
+            GetFileAttributesW, SetFileAttributesW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAGS_AND_ATTRIBUTES, INVALID_FILE_ATTRIBUTES,
+        };
+
+        let path = _path;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let file = PCWSTR(wide.as_ptr());
+        let attributes = unsafe { GetFileAttributesW(file) };
+        if attributes == INVALID_FILE_ATTRIBUTES {
+            let error = std::io::Error::last_os_error();
+            tracing::warn!(path = %path.display(), %error, "cannot read internal directory attributes");
+            return;
+        }
+        // Leave linked directories and files (including material references) alone.
+        if attributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0
+            || attributes & (FILE_ATTRIBUTE_HIDDEN.0 | FILE_ATTRIBUTE_REPARSE_POINT.0) != 0
+        {
+            return;
+        }
+        let attributes = FILE_FLAGS_AND_ATTRIBUTES(attributes | FILE_ATTRIBUTE_HIDDEN.0);
+        if let Err(error) = unsafe { SetFileAttributesW(file, attributes) } {
+            tracing::warn!(path = %path.display(), %error, "cannot hide internal directory");
+        }
+    }
+}
+
 pub fn write_json(path: &Path, value: &impl Serialize) -> AppResult<()> {
     let parent = path.parent().ok_or_else(|| AppError::Other("缺少资料目录".into()))?;
     fs::create_dir_all(parent)?;
@@ -36,11 +78,24 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> AppResult<()> {
         file.write_all(&serde_json::to_vec_pretty(value)?)?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&temporary, path)?;
+        replace_json(&temporary, path)?;
         Ok(())
     })();
     let _ = fs::remove_file(temporary);
     result
+}
+
+fn replace_json(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    for delay in [20, 40, 80, 160, 320, 320] {
+        match fs::rename(temporary, path) {
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => {
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+            }
+            result => return result,
+        }
+    }
+    fs::rename(temporary, path)
 }
 
 fn writable_directory(path: &Path) -> AppResult<PathBuf> {
@@ -160,6 +215,59 @@ mod tests {
         fn path(&self) -> &Path { &self.0 }
     }
     impl Drop for Temp { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+    #[cfg(windows)]
+    #[test]
+    fn hides_new_and_existing_internal_directories_and_preserves_attributes() {
+        use std::os::windows::fs::MetadataExt;
+        use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
+
+        let temp = Temp::new();
+        for name in [".bowerbird", ".bowerbird-quick-transfer"] {
+            let new = temp.path().join("新建").join(name);
+            ensure_hidden_dir(&new).unwrap();
+            assert_ne!(fs::metadata(&new).unwrap().file_attributes() & FILE_ATTRIBUTE_HIDDEN.0, 0);
+
+            let old = temp.path().join("旧目录").join(name);
+            fs::create_dir_all(&old).unwrap();
+            let mut permissions = fs::metadata(&old).unwrap().permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(&old, permissions).unwrap();
+            let attributes = fs::metadata(&old).unwrap().file_attributes();
+            assert_eq!(attributes & FILE_ATTRIBUTE_HIDDEN.0, 0);
+            for _ in 0..2 {
+                ensure_hidden_dir(&old).unwrap();
+                assert_eq!(fs::metadata(&old).unwrap().file_attributes(), attributes | FILE_ATTRIBUTE_HIDDEN.0);
+            }
+            let mut permissions = fs::metadata(&old).unwrap().permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(&old, permissions).unwrap();
+        }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn connection_scan_hides_internal_directories_and_leaves_files_visible() {
+        use std::os::windows::fs::MetadataExt;
+        use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
+
+        let temp = Temp::new();
+        let root = temp.path().join("source");
+        let paths = crate::core::paths::LibraryPaths::init(temp.path().join("index")).unwrap();
+        let db = crate::db::Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        for name in [".bowerbird", ".bowerbird-quick-transfer"] {
+            fs::create_dir_all(root.join(name).join("child")).unwrap();
+        }
+        let file = root.join(".bowerbird-visible-file");
+        fs::write(&file, b"file, not a directory").unwrap();
+
+        let id = db.connect_directory(&root, None).unwrap();
+        db.scan_connection(&paths, &id).unwrap();
+        assert_eq!(db.connection_folders(None, None).unwrap().len(), 1);
+        for name in [".bowerbird", ".bowerbird-quick-transfer"] {
+            assert_ne!(fs::metadata(root.join(name)).unwrap().file_attributes() & FILE_ATTRIBUTE_HIDDEN.0, 0);
+        }
+        assert_eq!(fs::metadata(&file).unwrap().file_attributes() & FILE_ATTRIBUTE_HIDDEN.0, 0);
+    }
     #[test]
     fn root_and_projects_survive_restart_and_reconfiguration() {
         let temp = Temp::new();

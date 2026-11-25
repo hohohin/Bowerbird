@@ -16,41 +16,41 @@ try {
   await box().click();
   const articleTool = () => page.getByRole('menuitem',{name:/视频转图文/});
   const localImageTool = () => page.getByRole('menuitem',{name:/本地 H3 视频/});
-  const assertLocalLocked = async () => {
+  const assertLocalAvailable = async () => {
     await localImageTool().waitFor();
-    assert.match(await localImageTool().innerText(),/Pro 专享 · 升级后使用/);
+    assert.equal(await localImageTool().isEnabled(), true);
+    assert.match(await localImageTool().innerText(), /首尾帧 · 提示词 · 生成视频/);
   };
   await page.evaluate(() => {
     window.notices=[]; window.localPlacements=0; window.addEventListener('local-video-placement',()=>window.localPlacements++);
     window.addEventListener('bowerbird://notify',event=>window.notices.push(event.detail.message));
   });
   assert.equal(await articleTool().count(),0,'logged out hides video-to-article');
-  await assertLocalLocked();
+  await assertLocalAvailable();
   await page.evaluate(() => window.store.setState({ cloudAuth:{logged_in:true,user_id:'tester'}, cloudEntitlement:{user_id:'tester',tier:'free',offline_state:'fresh',is_test_account:false} }));
   assert.equal(await articleTool().count(),0,'ordinary accounts hide video-to-article');
-  await assertLocalLocked();
+  await assertLocalAvailable();
   await page.screenshot({path:'.tmp/video-replication/toolbox-free-h3.png'});
   await page.keyboard.press('End');await page.keyboard.press('Enter');
-  assert.equal(await page.evaluate(()=>window.localPlacements),0,'Free cannot place H3 cards');
-  assert.match((await page.evaluate(()=>window.notices))[0],/Pro 专享/);
-  assert.equal(await page.evaluate(()=>window.calls.length),0,'Free click never detects, installs or generates');
+  assert.equal(await page.evaluate(()=>window.localPlacements),1,'Free can place H3 cards');
+  assert.deepEqual(await page.evaluate(()=>window.notices), []);
+  assert.equal(await page.evaluate(()=>window.calls.length),0,'choosing a local card does not call native generation');
   await box().click();
   for (const tier of ['pro','studio']) {
     for (const offline_state of ['fresh','grace']) {
       await page.evaluate(({tier,offline_state}) => window.store.setState({cloudEntitlement:{user_id:'tester',tier,offline_state,is_test_account:false}}), {tier,offline_state});
-      await localImageTool().waitFor();
-      assert.doesNotMatch(await localImageTool().innerText(),/升级后使用/);
+      await assertLocalAvailable();
       assert.equal(await articleTool().count(),0,'paid entitlement does not unlock video-to-article');
     }
   }
   for (const offline_state of ['expired','invalid',null]) {
     await page.evaluate(offline_state => window.store.setState({cloudEntitlement:{user_id:'tester',tier:'pro',offline_state,is_test_account:false}}), offline_state);
-    await assertLocalLocked();
+    await assertLocalAvailable();
   }
   await page.evaluate(() => window.store.setState({cloudEntitlement:{user_id:'other',tier:'pro',offline_state:'fresh',is_test_account:false}}));
-  await assertLocalLocked();
+  await assertLocalAvailable();
   await page.evaluate(() => window.store.setState({cloudAuth:{logged_in:false,user_id:'tester'},cloudEntitlement:{user_id:'tester',tier:'pro',offline_state:'fresh',is_test_account:false}}));
-  await assertLocalLocked();
+  await assertLocalAvailable();
   await page.evaluate(() => {
     window.notices=[]; window.localPlacements=0;
     window.store.setState({cloudAuth:{logged_in:true,user_id:'tester'},cloudEntitlement:{user_id:'tester',tier:'free',offline_state:'fresh',is_test_account:true}});
@@ -73,14 +73,14 @@ try {
   await box().click();
   await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:true,user_id:'other'}}));
   await articleTool().waitFor({state:'detached'});
-  await assertLocalLocked();
+  await assertLocalAvailable();
   await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:false,user_id:'tester'}}));
   assert.equal(await articleTool().count(),0,'stale test entitlement after logout stays hidden');
-  await assertLocalLocked();
+  await assertLocalAvailable();
   await localImageTool().click();
-  assert.equal(await page.evaluate(()=>window.localPlacements),1,'stale entitlement never places another card');
+  assert.equal(await page.evaluate(()=>window.localPlacements),2,'a signed-out user can place an H3 card');
   assert.deepEqual(errors,[]);
-  console.log('PASS toolbox H3 visible for Free/logout, Pro guidance without placement/IPC, paid/test access and invalid entitlement denial');
+  console.log('PASS toolbox H3 placement across account states, with separate video-to-article access');
 
 } finally { await browser.close(); await server.close(); }
 if (!process.argv.includes('--toolbox-only')) await import('./video-replication-workbench-ui.test.mjs');

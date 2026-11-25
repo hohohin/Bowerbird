@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
+use std::time::Duration;
 use tauri::{
     webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, WebviewUrl,
 };
+use tokio::sync::{watch, Mutex};
 
 use crate::error::{AppError, AppResult};
 
@@ -17,6 +20,35 @@ const SOURCE_BROWSER_LOCATION_EVENT: &str = "source-browser://location";
 const SOURCE_BROWSER_TITLE_EVENT: &str = "source-browser://title";
 const SOURCE_BROWSER_NEW_WINDOW_EVENT: &str = "source-browser://new-window";
 static SOURCE_BROWSER_DIMMED: AtomicBool = AtomicBool::new(false);
+
+#[path = "source_browser_site_rules.rs"]
+pub(crate) mod site_rules;
+
+#[derive(Default)]
+struct SourceBrowserLifecycle(Mutex<Weak<SourceBrowserVisibility>>);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceBrowserActivity { Visible, Hidden, Closed }
+
+struct SourceBrowserVisibility(watch::Sender<SourceBrowserActivity>);
+impl tauri::Resource for SourceBrowserVisibility {}
+
+fn source_browser_lifecycle(app: &AppHandle) -> tauri::State<'_, SourceBrowserLifecycle> {
+    if app.try_state::<SourceBrowserLifecycle>().is_none() {
+        app.manage(SourceBrowserLifecycle::default());
+    }
+    app.state()
+}
+
+fn set_source_browser_activity(signal: &Weak<SourceBrowserVisibility>, activity: SourceBrowserActivity) {
+    if let Some(signal) = signal.upgrade() {
+        signal.0.send_if_modified(|current| {
+            let changed = *current != activity;
+            *current = activity;
+            changed
+        });
+    }
+}
 
 // Optional hooks keep the isolated explorer fixture independent of the library.
 pub struct SourcePinterestHooks {
@@ -105,16 +137,39 @@ fn emit_status(app: &AppHandle, url: &Url, loading: bool) {
 
 // SPA history changes do not emit page-load events. Read the native location
 // without granting the remote page IPC or changing the loading indicator.
-fn watch_source_location(app: AppHandle) {
+fn watch_source_location(
+    app: AppHandle,
+    resource: tauri::ResourceId,
+    owner: Weak<SourceBrowserVisibility>,
+    mut activity: watch::Receiver<SourceBrowserActivity>,
+) {
     tauri::async_runtime::spawn(async move {
         let mut previous = None;
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let current = *activity.borrow_and_update();
+            match current {
+                SourceBrowserActivity::Closed => break,
+                SourceBrowserActivity::Hidden => {
+                    if activity.changed().await.is_err() { break; }
+                    continue;
+                }
+                SourceBrowserActivity::Visible => {}
+            }
             let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) else { break; };
+            let identity = webview.resources_table().get::<SourceBrowserVisibility>(resource);
+            if !identity.is_ok_and(|signal| owner.ptr_eq(&Arc::downgrade(&signal))) { break; }
             let Ok(url) = webview.url() else { break; };
-            if previous.as_ref() != Some(&url) && navigation_allowed(&url) {
+            drop(webview);
+            if *activity.borrow() == SourceBrowserActivity::Visible
+                && previous.as_ref() != Some(&url) && navigation_allowed(&url)
+            {
                 let _ = app.emit_to(MAIN_WEBVIEW_LABEL, SOURCE_BROWSER_LOCATION_EVENT, url.as_str());
                 previous = Some(url);
+            }
+            tokio::select! {
+                biased;
+                changed = activity.changed() => if changed.is_err() { break; },
+                _ = tokio::time::sleep(Duration::from_millis(500)) => {},
             }
         }
     });
@@ -136,6 +191,8 @@ pub async fn open_source_browser(
 ) -> AppResult<()> {
     let url = parse_http_source_url(&url)?;
     let bounds = validate_bounds(bounds)?;
+    let lifecycle = source_browser_lifecycle(&app);
+    let mut visibility = lifecycle.0.lock().await;
 
     if let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) {
         set_bounds(&webview, bounds).await?;
@@ -143,6 +200,7 @@ pub async fn open_source_browser(
         webview
             .show()
             .map_err(|error| tauri_error("显示素材发现面板失败", error))?;
+        set_source_browser_activity(&visibility, SourceBrowserActivity::Visible);
         webview
             .set_focus()
             .map_err(|error| tauri_error("聚焦素材发现面板失败", error))?;
@@ -167,11 +225,11 @@ pub async fn open_source_browser(
     let new_window_app = app.clone();
     // A private, narrowly-scoped notification route; no remote Tauri IPC.
     let drag_token = ulid::Ulid::new().to_string().to_ascii_lowercase();
-    let drag_script = include_str!("source_browser_drag.js")
+    let drag_script = site_rules::render(include_str!("source_browser_drag.js"))
         .replace("__BOWERBIRD_DRAG_BRIDGE__", &format!("bowerbird-explorer://{drag_token}"));
     let popup_drag_token = drag_token.clone();
     let page_search_token = drag_token.clone();
-    let pinterest_chrome = include_str!("source_browser_pinterest_chrome.js")
+    let pinterest_chrome = site_rules::render(include_str!("source_browser_pinterest_chrome.js"))
         .replace("__BOWERBIRD_SCROLLBAR_RUNTIME__", include_str!("../../../src/lib/overlayScrollbars.js"))
         .replace("__BOWERBIRD_SCROLLBAR_CSS__", &serde_json::to_string(include_str!("../../../src/components/OverlayScrollbars.css")).expect("static CSS"));
     let builder = WebviewBuilder::new(SOURCE_BROWSER_LABEL, WebviewUrl::External(url))
@@ -179,8 +237,8 @@ pub async fn open_source_browser(
         .disable_drag_drop_handler()
         .initialization_script(include_str!("../../../../extension/candidate-utils.js"))
         .initialization_script(include_str!("../../../src/lib/explorerDragVisual.js"))
-        .initialization_script(include_str!("source_browser_video.js"))
-        .initialization_script(include_str!("source_browser_pinterest_layout.js"))
+        .initialization_script(site_rules::render(include_str!("source_browser_video.js")))
+        .initialization_script(site_rules::render(include_str!("source_browser_pinterest_layout.js")))
         .initialization_script(&pinterest_chrome)
         .initialization_script(&drag_script)
         .on_navigation(move |url| {
@@ -255,7 +313,19 @@ pub async fn open_source_browser(
             LogicalSize::new(bounds.width, bounds.height),
         )
         .map_err(|error| tauri_error("创建素材发现面板失败", error))?;
-    watch_source_location(app.clone());
+    set_source_browser_activity(&visibility, SourceBrowserActivity::Closed);
+    let (sender, receiver) = watch::channel(SourceBrowserActivity::Visible);
+    let signal = Arc::new(SourceBrowserVisibility(sender));
+    *visibility = Arc::downgrade(&signal);
+    // The last native view handle releases the sender, including while hidden.
+    let resource = webview.resources_table().add_arc(signal);
+    let window_activity = visibility.clone();
+    main_window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            set_source_browser_activity(&window_activity, SourceBrowserActivity::Closed);
+        }
+    });
+    watch_source_location(app.clone(), resource, visibility.clone(), receiver);
     overlay::apply(&webview, bounds).await?;
     webview
         .set_focus()
@@ -309,14 +379,14 @@ fn handle_drag_notice(app: &AppHandle, url: &Url, token: &str) {
         "mediaKind": notice.media_kind,
         "posterUrl": notice.poster_url,
     }));
-    if !start || notice.media_kind != Some(SourceMediaKind::Video) {
-        if let Some(handler) = app.try_state::<SourceDragHandler>() { (handler.0)(app, start, notice); }
-    }
+    if let Some(handler) = app.try_state::<SourceDragHandler>() { (handler.0)(app, start, notice); }
 }
 
 #[tauri::command]
 pub async fn resize_source_browser(app: AppHandle, bounds: SourceBrowserBounds, visible: Option<bool>, dimmed: Option<bool>) -> AppResult<()> {
     let bounds = validate_bounds(bounds)?;
+    let lifecycle = source_browser_lifecycle(&app);
+    let visibility = lifecycle.0.lock().await;
     if let Some(dimmed) = dimmed {
         SOURCE_BROWSER_DIMMED.store(dimmed, Ordering::Relaxed);
     }
@@ -329,6 +399,7 @@ pub async fn resize_source_browser(app: AppHandle, bounds: SourceBrowserBounds, 
         if let Some(visible) = visible {
             if visible { webview.show() } else { webview.hide() }
                 .map_err(|error| tauri_error("更新探索面板显示失败", error))?;
+            set_source_browser_activity(&visibility, if visible { SourceBrowserActivity::Visible } else { SourceBrowserActivity::Hidden });
         }
     }
     Ok(())
@@ -347,22 +418,51 @@ pub async fn navigate_source_browser(app: AppHandle, url: String) -> AppResult<(
 
 #[tauri::command]
 pub async fn source_browser_back(app: AppHandle) -> AppResult<()> {
-    if let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) {
-        webview
-            .eval("history.back()")
-            .map_err(|error| tauri_error("返回上一页失败", error))?;
-    }
-    Ok(())
+    move_source_browser_history(app, true).await
 }
 
 #[tauri::command]
 pub async fn source_browser_forward(app: AppHandle) -> AppResult<()> {
-    if let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) {
-        webview
-            .eval("history.forward()")
-            .map_err(|error| tauri_error("前往下一页失败", error))?;
+    move_source_browser_history(app, false).await
+}
+
+async fn move_source_browser_history(app: AppHandle, back: bool) -> AppResult<()> {
+    let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) else { return Ok(()); };
+    let action = if back { "返回上一页失败" } else { "前往下一页失败" };
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        webview.with_webview(move |view| {
+            #[cfg(target_os = "windows")]
+            let result = (|| unsafe {
+                let browser = view.controller().CoreWebView2()?;
+                let mut can_go = windows_core::BOOL::default();
+                if back { browser.CanGoBack(&mut can_go)?; }
+                else { browser.CanGoForward(&mut can_go)?; }
+                if can_go.as_bool() {
+                    if back { browser.GoBack()?; } else { browser.GoForward()?; }
+                }
+                Ok::<_, windows_core::Error>(can_go.as_bool())
+            })().map_err(|error| AppError::Other(format!("{action}：{error}")));
+            #[cfg(target_os = "macos")]
+            let result: AppResult<bool> = unsafe {
+                #[link(name = "bowerbird_browser_capture", kind = "static")]
+                unsafe extern "C" {
+                    fn bb_browser_go_history(view: *mut std::ffi::c_void, back: bool) -> bool;
+                }
+                Ok(bb_browser_go_history(view.inner(), back))
+            };
+            let _ = sender.send(result);
+        }).map_err(|error| tauri_error(action, error))?;
+        if !receiver.await.map_err(|_| AppError::Other("探索窗口已关闭".into()))?? {
+            let message = if back { "没有可返回的上一页" } else { "没有可前往的下一页" };
+            return Err(AppError::Other(message.into()));
+        }
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    webview.eval(if back { "history.back()" } else { "history.forward()" })
+        .map_err(|error| tauri_error(action, error))
 }
 
 #[tauri::command]
@@ -377,10 +477,13 @@ pub async fn reload_source_browser(app: AppHandle) -> AppResult<()> {
 
 #[tauri::command]
 pub async fn hide_source_browser(app: AppHandle) -> AppResult<()> {
+    let lifecycle = source_browser_lifecycle(&app);
+    let visibility = lifecycle.0.lock().await;
     if let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) {
         webview
             .hide()
             .map_err(|error| tauri_error("关闭素材发现面板失败", error))?;
+        set_source_browser_activity(&visibility, SourceBrowserActivity::Hidden);
     }
     Ok(())
 }

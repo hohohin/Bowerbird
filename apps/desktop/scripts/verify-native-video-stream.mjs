@@ -82,8 +82,11 @@ try{
     const url=URL.createObjectURL(new Blob([value],{type:'video/mp4'}));
     target.src=url;window.__bbSourceVideo.remember(target,url,location.href);return url;
   },bytes.toString('base64'));
-  const capture=(url,captureId)=>main.evaluate(({url,captureId})=>window.__TAURI_INTERNALS__.invoke('smoke_capture_resource',{url,pageUrl:'http://127.0.0.1:1558/',captureId}),{url,captureId});
+  const capture=(url,captureId,pageUrl='http://127.0.0.1:1558/')=>main.evaluate(({url,captureId,pageUrl})=>window.__TAURI_INTERNALS__.invoke('smoke_capture_resource',{url,pageUrl,captureId}),{url,captureId,pageUrl});
   assert.deepEqual(Buffer.from(await capture(url,'blob-native'),'base64'),bytes);
+  const beforeMismatchedSource=crossRequests.length;
+  await assert.rejects(capture('http://127.0.0.1:1559/clip.mp4','switched-origin-native','http://127.0.0.1:1559/'),/来源页面已切换/);
+  assert.equal(crossRequests.length,beforeMismatchedSource,'a different current source cannot initiate a browser-session fetch');
   assert.deepEqual(Buffer.from(await capture('http://127.0.0.1:1559/clip.mp4','cookie-native'),'base64'),bytes);
   assert.deepEqual(Buffer.from(await capture('http://127.0.0.1:1558/redirect.mp4','redirect-native'),'base64'),bytes,'same-origin entry redirected across origins preserves native authenticated download');
   for(const port of [1558,1559])assert.deepEqual(Buffer.from(await capture(`http://127.0.0.1:${port}/gzip.mp4`,'gzip-'+port),'base64'),bytes,'gzip content length differs from decoded bytes');
@@ -178,7 +181,7 @@ try{
     execFileSync(ffmpeg,['-hide_banner','-loglevel','error','-i',publicOutput,'-f','null','-'],{windowsHide:true,timeout:120000});
     console.log(JSON.stringify({pinterestLive:true,bytes:publicBytes.length,probe:publicProbe,fullDecode:true}));
   }
-  console.log(JSON.stringify({ok:true,blobBytes:true,crossOriginCookiesWithoutCors:true,gzipDecodedLength:true,hls:!process.argv.includes('--transport-only'),separateAudio:!process.argv.includes('--transport-only'),dash:!process.argv.includes('--transport-only'),manifestBaseVerified:true,redirectedManifestRejected:true,unverifiedManifestRejected:true,manifestGuardCancelled:true,missingSegmentRejected:true,partialRejected:true,pendingHeadersCancelled:true,staleDocumentRejected:true,profiles:directory}));
+  console.log(JSON.stringify({ok:true,blobBytes:true,switchedOriginRejected:true,crossOriginCookiesWithoutCors:true,gzipDecodedLength:true,hls:!process.argv.includes('--transport-only'),separateAudio:!process.argv.includes('--transport-only'),dash:!process.argv.includes('--transport-only'),manifestBaseVerified:true,redirectedManifestRejected:true,unverifiedManifestRejected:true,manifestGuardCancelled:true,missingSegmentRejected:true,partialRejected:true,pendingHeadersCancelled:true,staleDocumentRejected:true,profiles:directory}));
 }catch(error){console.error(JSON.stringify({recentRequests:requests.slice(-18),directory}));throw error;}finally{
   if(child&&child.exitCode===null)await new Promise(resolve=>spawn('taskkill',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'}).on('exit',resolve));
   await browser?.close().catch(()=>{});await sourceBrowser?.close().catch(()=>{});

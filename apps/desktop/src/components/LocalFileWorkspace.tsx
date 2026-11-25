@@ -469,7 +469,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
           </div>
           <div className="folder-menu-divider"/>
           <button className="app-popover-option" disabled={(!allLocations && !classification) || loading} onClick={() => menuAction(() => { setClassificationView("classification"); setClassifyOpen(true); })}>{allLocations ? "自动分类全局素材" : "自动分类此文件夹"}</button>
-          <button className="app-popover-option" disabled={(!allLocations && !classification) || loading} onClick={() => menuAction(() => { setClassificationView("labels"); setClassifyOpen(true); })}>管理分类数据</button>
+          <button className="app-popover-option" disabled={(!allLocations && !classification) || loading} onClick={() => menuAction(() => { setClassificationView("labels"); setClassifyOpen(true); })}>标签管理</button>
           <div className="folder-menu-divider"/>
           <button className="app-popover-option" disabled={!directory || allLocations || loading} onClick={() => menuAction(() => directory && setRecordsRoot(directory.path))}>随图资料</button>
           <button className="app-popover-option" onClick={() => menuAction(() => setReferencesOpen(true))}>外部引用</button>

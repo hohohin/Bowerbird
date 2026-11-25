@@ -22,27 +22,29 @@ try{
  assert.equal(await tab.locator('.canvas-library-close-hint').count(),0,'no tiny secondary ESC label');
  assert.ok(Math.abs(tabBox.width-14.4)<0.1,'exploration tab is 40% narrower than the 24px library tab');
  assert.ok(Math.abs(tabBox.y+tabBox.height/2-panelBox.y-panelBox.height/2)<1,'exploration tab is vertically centered');
- assert.ok(tabBox.x+tabBox.width<=panelBox.x+panelBox.width,'the handle stays inside exploration, clear of the library letter index');
+ assert.ok(Math.abs(tabBox.x-panelBox.x)<1,'the handle fits inside the exploration panel’s left edge');
  const shapeBox=await tab.locator('.canvas-library-tab-shape').boundingBox();
  assert.ok(shapeBox.x+shapeBox.width<=panelBox.x+panelBox.width+0.1,'the decorative tab also stays inside');
  const viewport=await page.locator('.source-browser-viewport').boundingBox();
  assert.ok(Math.abs(viewport.x+viewport.width-panelBox.x-panelBox.width)<1,'the webpage fills the panel with no dedicated handle column');
  const width=async()=>(await panel.boundingBox()).width;
  const before=await width();
- await grip.focus();await page.keyboard.press('ArrowRight');assert.equal(await width(),before+20);
+ await grip.focus();await page.keyboard.press('ArrowLeft');assert.equal(await width(),before+20);
  const box=await grip.boundingBox();
  await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
- await page.mouse.move(box.x+box.width/2+80,box.y+box.height/2,{steps:4});await page.mouse.up();
- assert.equal(await width(),before+100,'drag uses the initial width without a jump from the inward tab');
+ await page.mouse.move(box.x+box.width/2-180,box.y+box.height/2,{steps:4});await page.mouse.up();
+ assert.equal(await width(),before+200,'drag uses the initial width without a jump from the inward tab');
  await page.waitForFunction(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1)?.args.visible===true);
  const nativeBounds=await page.evaluate(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1).args.bounds);
  assert.equal(nativeBounds.overlay.cut,4,'native clipping follows the visible chamfer, not a rectangular hole');
+ assert.equal(nativeBounds.overlay.side,'left','the clipped shape has its chamfer toward the page');
+ assert.ok(nativeBounds.overlay.x<1,'the clipped shape is on the left edge');
  assert.ok(Math.abs(nativeBounds.x+nativeBounds.width-(await panel.boundingBox()).x-(await panel.boundingBox()).width)<1,'native webpage retains the full panel width');
  const overlayShape=await tab.locator('.canvas-library-tab-shape').boundingBox();
  assert.ok(nativeBounds.overlay.width<22&&nativeBounds.overlay.height<100,'native exclusion is limited to the floating tab footprint');
  assert.ok(nativeBounds.x+nativeBounds.overlay.x<=overlayShape.x&&nativeBounds.x+nativeBounds.overlay.x+nativeBounds.overlay.width>=overlayShape.x+overlayShape.width,'native exclusion reveals the actual inward tab');
  assert.equal(await page.getByRole('button',{name:'收起浏览器',exact:true}).count(),1);
- assert.equal(await page.evaluate(()=>document.querySelector('.explore-main').getBoundingClientRect().left-document.querySelector('.explore-browser').getBoundingClientRect().right),0,'no full-height strip occupies width');
+ assert.equal(await page.evaluate(()=>document.querySelector('.explore-browser').getBoundingClientRect().left-document.querySelector('.explore-main').getBoundingClientRect().right),0,'no full-height strip occupies width');
  for(const theme of ['light','dark']){
   await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
   assert.equal(await tab.locator('.canvas-library-tab-fill').evaluate(el=>getComputedStyle(el).fill),await page.locator('.source-browser-panel').evaluate(el=>getComputedStyle(el).backgroundColor),'tab and exploration shell share their surface color');
@@ -54,7 +56,7 @@ try{
    const x=s.left-v.left,y=s.top-v.top,r=x+s.width,b=y+s.height,c=Number(shape.dataset.overlayCut);
    const layer=document.createElement('div');layer.dataset.handleReview='';
    Object.assign(layer.style,{position:'absolute',inset:'0',zIndex:'48',pointerEvents:'none',background:'repeating-linear-gradient(135deg,#a7bbba 0 18px,#c2cebd 18px 36px)',
-    clipPath:`path(evenodd, "M0 0H${v.width}V${v.height}H0Z M${x+c} ${y}H${r}V${b}H${x+c}L${x} ${b-c}V${y+c}Z")`});
+    clipPath:`path(evenodd, "M0 0H${v.width}V${v.height}H0Z M${x} ${y}H${r-c}L${r} ${y+c}V${b-c}L${r-c} ${b}H${x}Z")`});
    viewport.append(layer);
   });
   await page.mouse.move(900,100);await grip.evaluate(el=>el.blur());
@@ -66,8 +68,16 @@ try{
   await page.locator('[data-handle-review]').evaluate(el=>el.remove());
  }
  await page.getByRole('button',{name:'收起浏览器',exact:true}).click();await panel.waitFor({state:'hidden'});
- await page.getByRole('button',{name:'探索',exact:true}).click();assert.equal(await width(),before+100);
+ await page.getByRole('button',{name:'探索',exact:true}).click();assert.equal(await width(),before+200);
  await grip.focus();await page.keyboard.press('Escape');await panel.waitFor({state:'hidden'});
+ await page.setViewportSize({width:900,height:800});
+ await page.reload();
+ await page.getByRole('button',{name:'探索',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('[aria-label="调整浏览器宽度"]')?.getAttribute('aria-valuenow')==='620');
+ assert.equal(await width(),620,'starting at the 900px desktop minimum clamps the saved width');
+ await page.setViewportSize({width:1280,height:800});
+ await page.waitForFunction(expected=>Number(document.querySelector('[aria-label="调整浏览器宽度"]')?.getAttribute('aria-valuenow'))===expected,before+200);
+ assert.equal(await width(),before+200,'restoring enough window space restores the saved personal width');
  await page.goto(server.resolvedUrls.local[0]+'scripts/fixtures/canvas-reference/preview.html?source-library&canvas-library&detail-route');
  await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
  await page.waitForFunction(()=>document.activeElement?.classList.contains('canvas-stage'));

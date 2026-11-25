@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSettings } from "./types";
 
 export interface LocalClassificationStatus {
   run_id?: string;
@@ -73,9 +72,15 @@ export interface GlobalClassificationView {
   labels: ClassificationLabel[];
   pictures: { id: string; path: string; tags: string[] }[];
 }
+export interface ClassificationStartOptions {
+  install?: boolean;
+  tagId?: string;
+  pendingOnly?: boolean;
+  ensureCloud?: boolean;
+}
 export const globalClassification = {
   view: (paths: string[]) => invoke<GlobalClassificationView>("global_classification_view", { paths }),
-  start: (options: { install?: boolean; tagId?: string; pendingOnly?: boolean } = {}) => options.install
+  start: (options: ClassificationStartOptions = {}) => options.install
     ? localClassification.start(options)
     : invoke<void>("global_classification_start", { tagId: null, pendingOnly: true, ...options }),
 };
@@ -83,27 +88,23 @@ export const localClassification = {
   source: (tagId: string, root: string | null = null) => invoke<string | null>("local_classification_source", { tagId, root }),
   status: () => invoke<LocalClassificationStatus>("local_classification_status"),
   labels: () => invoke<ClassificationLabel[]>("local_classification_labels"),
-  start: (options: { install?: boolean; tagId?: string; pendingOnly?: boolean } = {}) =>
+  start: (options: ClassificationStartOptions = {}) =>
     invoke<void>("local_classification_start", { install: false, tagId: null, pendingOnly: true, ...options }),
   stop: () => invoke<void>("local_classification_stop"),
   vectorInstall: () => invoke<void>("local_classification_vector_install"),
   vectorUninstall: () => invoke<void>("local_classification_vector_uninstall"),
-  enable: (enabled: boolean) => invoke<void>("local_classification_enable", { enabled }),
+  enable: (enabled: boolean) => invoke<boolean>("local_classification_enable", { enabled }),
   save: (id: string | null, name: string, description: string, enabled: boolean) =>
     invoke<string>("local_classification_save_label", { id, name, description, enabled }),
-  example: (tagId: string, assetIds: string[], positive: boolean) =>
-    invoke<void>("local_classification_example", { tagId, assetIds, positive }),
+  example: (tagId: string, assetIds: string[], positive: boolean, assignedOnly = false) =>
+    invoke<void>("local_classification_example", { tagId, assetIds, positive, ...(assignedOnly ? { assignedOnly } : {}) }),
   deleteLabels: (tagIds: string[]) => invoke<void>("local_classification_delete_labels", { tagIds }),
-  jevConfig: async (): Promise<{ enabled: boolean }> => {
-    const settings = await invoke<AppSettings>("get_settings");
-    return { enabled: settings.jev_image_classification_enabled };
-  },
 };
 
 export const projectClassification = (projectId: string) => ({
   ...localClassification,
   labels: () => invoke<ClassificationLabel[]>("project_classification_labels", { projectId }),
-  start: (options: { tagId?: string; pendingOnly?: boolean } = {}) =>
+  start: (options: Omit<ClassificationStartOptions, "install"> = {}) =>
     invoke<void>("project_classification_start", { projectId, tagId: null, pendingOnly: true, ...options }),
   example: (tagId: string, assetIds: string[], positive: boolean) =>
     invoke<void>("local_classification_example", { projectId, tagId, assetIds, positive }),

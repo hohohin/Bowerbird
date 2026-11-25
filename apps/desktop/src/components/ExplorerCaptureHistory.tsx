@@ -1,7 +1,7 @@
-import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDownToLine, Check, Film, Image, RotateCcw, X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { cancelExplorerCapture, isCaptureActive, retryExplorerCapture, useExplorerCaptures, type ExplorerCaptureRecord } from "../lib/explorerCaptureHistory";
+import { cancelExplorerCapture, clearFinishedExplorerCaptures, isCaptureActive, retryExplorerCapture, retryFailedExplorerCaptures, useExplorerCaptures, type ExplorerCaptureRecord } from "../lib/explorerCaptureHistory";
 import { api } from "../lib/api";
 import { externalFiles } from "../lib/externalFiles";
 import { notifyError } from "../lib/notify";
@@ -10,7 +10,7 @@ import { isVideoAsset } from "../lib/videoGeneration";
 import { videoSourceKey } from "../lib/videoSourceKey";
 import { useStore } from "../store";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
-import { ModalShell } from "./ModalShell";
+import { SourceBrowserPopover } from "./SourceBrowserPopover";
 import "./ExplorerCaptureHistory.css";
 
 function bytes(value: number) {
@@ -67,20 +67,6 @@ function CaptureRow({ item, onView }: { item: ExplorerCaptureRecord; onView: (id
     <CaptureActions item={item} onView={onView} />
   </li>;
 }
-function useCapturePopoverPosition(button: RefObject<HTMLButtonElement>, opened: boolean) {
-  const [position, setPosition] = useState({ left: 8, top: 60, width: 390 });
-  useLayoutEffect(() => {
-    if (!opened) return;
-    const update = () => {
-      const rect = button.current?.getBoundingClientRect(); if (!rect) return;
-      const width = Math.min(390, window.innerWidth - 16);
-      setPosition({ width, left: Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width)), top: Math.min(rect.bottom + 8, window.innerHeight - 180) });
-    };
-    update(); window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [button, opened]);
-  return position;
-}
 export function ExplorerCaptureHistory({ visible = true }: { visible?: boolean }) {
   const records = useExplorerCaptures(state => state.records);
   const active = records.filter(isCaptureActive).length;
@@ -88,9 +74,9 @@ export function ExplorerCaptureHistory({ visible = true }: { visible?: boolean }
   const [opened, setOpened] = useState(false);
   const [preview, setPreview] = useState<{ asset: Asset; path: string; projectId: string | null }>();
   const button = useRef<HTMLButtonElement>(null);
+  const popoverId = useId();
   const request = useRef(0);
   const close = useCallback(() => { request.current++; setOpened(false); }, []);
-  const position = useCapturePopoverPosition(button, opened);
   useLayoutEffect(() => {
     setPreview(undefined);
     if (!visible) close();
@@ -112,6 +98,7 @@ export function ExplorerCaptureHistory({ visible = true }: { visible?: boolean }
         setPreview({ asset, path, projectId });
       } else {
         close();
+        button.current?.focus({ preventScroll: true });
         useStore.getState().openDetail(asset.id);
       }
     } catch (error) {
@@ -119,14 +106,18 @@ export function ExplorerCaptureHistory({ visible = true }: { visible?: boolean }
     }
   }
   return <>
-    <button ref={button} type="button" className={`explorer-capture-trigger${active ? " is-active" : ""}`} onClick={() => opened ? close() : setOpened(true)} title="采集记录" aria-label="采集记录" aria-haspopup="dialog" aria-expanded={opened}>
+    <button ref={button} type="button" className={`explorer-capture-trigger${active ? " is-active" : ""}`} onClick={() => opened ? close() : setOpened(true)} title="采集记录" aria-label="采集记录" aria-haspopup="dialog" aria-expanded={opened} aria-controls={opened && visible ? popoverId : undefined}>
       <ArrowDownToLine size={16} aria-hidden />{active > 0 && <span className="explorer-capture-count explore-capture-status" aria-hidden>{active}</span>}
       <span className="sr-only">{active ? `${active} 项正在采集` : ""}</span>
     </button>
-    {opened && visible && <ModalShell title="采集记录" onClose={close} className="explorer-capture-popover" panelProps={{ style: position }}>
+    {opened && visible && <SourceBrowserPopover id={popoverId} button={button} title="采集记录" onClose={close} className="explorer-capture-popover">
+      <div className="explorer-capture-bulk-actions">
+        <button type="button" onClick={clearFinishedExplorerCaptures} disabled={active === records.length}>清空已结束记录</button>
+        <button type="button" onClick={retryFailedExplorerCaptures} disabled={!records.some(item => item.phase === "failed" && item.retryable)}>全部重试</button>
+      </div>
       {records.length ? <ul className="explorer-capture-list">{records.map(item => <CaptureRow key={item.id} item={item} onView={id => void openCapturedAsset(id)} />)}</ul>
         : <div className="explorer-capture-empty">暂无采集记录</div>}
-    </ModalShell>}
+    </SourceBrowserPopover>}
     {visible && preview?.projectId === projectId && <LibraryVideoPreview
       asset={preview.asset} path={preview.path} projectId={projectId} sourceKey={videoSourceKey(preview.asset)}
       onClose={() => { setPreview(undefined); button.current?.focus({ preventScroll: true }); }}/>

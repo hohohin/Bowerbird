@@ -24,8 +24,10 @@
 .asset-tag-picker-option:is(:hover,:focus-within) input::before { border-color:var(--bb-blue); }
 .asset-tag-picker-option input:checked::before { background:var(--bb-blue); border-color:var(--bb-blue); }
 .asset-tag-picker-option span { min-width:0; overflow-wrap:anywhere; }
-.asset-tag-picker-footer { flex-shrink:0; border-top:1px solid var(--bb-line); padding:5px 8px; }
-.asset-tag-picker-footer button { display:flex; align-items:center; gap:7px; width:100%; min-height:36px; padding:7px 13px; color:var(--bb-blue); text-align:left; overflow-wrap:anywhere; }
+.asset-tag-picker-footer { display:flex; flex-shrink:0; flex-wrap:wrap; justify-content:flex-end; border-top:1px solid var(--bb-line); padding:5px 8px; }
+.asset-tag-picker-footer button { display:flex; align-items:center; gap:7px; min-height:36px; min-width:0; padding:7px 13px; color:var(--bb-blue); text-align:left; overflow-wrap:anywhere; }
+.asset-tag-picker-footer [data-create] { flex:1 1 180px; }
+.asset-tag-picker-footer [data-manage] { color:var(--bb-ink); white-space:nowrap; }
 .asset-tag-picker-footer button svg { flex:none; }
 .asset-tag-picker-footer button:hover { background:var(--bb-popover-hover); }
 .asset-tag-picker button:disabled,.asset-tags button:disabled { opacity:.5; cursor:default; }
@@ -33,5 +35,11 @@
 .asset-tags-error { color:var(--bb-ink); font-size:12px; }
 .asset-tag-picker .asset-tags-error { padding:12px 20px 0; }
 .asset-tags-error button { margin-left:8px; color:var(--bb-blue); }
+.asset-tag-batch-content { display:flex; flex-direction:column; min-height:110px; max-height:min(400px, 50vh); }
+.asset-tag-batch-content .asset-tag-picker-search { margin-inline:0; padding-top:0; }
+.asset-tag-batch-footer { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+.asset-tag-batch-create { margin-inline-end:auto; }
+.asset-tag-batch-feedback { margin:12px 0 4px; color:var(--bb-muted); font-size:12px; }
+.asset-tag-batch-feedback:empty { margin:0; }
 @media(max-width:600px) { .asset-tag-picker-columns { gap:12px; padding:12px; } }
 @media(forced-colors:active) { .asset-tag-picker-option input { appearance:auto; } }

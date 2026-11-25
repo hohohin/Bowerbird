@@ -339,6 +339,20 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
     };
   }, [id, activeProjectId, panelOnly, standaloneVideo]);
 
+  useEffect(() => {
+    if (!id || standaloneVideo) return;
+    let alive = true;
+    let version = 0;
+    const unsubscribe = listen<{ assetTagIds?: string[] } | null>("library://assets-changed", event => {
+      if (!alive || !event.payload?.assetTagIds?.includes(id)) return;
+      const requested = ++version;
+      void api.listAssetTags(id).then(value => {
+        if (alive && requested === version) setTags(value);
+      }).catch(error => console.error("Refreshing asset tags failed", error));
+    }).catch(() => undefined);
+    return () => { alive = false; void unsubscribe.then(cleanup => cleanup?.()); };
+  }, [id, standaloneVideo]);
+
   // 同流程轮播：本图是生成图（或被合并掉的 sibling）时取整组过程图。非生成图置空。
   // sibling 不在主列表 → assets.find 落空 → 仍走 listGenerationGroup 取组。
   // 组已含 id（轮播切 sibling）→ 跳过，免每次切换都 fetch。

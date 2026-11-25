@@ -4,6 +4,8 @@
 
 ## 查阅
 
+- [2026-11-25 桌面与 Cloud 源码存档](2026-11-25-desktop-cloud-archive.md) 记录探索、素材库、画板、H3、分层候选及 MCP 的本轮验收。
+- [2026-11-25 素材库体验与性能验证](2026-11-25-material-library-performance.md) 记录 30 万条素材概览基准与 Windows 本机验收。
 - [2026-11-24 画板、音频与代码 MCP 源码存档](2026-11-24-canvas-audio-mcp-archive.md) 记录折叠接线、裁剪、分支控制台及 H3 空槽校验。
 - [2026-11-23 连接文件夹性能验证](2026-11-23-folder-library-performance.md) 记录 P0／P1 的隔离基准、回归和覆盖边界。
 - [2026-11-23 音频与素材库源码存档](2026-11-23-media-library-archive.md) 记录音频详情、目录刷新、文件夹侧栏和画板回归。

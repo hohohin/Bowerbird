@@ -1,4 +1,4 @@
-.comfy-video-card { display: grid; gap: 10px; }
+.comfy-video-card { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .workflow-card .comfy-video-prompt { display: block; width: 100%; margin: 0; max-height: 360px; box-sizing: border-box; }
 .comfy-frame-slots { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 30px; padding-bottom: 10px; border-bottom: 1px solid var(--bb-line); }
 .h3-frame-group, .h3-frame-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -18,18 +18,32 @@
   background: var(--bb-surface); border: 1px solid var(--bb-line); box-shadow: 0 8px 20px var(--bb-shadow-popover);
 }
 .comfy-frame-placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--bb-muted); text-align: center; }
-.comfy-audio-input { display: grid; gap: 3px; min-width: 0; padding: 4px 8px; border: 1px dashed var(--bb-line); border-radius: 6px; font-size: 12px; }
+.comfy-audio-input { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; min-width: 0; padding: 4px 8px; border: 1px dashed var(--bb-line); border-radius: 6px; font-size: 12px; }
 .comfy-audio-input:has(button) { border-style: solid; }
-.comfy-audio-row { display: flex; align-items: center; gap: 6px; min-height: 24px; }
+.comfy-audio-row { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; min-height: 24px; }
 .comfy-audio-row > :not(.comfy-audio-source) { flex-shrink: 0; }
 .comfy-audio-source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .comfy-audio-input small, .comfy-audio-source { color: var(--bb-muted); }
 .workflow-card .comfy-audio-row button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; }
 .comfy-audio-row button:focus-visible { outline: 1px solid var(--bb-blue); outline-offset: -2px; }
-.comfy-r2v-groups { display:grid; gap:5px; }
+.comfy-r2v-groups { display:grid; min-width:0; grid-template-columns:minmax(0, 1fr); gap:5px; }
 .comfy-r2v-groups > small { color:var(--bb-muted); }
+.comfy-r2v-list { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .comfy-r2v-source { border-top:1px solid var(--bb-line); }
 .comfy-r2v-source > small { max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.comfy-r2v-pictures { display: grid; grid-template-columns: repeat(auto-fill, 64px); gap: 6px; }
+.comfy-r2v-picture { min-width: 0; }
+.comfy-r2v-picture > .comfy-audio-source { display: block; margin-top: 2px; font-size: 10px; line-height: 14px; }
+.comfy-r2v-picture-frame, .comfy-r2v-video-cover { border: 1px solid var(--bb-line); background: var(--bb-surface-2); box-sizing: border-box; }
+.comfy-r2v-picture-frame { position: relative; height: 46px; }
+.comfy-r2v-picture-frame .comfy-frame-placeholder { bottom: 12px; font-size: 10px; }
+.comfy-r2v-picture-frame .comfy-picture-tag { position: absolute; bottom: 0; left: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 1px 2px; background: rgb(0 0 0 / 76%); color: white; font: 9px/12px ui-monospace, Consolas, monospace; pointer-events: none; }
+.workflow-card .comfy-r2v-picture-frame button { position: absolute; top: 0; right: 0; display: grid; place-items: center; width: 20px; height: 20px;
+  padding: 0; border: 0; border-radius: 0; background: rgb(0 0 0 / 76%); color: white; }
+.comfy-r2v-picture-frame button:focus-visible { outline: 1px solid white; outline-offset: -2px; }
+.comfy-r2v-video-cover { display: grid; place-items: center; width: 32px; height: 24px; color: var(--bb-muted); }
+.comfy-r2v-video-cover img { width: 100%; height: 100%; object-fit: contain; }
 .comfy-video-card .comfy-video-options { padding-bottom: 8px; border-bottom: 1px solid var(--bb-line); }
 /* The header keeps a full button hit target around the small status dot. */
 .workflow-card > header .comfy-environment-dot { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; }

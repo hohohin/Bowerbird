@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { loadSourceScript } from './fixtures/explorer/source-script.mjs';
 import { readFile } from 'node:fs/promises';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 import { startBrowserDrag, finishBrowserDrag } from './fixtures/explorer/native-drag.mjs';
 import { parseExplorerImage, EXPLORER_MIME } from '../src/lib/explorer.ts';
 
 const clip=await readFile('src-tauri/tests/fixtures/media/fragmented.mp4');
-const injection=(await readFile('src-tauri/src/commands/source_browser_drag.js','utf8')).replace('__BOWERBIRD_DRAG_BRIDGE__','bowerbird-explorer://fixture');
+const injection=(await loadSourceScript('src-tauri/src/commands/source_browser_drag.js')).replace('__BOWERBIRD_DRAG_BRIDGE__','bowerbird-explorer://fixture');
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try {
   for(const kind of ['video','source','overlay','poster-overlay','independent-image','css-disabled','blob','blob-with-source','hls','protected']) {

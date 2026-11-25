@@ -3,13 +3,19 @@
   if (window.top !== window || (location.origin !== "https://www.pinterest.com" && location.origin !== "https://pinterest.com")) return;
   if (window.__bowerbirdPinterestChrome) return;
   window.__bowerbirdPinterestChrome = true;
+  const rules = __BOWERBIRD_SITE_RULES__;
+  const pin = rules.pinterest;
+  const testId = value => `[data-test-id="${value}"]`;
+  const hiddenToolbar = pin.hiddenToolbarItems.map(testId).join(", ");
+  const navSelector = `html[data-bowerbird-pin-nav] #${CSS.escape(pin.toolbarId)}`;
+  const navIcon = `${navSelector} ${testId(pin.toolbarIcon)}`;
   __BOWERBIRD_SCROLLBAR_RUNTIME__
   const style = document.createElement("style");
   style.dataset.bowerbirdPinterestChrome = "";
   style.textContent = __BOWERBIRD_SCROLLBAR_CSS__ + `
-    [data-test-id="PinBetterSaveDropdown"], [data-test-id="PinBetterSaveButton"] { display: none !important; }
+    ${hiddenToolbar} { display: none !important; }
     button.industrial-scrollbar { --bb-muted: var(--sema-color-text-subtle, #646464); }
-    html[data-bowerbird-pin-nav] #VerticalNavContent {
+    ${navSelector} {
       position: fixed !important; inset: auto !important; inset-inline-start: 8px !important;
       top: 50% !important; transform: translateY(-50%) !important;
       box-sizing: border-box !important; width: 36px !important; min-width: 0 !important;
@@ -19,22 +25,22 @@
       border-radius: 12px !important; background: var(--sema-color-background-default, Canvas) !important;
       box-shadow: 0 3px 12px #0002;
     }
-    html[data-bowerbird-pin-nav] #VerticalNavContent > div { height: auto !important; padding: 0 !important; }
-    html[data-bowerbird-pin-nav] #VerticalNavContent [data-test-id="vertical-nav-icon"] {
+    ${navSelector} > div { height: auto !important; padding: 0 !important; }
+    ${navIcon} {
       width: 32px !important; max-width: 32px !important; margin-inline: auto !important;
     }
-    html[data-bowerbird-pin-nav] #VerticalNavContent :is(a, button) {
+    ${navSelector} :is(a, button) {
       max-width: 32px !important; min-width: 0 !important; padding-inline: 4px !important; box-sizing: border-box !important;
     }
-    html[data-bowerbird-pin-nav] #VerticalNavContent :focus-visible {
+    ${navSelector} :focus-visible {
       outline: 2px solid currentColor !important; outline-offset: -2px !important;
     }
-    html[data-bowerbird-pin-nav] #VerticalNavContent svg,
-    html[data-bowerbird-pin-nav] #VerticalNavContent [data-test-id="vertical-nav-icon"] img {
+    ${navSelector} svg,
+    ${navIcon} img {
       width: 16px !important; height: 16px !important; flex-shrink: 0 !important; object-fit: contain !important;
     }
     html[data-bowerbird-pin-nav] [data-bowerbird-pin-inset] { padding-inline-start: var(--bowerbird-pin-inset) !important; }
-    html[data-bowerbird-pin-nav] [data-test-id="sidebar-container"] { margin-inline-start: 52px !important; }
+    html[data-bowerbird-pin-nav] ${testId(pin.sidebar)} { margin-inline-start: 52px !important; }
   `;
   let frame = 0;
   let marked = new Set();
@@ -54,14 +60,14 @@
     const next = new Set();
     if (!nav) return next;
     const side = getComputedStyle(nav).direction === "rtl" ? "paddingRight" : "paddingLeft";
-    for (const main of document.querySelectorAll(".mainContainer")) {
+    for (const main of document.querySelectorAll(`.${CSS.escape(pin.mainClass)}`)) {
       if (markInset(main.parentElement, side)) next.add(main.parentElement);
     }
     return next;
   }
   function update() {
     frame = 0;
-    const nav = document.getElementById("VerticalNavContent");
+    const nav = document.getElementById(pin.toolbarId);
     const active = !!nav && nav.getClientRects().length > 0;
     document.documentElement.toggleAttribute("data-bowerbird-pin-nav", active);
     const next = contentInsets(active ? nav : null);

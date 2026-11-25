@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1591, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/workflow-layer-parallel-vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1591, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
@@ -25,7 +25,7 @@ try {
     api.layerWorkspaceSave = async (id, value) => { workspaces.set(id, structuredClone(value)); };
     api.readImageDataUrl = async () => dataUrl;
     api.layerCloudRequest = async request => {
-      if (request.action === 'layer_quote') return { services: [{ service: 'image_layer_decompose', available: true }] };
+      if (request.action === 'layer_quote') return { layer_protocol: 2, services: [{ service: 'image_layer_decompose', available: true, max_images: request.max_images }] };
       if (request.action === 'get_by_key') return { status: 'not_found' };
       const entry = [...workspaces.entries()].find(([, value]) => value.pending?.request.idempotency_key === request.idempotency_key);
       if (!entry) throw new Error('request submitted before pending workspace saved');
@@ -49,7 +49,7 @@ try {
   await page.waitForFunction(() => window.layerRequests.length === 2);
   assert.deepEqual(await page.evaluate(() => window.layerRequests.map(r => r.assetId).sort()), ['a', 'existing']);
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
-  await page.locator('[data-workflow-card="switch"]').hover();
+  await page.locator('[data-workflow-card="switch"] > header').hover();
   await page.getByRole('tooltip').waitFor();
   assert.match(await page.getByRole('tooltip').innerText(), /2 个步骤同时执行中/);
   assert.equal(await page.getByRole('tooltip').locator('li').filter({ hasText: '分层拆分 · 执行中' }).count(), 2);

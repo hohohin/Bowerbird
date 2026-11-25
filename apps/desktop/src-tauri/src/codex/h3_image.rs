@@ -261,6 +261,15 @@ pub async fn cancel(encoded: &str, auth: &AuthClient) -> AppResult<()> {
     }
     Err(err("本机图片任务仍在停止中，尚未确认停止，请稍后检查原任务状态"))
 }
+async fn query_status(http: &reqwest::Client, url: String) -> AppResult<Value> {
+    for attempt in 1..=3 {
+        match json_response(http.get(&url).timeout(Duration::from_secs(18))).await {
+            Err(e) if attempt < 3 && (e.to_string().starts_with("无法连接本机 ComfyUI") || e.to_string().contains("本机服务查询暂时中断")) => tokio::time::sleep(Duration::from_secs(2)).await,
+            result => return result,
+        }
+    }
+    unreachable!()
+}
 async fn retrieve(ticket: &Ticket, auth: &AuthClient) -> AppResult<(Vec<PathBuf>, PathBuf)> {
     let http = client()?;
     let base = endpoint(&ticket.endpoint)?;
@@ -268,7 +277,7 @@ async fn retrieve(ticket: &Ticket, auth: &AuthClient) -> AppResult<(Vec<PathBuf>
     let mut misses = 0;
     loop {
         ticket.check_owner(auth)?;
-        let history = json_response(http.get(format!("{base}/history/{id}"))).await?;
+        let history = query_status(&http, format!("{base}/history/{id}")).await?;
         let result = &history[&id];
         if result["status"]["status_str"] == "error" {
             let reason = result["status"]["messages"]
@@ -320,7 +329,7 @@ async fn retrieve(ticket: &Ticket, auth: &AuthClient) -> AppResult<(Vec<PathBuf>
             ticket.check_owner(auth)?;
             return Ok((vec![path], temp.keep()));
         }
-        let queue = json_response(http.get(format!("{base}/queue"))).await?;
+        let queue = query_status(&http, format!("{base}/queue")).await?;
         if ["queue_running", "queue_pending"].iter().any(|key| {
             queue[*key]
                 .as_array()

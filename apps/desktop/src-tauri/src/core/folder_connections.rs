@@ -208,6 +208,8 @@ pub struct ConnectionFilter {
     pub query: Option<String>,
     #[serde(default)]
     pub grouped: bool,
+    #[serde(rename = "firstAssetId")]
+    pub first_asset_id: Option<String>,
 }
 impl ConnectionFilter {
     fn gallery(&self, condition: &str, provenance: &str) -> String {
@@ -536,6 +538,12 @@ impl Database {
             }
             values.push(Value::Text(folder.into()));
         }
+        let first = if let Some(id) = &filter.first_asset_id {
+            // Preserve the normal representative of grouped entries and every
+            // entry's folder identity. The matching group only moves visually.
+            values.push(Value::Text(id.clone()));
+            "(e.folder_id,e.group_key) IN (SELECT f.folder_id,f.group_key FROM entry_gallery f WHERE f.asset_id=?) DESC, "
+        } else { "" };
         values.push(Value::Integer(limit.clamp(1, 2000)));
         values.push(Value::Integer(offset.max(0)));
         let waiting = std::time::Instant::now();
@@ -547,7 +555,7 @@ impl Database {
             let mut stmt = conn.prepare_cached(&format!("WITH {gallery}
               SELECT e.id FROM ranked_entries e
               WHERE e.rank=1
-              ORDER BY lower(e.name),e.id LIMIT ? OFFSET ?"))?;
+              ORDER BY {first}lower(e.name),e.id LIMIT ? OFFSET ?"))?;
             let values = stmt.query_map(params_from_iter(values), |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
             tracing::debug!(target: "library::read", operation = "folder_page_ids", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = values.len(), offset);
             Ok(values)
@@ -607,8 +615,8 @@ impl Database {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn every_entry_id(&self, folder: Option<&str>) -> AppResult<Vec<String>> {
-        // Physical rename/relocation must also visit references hidden from the catalog.
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id FROM connected_entries WHERE ?1 IS NULL OR folder_id=?1 ORDER BY lower(name),id")?;
         let ids = stmt.query_map([folder], |row| row.get(0))?.collect::<Result<Vec<_>,_>>()?;
@@ -1191,11 +1199,13 @@ impl Database {
                 };
                 let file = item.path();
                 let file_name = name(&file);
-                if file_type.is_symlink()
-                    || file_name == ".bowerbird"
-                    || file_name.starts_with(".bowerbird-")
-                    || generated.iter().any(|path| file.starts_with(path))
-                {
+                if file_type.is_symlink() || generated.iter().any(|path| file.starts_with(path)) {
+                    continue;
+                }
+                if super::file_workspace::is_internal_dir_name(&file_name) {
+                    if file_type.is_dir() {
+                        super::file_workspace::hide_existing_internal_dir(&file);
+                    }
                     continue;
                 }
                 if file_type.is_dir() {
@@ -1509,17 +1519,37 @@ impl Database {
         tx.commit()?;
         Ok(())
     }
-    fn rewrite_references(&self) -> AppResult<()> {
-        let ids = self.every_entry_id(None)?;
+    fn rewrite_references_for_assets(&self, asset_ids: &[String]) -> AppResult<()> {
         let mut failed = Vec::new();
-        for batch in ids.chunks(2000) {
-            for entry in self.resolve_connection_entries(batch)? {
-                if entry.is_reference && entry.available {
-                    if let Err(error) = write_reference(Path::new(&entry.path), &entry.asset)
-                    {
-                        tracing::warn!("reference update {}: {error}", entry.id);
-                        failed.push(entry.name);
-                    }
+        for batch in asset_ids.chunks(2000) {
+            let references = {
+                let conn = self.conn.lock().unwrap();
+                let placeholders = vec!["?"; batch.len()].join(",");
+                let mut stmt = conn.prepare_cached(&format!(
+                    "SELECT e.id AS entry_id,e.name AS entry_name,e.path AS entry_path,a.*
+                     FROM connected_entries e JOIN assets a ON a.id=e.asset_id
+                     JOIN connected_folders f ON f.id=e.folder_id JOIN connected_roots r ON r.id=f.root_id
+                     WHERE e.is_reference=1 AND e.available=1 AND f.available=1 AND r.available=1
+                       AND e.asset_id IN ({placeholders})
+                     ORDER BY lower(e.name),e.id"
+                ))?;
+                let rows = stmt.query_map(params_from_iter(batch), |row| {
+                    Ok((
+                        row.get::<_, String>("entry_id")?,
+                        row.get::<_, String>("entry_name")?,
+                        row.get::<_, String>("entry_path")?,
+                        super::library::asset_from_row(row)?,
+                    ))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for (id, name, path, asset) in references {
+                if !asset.store_path.as_deref().is_some_and(|path| Path::new(path).is_file()) {
+                    continue;
+                }
+                if let Err(error) = write_reference(Path::new(&path), &asset) {
+                    tracing::warn!("reference update {id}: {error}");
+                    failed.push(name);
                 }
             }
         }
@@ -1537,47 +1567,59 @@ impl Database {
         source: &FolderConnection,
         destination: &Path,
         target: Option<&FolderConnection>,
-    ) -> AppResult<()> {
-        let folders: Vec<_> = self
-            .connection_folders(None, None)?
-            .into_iter()
-            .filter(|f| Path::new(&f.path).starts_with(&source.path))
-            .map(|folder| {
-                let suffix = Path::new(&folder.path).strip_prefix(&source.path).unwrap();
-                let next = if suffix.as_os_str().is_empty() {
-                    destination.to_path_buf()
-                } else {
-                    destination.join(suffix)
-                };
-                (folder, next)
-            })
-            .collect();
-        let mut updates = Vec::new();
-        for (folder, next) in &folders {
-            let ids = self.every_entry_id(Some(&folder.id))?;
-            for batch in ids.chunks(2000) {
-                for entry in self.resolve_connection_entries(batch)? {
-                    let next_file = next.join(&entry.name);
-                    updates.push((entry, next_file));
-                }
-            }
-        }
+    ) -> AppResult<Vec<String>> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        for (entry, next_file) in updates {
-            if !entry.is_reference {
-                repoint_asset_in(&tx, &entry.asset_id, Path::new(&entry.path), &next_file)?;
-            }
-            tx.execute(
-                "UPDATE connected_entries SET path=?2 WHERE id=?1",
-                params![entry.id, string(&next_file)],
+        let folders = {
+            let mut stmt = tx.prepare(
+                "WITH RECURSIVE tree(id,path) AS (
+                    SELECT id,path FROM connected_folders WHERE id=?1
+                    UNION ALL SELECT f.id,f.path FROM connected_folders f JOIN tree t ON f.parent_id=t.id
+                 ) SELECT id,path FROM tree",
             )?;
-        }
-        for (folder, next) in folders {
+            let rows = stmt.query_map([&source.id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let mut assets = HashSet::new();
+        let mut entries = tx.prepare(
+            "SELECT id,asset_id,path,name,is_reference FROM connected_entries WHERE folder_id=?1",
+        )?;
+        for (folder_id, path) in folders {
+            let suffix = Path::new(&path)
+                .strip_prefix(&source.path)
+                .map_err(|_| invalid("目录结构已变化"))?;
+            let next = if suffix.as_os_str().is_empty() {
+                destination.to_path_buf()
+            } else {
+                destination.join(suffix)
+            };
+            let rows = entries.query_map([&folder_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, bool>(4)?,
+                ))
+            })?.collect::<Result<Vec<_>, _>>()?;
+            for (entry_id, asset_id, path, name, is_reference) in rows {
+                let next_file = next.join(name);
+                if !is_reference {
+                    repoint_asset_in(&tx, &asset_id, Path::new(&path), &next_file)?;
+                }
+                // Moved reference files also need their relative target recalculated.
+                assets.insert(asset_id);
+                tx.execute(
+                    "UPDATE connected_entries SET path=?2 WHERE id=?1",
+                    params![entry_id, string(&next_file)],
+                )?;
+            }
             tx.execute(
                 "UPDATE connected_folders SET path=?2,root_id=?3,available=1 WHERE id=?1",
                 params![
-                    folder.id,
+                    folder_id,
                     string(&next),
                     target
                         .map(|f| f.root_id.as_str())
@@ -1603,8 +1645,9 @@ impl Database {
                 )?;
             }
         }
+        drop(entries);
         tx.commit()?;
-        Ok(())
+        Ok(assets.into_iter().collect())
     }
 
     fn complete_fingerprints_before_directory_move(&self, path: &Path) -> AppResult<()> {
@@ -1627,45 +1670,62 @@ impl Database {
         }
         let destination = directory(path)?;
         // Verify every known original before changing identity mappings.
-        for f in self
-            .connection_folders(None, None)?
-            .into_iter()
-            .filter(|f| f.root_id == id)
-        {
-            let ids = self.every_entry_id(Some(&f.id))?;
-            for batch in ids.chunks(2000) {
-                for entry in self
-                    .resolve_connection_entries(batch)?
-                    .into_iter()
-                    .filter(|e| !e.is_reference)
-                {
-                    let target = destination.join(
-                        Path::new(&entry.path)
-                            .strip_prefix(&folder.path)
-                            .map_err(|_| invalid("目录结构已变化"))?,
-                    );
-                    if Path::new(&entry.path).is_file() { self.complete_connected_fingerprint(&entry.asset_id)?; }
-                    let expected: Option<String> = self
-                        .conn
-                        .lock()
-                        .unwrap()
-                        .query_row(
-                            "SELECT fingerprint FROM external_assets WHERE asset_id=?1",
-                            [&entry.asset_id],
-                            |r| r.get(0),
-                        )
-                        .optional()?;
-                    let expected = expected.filter(|hash| !hash.is_empty())
-                        .or_else(|| external_files::fingerprint(Path::new(&entry.path)).ok())
-                        .ok_or_else(|| invalid("原文件缺少校验信息，无法确认新位置"))?;
-                    if external_files::fingerprint(&target)? != expected {
-                        return Err(invalid("新位置与原文件内容不一致，未重新定位"));
-                    }
-                }
+        let originals = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "WITH RECURSIVE tree(id) AS (
+                    SELECT ?1 UNION ALL SELECT f.id FROM connected_folders f JOIN tree t ON f.parent_id=t.id
+                 )
+                 SELECT e.asset_id,e.path FROM tree CROSS JOIN connected_entries e ON e.folder_id=tree.id
+                 WHERE e.is_reference=0",
+            )?;
+            let rows = stmt.query_map([id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        for (asset_id, path) in originals {
+            let path = Path::new(&path);
+            let target = destination.join(
+                path.strip_prefix(&folder.path).map_err(|_| invalid("目录结构已变化"))?,
+            );
+            if path.is_file() {
+                self.complete_connected_fingerprint(&asset_id)?;
+            }
+            let expected: Option<String> = self
+                .conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT fingerprint FROM external_assets WHERE asset_id=?1",
+                    [&asset_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let expected = expected.filter(|hash| !hash.is_empty())
+                .or_else(|| external_files::fingerprint(path).ok())
+                .ok_or_else(|| invalid("原文件缺少校验信息，无法确认新位置"))?;
+            if external_files::fingerprint(&target)? != expected {
+                return Err(invalid("新位置与原文件内容不一致，未重新定位"));
             }
         }
-        self.repoint_tree(&folder, &destination, None)?;
-        self.rewrite_references()
+        let assets = self.repoint_tree(&folder, &destination, None)?;
+        self.rewrite_references_for_assets(&assets)
+    }
+    fn move_connected_tree(
+        &self,
+        source: &FolderConnection,
+        destination: &Path,
+        target: Option<&FolderConnection>,
+    ) -> AppResult<()> {
+        let path = Path::new(&source.path);
+        self.complete_fingerprints_before_directory_move(path)?;
+        let mut assets = Vec::new();
+        move_path_with(path, destination, || {
+            assets = self.repoint_tree(source, destination, target)?;
+            Ok(())
+        })?;
+        self.rewrite_references_for_assets(&assets)
     }
     pub fn rename_connected_directory(&self, id: &str, value: &str) -> AppResult<()> {
         let folder = self.writable_connection(id)?;
@@ -1673,11 +1733,7 @@ impl Database {
         if destination == Path::new(&folder.path) {
             return Ok(());
         }
-        self.complete_fingerprints_before_directory_move(Path::new(&folder.path))?;
-        move_path_with(Path::new(&folder.path), &destination, || {
-            self.repoint_tree(&folder, &destination, None)
-        })?;
-        self.rewrite_references()
+        self.move_connected_tree(&folder, &destination, None)
     }
     pub fn move_connected_directory(&self, id: &str, target: &str) -> AppResult<()> {
         let source = self.writable_connection(id)?;
@@ -1689,11 +1745,7 @@ impl Database {
         if destination == Path::new(&source.path) {
             return Ok(());
         }
-        self.complete_fingerprints_before_directory_move(Path::new(&source.path))?;
-        move_path_with(Path::new(&source.path), &destination, || {
-            self.repoint_tree(&source, &destination, Some(&target))
-        })?;
-        self.rewrite_references()
+        self.move_connected_tree(&source, &destination, Some(&target))
     }
     pub fn create_material_references(&self, _paths: &LibraryPaths, asset_ids: &[String], folder_id: &str) -> AppResult<()> {
         let mut seen = HashSet::new();
@@ -1986,10 +2038,10 @@ impl Database {
     }
     pub fn rename_connection_entry(&self, id: &str, value: &str) -> AppResult<()> {
         let entry = self
-            .resolve_connection_entries(&[id.to_owned()])?
+            .read_connection_entries(&[id.to_owned()])?
             .pop()
             .ok_or_else(|| invalid("素材条目已不存在"))?;
-        self.writable_connection(&entry.folder_id)?;
+        self.writable_folder_path(&entry.folder_id)?;
         let mut value = valid_name(value)?.to_owned();
         if entry.is_reference && !value.ends_with(".bowerbird") {
             value.push_str(".bowerbird");
@@ -2028,7 +2080,11 @@ impl Database {
             tx.commit()?;
             Ok(())
         })?;
-        self.rewrite_references()
+        if entry.is_reference {
+            Ok(())
+        } else {
+            self.rewrite_references_for_assets(&[entry.asset_id])
+        }
     }
     pub fn trash_connection_entries(&self, ids: &[String]) -> AppResult<()> {
         self.trash_entries_with(ids, recycle)
@@ -2483,6 +2539,11 @@ fn copy_move_with(
         }
         if metadata.is_dir() {
             fs::create_dir(destination)?;
+            if destination.file_name().is_some_and(|name| {
+                super::file_workspace::is_internal_dir_name(&name.to_string_lossy())
+            }) {
+                super::file_workspace::hide_existing_internal_dir(destination);
+            }
             for item in fs::read_dir(source)? {
                 let item = item?;
                 copy(&item.path(), &destination.join(item.file_name()), manifest)?;

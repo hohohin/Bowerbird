@@ -69,6 +69,29 @@ try {
   near(+await dialog.getByLabel("图层 X", { exact: true }).inputValue(), 380 + 40 * 1024 / expanded.width, 1.1);
   await page.keyboard.press("Control+z");
   near(+await dialog.getByLabel("图层 X", { exact: true }).inputValue(), 380);
+  const width = dialog.getByLabel("图层宽度", { exact: true });
+  const height = dialog.getByLabel("图层高度", { exact: true });
+  const xField = dialog.getByLabel("图层 X", { exact: true });
+  const yField = dialog.getByLabel("图层 Y", { exact: true });
+  for (const [corner, dx, dy] of [["top-left", -30, -25], ["top-right", 30, -25], ["bottom-left", -30, 25], ["bottom-right", 30, 25]]) {
+    const handle = await stage.locator(`.layer-resize[data-corner="${corner}"]`).boundingBox();
+    await drag(handle.x + handle.width / 2, handle.y + handle.height / 2, dx, dy);
+    const nextWidth = +await width.inputValue(), nextHeight = +await height.inputValue();
+    assert.ok(nextWidth > 400 && nextHeight > 400, `${corner} should enlarge the layer`);
+    near(nextWidth, nextHeight, 1.1);
+    near(+await xField.inputValue() + (corner.endsWith("left") ? nextWidth : 0), corner.endsWith("left") ? 780 : 380, 1.1);
+    near(+await yField.inputValue() + (corner.startsWith("top") ? nextHeight : 0), corner.startsWith("top") ? 600 : 200, 1.1);
+    await page.keyboard.press("Control+z");
+  }
+  const center = await stage.locator('[data-layer-id="circle"]').boundingBox();
+  await page.mouse.move(center.x + center.width / 2, center.y + center.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(expanded.x + expanded.width / 2 + 3, center.y + center.height / 2, { steps: 8 });
+  await stage.locator(".layer-snap-guide.is-vertical").waitFor();
+  near(+await xField.inputValue(), 312);
+  await page.mouse.up();
+  assert.equal(await stage.locator(".layer-snap-guide").count(), 0);
+  await page.keyboard.press("Control+z");
   await dialog.getByLabel("图层 X", { exact: true }).fill("430");
   await page.keyboard.press("Control+z");
   near(+await dialog.getByLabel("图层 X", { exact: true }).inputValue(), 380);

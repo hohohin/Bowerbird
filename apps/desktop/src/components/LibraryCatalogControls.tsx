@@ -1,7 +1,8 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ListChecks, Search, X } from "lucide-react";
 import { useLibraryModeStore } from "../lib/libraryPane";
 import { materialCatalog, type CatalogFilter } from "../lib/materialCatalog";
+import { useImeGuard } from "../lib/useImeGuard";
 import { FileColorFilter } from "./FileColorFilter";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { LibraryFloatingControls } from "./LibraryFloatingControls";
@@ -15,6 +16,10 @@ export function LibraryCatalogControls({ filter, onColorChange, onColorsPrepared
   const mode = useLibraryModeStore();
   const generated = mode(state => state.generatedFilter);
   const query = mode(state => state.query);
+  const [draft, setDraft] = useState(query);
+  const timer = useRef<number>();
+  const ime = useImeGuard();
+  const searchStart = useRef(onSearchStart);
   const [searchOpen, setSearchOpen] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const searchButton = useRef<HTMLButtonElement>(null);
@@ -24,6 +29,35 @@ export function LibraryCatalogControls({ filter, onColorChange, onColorsPrepared
   const [retry, setRetry] = useState(0);
   const scope = JSON.stringify({ ...filter, color: null });
   const indexColors = filter.media === "images" && (open || !!filter.color);
+  function cancelQuery() {
+    window.clearTimeout(timer.current);
+    timer.current = undefined;
+  }
+  function commitQuery(value: string) {
+    const current = mode.getState();
+    if (value === current.query) return;
+    if (value.trim() && !current.query.trim()) searchStart.current();
+    current.setQuery(value);
+  }
+  function scheduleQuery(value: string) {
+    cancelQuery();
+    if (value === mode.getState().query) return;
+    timer.current = window.setTimeout(() => {
+      timer.current = undefined;
+      commitQuery(value);
+    }, 200);
+  }
+  useLayoutEffect(() => { searchStart.current = onSearchStart; }, [onSearchStart]);
+  useLayoutEffect(() => {
+    const unsubscribe = mode.subscribe((state, previous) => {
+      // Navigation and explicit clears also discard a draft before its first commit.
+      if (state.query === previous.query && state.queryReset === previous.queryReset) return;
+      cancelQuery();
+      ime.composing.current = false;
+      setDraft(state.query);
+    });
+    return () => { unsubscribe(); cancelQuery(); };
+  }, [mode, ime.composing]);
   useEffect(() => {
     if (!indexColors) { setProgress({ pending: false, failed: 0 }); return; }
     let current = true;
@@ -43,25 +77,48 @@ export function LibraryCatalogControls({ filter, onColorChange, onColorsPrepared
     })();
     return () => { current = false; };
   }, [scope, indexColors, retry, onColorsPrepared]);
-  useEffect(() => { if (searchOpen) input.current?.focus({ preventScroll: true }); }, [searchOpen]);
+  useEffect(() => {
+    if (searchOpen) input.current?.focus({ preventScroll: true });
+    else if (ime.composing.current) {
+      ime.composing.current = false;
+      setDraft(mode.getState().query);
+    }
+  }, [searchOpen, mode, ime.composing]);
   return <><div className="library-keyword-search" data-library-search onBlur={event => {
     if (!event.currentTarget.contains(event.relatedTarget as Node)) setSearchOpen(false);
   }} onKeyDown={event => {
-    if (event.key !== "Escape" || !searchOpen || event.nativeEvent.isComposing) return;
+    if (event.key !== "Escape" || !searchOpen || ime.isComposing(event.nativeEvent)) return;
     event.preventDefault(); event.stopPropagation(); setSearchOpen(false); searchButton.current?.focus();
   }}>
     <button ref={searchButton} type="button" className="library-filter-trigger" aria-label="搜索素材" title={query || "搜索素材"}
       aria-controls={searchOpen ? searchId : undefined} aria-expanded={searchOpen} data-active={!!query.trim() || undefined}
       onClick={() => setSearchOpen(value => !value)}><Search size={14} aria-hidden="true"/></button>
     {searchOpen && <div id={searchId} className="library-keyword-search-panel">
-      <input ref={input} type="search" aria-label="搜索素材" placeholder="搜索素材" value={query}
+      <input ref={input} type="search" aria-label="搜索素材" placeholder="搜索素材" value={draft}
+        onCompositionStart={() => { cancelQuery(); ime.onCompositionStart(); }}
+        onCompositionEnd={event => {
+          if (!ime.composing.current) return;
+          ime.onCompositionEnd();
+          const value = event.currentTarget.value;
+          setDraft(value);
+          scheduleQuery(value);
+        }}
         onChange={event => {
-          const value = event.target.value;
-          if (value.trim() && !mode.getState().query.trim()) onSearchStart();
-          mode.getState().setQuery(value);
+          const value = event.currentTarget.value;
+          setDraft(value);
+          if (ime.composing.current || (event.nativeEvent as InputEvent).isComposing) cancelQuery();
+          else scheduleQuery(value);
+        }}
+        onKeyDown={event => {
+          if (event.key !== "Enter" || ime.isComposing(event.nativeEvent)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          cancelQuery();
+          commitQuery(event.currentTarget.value);
         }}/>
-      {query && <button type="button" aria-label="清空搜索" onMouseDown={event => event.preventDefault()} onClick={() => {
-        mode.getState().setQuery(""); input.current?.focus({ preventScroll: true });
+      {draft && <button type="button" aria-label="清空搜索" onMouseDown={event => event.preventDefault()} onClick={() => {
+        mode.getState().setQuery("");
+        input.current?.focus({ preventScroll: true });
       }}><X size={14} aria-hidden="true"/></button>}
     </div>}
   </div><LibraryFloatingControls>

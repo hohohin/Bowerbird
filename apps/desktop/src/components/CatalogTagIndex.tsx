@@ -4,11 +4,14 @@ import { Pin } from "lucide-react";
 import { catalogInitial, catalogLetters } from "../lib/materialCatalogOrder";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 
-export function CatalogTagIndex({ tags, active, dropTarget, alphabetic, pinned, onTogglePin, onNavigate, onLetter }: {
+export type CatalogTagAction = { id: string; action: "edit" | "delete" };
+
+export function CatalogTagIndex({ tags, active, dropTarget, alphabetic, pinned, onTogglePin, onNavigate, onLetter, onManageTags }: {
   dropTarget?: string | null;
   tags: { id: string; name: string }[]; active: string | null; alphabetic: boolean;
   pinned: string[]; onTogglePin: (id: string) => void;
   onNavigate: (id: string) => void; onLetter: (letter: string) => void;
+  onManageTags?: (labelAction?: CatalogTagAction) => void;
 }) {
   const list = useRef<HTMLDivElement>(null);
   const pointer = useRef<number | null>(null);
@@ -17,6 +20,16 @@ export function CatalogTagIndex({ tags, active, dropTarget, alphabetic, pinned, 
   const [scrubbing, setScrubbing] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number; trigger: HTMLElement } | null>(null);
   function closeMenu() { setMenu(null); }
+  function openMenu(id: string, trigger: HTMLElement, x = 0, y = 0) {
+    const rect = trigger.getBoundingClientRect();
+    setMenu({ id, x: x || rect.left, y: y || rect.bottom, trigger });
+  }
+  function manage(action?: CatalogTagAction["action"]) {
+    if (!menu || !onManageTags) return;
+    menu.trigger.focus({ preventScroll: true });
+    closeMenu();
+    onManageTags(action ? { id: menu.id, action } : undefined);
+  }
   const letters = new Set(tags.map(tag => catalogInitial(tag.name)));
   useEffect(() => () => clearTimeout(timer.current), []);
   useLayoutEffect(() => {
@@ -63,13 +76,17 @@ export function CatalogTagIndex({ tags, active, dropTarget, alphabetic, pinned, 
         return <div key={tag.id}>
           {isPinned && index === 0 && <div className="catalog-letter-heading">置顶</div>}
           {!isPinned && alphabetic && (index === 0 || pinned.includes(tags[index - 1].id) || catalogInitial(tags[index - 1].name) !== initial) && <div className="catalog-letter-heading" aria-hidden="true">{initial}</div>}
-          <button className={`catalog-row${dropTarget === tag.id ? " is-drop-target" : ""}`} data-tag-id={tag.id} data-tag-name={tag.name} data-section-id={tag.id} aria-current={active === tag.id ? "location" : undefined}
+          <button type="button" className={`catalog-row${dropTarget === tag.id ? " is-drop-target" : ""}`} data-tag-id={tag.id} data-tag-name={tag.name} data-section-id={tag.id} aria-current={active === tag.id ? "location" : undefined}
+            aria-keyshortcuts="Shift+F10"
             title={isPinned ? `${tag.name} · 已置顶` : tag.name} onClick={() => onNavigate(tag.id)}
+            onKeyDown={event => {
+              if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+              event.preventDefault(); event.stopPropagation();
+              openMenu(tag.id, event.currentTarget);
+            }}
             onContextMenu={event => {
               event.preventDefault(); event.stopPropagation();
-              const rect = event.currentTarget.getBoundingClientRect();
-              setMenu({ id: tag.id, x: event.clientX || rect.left,
-                y: event.clientY || rect.bottom, trigger: event.currentTarget });
+              openMenu(tag.id, event.currentTarget, event.clientX, event.clientY);
             }}><span>{tag.name}</span>{isPinned && <Pin size={11} aria-hidden="true"/>}</button>
         </div>;
       })}
@@ -77,7 +94,12 @@ export function CatalogTagIndex({ tags, active, dropTarget, alphabetic, pinned, 
     </OverlayScrollArea>
     {scrubbing && <div className="catalog-letter-bubble" aria-hidden="true">{scrubbing}</div>}
     {menu && <ContextMenu x={menu.x} y={menu.y} label="标签操作" trigger={menu.trigger} onClose={closeMenu}>
-      <button role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => { onTogglePin(menu.id); closeMenu(); }}>{pinned.includes(menu.id) ? "取消置顶" : "置顶标签"}</button>
+      <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => { onTogglePin(menu.id); closeMenu(); }}>{pinned.includes(menu.id) ? "取消置顶" : "置顶标签"}</button>
+      {onManageTags && <>
+        <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => manage("edit")}>编辑标签</button>
+        <button type="button" role="menuitem" className="app-context-item is-danger px-2 py-1.5" onClick={() => manage("delete")}>删除标签</button>
+        <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => manage()}>管理全部标签</button>
+      </>}
     </ContextMenu>}
   </div>;
 }

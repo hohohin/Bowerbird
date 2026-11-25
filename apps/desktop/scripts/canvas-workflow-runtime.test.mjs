@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server=await createServer({configFile:false,root:process.cwd(),server:{host:'127.0.0.1',port:1580,strictPort:true,hmr:false,watch:null}});
+const server=await createServer({cacheDir:'.tmp/workflow-runtime-vite',optimizeDeps:{entries:['scripts/fixtures/canvas-reference/preview.html']},server:{host:'127.0.0.1',port:0,strictPort:true,hmr:false,watch:null}});
 await server.listen();
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const page=await browser.newPage();
 try {
-  await page.goto('http://127.0.0.1:1580/scripts/fixtures/canvas-reference/preview.html');
+  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/canvas-reference/preview.html`);
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   const result=await page.evaluate(async()=>{
     const {api}=await import('/src/lib/api.ts');
@@ -122,9 +122,10 @@ try {
     api.layerWorkspaceSave=async(id,value)=>{workspace=structuredClone(value);};
     api.readImageDataUrl=async()=> 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="red"/></svg>');
     api.layerCloudRequest=async request=>{
-      if(request.action==='layer_quote')return {services:[{service:'image_layer_decompose',available:true}]};
+      if(request.action==='layer_quote')return {layer_protocol:2,services:[{service:'image_layer_decompose',available:true,max_images:request.max_images}]};
       if(request.action==='get_by_key')return layerStarts?{status:'succeeded',layer_result:{document:layerDocument}}:{status:'not_found'};
       layerStarts++;check(workspace.pending.request.idempotency_key===request.idempotency_key,'save before split');
+      check(request.layer_options.max_images===30&&request.layer_options.text_recognition===true,'workflow requests v2 decomposition with native OCR');
       check(!useStore.getState().layerWorkspaceIds.has('existing'),'do not mark before saved result');
       return {status:'succeeded',layer_result:{document:layerDocument}};
     };

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { callTool } from '../core.mjs';
 import { createSnapshotReader } from '../snapshot-store.mjs';
 import { fixture } from './branch-fixture.mjs';
+import { startBranchConsole } from '../branch-console.mjs';
 
 test('console publishes local branch commits and dirty working trees without touching primary index, files or checkout', async t => {
   const f = await fixture(t);
@@ -61,6 +62,75 @@ test('console publishes local branch commits and dirty working trees without tou
   assert.equal(f.git('worktree', 'list', '--porcelain'), worktrees);
   assert.equal(f.git('status', '--porcelain'), before);
   assert.deepEqual(await readFile(f.output), saved);
+});
+
+test('console reuses a matching instance and exports the current working tree from the top action', async t => {
+  const f = await fixture(t);
+  const port = Number(new URL(f.app.origin).port);
+  const second = await startBranchConsole(f.root, f.output, port);
+  assert.equal(second.reused, true);
+  assert.equal(second.origin, f.app.origin);
+  await second.close();
+  await assert.rejects(startBranchConsole(f.root, f.output + '.other', port), { code: 'EADDRINUSE' });
+  const response = await fetch(f.app.origin + '/api/export', {
+    method: 'POST', headers: { Origin: f.app.origin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ current: true }),
+  });
+  assert.equal(response.status, 202);
+  const state = await f.finished();
+  assert.equal(state.job.status, 'done');
+  assert.equal(state.snapshot.branch, 'main');
+  assert.equal(state.snapshot.isDirty, true);
+  assert.equal((await fetch(f.app.origin + '/api/services', { headers: { Origin: 'https://elsewhere.invalid' } })).status, 403);
+});
+
+test('service startup protects origin, validates local setup, excludes healthy peers and serializes launch requests', async t => {
+  const secret = 'MCP_UPDATE_KEY=private-value';
+  const states = { gpt: { state: 'stopped' }, gemini: { state: 'healthy' } };
+  const attempts = [];
+  const { promise, reject } = Promise.withResolvers();
+  const f = await fixture(t, {
+    probe: async () => states,
+    launchServices: async (root, targets) => { attempts.push(targets); await promise; },
+  });
+  const address = f.app.origin + '/api/services/start';
+  const post = (origin = f.app.origin, body = {}) => fetch(address, {
+    method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  assert.equal((await post('https://elsewhere.invalid')).status, 403);
+  assert.equal((await fetch(address, { method: 'POST', body: '{}' })).status, 403);
+  assert.equal((await new Promise((resolve, fail) => {
+    request(address, { method: 'POST', headers: { Host: 'elsewhere.invalid', Origin: f.app.origin } }, res => {
+      res.resume();
+      resolve(res.statusCode);
+    }).once('error', fail).end();
+  })), 403);
+  assert.equal((await post(f.app.origin, { script: secret })).status, 400);
+  assert.match(await (await post()).text(), /先更新快照/);
+  assert.equal((await f.post('main', false)).status, 202);
+  await f.finished();
+  const missing = await post();
+  assert.equal(missing.status, 409);
+  assert.match(await missing.text(), /缺少 GPT 隧道密钥文件/);
+  states.gpt.state = 'healthy';
+  states.gemini.state = 'stopped';
+  assert.match(await (await post()).text(), /缺少 Gemini 本机配置/);
+  assert.deepEqual(attempts, []);
+  states.gpt.state = 'stopped';
+  states.gemini.state = 'healthy';
+  await writeFile(path.join(f.root, '.env.tunnel'), secret);
+  const replies = await Promise.all([post(), post()]);
+  assert.deepEqual(replies.map(res => res.status).sort(), [202, 409]);
+  assert.deepEqual(attempts, [['gpt']]);
+  const serving = () => fetch(f.app.origin + '/api/services').then(res => res.json());
+  assert.equal((await serving()).combined, 'starting');
+  reject(new Error(secret + ' oauthClient adminPassword access_token'));
+  const status = await serving();
+  assert.equal(status.combined, 'stopped');
+  assert.equal(status.startup.status, 'failed');
+  assert.doesNotMatch(JSON.stringify(status), /private-value|MCP_UPDATE_KEY|oauthClient|adminPassword|access_token/);
+  states.gpt.state = 'healthy';
+  assert.equal((await post()).status, 200);
 });
 
 test('console rejects foreign Host and Origin, absent POST Origin, stale or forged selections', async t => {

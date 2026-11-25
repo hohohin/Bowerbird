@@ -180,11 +180,11 @@ async fn remux(downloaded: Downloaded, control: &CaptureControl) -> AppResult<Ve
     Ok(tokio::fs::read(&output).await?)
 }
 
-pub(crate) async fn capture_stream(webview: &tauri::Webview, first: CaptureResource, control: &CaptureControl) -> AppResult<Vec<u8>> {
+async fn capture_stream(webview: &tauri::Webview, first: CaptureResource, page: &tauri::Url, control: &CaptureControl) -> AppResult<Vec<u8>> {
     control.check()?;
     ffmpeg()?;
     let downloaded = download(first, control, |url, maximum| async move {
-        browser_capture_resource_silent(webview, &url, maximum, control).await
+        browser_capture_resource_silent(webview, &url, page, maximum, control).await
     }).await?;
     remux(downloaded, control).await
 }
@@ -198,10 +198,11 @@ fn ffmpeg() -> AppResult<&'static Path> {
 
 pub(crate) async fn capture_video(webview: &tauri::Webview, source: &str, page_url: &str, control: &CaptureControl) -> AppResult<Vec<u8>> {
     control.check()?;
-    let source = resolve_video_source(webview, source, page_url, control).await?;
-    let resource = browser_capture_resource(webview, &source, MAX_BYTES, control).await?;
+    let page = tauri::Url::parse(page_url).map_err(|_| invalid())?;
+    let source = resolve_video_source(webview, source, page_url, &page, control).await?;
+    let resource = browser_capture_resource(webview, &source, &page, MAX_BYTES, control).await?;
     if resource.is_manifest() {
-        capture_stream(webview, resource, control).await
+        capture_stream(webview, resource, &page, control).await
     } else {
         receive(&resource, &mut 0)?;
         control.check()?;

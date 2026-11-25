@@ -2,9 +2,23 @@
 
 实现状态与产品决策以 `PROJECT.md` 为准。本文件记录协议、代码入口和离线验收方法。
 
+## Seedream 5.5 升级候选
+
+分层拆分、单层 AI 修改和透明元素生成使用同一固定模型 `doubao-seedream-5-5-261028`。桌面从 `layer_quote` 的 `layer_protocol: 2` 确认新版能力，按尺寸、拆分上限和参考图数读取实际报价。新桌面与工作流默认请求 30 张输出并开启原生 OCR。旧桌面未发送新选项时，上限为 17 张，以匹配其本地读取能力。
+
+- 拆分上限 100 张含底图。新版请求按输出上限动态预留，按实际编码图片像素结算并退差额。0102 候选价为输入 2 Bcoin，输出图 ≤261 万像素 5 Bcoin，超过为 8 Bcoin，默认预留 242 Bcoin。旧客户端未传输出上限时最多返回 17 张，预留 170 Bcoin，输出图按原 5／10 Bcoin 结算。单层修改和透明元素生成沿用尺寸价 10／20 Bcoin，每多附一张上下文参考图加 2 Bcoin。[方舟模型价格](https://docs.volcengine.com/docs/ark/model-pricing?lang=zh)
+- 拆分输出依旧是底图和透明 PNG。规整文字层可附带 `textRecognition`，包含文本、逐行位置与样式片段。转换时先使用这个本地结果，保留图层的 PNG，找不到字体时用本机默认字体。没有可用原生结果时可主动调用原云端文字识别。文本样式用于画布、合成及导出，Adobe 应用可能因字体与排版引擎差异产生偏差。[方舟图片生成 API](https://docs.volcengine.com/docs/ark/image-generation-api?lang=zh)
+- 右键「分层编辑」可手动设置 16／30／60／100 张拆分上限，重新拆分前确认覆盖并保留撤销。撤销和重做随工程保存。可新建文字层、导入图片、复制或删除图层，四角等比缩放，拖动时吸附画布中心与边缘。
+- 单层修改可以附带底图或当前合成图作为上下文。透明元素可以从文字直接生成并插入分层工程。桌面单张参考图上限 10 MiB，两张合计上限 14 MiB。超限时可确认等比缩小上传副本，保留原件和透明度。工作流沿用单图检查，超限时可从手动分层入口处理。
+- 本地保存使用 `<library>/layers/<ULID>/manifest.json` 与 SHA-256 命名的图片文件。已保存的撤销、重做与待提交任务复用图片文件。旧版 `<ULID>.json` 能读取，下一次保存写成目录结构。新目录格式需用支持该格式的桌面版本打开。Worker 对单层下载的临时故障最多尝试三次，Cloud 完整分层包受 256 MiB 限制。PSD 以累计 6400 万工作像素保护内存，按实际层范围估算。
+
+在 Windows 隔离测试中，使用 50 个 2048×2048 合成图层和 30 次历史记录，同一夹具的旧单文件 JSON 保存耗时 2.16 秒，峰值工作集 236.4 MiB，新目录保存 1.85 秒，峰值工作集 128.6 MiB。通过 `benchmark_fifty_2k_layer_save` 可分别复测原格式和新格式。
+
+部署须先暂停新单并排空在途分层任务，再配套应用 `0102_seedream55_layers.sql`、发布 `generate-proxy` 和 `generation-worker`、切换 VPS 生成 Worker，最后恢复对应服务准入。旧任务按冻结计费快照处理。真机字体、真实方舟 OCR、上下文修改、透明生成与正式账本以发布验收为准。
+
 ## 协议来源
 
-2026-09-14 用户粘贴的《Seedream 5.0 pro》官方说明，图层拆分与单透明图层编辑章节。模型固定 `doubao-seedream-5-0-pro-260628`，调用方舟 `images/generations`，由 Bowerbird Cloud 持有 `ARK_API_KEY`。
+以下记录 Seedream 5.0 Pro 现役协议。2026-09-14 用户提供官方图层拆分与单透明图层编辑说明。模型固定 `doubao-seedream-5-0-pro-260628`，调用方舟 `images/generations`，由 Bowerbird Cloud 持有 `ARK_API_KEY`。
 
 - 拆分：单张 PNG/JPEG，`layer_decomposition=true`；空 prompt 不发送，指定元素时发送原文；size 为 auto/1K/1.5K/2K。
 - `data` 中底图 z_index=0，其余最多 16 层；按 z_index 排序，优先使用 bounding_box.absolute，缺失时使用 normalized÷1000。宽高严格采用 right-left、bottom-top，不按示例图片编码尺寸额外加 1。

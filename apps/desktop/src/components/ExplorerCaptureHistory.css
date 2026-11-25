@@ -1,12 +1,10 @@
 .source-browser-actions .explorer-capture-trigger { position:relative; }
 .source-browser-actions .explorer-capture-trigger.is-active { color:var(--bb-blue); }
 .explorer-capture-count { position:absolute; right:-2px; top:-3px; min-width:13px; height:13px; padding:0 2px; display:grid; place-items:center; background:var(--bb-blue); color:var(--bb-bg); font-size:9px; font-weight:700; line-height:1; border-radius:2px; }
-html[data-theme] .explorer-capture-popover.app-modal-backdrop { padding:0; background:transparent; backdrop-filter:none; animation:none; }
-html[data-theme] .explorer-capture-popover .app-modal { position:fixed; margin:0; max-width:calc(100vw - 16px); max-height:calc(100vh - 120px); background:var(--bb-surface); border:1px solid var(--bb-line-strong); border-radius:4px; box-shadow:0 12px 35px rgb(0 0 0 / .2); animation:none; }
-html[data-theme] .explorer-capture-popover .app-modal-header { padding:10px 14px; min-height:44px; align-items:center; background:transparent; }
-html[data-theme] .explorer-capture-popover .app-modal-title { font-size:13px; }
-html[data-theme] .explorer-capture-popover .app-modal-body { padding:0; overflow:auto; background:transparent; }
-html[data-theme] .explorer-capture-popover .app-modal-body::before { display:none; }
+.explorer-capture-bulk-actions { display:flex; flex-wrap:wrap; align-items:center; gap:3px; padding:0 10px 5px; }
+.explorer-capture-bulk-actions button { min-height:28px; padding:4px 6px; border-radius:2px; color:var(--bb-blue); font-size:11px; }
+.explorer-capture-bulk-actions button:disabled { color:var(--bb-muted); opacity:.55; }
+.explorer-capture-bulk-actions button:hover:enabled { background:var(--bb-surface-2); }
 .explorer-capture-list { list-style:none; margin:0; padding:0 12px 5px; }
 .explorer-capture-row { display:flex; align-items:flex-start; gap:10px; padding:13px 1px; border-top:1px solid var(--bb-line); }
 .explorer-capture-thumb { position:relative; width:46px; height:46px; flex:none; display:grid; place-items:center; color:var(--bb-muted); background:var(--bb-surface-2); overflow:hidden; border-radius:2px; }
@@ -24,6 +22,5 @@ html[data-theme] .explorer-capture-popover .app-modal-body::before { display:non
 .explorer-capture-row-actions { display:flex; align-items:center; gap:3px; flex:none; }
 .explorer-capture-row-actions button { min-width:27px; min-height:28px; padding:4px; color:var(--bb-muted); font-size:11px; display:grid; place-items:center; border-radius:2px; }
 .explorer-capture-row-actions button:hover { color:var(--bb-blue); background:var(--bb-surface-2); }
-.explorer-capture-row-actions button:focus-visible,.explorer-capture-trigger:focus-visible { outline:1px solid var(--bb-blue); outline-offset:2px; }
+.explorer-capture-row-actions button:focus-visible,.explorer-capture-trigger:focus-visible,.explorer-capture-bulk-actions button:focus-visible { outline:1px solid var(--bb-blue); outline-offset:2px; }
 .explorer-capture-empty { padding:28px 18px; text-align:center; font-size:12px; color:var(--bb-muted); }
-@media(max-width:760px) { html[data-theme] .explorer-capture-popover .app-modal { max-height:calc(100vh - 150px); } }

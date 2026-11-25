@@ -203,11 +203,11 @@ try {
   await page.locator('.app-search input').click();
   assert.equal(await palette.count(), 0, 'outside click closes colors');
   await revealTags(home);
-  await home.getByRole('button', { name: '管理标签', exact: true }).click();
-  await page.getByRole('dialog', { name: '自动分类', exact: true }).waitFor();
+  await home.getByRole('button', { name: '标签管理', exact: true }).click();
+  await page.getByRole('dialog', { name: '标签管理', exact: true }).waitFor();
   await page.keyboard.press('Escape');
-  await page.getByRole('dialog', { name: '自动分类', exact: true }).waitFor({ state: 'hidden' });
-  assert.equal(await home.getByRole('button', { name: '管理标签', exact: true }).evaluate(el => el === document.activeElement), true);
+  await page.getByRole('dialog', { name: '标签管理', exact: true }).waitFor({ state: 'hidden' });
+  assert.equal(await home.getByRole('button', { name: '标签管理', exact: true }).evaluate(el => el === document.activeElement), true);
   await page.evaluate(() => window.failPalette = true);
   await rgb.click();
   await palette.getByRole('button', { name: '加载失败 · 重试', exact: true }).waitFor();
@@ -561,7 +561,7 @@ try {
   await page.evaluate(() => { window.failTags = false; window.testTags = []; });
   await longMenu.getByRole('button', {name:'标签加载失败 · 重试'}).click();
   await longMenu.getByRole('button', {name:'标签加载失败 · 重试'}).waitFor({state:'hidden'});
-  assert.equal(await panel.getByRole('button', {name:'管理标签', exact:true}).count(), 1, 'empty catalogue retains management');
+  assert.equal(await panel.getByRole('button', {name:'标签管理', exact:true}).count(), 1, 'empty catalogue retains management');
   // Real App routing: the existing return button retains save protection.
   await page.goto(root + 'canvas-reference/preview.html?source-library&detail-route');
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();

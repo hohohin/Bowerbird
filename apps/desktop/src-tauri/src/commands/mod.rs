@@ -5,6 +5,7 @@ pub mod audio;
 pub mod audio_trim;
 pub mod voice;
 pub mod voice_setup;
+mod install_download;
 pub mod text_documents;
 pub mod document_attachments;
 pub mod agent_ds;

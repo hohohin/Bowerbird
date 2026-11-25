@@ -1,7 +1,19 @@
 import { deepEqual, equal, ok, throws } from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { test } from "node:test";
 
-import { configFromEnv, mapArkHttpError, modelForService, arkImageRequestBody, KnownProviderError } from "./runtime.ts";
+import { configFromEnv, mapArkHttpError, modelForService, arkImageRequestBody, KnownProviderError, outputLayerPixels } from "./runtime.ts";
+
+test("layer billing uses encoded image pixel counts for all 100 returned images", () => {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  const header = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  header.setUint32(16, 2048);
+  header.setUint32(20, 1536);
+  const layer = { width: 10, height: 10, dataUrl: `data:image/png;base64,${png.toString("base64")}` };
+  const bundle = (count: number) => new TextEncoder().encode(JSON.stringify({ document: { layers: Array(count).fill(layer) } }));
+  deepEqual(outputLayerPixels(bundle(100)), Array(100).fill(2048 * 1536));
+  throws(() => outputLayerPixels(bundle(101)), /invalid_billing_layers/);
+});
 
 test("Seedream 5.5 is isolated from Pro/Fast and sends PNG for transparent text and image inputs", () => {
   const env = { GENERATION_CONTROL_URL: "https://control", GENERATION_WORKER_TOKEN: "token",

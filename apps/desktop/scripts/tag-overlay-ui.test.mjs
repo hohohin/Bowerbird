@@ -39,7 +39,7 @@ try {
     assert.equal(await first.isVisible(),true,'hover reveals category tags');
     const firstRect=await first.boundingBox();
     assert.ok(firstRect.y>=0 && firstRect.y+firstRect.height<=height,'first tag must be on screen');
-    const manage=bar.getByRole('button',{name:'管理标签',exact:true});
+    const manage=bar.getByRole('button',{name:'标签管理',exact:true});
     assert.equal(await manage.evaluate(el=>{const r=el.getBoundingClientRect();return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}),true,'manager must be on screen and unobstructed');
     await page.screenshot({path:`.tmp/tag-overlay/home-${height}.png`});
     await manage.click();

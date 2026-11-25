@@ -1,6 +1,6 @@
 // Shared library layout must load before component and theme overrides.
 import "./components/LocalFileWorkspace.css";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useLocalFileMode } from "./lib/localFileMode";
@@ -102,7 +102,12 @@ function App() {
   const localFilesOpen = useLocalFileMode(s => s.open);
   const setLocalFilesOpen = useLocalFileMode(s => s.setOpen);
   useEffect(() => {
-    const show = () => { useStore.getState().setLibraryHomeView("library"); useLocalFileMode.getState().openBrowser(); setSourceBrowserOpen(false); };
+    const show = () => {
+      const state = useStore.getState();
+      state.setLibraryHomeView("library");
+      if (state.activeProjectId) setCanvasSourceBrowserOpen(false);
+      useLocalFileMode.getState().openBrowser();
+    };
     window.addEventListener(OPEN_LOCAL_FILES, show);
     return () => window.removeEventListener(OPEN_LOCAL_FILES, show);
   }, []);
@@ -114,16 +119,9 @@ function App() {
     requestId: string;
   } | null>(null);
   const [sourceBrowserUrl, setSourceBrowserUrl] = useState<string | null>(null);
-  const [sourceBrowserOpen, setSourceBrowserOpen] = useState(false);
+  const [canvasSourceBrowserOpen, setCanvasSourceBrowserOpen] = useState<boolean | null>(null);
   const [sourceBrowserNavigation, setSourceBrowserNavigation] = useState(0);
   const pinterestSearch = usePinterestSearch(state => state.request);
-  useEffect(() => {
-    if (!pinterestSearch || !isPinterestSearchCurrent(pinterestSearch)) return;
-    setLocalFilesOpen(false);
-    setSourceBrowserUrl(PINTEREST_SEARCH_URL);
-    setSourceBrowserNavigation(id => id + 1);
-    setSourceBrowserOpen(true);
-  }, [pinterestSearch, setLocalFilesOpen]);
   const setAssets = useStore((s) => s.setAssets);
   const setTotal = useStore((s) => s.setTotal);
   const setPromptedAssets = useStore((s) => s.setPromptedAssets);
@@ -180,6 +178,44 @@ function App() {
   const activeProjectIsProvisional = projects.find((project) => project.id === activeProjectId)?.provisional === true;
   const workspaceProjectId = resolveWorkspaceProjectId(activeProjectId, projects);
   const projectWorkspaceActive = workspaceProjectId !== null;
+  const homeExplore = !projectWorkspaceActive && libraryHomeView === "explore";
+  const transferHomeBrowser = libraryHomeView === "explore" && sourceBrowserUrl !== null;
+  const canvasExplore = canvasSourceBrowserOpen ?? transferHomeBrowser;
+  const sourceBrowserOpen = !collectionAddTargetId && (projectWorkspaceActive ? canvasExplore : homeExplore);
+
+  useLayoutEffect(() => {
+    // Keep an open homepage browser visible through the first canvas commit.
+    setCanvasSourceBrowserOpen(current => projectWorkspaceActive ? current ?? transferHomeBrowser : null);
+  }, [projectWorkspaceActive, transferHomeBrowser]);
+
+  useEffect(() => {
+    if (sourceBrowserOpen && !sourceBrowserUrl) setSourceBrowserUrl(readLastSourceAddress() ?? DEFAULT_EXPLORER_URL);
+  }, [sourceBrowserOpen, sourceBrowserUrl]);
+
+  const revealSourceBrowser = useCallback(() => {
+    if (projectWorkspaceActive) setCanvasSourceBrowserOpen(true);
+    else if (useStore.getState().libraryHomeView !== "explore") useStore.getState().setLibraryHomeView("explore");
+  }, [projectWorkspaceActive]);
+
+  useEffect(() => {
+    if (!pinterestSearch || !isPinterestSearchCurrent(pinterestSearch)) return;
+    setSourceBrowserUrl(PINTEREST_SEARCH_URL);
+    setSourceBrowserNavigation(id => id + 1);
+    revealSourceBrowser();
+  }, [pinterestSearch, revealSourceBrowser]);
+
+  const openSourceBrowser = useCallback((url: string) => {
+    cancelPinterestSearch();
+    setSourceBrowserUrl(url);
+    setSourceBrowserNavigation(id => id + 1);
+    revealSourceBrowser();
+  }, [revealSourceBrowser]);
+
+  const closeSourceBrowser = useCallback(() => {
+    if (projectWorkspaceActive) setCanvasSourceBrowserOpen(false);
+    else useStore.getState().setLibraryHomeView("library");
+  }, [projectWorkspaceActive]);
+
   const activeInspectorExecution = activeSessionKind === "generation"
     ? (activeJobId ? genJobs[activeJobId] ?? null : null)
     : (activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null);
@@ -893,7 +929,6 @@ function App() {
     )) return;
     completeLesson({ projectId: createdProjectId });
     setCreativeLaunch({ id: crypto.randomUUID(), projectId: createdProjectId, assetIds });
-    setSourceBrowserOpen(false);
     setCreativeTarget(null);
     if (state.mode === "manage") state.exitManage();
   }
@@ -912,16 +947,14 @@ function App() {
     if (state.projectRouteRevision !== revision || state.projectRoutePending) return;
     setCreativeLaunch(null);
     setCreativeTarget(null);
-    setSourceBrowserOpen(false);
     await state.enterProject(project.id);
   }
 
-  async function exitCreative(homeView?: "library" | "projects") {
+  async function exitCreative() {
     try {
       await useStore.getState().exitProject();
       setCreativeLaunch(null);
       setCreativeTarget(null);
-      if (homeView) useStore.getState().setLibraryHomeView(homeView);
     } catch (error) {
       notifyError(error, "项目仍有未保存修改，已留在当前画板");
     }
@@ -959,20 +992,21 @@ function App() {
       <WindowTitlebar />
       <Toolbar
         onRefresh={refresh}
-        localFilesOpen={localFilesOpen}
+        localFilesOpen={!homeExplore && localFilesOpen}
         canvasMode={projectWorkspaceActive}
         onCanvasModeChange={(active) => { setLocalFilesOpen(false); return active ? createCreative(false) : exitCreative(); }}
-        onHomeViewChange={view => { if (projectWorkspaceActive) void exitCreative(view); else useStore.getState().setLibraryHomeView(view); }}
+        onHomeViewChange={useStore.getState().setLibraryHomeView}
         exploring={sourceBrowserOpen}
-        onExplore={() => {
-          if (!sourceBrowserUrl) setSourceBrowserUrl(readLastSourceAddress() ?? DEFAULT_EXPLORER_URL);
-          setSourceBrowserOpen(current => !current);
-        }}
+        onExplore={() => setCanvasSourceBrowserOpen(!canvasExplore)}
       />
       <div className="relative flex flex-1 overflow-hidden">
-        {COLLECTIONS_FEATURE_ENABLED && !projectWorkspaceActive && !localFilesOpen && <Sidebar />}
+        {COLLECTIONS_FEATURE_ENABLED && !projectWorkspaceActive && !homeExplore && !localFilesOpen && <Sidebar />}
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
-          <ExploreWorkspace onCreateProject={createProjectFromAssets} url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
+          <ExploreWorkspace layout={projectWorkspaceActive ? "canvas" : "home"} onCreateProject={createProjectFromAssets}
+            onOpenProject={useStore.getState().enterProject} url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen}
+            onClose={closeSourceBrowser} foreground={showDetail && <div className="absolute inset-0 z-30 bg-canvas">
+              <AssetDetail onExploreSource={openSourceBrowser} />
+            </div>}>
           <PreservedWorkspace suspended={showDetail}>
           <div className="relative flex min-h-0 flex-1">
             <div className="home-workspace-route" data-suspended={projectWorkspaceActive}>
@@ -999,7 +1033,7 @@ function App() {
               <CanvasWorkspace
                 key={workspaceProjectId}
                 projectId={workspaceProjectId}
-                exploring={sourceBrowserOpen && !collectionAddTargetId}
+                exploring={sourceBrowserOpen}
                 focusThreadId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.threadId : null}
                 focusNodeId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.nodeId : null}
                 focusRequestId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.requestId : null}
@@ -1012,9 +1046,6 @@ function App() {
           </div>
           <CollectionAddMode />
           </PreservedWorkspace>
-          {showDetail && <div className="absolute inset-0 z-30 bg-canvas">
-            <AssetDetail onExploreSource={url => { cancelPinterestSearch(); setSourceBrowserUrl(url); setSourceBrowserNavigation(id => id + 1); setSourceBrowserOpen(true); }} />
-          </div>}
           </ExploreWorkspace>
         </main>
       </div>

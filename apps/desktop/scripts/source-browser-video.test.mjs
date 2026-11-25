@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { loadSourceScript } from './fixtures/explorer/source-script.mjs';
 import { readFile } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const script = await readFile(process.env.BOWERBIRD_SOURCE_VIDEO_PATH || 'src-tauri/src/commands/source_browser_video.js', 'utf8');
+const script = await loadSourceScript(process.env.BOWERBIRD_SOURCE_VIDEO_PATH || 'src-tauri/src/commands/source_browser_video.js');
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 async function pageFor(url = 'https://www.xiaohongshu.com/explore/note-a') {
   const page = await browser.newPage();
@@ -69,7 +70,7 @@ try {
   assert.match(await xhs.evaluate(async () => {
     window.__INITIAL_STATE__ = {note:{noteDetailMap:{'note-a':{note:{noteId:'note-a',type:'video',video:{}}}}}};
     try { return await window.__bbSourceVideo.resolve(target.src, location.href); } catch (error) { return error.message; }
-  }), /尚未找到/, 'missing video fields never turn into a relative /undefined URL');
+  }), /site-video-rules-miss/, 'missing video fields never turn into a relative /undefined URL');
   assert.match(await xhs.evaluate(async () => {
     history.pushState({}, '', '/explore/note-b');
     try { return await window.__bbSourceVideo.resolve(target.src, 'https://www.xiaohongshu.com/explore/note-a'); } catch (e) { return e.message; }

@@ -21,7 +21,7 @@ interface DragVisual {
 }
 declare global { interface Window { createBowerbirdDragVisual(parent: HTMLElement): DragVisual } }
 
-export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boolean, projectId: string | null, onThumbnail?: (id: string, thumbnail: string) => void, onDragEnd?: () => void) {
+export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boolean, projectId: string | null, onThumbnail?: (id: string, thumbnail: string) => void, onDragEnd?: () => void, onDragStart?: () => void) {
   const visual = useRef<DragVisual>();
   const active = useRef<(DragVisualValue & { dropped?: boolean; preview?: DragPreview; thumbnail?: string; shown?: boolean }) | null>(null);
   const clear = () => { visual.current?.clear(); active.current = null; };
@@ -33,7 +33,7 @@ export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boo
     const subscriptions = [
       listen<DragVisualValue & { phase: "start" | "end" }>("source-browser://drag", ({ payload }) => {
         if (disposed) return;
-        if (payload.phase === "start") { clear(); active.current = payload; }
+        if (payload.phase === "start") { clear(); active.current = payload; onDragStart?.(); }
         else if (active.current?.id === payload.id && !active.current.dropped) {
           // Native dragend can precede the main WebView's drop event.
           const ended = active.current;
@@ -64,7 +64,7 @@ export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boo
       disposed = true; clear(); window.removeEventListener("keydown", escape, true);
       for (const subscription of subscriptions) void subscription.then(unlisten => unlisten()).catch(() => {});
     };
-  }, [open, projectId, root, onThumbnail, onDragEnd]);
+  }, [open, projectId, root, onThumbnail, onDragEnd, onDragStart]);
   return {
     over(x: number, y: number, hideCandidateLabels = false) {
       const value = active.current;

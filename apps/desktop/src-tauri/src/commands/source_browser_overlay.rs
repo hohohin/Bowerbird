@@ -2,7 +2,24 @@ use super::SourceBrowserBounds;
 use crate::error::{AppError, AppResult};
 
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
-pub(super) struct OverlayBounds { pub x: f64, pub y: f64, pub width: f64, pub height: f64, #[serde(default)] pub cut: f64 }
+pub(super) struct OverlayBounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default)]
+    pub cut: f64,
+    #[serde(default)]
+    side: OverlaySide,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum OverlaySide {
+    Left,
+    #[default]
+    Right,
+}
 
 impl OverlayBounds {
     pub fn valid(self, width: f64, height: f64) -> bool {
@@ -23,9 +40,9 @@ pub(super) async fn apply(webview: &tauri::Webview, bounds: SourceBrowserBounds)
         };
         #[cfg(target_os = "macos")]
         let result = unsafe {
-            unsafe extern "C" { fn bb_browser_overlay(view: *mut std::ffi::c_void, x: f64, y: f64, width: f64, height: f64, cut: f64) -> bool; }
-            let rect = bounds.overlay.unwrap_or(OverlayBounds { x: 0.0, y: 0.0, width: 0.0, height: 0.0, cut: 0.0 });
-            if bb_browser_overlay(view.inner(), rect.x, rect.y, rect.width, rect.height, rect.cut) { Ok(()) }
+            unsafe extern "C" { fn bb_browser_overlay(view: *mut std::ffi::c_void, x: f64, y: f64, width: f64, height: f64, cut: f64, left: bool) -> bool; }
+            let rect = bounds.overlay.unwrap_or(OverlayBounds { x: 0.0, y: 0.0, width: 0.0, height: 0.0, cut: 0.0, side: OverlaySide::Right });
+            if bb_browser_overlay(view.inner(), rect.x, rect.y, rect.width, rect.height, rect.cut, matches!(rect.side, OverlaySide::Left)) { Ok(()) }
             else { Err(AppError::Other("更新探索把手遮挡失败".into())) }
         };
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -46,7 +63,13 @@ unsafe fn set_region(hwnd: windows::Win32::Foundation::HWND, bounds: SourceBrows
     let region = CreateRectRgn(0, 0, client.right, client.bottom);
     let (x, y, right, bottom, c) = (overlay.x, overlay.y, overlay.x + overlay.width, overlay.y + overlay.height, overlay.cut);
     let points = [(x+c,y),(right,y),(right,bottom),(x+c,bottom),(x,bottom-c),(x,y+c)]
-        .map(|(x,y)| POINT { x: (x * scale_x).round() as i32, y: (y * scale_y).round() as i32 });
+        .map(|(point_x, point_y)| {
+            let point_x = match overlay.side {
+                OverlaySide::Left => right - (point_x - x),
+                OverlaySide::Right => point_x,
+            };
+            POINT { x: (point_x * scale_x).round() as i32, y: (point_y * scale_y).round() as i32 }
+        });
     let cut = CreatePolygonRgn(&points, WINDING);
     let combined = CombineRgn(Some(region), Some(region), Some(cut), RGN_DIFF);
     let _ = DeleteObject(HGDIOBJ(cut.0));
@@ -60,7 +83,7 @@ mod tests {
     use super::*;
     #[test]
     fn overlay_rejects_unbounded_or_invalid_holes() {
-        let rect = OverlayBounds { x: 380.0, y: 100.0, width: 20.0, height: 98.0, cut: 4.0 };
+        let rect = OverlayBounds { x: 380.0, y: 100.0, width: 20.0, height: 98.0, cut: 4.0, side: OverlaySide::Right };
         assert!(rect.valid(400.0, 600.0));
         assert!(OverlayBounds { x: 0.0, y: 0.0, ..rect }.valid(400.0, 600.0));
         for bad in [OverlayBounds { x: f64::NAN, ..rect }, OverlayBounds { x: -1.0, ..rect },
@@ -71,6 +94,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn overlay_without_side_keeps_right_edge_cut_direction() {
+        let legacy = serde_json::json!({ "x": 380, "y": 100, "width": 20, "height": 98, "cut": 4 });
+        let overlay: OverlayBounds = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(matches!(overlay.side, OverlaySide::Right));
+        let mut explicit = legacy;
+        explicit["side"] = "left".into();
+        let left: OverlayBounds = serde_json::from_value(explicit.clone()).unwrap();
+        assert!(matches!(left.side, OverlaySide::Left));
+        explicit["side"] = "top".into();
+        assert!(serde_json::from_value::<OverlayBounds>(explicit).is_err());
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn native_region_preserves_full_width_above_and_below_overlay_at_both_scales() {
@@ -78,20 +114,26 @@ mod tests {
         for scale in [1, 2] { unsafe {
             let hwnd = CreateWindowExW(WINDOW_EX_STYLE::default(), w!("STATIC"), w!("Bowerbird isolated region test"), WS_POPUP,
                 0, 0, 400 * scale, 600 * scale, None, None, None, None).unwrap();
-            let bounds = SourceBrowserBounds { x: 0.0, y: 0.0, width: 400.0, height: 600.0,
-                overlay: Some(OverlayBounds { x: 380.0, y: 100.0, width: 20.0, height: 98.0, cut: 4.0 }) };
-            set_region(hwnd, bounds).unwrap();
             let region = CreateRectRgn(0, 0, 0, 0);
-            assert_ne!(GetWindowRgn(hwnd, region).0, 0);
-            assert!(!PtInRegion(region, 390 * scale, 150 * scale).as_bool());
-            assert!(PtInRegion(region, 381 * scale, 101 * scale).as_bool(), "the page remains visible at the top chamfer");
-            assert!(PtInRegion(region, 381 * scale, 197 * scale).as_bool(), "the page remains visible at the bottom chamfer");
-            assert!(!PtInRegion(region, 383 * scale, 103 * scale).as_bool(), "the control face stays exposed");
-            for (x, y) in [(390, 50), (390, 250), (200, 150)] { assert!(PtInRegion(region, x * scale, y * scale).as_bool()); }
-            set_region(hwnd, SourceBrowserBounds { overlay: None, ..bounds }).unwrap();
+            let full = SourceBrowserBounds { x: 0.0, y: 0.0, width: 400.0, height: 600.0, overlay: None };
+            for side in [OverlaySide::Right, OverlaySide::Left] {
+                let mirror_x = |x| match side { OverlaySide::Left => 399 - x, OverlaySide::Right => x };
+                let x = match side { OverlaySide::Left => 0.0, OverlaySide::Right => 380.0 };
+                let overlay = OverlayBounds { x, y: 100.0, width: 20.0, height: 98.0, cut: 4.0, side };
+                let bounds = SourceBrowserBounds { overlay: Some(overlay), ..full };
+                set_region(hwnd, bounds).unwrap();
+                assert_ne!(GetWindowRgn(hwnd, region).0, 0);
+                let in_page = |x: i32, y: i32| PtInRegion(region, mirror_x(x) * scale, y * scale).as_bool();
+                assert!(!in_page(390, 150));
+                assert!(in_page(381, 101), "the page remains visible at the top chamfer");
+                assert!(in_page(381, 197), "the page remains visible at the bottom chamfer");
+                assert!(!in_page(385, 103), "the control face stays exposed");
+                for (x, y) in [(390, 50), (390, 250), (200, 150)] { assert!(in_page(x, y)); }
+                assert!(set_region(HWND::default(), bounds).is_err());
+            }
+            set_region(hwnd, full).unwrap();
             assert_eq!(GetWindowRgn(hwnd, region).0, 0, "removing the overlay restores a rectangular window");
             let _ = DeleteObject(HGDIOBJ(region.0)); DestroyWindow(hwnd).unwrap();
-            assert!(set_region(HWND::default(), bounds).is_err());
         } }
     }
 }

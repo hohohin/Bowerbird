@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
+import { loadSourceScript } from './fixtures/explorer/source-script.mjs';
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {chromium} from '../../html-renderer/node_modules/playwright/index.mjs';
 import {chromeFixture} from './fixtures/pinterest-layout/chrome.mjs';
 import {imageFor} from './fixtures/pinterest-layout/page.mjs';
 const runtime=await readFile(process.env.BOWERBIRD_SCROLLBAR_RUNTIME_PATH||'src/lib/overlayScrollbars.js','utf8');
 const css=await readFile('src/components/OverlayScrollbars.css','utf8');
-const chrome=(await readFile(process.env.BOWERBIRD_PINTEREST_CHROME_PATH||'src-tauri/src/commands/source_browser_pinterest_chrome.js','utf8'))
+const chrome=(await loadSourceScript(process.env.BOWERBIRD_PINTEREST_CHROME_PATH||'src-tauri/src/commands/source_browser_pinterest_chrome.js'))
  .replace('__BOWERBIRD_SCROLLBAR_RUNTIME__',runtime).replace('__BOWERBIRD_SCROLLBAR_CSS__',JSON.stringify(css))+'\n//# sourceURL=bowerbird-pinterest-chrome.js';
-const layout=await readFile('src-tauri/src/commands/source_browser_pinterest_layout.js','utf8');
+const layout=await loadSourceScript(process.env.BOWERBIRD_PINTEREST_LAYOUT_PATH||'src-tauri/src/commands/source_browser_pinterest_layout.js');
 const browser=await chromium.launch({channel:'chrome',headless:true,ignoreDefaultArgs:['--hide-scrollbars']});
 const page=await browser.newPage({viewport:{width:460,height:700}});
 const coverageOutput=process.env.BOWERBIRD_PINTEREST_CHROME_COVERAGE;
@@ -20,12 +21,14 @@ try{
  await page.addInitScript(chrome);await page.addInitScript(layout);
  await page.goto('https://www.pinterest.com/lens-search/');
  assert.ok(await page.waitForFunction(()=>document.documentElement.hasAttribute('data-bowerbird-pin-nav'),null,{timeout:3000}).then(()=>true,()=>false),'Pinterest chrome initializes on its allowed origin');
+ await page.locator('[data-bowerbird-lens="layout"]').waitFor({timeout:3000});
  for(const id of ['PinBetterSaveDropdown','PinBetterSaveButton'])assert.equal(await page.locator(`[data-test-id="${id}"]`).isVisible(),false,'hide oversized native board/save controls');
  assert.equal(await page.locator('#unrelated-save').isVisible(),true,'unrelated buttons are preserved');
  assert.equal((await page.locator('#nav-icon').boundingBox()).width,16,'navigation glyphs shrink with the narrow sidebar');
  assert.equal((await page.getByRole('button',{name:'消息',exact:true}).boundingBox()).width,32,'the clickable button keeps its existing width');
  for(const width of [320,460,900]){
-  await page.setViewportSize({width,height:700});await page.waitForTimeout(200);
+  await page.setViewportSize({width,height:700});
+  await page.waitForFunction(width=>document.documentElement.scrollWidth===width,width,{timeout:3000});
   const size=await page.evaluate(()=>({width:innerWidth,client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,nav:document.querySelector('#VerticalNavContent').getBoundingClientRect().width,inset:document.querySelector('.mainContainer').getBoundingClientRect().left}));
   assert.deepEqual(size,{width,client:width,scroll:width,nav:36,inset:0});
   const toolbar = await page.locator('#VerticalNavContent').boundingBox();

@@ -29,13 +29,15 @@ w.__TAURI_INTERNALS__ = {
     if (command === "preview_asset_originals") return assets.filter(a => args.assetIds.includes(a.id)).map(a => ({ asset_id: a.id, name: a.name, path: a.store_path, fingerprint: "fixture-original" }));
     if (command === "trash_asset_original") { if (w.failDelete === args.original.asset_id) throw new Error('模拟失败'); return null; }
     if (command === "list_collections") return [{ id: "c1", name: "参考", kind: "collection" }];
+    if (command === "local_classification_labels") return [{ id: "tag1", name: "标签" }];
     if (command === "list_generation_group") {
       if (w.holdGroupCheck) await new Promise(resolve => { w.releaseGroupCheck = resolve; });
       return assets.slice(0, 2);
     }
-    if (command === "project_canvas_get") {
+    if (command === "project_canvas_has_asset") {
       if (w.holdCanvasCheck) await new Promise(resolve => { w.releaseCanvasCheck = resolve; });
-      return { nodes: [{ kind: "asset", assetId: "a1" }] };
+      if (w.canvasCheck === "failed") throw new Error("模拟读取失败");
+      return w.canvasCheck !== "unavailable" && args.projectId === "p1" && args.assetId === "a1";
     }
     if (command === "delete_asset_with_mode") { if (w.failDelete === args.id) throw new Error('模拟失败'); return { deleted_assets: 1, removed_members: 0, moved_files: 0, failed_moves: [] }; }
     if (command === "reveal_asset_folder" && w.holdReveal) await new Promise(resolve => { w.releaseReveal = resolve; });

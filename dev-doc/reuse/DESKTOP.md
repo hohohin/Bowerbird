@@ -82,6 +82,7 @@
 - 边界：`id` 决定尺寸／固定项的持久化键，复用浏览组件时应明确状态归属；未挂 Provider 会回退全局 `useLocalFileMode`。共享 Asset 与项目身份，独立持有浏览模式、位置和偏好，不另建素材数据源。
 - 会话数据缓存：[catalogCache.ts](../../apps/desktop/src/lib/catalogCache.ts) 的 `catalogCache` 提供有上限的快照、读取合并与版本失效；[useCatalogRevision.ts](../../apps/desktop/src/lib/useCatalogRevision.ts) 的 `useCatalogRevision`／`invalidateCatalog` 统一订阅和本地操作后的失效。实际调用为 `CategorizedLibrary`、`ConnectedCollections`、`VirtualCatalog`；概览键包含项目上下文，分页键包含完整过滤条件和段落／页码，不能以 pane ID 或组件内从零开始的 revision 代替。只缓存桌面浏览数据，不缓存显式选取的 ID／原件解析，不跨应用重启持久化；关闭全部面板仍接收原生变更。只有用户手动刷新调用 `folderConnections.refresh(folderId, force)`（默认 true）；打开／回焦只读索引，禁止再调用此扫描入口。后台同步复用原生 watcher 和建联队列。[契约与验证](../FOLDER-MODE.md#素材库会话缓存2026-11-10源码待发布)。
 - 导航状态由 [localFileMode.ts](../../apps/desktop/src/lib/localFileMode.ts) 按分栏与项目上下文持久化。三个宿主复用 `setSidebarMode`、`setSidebarCollapsed` 与 `selectHierarchy`。浏览其他项目时，创作项目仍由宿主决定。`showImportedMedia` 按导入目标恢复层级和媒体类型。
+- 关键词搜索由 [LibraryCatalogControls.tsx](../../apps/desktop/src/components/LibraryCatalogControls.tsx) 管理输入草稿，复用 [useImeGuard](../../apps/desktop/src/lib/useImeGuard.ts)。暂停输入 200 ms 后提交，Enter 或清空立即提交，分栏导航与显式清空取消待提交草稿。平铺与搜索概览读取组图后的总数，标签侧栏沿用已读取的标签，标签视图仍读取完整汇总。
 - 项目边界：[CategorizedLibrary.tsx](../../apps/desktop/src/components/CategorizedLibrary.tsx) 的 `browseProjectId` 用于项目素材查询、位置记忆、标签／分类及导入归属，`projectId` 仍表示当前创作项目，用于添加到画板、引用和截帧目标。新增嵌入宿主必须明确二者；不得为了浏览其他项目而修改 `activeProjectId`。`FileDropImport` 在完成后核对浏览项目身份，迟到结果不会切换另一个项目的素材视图。
 - 导航记忆：`createLocalFileMode(paneId)` 按 pane＋主页／项目保存 `source`、`lens` 和媒体类型，恢复时兼容旧 `view`、`tagSource`。浏览项目同样分栏记忆，兼容原项目键。`copyLibraryPane` 复制当前选择后独立浏览。普通打开使用 `setOpen(true)`。临时菜单与搜索词只在会话中保留。
 - 现有画板入口：[Toolbar.tsx](../../apps/desktop/src/components/Toolbar.tsx) 与 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 共用 `useStore.canvasLibraryOpen`／`setCanvasLibraryOpen` 和 `useLocalFileMode.setOpen(true)`；顶栏先恢复上次素材视图，展开后显示既有连接操作。`ConnectedCollections` 复用公共 `catalog-tree-row` 的 hover／focus／`is-menu-open` 名称避让，不给空闲目录名称无条件预留操作宽度。
@@ -94,11 +95,13 @@
 - 用途／关键词：选择、Ctrl、Cmd、Shift、范围、anchor。
 - 入口：[catalogSelection.ts](../../apps/desktop/src/lib/catalogSelection.ts) 的 `selectCatalogItem`；实际调用：[CategorizedLibrary.tsx](../../apps/desktop/src/components/CategorizedLibrary.tsx) 与 [ConnectedCollections.tsx](../../apps/desktop/src/components/ConnectedCollections.tsx) 的 `select`。
 - 边界：公共函数只处理单项增删与多选模式，**不负责取范围内 ID**。标签／全部视图选择 Asset ID，真实集合选择 entry ID；两宿主分别解析 section、分页、范围起点与迟到结果保护，不能直接复制或互换其 `select` 闭包。
+- 标签操作：[AssetTagPicker.tsx](../../apps/desktop/src/components/AssetTagPicker.tsx) 的 `BatchAssetTagDialog` 供素材库多选工具栏和素材右键菜单共用。调用方传入素材 ID，弹窗去重并按每批最多 100 项调用 `localClassification.example`，处理失败时可从已完成批次之后重试。批量移除只记录已有标签的移除。原生素材变更事件驱动目录和标签计数刷新。
 - 状态：单项规则 **可跨模块复用**；两处范围分页编排是 **待提取候选**，提取前须保留身份差异与异步取消语义。
 
 ## 修改普通应用设置
 
-- [store.ts](../../apps/desktop/src/store.ts) 的 `updateSettings(patch)` 只接收本次变更字段。设置面板、截图偏好与分类授权共用 [settingsQueue.ts](../../apps/desktop/src/lib/settingsQueue.ts) 的顺序写入、确认快照和失败重试。快捷键变更通过 `update_settings` 同步原生注册与文件写入，失败保留原绑定。默认反推模型首次加载时将旧版偏好迁入 `settings.json`。资料迁移继续使用专用命令。
+- [store.ts](../../apps/desktop/src/store.ts) 的 `updateSettings(patch)` 只接收本次变更字段。设置面板和截图偏好复用 [settingsQueue.ts](../../apps/desktop/src/lib/settingsQueue.ts) 的顺序写入、确认快照和失败重试。快捷键变更通过 `update_settings` 同步原生注册与文件写入，失败保留原绑定。默认反推模型首次加载时将旧版偏好迁入 `settings.json`。资料迁移继续使用专用命令。
+- 自动处理开关和手动云端分类启动在各自的 [Tauri 分类命令](../../apps/desktop/src-tauri/src/commands/local_classification.rs) 内保存 Jev 设置，共用 [SettingsState](../../apps/desktop/src-tauri/src/core/settings.rs) 的幂等写入。手动启动使用 `ensureCloud` 明确选用云端，自动处理的 SQLite 开关独立维护。
 
 ## 顺序保存画板，失败时阻止后续覆盖
 

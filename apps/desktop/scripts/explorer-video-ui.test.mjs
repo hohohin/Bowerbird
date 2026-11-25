@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { loadSourceScript } from './fixtures/explorer/source-script.mjs';
 import { readFile, mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -22,7 +23,7 @@ page.setDefaultTimeout(10000);
 const errors=[];page.on('pageerror',error=>errors.push(error.message));
 await source.addInitScript(await readFile('../extension/candidate-utils.js','utf8'));
 await source.addInitScript(await readFile('src/lib/explorerDragVisual.js','utf8'));
-await source.addInitScript(await readFile('src-tauri/src/commands/source_browser_drag.js','utf8'));
+await source.addInitScript(await loadSourceScript('src-tauri/src/commands/source_browser_drag.js'));
 async function payload(){
   const {session,data}=await startBrowserDrag(source,100,90);
   await finishBrowserDrag(session,data,550,90);

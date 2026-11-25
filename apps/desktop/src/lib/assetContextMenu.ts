@@ -12,14 +12,14 @@ export type AssetDescribeEngine = "bowerbird-cloud" | "codex";
 export type AssetMenuAction =
   | "move-incomplete" | "add-to-chat" | "open-detail" | "open-transcript" | "edit" | "pinterest" | "select" | "rename"
   | "describe-cloud" | "describe-codex" | "dimensions" | "artboard" | "reuse" | "layers" | "history"
-  | "assign" | "project-picker" | "reveal" | "open-system" | "copy-image" | "copy-path" | "references"
+  | "assign" | "edit-tags" | "project-picker" | "reveal" | "open-system" | "copy-image" | "copy-path" | "references"
   | "show-in-library" | "hide-in-library" | "remove-references" | "remove-from-canvas" | "ungroup"
   | "pin-generation-card" | "continue-image-generation" | "create-image-generation-card"
   | "remove-from-project" | "delete-originals" | "delete-generation" | "remove-canvas-item-from-project"
   | "delete-canvas-item" | "remove-canvas-group" | "remove-canvas-group-from-project" | "delete-canvas-group";
 
 type AssetMenuIcon = "edit" | "pin" | "folder-plus" | "folder-tree" | "trash" | "ungroup" | "layers"
-  | "status-unavailable" | "status-ready" | "scan-search" | "scan" | "board" | "clipboard" | "message" | "file-text";
+  | "status-unavailable" | "status-ready" | "scan-search" | "scan" | "board" | "clipboard" | "message" | "file-text" | "tags";
 type AssetMenuSlot = "canvas-selection" | "generation-group" | "merge-generation-group" | "transfers";
 type AssetMenuItem = MenuItemDescriptor<AssetMenuAction, AssetMenuIcon, AssetMenuSlot>;
 type AssetActionOptions = Omit<Extract<AssetMenuItem, { kind: "action" }>, "kind" | "id" | "label">;
@@ -80,6 +80,7 @@ export function buildAssetContextMenu(s: AssetMenuSnapshot): {
     ({ kind: "action", id, label, disabled: busy, ...options });
   const pinterest = action("pinterest", "Pinterest 以图搜图");
   const assign = action("assign", "添加到文件夹", { icon: "folder-plus" });
+  const editTags = action("edit-tags", "编辑标签", { icon: "tags", disabled: busy || file?.entries?.available === false });
   const transfers: AssetMenuItem = { kind: "slot", id: "transfers" };
   const canvasSelection: AssetMenuItem = { kind: "slot", id: "canvas-selection" };
   const divider: AssetMenuItem = { kind: "divider", id: "delete-divider" };
@@ -150,7 +151,7 @@ export function buildAssetContextMenu(s: AssetMenuSnapshot): {
     if (canvas) items.push(canvasSelection);
     if ((allImages || s.canvasImagesPending) && s.targets.length > 1) items.push({ kind: "slot", id: "merge-generation-group" });
     if (s.canSearchPinterest) items.push(pinterest);
-    if (s.targets.length) items.push(assign);
+    if (s.targets.length) items.push(editTags, assign);
     if (!file?.local) items.push(transfers);
     if (!s.hasProject && s.canAddToProject) items.push(action("project-picker", "加入项目", { icon: "folder-tree" }));
     if (allImages || s.canvasImagesPending) items.push({ kind: "divider", id: "describe-divider" }, describeMenu);
@@ -170,6 +171,7 @@ export function buildAssetContextMenu(s: AssetMenuSnapshot): {
   if (asset && !video) common.push(action("open-detail", text ? "打开文本编辑器" : audio ? "打开音频详情" : "打开图片详情",
     audio ? { disabled: unavailable } : undefined));
   if (annotatable) common.push(action("edit", "编辑", { icon: "edit" }));
+  if (asset) common.push(editTags);
   if (s.canSearchPinterest) common.push(pinterest);
   if (!canvas && (!s.embedded || file)) common.push(action("select", !file && s.manage ? "选择/取消选择" : "选择"));
   if (storePath) common.push(action("rename", "重命名", {

@@ -27,13 +27,14 @@ let job: any = JSON.parse(sessionStorage.getItem("layer-job") || "null");
 let saved = JSON.parse(sessionStorage.getItem("layer-workspace") || "null");
 w.documentFixture = documentValue;
 w.saved = () => structuredClone(saved);
+w.layerJob = () => structuredClone(job);
 w.__TAURI_INTERNALS__ = {
   convertFileSrc: (path: string) => path,
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
     if (command === "get_assets_by_ids") return [source];
-    if (command === "read_image_data_url") return background;
+    if (command === "read_image_data_url") return w.sourceOverride ?? background;
     if (command === "layer_workspace_load") return saved;
     if (command === "plugin:dialog|save") return w.cancelExport ? null : `C:/exports/layers.${args.options.filters[0].extensions[0]}`;
     if (command === "layer_export_psd" || command === "layer_export_ai") {
@@ -56,18 +57,26 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "layer_workspace_save") {
       if (w.failSave) throw "模拟磁盘保存失败";
-      saved = structuredClone(args.workspace); sessionStorage.setItem("layer-workspace", JSON.stringify(saved)); return;
+      saved = structuredClone(args.workspace);
+      const serialized = JSON.stringify(saved);
+      if (serialized.length < 4 * 1024 * 1024) sessionStorage.setItem("layer-workspace", serialized);
+      return;
     }
     if (command === "layer_export") { w.exports.push(args); return { ...source, id: "exported" }; }
     if (command === "layer_cloud_request") {
       const request = args.request;
-      if (request.action === "layer_quote") return { status: "quoted", services: ["image_layer_decompose", "image_layer_edit"].map(service => ({ service, available: w.enabled, credits: w.enabled ? 20 : null })) };
+      if (request.action === "layer_quote") return { status: "quoted", layer_protocol: 2, services: [
+        { service: "image_layer_decompose", available: w.enabled, credits: w.enabled ? (request.max_images ?? 17) * 8 + 2 : null, max_images: request.max_images ?? 17, small_layer_cost: 5, large_layer_cost: 8, input_credits: 2 },
+        { service: "image_layer_edit", available: w.enabled, credits: w.enabled ? 20 + Math.max(0, (request.edit_reference_count ?? 1) - 1) * 2 : null },
+      ] };
       if (request.action === "get_by_key") {
         if (!job || job.idempotency_key !== request.idempotency_key) return { status: "not_found" };
         if (w.pendingBusy) return { status: "running", progress: 40 };
-        return { status: "succeeded", layer_result: job.layer_options.operation === "edit" ? { image: circle } : { document: documentValue } };
+        return { status: "succeeded", layer_result: job.layer_options.operation === "decompose" ? { document: documentValue } : { image: circle } };
       }
-      job = request; sessionStorage.setItem("layer-job", JSON.stringify(job));
+      job = request;
+      const serialized = JSON.stringify(job);
+      if (serialized.length < 4 * 1024 * 1024) sessionStorage.setItem("layer-job", serialized);
       if (w.submitDisconnect) { w.submitDisconnect = false; throw "模拟提交响应丢失"; }
       return { status: "queued", progress: 0 };
     }

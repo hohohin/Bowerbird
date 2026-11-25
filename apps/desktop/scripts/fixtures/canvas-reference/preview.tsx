@@ -266,6 +266,11 @@ w.__TAURI_INTERNALS__ = {
     };
     if (command === "project_thread_create") return args.value;
     if (command === "get_settings") return JSON.parse(sessionStorage.getItem("canvas-settings") || "{}");
+    if (command === "set_h3_auto_optimize") {
+      const saved = JSON.parse(sessionStorage.getItem("canvas-settings") || "{}");
+      sessionStorage.setItem("canvas-settings", JSON.stringify({ ...saved, h3_auto_optimize_prompt: args.enabled }));
+      return;
+    }
     if (command === "update_settings") { sessionStorage.setItem("canvas-settings", JSON.stringify(args.settings)); return null; }
     if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, url: null, transfers: [] };
     if (command === "quick_transfer_addresses") return [];

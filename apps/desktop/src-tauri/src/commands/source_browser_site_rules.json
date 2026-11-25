@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "pinterest": {
+    "lensButtonLabels": ["Lens", "Pinterest 镜头"],
+    "lensPopoverLabel": "Lens popover",
+    "pinWrapper": "pinWrapper",
+    "hoverOverlay": "pin-card-hover-overlay",
+    "hoverDecorations": ["pin-card-hover-overlay-top-wash", "pin-card-hover-overlay-gradient-full"],
+    "hiddenToolbarItems": ["PinBetterSaveDropdown", "PinBetterSaveButton"],
+    "toolbarId": "VerticalNavContent",
+    "toolbarIcon": "vertical-nav-icon",
+    "sidebar": "sidebar-container",
+    "mainClass": "mainContainer",
+    "lensImageContainer": "visual-search-image-container",
+    "lensImagePlaceholder": "visual-search-image-container-placeholder",
+    "lensCropper": "visual-search-cropper",
+    "videoIndexes": ["pins", "initialReduxState.pins", "props.initialReduxState.pins"],
+    "relayVideoPath": "response.data.v3GetPinQueryv2.data"
+  },
+  "xiaohongshu": {
+    "noteCardClass": "note-item",
+    "videoIndex": "note.noteDetailMap",
+    "streamPath": "media.stream",
+    "variantUrlKeys": ["masterUrl", "master_url", "url"],
+    "videoUrlKeys": ["url", "playUrl"]
+  }
+}

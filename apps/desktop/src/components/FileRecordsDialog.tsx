@@ -65,7 +65,7 @@ export function FileRecordsDialog({ root, onClose, onRestored }: { root: string;
     {busy && <p role="status" className="my-3 text-sm">正在校验文件内容…</p>}
     {message && <p role="status" className="my-3 text-sm">{message}</p>}
     {error && <p role="alert" className="folder-error">{userErrorMessage(error, "随图资料处理未完成，请检查文件夹后重试。")}</p>}
-    {preview && !preview.items.length && <p className="my-4 text-sm">未找到随图资料。可先在原设备保存资料，再将图片连同 .bowerbird 文件夹一起复制。</p>}
+    {preview && !preview.items.length && <p className="my-4 text-sm">未找到随图资料。可先在原设备保存资料，再复制整个素材文件夹。</p>}
     {!!preview?.items.length && <ul className="space-y-2 my-4 max-h-[45vh] overflow-auto" aria-label="资料恢复预览">
       {preview.items.map(item => <li key={item.record_path} className="border border-line rounded-lg p-3 text-sm">
         <div className="break-all font-medium">{item.file}</div>

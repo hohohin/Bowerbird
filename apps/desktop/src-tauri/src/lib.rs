@@ -416,7 +416,8 @@ pub fn run() {
             core::creative_files::watch(db.clone(), file_config_root.join("creative-records"));
             commands::folder_connections::watch(app.handle().clone(), db.clone(), paths.clone());
             app.manage(core::local_classification::explorer::ExplorerAnalysis::default());
-            app.manage(commands::source_browser::SourceDragHandler(core::local_classification::explorer::handle_notice));
+            app.manage(commands::source_browser_capture::CaptureAdmissions::new()?);
+            app.manage(commands::source_browser::SourceDragHandler(commands::source_browser_capture::handle_drag_notice));
             app.manage(commands::pinterest_search::PinterestSearchState::default());
             app.manage(commands::source_browser::SourcePinterestHooks {
                 loaded: commands::pinterest_search::on_page_finished,
@@ -529,6 +530,7 @@ pub fn run() {
             commands::projects::prepare_library_generation_project,
             commands::project_canvas::project_canvas_ensure,
             commands::project_canvas::project_canvas_get,
+            commands::project_canvas::project_canvas_has_asset,
             commands::project_canvas::project_canvas_visible_nodes,
             commands::project_canvas::project_canvas_rename,
             commands::project_canvas::project_canvas_title_from_first_prompt,
@@ -847,6 +849,8 @@ pub fn run() {
             commands::collect::extension_folder_path,
             commands::settings::get_settings,
             commands::settings::update_settings,
+            commands::settings::set_h3_auto_optimize,
+            commands::comfy_setup::comfy_video_log_tail,
             commands::file_workspace::file_workspace_status,
             commands::file_workspace::file_workspace_move_preview,
             commands::file_workspace::file_workspace_move_schedule,
@@ -875,6 +879,7 @@ pub fn run() {
             commands::source_browser::reload_source_browser,
             commands::source_browser::hide_source_browser,
             commands::source_browser_capture::capture_source_browser_image,
+            commands::source_browser_capture::authorize_source_browser_capture,
             commands::source_browser_jobs::cancel_source_browser_capture,
             commands::source_browser_capture::claim_source_browser_analysis,
             commands::source_browser_capture::release_source_browser_analysis,
@@ -896,6 +901,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, _event| {
             if matches!(&_event, tauri::RunEvent::Exit) {
+                commands::comfy_setup::shutdown();
                 tauri::async_runtime::block_on(async {
                     commands::local_chat::stop_dsh_host().await;
                     commands::agent_ds::video_studio::shutdown().await;

@@ -26,7 +26,7 @@ try {
  }
  await page.waitForFunction(()=>document.querySelectorAll('.folder-media-card').length===180);
  await page.waitForTimeout(600);
- const manager = page.getByRole('button',{name:'管理标签',exact:true});
+ const manager = page.getByRole('button',{name:'标签管理',exact:true});
  assert.equal(await manager.isVisible(),false,'collapsed tags also hide classification management');
  const bar = await page.locator('.library-tag-bar').boundingBox();
  await page.mouse.move(bar.x + bar.width - 10,bar.y + bar.height / 2);
@@ -37,8 +37,8 @@ try {
  await page.mouse.move(500,450);
  await manager.waitFor({state:'hidden'});
  await page.getByRole('button',{name:'显示标签列表',exact:true}).click();
- await page.getByRole('button',{name:'管理标签',exact:true}).click();
- await page.getByRole('dialog',{name:'管理分类数据',exact:true}).waitFor();
+ await page.getByRole('button',{name:'标签管理',exact:true}).click();
+ await page.getByRole('dialog',{name:'标签管理',exact:true}).waitFor();
  await page.keyboard.press('Escape');
  const viewport=page.locator('.folder-scroller');
  const geometry=await viewport.evaluate(el=>({height:el.clientHeight,content:el.scrollHeight,bottom:el.getBoundingClientRect().bottom,window:innerHeight}));
@@ -66,8 +66,8 @@ try {
    await page.waitForFunction(()=>document.querySelectorAll('.folder-media-card').length===2);
    assert.deepEqual(await page.locator('.folder-media-card').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('aria-label'))),['0.png','1.png']);
    await page.getByRole('group',{name:'当前标签：全局水彩',exact:true}).waitFor();
-   await page.getByRole('button',{name:'管理标签',exact:true}).click();
-   const dialog=page.getByRole('dialog',{name:'管理分类数据',exact:true});
+   await page.getByRole('button',{name:'标签管理',exact:true}).click();
+   const dialog=page.getByRole('dialog',{name:'标签管理',exact:true});
    await dialog.getByText('分类目标：全局素材',{exact:true}).waitFor();
    assert.equal(await dialog.getByRole('button',{name:'选择目标文件夹',exact:true}).count(),0);
    assert.equal(await dialog.getByRole('button',{name:'自动分类设置',exact:true}).count(),0);
@@ -97,7 +97,7 @@ try {
    await page.getByRole('button',{name:'分类69',exact:true}).hover();
    await page.mouse.wheel(0,400);
    await page.waitForFunction(()=>document.querySelector('.folder-scroller').scrollTop>0);
-   assert.equal(await page.getByRole('button',{name:'管理标签',exact:true}).evaluate(el => {
+   assert.equal(await page.getByRole('button',{name:'标签管理',exact:true}).evaluate(el => {
      const r=el.getBoundingClientRect(); return r.bottom <= innerHeight && el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
    }),true,'long tag lists and the scrollbar cannot cover the manager button');
  }
@@ -112,8 +112,8 @@ try {
  await page.getByRole('button',{name:'文件夹 旅行',exact:true}).waitFor();
  assert.equal(await page.locator('.library-tag-filter').count(),0);
  await page.getByRole('button',{name:'更多文件操作',exact:true}).click();
- await page.getByRole('button',{name:'管理分类数据',exact:true}).click();
- const folderManager=page.getByRole('dialog',{name:'管理分类数据',exact:true});
+ await page.getByRole('button',{name:'标签管理',exact:true}).click();
+ const folderManager=page.getByRole('dialog',{name:'标签管理',exact:true});
  await folderManager.getByRole('button',{name:'选择目标文件夹',exact:true}).waitFor();
  assert.equal(await folderManager.getByRole('textbox',{name:'标签名称',exact:true}).count(),0);
  await folderManager.getByRole('button',{name:'新建标签',exact:true}).click();

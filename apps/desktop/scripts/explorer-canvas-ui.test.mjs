@@ -20,7 +20,7 @@ async function drop(selector = "[data-canvas-stage]") {
     return point;
   });
 }
-async function settled() { await page.waitForFunction(() => !document.querySelector(".explore-capture-status")); }
+async function settled() { await page.locator(".explorer-capture-count").waitFor({ state: "hidden" }); }
 const settleSource = () => page.locator(".canvas-workspace").evaluate(async element => {
   await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => {})));
 });
@@ -33,6 +33,9 @@ try {
   await page.goto("http://127.0.0.1:1556/scripts/fixtures/canvas-reference/preview.html?explorer");
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.waitForFunction(() => window.calls.filter(call => call.command === "resize_source_browser").at(-1)?.args.visible === true);
+  const stage = await page.locator('[data-canvas-stage]').boundingBox();
+  const browserPanel = await page.getByRole('complementary', { name: '探索面板' }).boundingBox();
+  assert.ok(stage.x + stage.width <= browserPanel.x, 'the website is right of the canvas');
   const browserNavigationCount = await page.evaluate(() => window.calls.filter(call => ["open_source_browser", "navigate_source_browser", "reload_source_browser"].includes(call.command)).length);
   for (let attempt = 0; attempt < 3; attempt++) {
     await page.locator('[data-canvas-node-id="old"]').click({ button: "right" });
@@ -45,11 +48,12 @@ try {
   }
   assert.equal(await page.evaluate(() => window.calls.filter(call => ["open_source_browser", "navigate_source_browser", "reload_source_browser"].includes(call.command)).length), browserNavigationCount);
   const source = page.locator(".canvas-source-content");
-  const resizer = page.getByRole("separator", { name: "调整素材面板宽度" });
+  const resizer = page.getByRole("separator", { name: "调整素材库宽度", exact: true });
   const toggle = page.locator(".canvas-source-toggle:visible");
+  const closeLibrary = page.getByRole("button", { name: "关闭素材库", exact: true });
   assert.equal(await page.locator(".canvas-board-toolbar .canvas-source-toggle").count(), 0);
   assert.equal(await page.locator(".canvas-board-shell > .canvas-source-toggle:visible").count(), 1);
-  assert.equal(await source.isVisible(), false, "opening a canvas with exploration already open collapses its library");
+  assert.equal(await source.isVisible(), false, "a canvas starts with its library closed");
   await page.evaluate(() => {
     window.originalSource = document.querySelector(".canvas-source-panel");
     window.originalNode = document.querySelector('[data-canvas-node-id="old"]');
@@ -58,35 +62,40 @@ try {
   await toggle.click();
   await settleSource();
   assert.equal(await source.isVisible(), true, "manual expansion is allowed during exploration");
-  await page.getByRole("tab", { name: "中央素材", exact: true }).click();
+  const allAssets = source.getByRole("button", { name: "全部素材", exact: true });
+  await allAssets.click();
   await resizer.focus(); await page.keyboard.press("ArrowRight");
   await settleSource();
   const sourceWidth = await source.evaluate(element => element.getBoundingClientRect().width);
   const boardWidth = await page.locator(".canvas-board-shell").evaluate(element => element.getBoundingClientRect().width);
-  await toggle.click();
+  await closeLibrary.click();
   assert.equal(await resizer.count(), 0, "the hidden library does not leave a resize gutter");
   await settleSource();
-  assert.ok(await page.locator(".canvas-board-shell").evaluate(element => element.getBoundingClientRect().width) > boardWidth + 200);
+  assert.equal(await page.locator(".canvas-board-shell").evaluate(element => element.getBoundingClientRect().width), boardWidth,
+    "closing the floating library must leave the canvas viewport stable");
   await toggle.press("Enter");
   await settleSource();
-  assert.equal(await page.getByRole("tab", { name: "中央素材", exact: true }).getAttribute("aria-selected"), "true");
+  assert.equal(await allAssets.getAttribute("aria-current"), "true");
   assert.equal(await source.evaluate(element => element.getBoundingClientRect().width), sourceWidth);
   await page.getByRole("button", { name: "收起浏览器", exact: true }).click();
   await page.evaluate(() => window.setExploring(true));
+  await page.getByRole('complementary', { name: '探索面板' }).waitFor();
+  assert.equal(await source.isVisible(), true, 'opening right-side exploration leaves the manually opened library alone');
+  await closeLibrary.click();
   await source.waitFor({ state: "hidden" });
   await mkdir(".tmp", { recursive: true });
   await page.screenshot({ path: ".tmp/canvas-explorer-library-collapsed.png" });
   await page.getByRole("button", { name: "收起浏览器", exact: true }).click();
   assert.equal(await source.isVisible(), false, "closing exploration keeps the library collapsed until requested");
   await toggle.click();
-  await page.getByRole("tab", { name: "项目素材", exact: true }).click();
+  await source.getByRole("button", { name: "引用布局合成验收", exact: true }).click();
   assert.ok(await page.evaluate(() => window.originalSource === document.querySelector(".canvas-source-panel")
     && window.originalNode === document.querySelector('[data-canvas-node-id="old"]')
     && window.originalTransform === document.querySelector(".canvas-plane").style.transform));
   await page.screenshot({ path: ".tmp/canvas-library-expanded.png" });
   await page.evaluate(() => window.setExploring(true));
   await page.setViewportSize({ width: 1000, height: 800 });
-  await toggle.click(); await toggle.click();
+  await closeLibrary.click();
   assert.equal(await toggle.isVisible(), true, "narrow canvases retain the expand control");
   await page.setViewportSize({ width: 1800, height: 1000 });
   await drop('[aria-label="探索采集素材"]'); await settled();
@@ -125,5 +134,5 @@ try {
   assert.ok(commands.indexOf("project_canvas_materialize") < commands.indexOf("capture_source_browser_image"));
   assert.ok(commands.indexOf("capture_source_browser_image") < commands.indexOf("project_canvas_node_create"));
   assert.deepEqual(errors, []);
-  console.log("PASS explorer canvas: right-click keeps browser visible without navigation, automatic library collapse, manual/keyboard toggle, retained filters/width/DOM/viewport, narrow controls, drop coordinates, zoom while downloading, duplicate instances, failure, frozen project, persisted reload, provisional project, library-only drop");
+  console.log("PASS explorer canvas: right-side browser, initial library closed, both panels coexist, drop coordinates, frozen project, persistence and narrow controls");
 } finally { await browser.close(); await server.close(); }

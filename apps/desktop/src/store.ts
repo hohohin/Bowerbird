@@ -7,6 +7,7 @@ import { create } from "zustand";
 import { filterAssetsByMediaType, type MediaFilter } from "./lib/mediaFilter";
 import { readThumbnailWidth, saveThumbnailWidth, type ThumbnailScope } from "./lib/thumbnailSize";
 import { beginOnboardingOperation } from "./lib/onboardingStore";
+import { useLocalFileMode } from "./lib/localFileMode";
 import type { ProjectMembership } from "./lib/libraryView";
 import { resolveVideoOptions, videoInputError, videoRatio, type GenerationSettings } from "./lib/videoGeneration";
 import { api } from "./lib/api";
@@ -84,9 +85,12 @@ const DEFAULT_PROVIDER_KEY = "bowerbird.defaultProvider";
 const VISUAL_PROFILE_KEY = "bowerbird.visualProfile.selected";
 const LIBRARY_HOME_VIEW_KEY = "bowerbird.libraryHomeView";
 
-function loadLibraryHomeView(): "library" | "projects" {
+export type LibraryHomeView = "library" | "projects" | "explore";
+
+function loadLibraryHomeView(): LibraryHomeView {
   try {
-    return localStorage.getItem(LIBRARY_HOME_VIEW_KEY) === "projects" ? "projects" : "library";
+    const view = localStorage.getItem(LIBRARY_HOME_VIEW_KEY);
+    return view === "projects" || view === "explore" ? view : "library";
   } catch {
     return "library";
   }
@@ -204,8 +208,8 @@ interface State {
   setThumbnailWidth: (scope: ThumbnailScope, value: number) => void;
   assets: Asset[];
   libraryMemberships: ProjectMembership[];
-  libraryHomeView: "projects" | "library";
-  setLibraryHomeView: (view: "projects" | "library") => void;
+  libraryHomeView: LibraryHomeView;
+  setLibraryHomeView: (view: LibraryHomeView) => void;
   canvasLibraryOpen: boolean;
   librarySelectionIds: string[] | null;
   setCanvasLibraryOpen: (open: boolean) => void;
@@ -585,6 +589,7 @@ export const useStore = create<State>((set, get) => {
     if (settings.default_understand_provider) clearLegacyUnderstandProvider();
     return settings;
   }, async (settings, patch) => {
+    if (Object.keys(patch).length === 1 && typeof patch.h3_auto_optimize_prompt === "boolean") return api.setH3AutoOptimize(patch.h3_auto_optimize_prompt);
     const receipt = await api.updateSettings(settings, !!patch.screenshot_shortcuts);
     if (settings.default_understand_provider) clearLegacyUnderstandProvider();
     return receipt;
@@ -1018,8 +1023,10 @@ export const useStore = create<State>((set, get) => {
       // writing into the project we just left.
       await api.setActiveProject(backendProjectScopeForRoute(project));
       const retainInspector = shouldRetainInspectorForProjectRoute(id, get().creativeNavigation);
+      useLocalFileMode.getState().setOpen(false);
       set({
         activeProjectId: id,
+        canvasLibraryOpen: false,
         boardOpen: false,
         focusedThreadId: null,
         currentFolderId: null,
@@ -1053,6 +1060,7 @@ export const useStore = create<State>((set, get) => {
         : get().projects,
       activeProjectId: null,
       libraryHomeView: get().activeProjectId ? "projects" : get().libraryHomeView,
+      canvasLibraryOpen: false,
       boardOpen: false,
       focusedThreadId: null,
       currentFolderId: null,
@@ -1089,9 +1097,11 @@ export const useStore = create<State>((set, get) => {
       title_source: titleSource,
       provisional: true,
     };
+    useLocalFileMode.getState().setOpen(false);
     set((state) => ({
       projects: [project, ...state.projects.filter((candidate) => !candidate.provisional)],
       activeProjectId: id,
+      canvasLibraryOpen: false,
       boardOpen: false,
       focusedThreadId: null,
       projectTimelineScope: "focused",

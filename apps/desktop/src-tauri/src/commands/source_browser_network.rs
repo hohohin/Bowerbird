@@ -1,9 +1,17 @@
 //! Native browser transports shared by production capture and smoke fixtures.
 use crate::error::{AppError, AppResult};
-use tauri::Webview;
+use tauri::{Url, Webview};
 use super::source_browser_jobs::CaptureControl;
 const MAX_BYTES: usize = 50 * 1024 * 1024;
 const MAX_VIDEO_BYTES: usize = 200 * 1024 * 1024;
+pub(super) const SOURCE_ORIGIN_CHANGED: &str = "来源页面已切换，请返回来源后重试。";
+
+fn verify_source_origin(webview: &Webview, page: &Url) -> AppResult<()> {
+    if webview.url().ok().is_some_and(|current| current.origin() == page.origin()) {
+        return Ok(());
+    }
+    Err(AppError::Other(SOURCE_ORIGIN_CHANGED.into()))
+}
 
 pub struct CaptureResource {
     pub url: String,
@@ -82,50 +90,61 @@ async fn evaluate(_: &Webview, _: &str) -> AppResult<serde_json::Value> {
     Err(AppError::Other("此平台暂不支持浏览器视频采集。".into()))
 }
 
-fn renderer_expression(method: &str, args: serde_json::Value) -> String {
-    format!("(async()=>{{try{{return {{value:await window.__bbSourceVideo.{method}(...{args})}}}}catch(error){{return {{error:String(error?.message||'')}}}}}})()")
+fn renderer_expression(method: &str, args: serde_json::Value, page: &Url) -> String {
+    let origin = serde_json::json!(page.origin().ascii_serialization());
+    let error = serde_json::json!(SOURCE_ORIGIN_CHANGED);
+    format!("(async()=>{{try{{if(location.origin!=={origin})throw new Error({error});return {{value:await window.__bbSourceVideo.{method}(...{args})}}}}catch(error){{return {{error:String(error?.message||'')}}}}}})()")
 }
 
-async fn renderer_call(webview: &Webview, method: &str, args: serde_json::Value) -> AppResult<serde_json::Value> {
-    let result = evaluate(webview, &renderer_expression(method, args)).await?;
+async fn renderer_call(webview: &Webview, method: &str, args: serde_json::Value, page: &Url) -> AppResult<serde_json::Value> {
+    let result = evaluate(webview, &renderer_expression(method, args, page)).await?;
     if let Some(message) = result["error"].as_str() {
-        tracing::warn!(diagnostic=message, "source video renderer rejected request");
+        if method == "resolve" && message == "site-video-rules-miss" {
+            tracing::warn!(method, "source video site rules did not resolve the media");
+            return Err(AppError::Other("网页视频暂未识别。请先播放后重新拖入，也可尝试用系统浏览器的插件采集。".into()));
+        }
         // Page content cannot supply arbitrary user-facing errors or internal URLs.
-        let known = ["来源页面或视频已切换，请重新拖入。", "此视频受播放保护，无法采集。", "视频超过大小限制。",
+        let known = [SOURCE_ORIGIN_CHANGED, "来源页面或视频已切换，请重新拖入。", "此视频受播放保护，无法采集。", "视频超过大小限制。",
             "当前页面无法读取该网络资源。",
             "此笔记包含多个视频，暂时无法确认本次拖动的视频。", "网页提供了多个视频来源，暂时无法确认本次拖动的视频。",
             "检测到多个分段清单，暂时无法确认本次拖动的视频。", "尚未找到当前视频的分段清单，请播放视频后重新拖入。",
             "网站未返回完整视频内容，请重新拖入。", "网站未返回完整视频内容。"];
-        return Err(AppError::Other(if known.contains(&message) { message } else { "浏览器未能读取当前视频，请播放视频后重试。" }.into()));
+        let message = known.into_iter().find(|known| *known == message);
+        tracing::warn!(method, diagnostic = ?message, "source video renderer rejected request");
+        return Err(AppError::Other(message.unwrap_or("浏览器未能读取当前视频，请播放视频后重试。").into()));
     }
     Ok(result["value"].clone())
 }
 
-pub async fn resolve_video_source(webview: &Webview, source: &str, page_url: &str, control: &CaptureControl) -> AppResult<String> {
-    let value = checked(control, renderer_call(webview, "resolve", serde_json::json!([source, page_url]))).await?;
+pub async fn resolve_video_source(webview: &Webview, source: &str, page_url: &str, page: &Url, control: &CaptureControl) -> AppResult<String> {
+    let value = checked(control, renderer_call(webview, "resolve", serde_json::json!([source, page_url]), page)).await?;
     let source = value.as_str().filter(|source| source.len() <= 8192)
         .ok_or_else(|| AppError::Other("无法确认当前视频来源，请重新拖入。".into()))?;
     let parsed = tauri::Url::parse(source).map_err(|_| AppError::Other("视频来源地址无效。".into()))?;
     if !matches!(parsed.scheme(), "http" | "https" | "blob") || !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(AppError::Other("视频来源地址无效。".into()));
     }
+    if parsed.scheme() == "blob" && parsed.origin() != page.origin() {
+        return Err(AppError::Other("视频来源与当前网页不一致，请重新拖入。".into()));
+    }
     Ok(source.into())
 }
 
-pub async fn browser_capture_resource(webview: &Webview, url: &str, max_bytes: usize, control: &CaptureControl) -> AppResult<CaptureResource> {
-    capture_resource(webview, url, max_bytes, control, true).await
+pub async fn browser_capture_resource(webview: &Webview, url: &str, page: &Url, max_bytes: usize, control: &CaptureControl) -> AppResult<CaptureResource> {
+    capture_resource(webview, url, page, max_bytes, control, true).await
 }
 
-pub async fn browser_capture_resource_silent(webview: &Webview, url: &str, max_bytes: usize, control: &CaptureControl) -> AppResult<CaptureResource> {
-    capture_resource(webview, url, max_bytes, control, false).await
+pub async fn browser_capture_resource_silent(webview: &Webview, url: &str, page: &Url, max_bytes: usize, control: &CaptureControl) -> AppResult<CaptureResource> {
+    capture_resource(webview, url, page, max_bytes, control, false).await
 }
 
-async fn capture_resource(webview: &Webview, url: &str, max_bytes: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
+async fn capture_resource(webview: &Webview, url: &str, page: &Url, max_bytes: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
     control.check()?;
+    verify_source_origin(webview, page)?;
     if max_bytes == 0 || max_bytes > MAX_VIDEO_BYTES { return Err(AppError::Other("视频大小限制无效。".into())); }
     let parsed = tauri::Url::parse(url).map_err(|_| AppError::Other("视频地址无效。".into()))?;
     if parsed.scheme() == "blob" {
-        return renderer_resource(webview, url, max_bytes, control, report).await;
+        return renderer_resource(webview, url, page, max_bytes, control, report).await;
     }
     if !matches!(parsed.scheme(), "http" | "https") || !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(AppError::Other("视频地址无效。".into()));
@@ -133,23 +152,23 @@ async fn capture_resource(webview: &Webview, url: &str, max_bytes: usize, contro
     #[cfg(windows)]
     {
         // The renderer supplies the final response URL for relative manifest references.
-        if webview.url().ok().is_some_and(|page| page.origin() == parsed.origin()) {
-            match renderer_resource(webview, url, max_bytes, control, report).await {
+        if page.origin() == parsed.origin() {
+            match renderer_resource(webview, url, page, max_bytes, control, report).await {
                 Ok(resource) => return Ok(resource),
                 Err(AppError::Other(message)) if message == "当前页面无法读取该网络资源。" => control.check()?,
                 Err(error) => return Err(error),
             }
         }
-        capture_network_resource(webview, url, max_bytes, control, report).await
+        capture_network_resource(webview, &parsed, page, max_bytes, control, report).await
     }
     #[cfg(target_os = "macos")]
-    { capture_mac_resource(webview, url, max_bytes, control, report).await }
+    { capture_mac_resource(webview, url, page, max_bytes, control, report).await }
     #[cfg(not(any(windows, target_os = "macos")))]
-    { renderer_resource(webview, url, max_bytes, control, report).await }
+    { renderer_resource(webview, url, page, max_bytes, control, report).await }
 }
 
 #[cfg(target_os = "macos")]
-async fn capture_mac_resource(webview: &Webview, url: &str, maximum: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
+async fn capture_mac_resource(webview: &Webview, url: &str, page: &Url, maximum: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
     use std::ffi::{c_char, c_void, CStr, CString};
     type Sender = (tokio::sync::oneshot::Sender<AppResult<CaptureResource>>, usize);
     if report { control.report("downloading", 0, None, None, None); }
@@ -177,8 +196,14 @@ async fn capture_mac_resource(webview: &Webview, url: &str, maximum: usize, cont
     let id = CString::new(uuid::Uuid::new_v4().to_string()).unwrap();
     let native_id = id.clone();
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    webview.with_webview(move |view| unsafe {
-        bb_browser_capture_resource(view.inner(), url.as_ptr(), maximum, native_id.as_ptr(), Box::into_raw(Box::new((sender,maximum))).cast(), complete);
+    let browser = webview.clone();
+    let page = page.clone();
+    webview.with_webview(move |view| {
+        if let Err(error) = verify_source_origin(&browser, &page) {
+            let _ = sender.send(Err(error));
+            return;
+        }
+        unsafe { bb_browser_capture_resource(view.inner(), url.as_ptr(), maximum, native_id.as_ptr(), Box::into_raw(Box::new((sender,maximum))).cast(), complete); }
     }).map_err(|_| AppError::Other("浏览器读取初始化失败。".into()))?;
     let result = checked(control, async {
         tokio::time::timeout(std::time::Duration::from_secs(125), receiver).await
@@ -190,16 +215,16 @@ async fn capture_mac_resource(webview: &Webview, url: &str, maximum: usize, cont
     result
 }
 
-async fn renderer_resource(webview: &Webview, url: &str, max_bytes: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
+async fn renderer_resource(webview: &Webview, url: &str, page: &Url, max_bytes: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
     // Native chooses the ID before starting fetch, so cancellation can abort even
     // while the response headers have not arrived yet.
     let id = uuid::Uuid::new_v4().to_string();
     let result = async {
-        let opened = checked(control, renderer_call(webview, "open", serde_json::json!([url, max_bytes, id]))).await?;
+        let opened = checked(control, renderer_call(webview, "open", serde_json::json!([url, max_bytes, id]), page)).await?;
         let total = opened["totalBytes"].as_u64();
         let mut bytes = Vec::new();
         loop {
-            let value = checked(control, renderer_call(webview, "read", serde_json::json!([id]))).await?;
+            let value = checked(control, renderer_call(webview, "read", serde_json::json!([id]), page)).await?;
             let chunk = decode_chunk(&serde_json::json!({"data":value["data"],"base64Encoded":true}))?;
             if bytes.len() + chunk.len() > max_bytes { return Err(AppError::Other("视频超过大小限制。".into())); }
             bytes.extend(chunk);
@@ -212,16 +237,19 @@ async fn renderer_resource(webview: &Webview, url: &str, max_bytes: usize, contr
         Ok(CaptureResource {url:opened["url"].as_str().unwrap_or(url).into(), bytes,
             content_type:opened["contentType"].as_str().unwrap_or("").into(), total_bytes:total})
     }.await;
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), renderer_call(webview, "close", serde_json::json!([id]))).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), renderer_call(webview, "close", serde_json::json!([id]), page)).await;
     result
 }
 
 #[cfg(windows)]
-async fn confirm_manifest_base(webview: &Webview, url: &str, include_credentials: bool, control: &CaptureControl) -> AppResult<()> {
+async fn confirm_manifest_base(webview: &Webview, url: &str, page: &Url, include_credentials: bool, control: &CaptureControl) -> AppResult<()> {
     let id = uuid::Uuid::new_v4().to_string();
-    let result = checked(control, renderer_call(webview, "manifestBase", serde_json::json!([url, id, include_credentials]))).await;
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), renderer_call(webview, "close", serde_json::json!([id]))).await;
+    let result = checked(control, renderer_call(webview, "manifestBase", serde_json::json!([url, id, include_credentials]), page)).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), renderer_call(webview, "close", serde_json::json!([id]), page)).await;
     control.check()?;
+    if matches!(&result, Err(AppError::Other(message)) if message == SOURCE_ORIGIN_CHANGED) {
+        return Err(AppError::Other(SOURCE_ORIGIN_CHANGED.into()));
+    }
     let value = result.unwrap_or_default();
     match value["type"].as_str() {
         Some("basic" | "cors") if value["ok"].as_bool() == Some(true) => Ok(()),
@@ -240,17 +268,15 @@ fn include_media_credentials(page: &tauri::Url, media: &tauri::Url) -> bool {
 }
 
 #[cfg(windows)]
-async fn capture_network_resource(webview: &Webview, url: &str, max_bytes: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
+async fn capture_network_resource(webview: &Webview, media: &Url, page: &Url, max_bytes: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
     use serde_json::json;
-    let include_credentials = match (webview.url(), tauri::Url::parse(url)) {
-        (Ok(page), Ok(media)) => include_media_credentials(&page, &media),
-        _ => true,
-    };
+    let url = media.as_str();
+    let include_credentials = include_media_credentials(page, media);
     let tree = checked(control, cdp(webview, "Page.getFrameTree", json!({}))).await?;
     let frame = tree["frameTree"]["frame"]["id"].as_str().ok_or_else(|| AppError::Other("网页尚未就绪。".into()))?;
-    let response = checked(control, cdp_timed(webview, "Network.loadNetworkResource", json!({
+    let response = checked(control, cdp_timed_for_source(webview, "Network.loadNetworkResource", json!({
         "frameId":frame, "url":url, "options":{"disableCache":false,"includeCredentials":include_credentials}
-    }), std::time::Duration::from_secs(120), "视频")).await?;
+    }), std::time::Duration::from_secs(120), "视频", Some(page))).await?;
     let resource = &response["resource"];
     let stream = resource["stream"].as_str();
     let result = async {
@@ -276,7 +302,7 @@ async fn capture_network_resource(webview: &Webview, url: &str, max_bytes: usize
         let captured = CaptureResource {url:url.into(),bytes,content_type:header("content-type").unwrap_or("").into(),total_bytes:total};
         // CDP omits the final response URL. Never resolve relative fragments
         // against an unverified pre-redirect URL, even if those files exist.
-        if captured.is_manifest() { confirm_manifest_base(webview, url, include_credentials, control).await?; }
+        if captured.is_manifest() { confirm_manifest_base(webview, url, page, include_credentials, control).await?; }
         Ok(captured)
     }.await;
     if let Some(stream) = stream { let _ = cdp_timed(webview, "IO.close", json!({"handle":stream}), std::time::Duration::from_secs(2), "视频").await; }
@@ -294,14 +320,25 @@ pub(crate) async fn cdp(
 
 #[cfg(windows)]
 async fn cdp_timed(webview: &Webview, method: &str, params: serde_json::Value, timeout: std::time::Duration, media: &'static str) -> AppResult<serde_json::Value> {
+    cdp_timed_for_source(webview, method, params, timeout, media, None).await
+}
+
+#[cfg(windows)]
+async fn cdp_timed_for_source(webview: &Webview, method: &str, params: serde_json::Value, timeout: std::time::Duration, media: &'static str, page: Option<&Url>) -> AppResult<serde_json::Value> {
     use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
     use windows::core::HSTRING;
     let (tx, rx) = tokio::sync::oneshot::channel();
     let method = method.to_string();
     let resource_request = method == "Network.loadNetworkResource";
     let params = params.to_string();
+    let browser = webview.clone();
+    let page = page.cloned();
     webview
         .with_webview(move |view| {
+            if page.as_ref().is_some_and(|page| verify_source_origin(&browser, page).is_err()) {
+                let _ = tx.send(Err(SOURCE_ORIGIN_CHANGED.to_string()));
+                return;
+            }
             unsafe {
                 if let Ok(core) = view.controller().CoreWebView2() {
                     let cleanup_core = core.clone();
@@ -338,6 +375,7 @@ async fn cdp_timed(webview: &Webview, method: &str, params: serde_json::Value, t
         .map_err(|_| AppError::Other(format!("浏览器读取{media}超时，请重试")))?
         .map_err(|_| AppError::Other(format!("浏览器已关闭，无法读取{media}")))?
         .map_err(|error| {
+            if error == SOURCE_ORIGIN_CHANGED { return AppError::Other(error); }
             tracing::warn!(diagnostic=%error, "native browser media request failed");
             AppError::Other(format!("浏览器无法读取{media}，请刷新网页后重试"))
         })?;

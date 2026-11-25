@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { loadSourceScript } from "./fixtures/explorer/source-script.mjs";
 import { readFile } from "node:fs/promises";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 import { startBrowserDrag, finishBrowserDrag } from "./fixtures/explorer/native-drag.mjs";
@@ -10,7 +11,7 @@ try {
     const page = await browser.newPage();
     await page.addInitScript(await readFile("../extension/candidate-utils.js", "utf8"));
     await page.addInitScript(await readFile("src/lib/explorerDragVisual.js", "utf8"));
-    await page.addInitScript(await readFile("src-tauri/src/commands/source_browser_drag.js", "utf8"));
+    await page.addInitScript(await loadSourceScript("src-tauri/src/commands/source_browser_drag.js"));
     await page.route("https://fixture.example/**", route => route.request().resourceType() === "image"
       ? route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="blue"/></svg>' })
       : route.fulfill({ contentType: "text/html", body: `<style>

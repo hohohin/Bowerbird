@@ -14,7 +14,18 @@ test('developer can publish a branch and see a failed coverage check from the lo
     args: ['--no-proxy-server', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'] });
   try {
     const page = await browser.newPage();
+    await page.route('**/api/services', route => route.fulfill({ json: {
+      gpt: { state: 'degraded', process: 'running', controlPlane: { state: 'backoff', reason: 'network_error', consecutiveFailures: 5 }, proxy: 'unhealthy' },
+      gemini: { state: 'healthy', process: 'running', http: 'healthy', ssh: 'connected', interface: 'Fixture WLAN' },
+    } }));
     await page.goto(f.app.origin);
+    await page.locator('#gpt-service').getByText(/network_error/).waitFor();
+    await page.locator('#gemini-service').getByText(/SSH 连接已建立/).waitFor();
+    await page.getByRole('button', { name: '刷新状态' }).click();
+    await page.getByRole('button', { name: '一键更新当前快照' }).click();
+    await page.getByRole('status').filter({ hasText: '覆盖检查已通过' }).waitFor();
+    assert.equal(callTool(reader(), 'project_overview').branch, 'main');
+    assert.equal(callTool(reader(), 'project_overview').isDirty, true);
     await page.getByRole('button', { name: '更新快照 topic/green' }).click();
     await page.getByRole('status').filter({ hasText: '覆盖检查已通过' }).waitFor();
     const expected = f.branches.find(row => row.branch === 'topic/green');

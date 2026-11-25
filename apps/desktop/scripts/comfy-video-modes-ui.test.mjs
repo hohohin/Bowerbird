@@ -18,7 +18,7 @@ async function mock() {
     window.store.setState({ cloudAuth: { logged_in: true, user_id: 'tester' }, cloudEntitlement: { user_id: 'tester', tier: 'pro', offline_state: 'fresh', balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true }, generation_services: [] } });
     const invoke = window.__TAURI_INTERNALS__.invoke;
     window.h3Calls = []; window.envCalls = []; window.h3Status = 'done';
-    window.h3Asset = { id: 'h3-result', store_path: '/synthetic-h3.mp4', ext: 'mp4', width: 768, height: 1344, duration: 124 / 24 };
+    window.h3Asset = { id: 'h3-result', name: 'H3 合成结果', source: 'comfy-h3', store_path: '/synthetic-h3.mp4', ext: 'mp4', width: 768, height: 1344, duration: 124 / 24 };
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
       if (command === 'plugin:dialog|open' && args.options?.title === '选择已有 ComfyUI') return 'D:/Local/ComfyUI';
       if (command === 'comfy_video_environment') {
@@ -120,9 +120,10 @@ try {
   });
   const setDragged = ids => page.evaluate(async ids => (await import('/src/lib/dragPayload.ts')).setDragAssets(ids), ids);
   await setDragged(['voice']);
-  const referenceAudio = card.getByRole('group', { name: '参考音频' });
-  await referenceAudio.getByText('（可选，如角色声音）', { exact: true }).waitFor();
-  await referenceAudio.dispatchEvent('drop');
+  const audioGuide = card.getByRole('group', { name: '原声引导' });
+  await audioGuide.getByText('拖入或连接录音（可选）', { exact: true }).waitFor();
+  assert.match(await audioGuide.innerText(), /第 0 秒沿用录音内容与节奏.*切换到单图或 R2V/);
+  await audioGuide.dispatchEvent('drop');
   await setDragged(null);
   await card.getByText('合成录音.wav', { exact: true }).waitFor();
   assert.match(await card.locator('header').innerText(), /视频生成/);
@@ -152,6 +153,7 @@ try {
   await card.getByLabel('H3 模式', { exact: true }).click();
   await page.getByRole('option', { name: '单图', exact: true }).click();
   await card.getByRole('group', { name: '参考音频' }).getByText('合成录音.wav').waitFor();
+  assert.match(await card.getByRole('group', { name: '参考音频' }).innerText(), /<Audio 1> 的音色和语调说新台词/);
   assert.equal(await card.locator('.comfy-frame-slot').count(), 1);
   assert.equal(await card.getByLabel('参考图输入', { exact: true }).count(), 1);
   assert.match(await card.getByLabel('H3 时长', { exact: true }).innerText(), /5 秒/);
@@ -170,9 +172,15 @@ try {
 
   // A normal image-card save writes the whole board, including the existing H3 recording and run.
   const readBoard = () => page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')));
+  async function pinCompletedCard() {
+    const resultId = (await readBoard()).document.nodes.find(node => node.id === 'h3').resultNodeIds[0];
+    await page.locator(`[data-canvas-node-id="${resultId}"]`).hover();
+    await card.getByRole('button', { name: '固定在画板上', exact: true }).click();
+  }
   const beforeImage = await readBoard();
   const audioInput = beforeImage.document.nodes.find(node => node.id === 'h3').inputs['reference-audio'];
   const oldRun = beforeImage.document.run;
+  await pinCompletedCard();
   await placeWorkflowCard(page, '新增生成卡片');
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node =>
     node.kind === 'generation' && node.generation?.media !== 'video'));
@@ -197,6 +205,7 @@ try {
     const run = JSON.parse(sessionStorage.getItem('workflow-p')).document.run;
     return run.id !== runId && run.status === 'done';
   }, oldRun.id);
+  await pinCompletedCard();
 
   // Completion refreshes the canvas. Reopen if that refresh dismissed the first popup.
   const modePicker = card.getByLabel('H3 模式', { exact: true });
@@ -222,7 +231,9 @@ try {
   assert.equal(input.ratio, '9:16');
   assert.equal(input.audioAssetId, 'voice'); assert.doesNotMatch(input.prompt, /<Audio 1>/);
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
-  await card.getByRole('button', { name: '断开参考音频' }).click();
+  await pinCompletedCard();
+  assert.match(await audioGuide.innerText(), /第 0 秒沿用录音内容与节奏.*切换到单图或 R2V/);
+  await card.getByRole('button', { name: '断开原声引导' }).click();
   await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'h3').inputs['reference-audio']?.length);
   const checks = await page.evaluate(async () => {
     const { CanvasWorkflowController, filterAutomaticMediaValues } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -364,7 +375,8 @@ try {
 
   await modes.click();
   await page.getByRole('option', { name: '多素材参考（R2V）', exact: true }).click();
-  const groups = [ ['参考图片输入', 'reference-image', ['a', 'b']], ['参考视频输入', 'reference-video', ['r2v-clip']], ['独立录音输入', 'r2v-audio', ['voice']] ];
+  assert.match(await card.locator('.comfy-r2v-groups').innerText(), /借用参考音频的音色和语调说新台词/);
+  const groups = [ ['参考图片输入', 'reference-image', ['a', 'b']], ['参考视频输入', 'reference-video', ['r2v-clip']], ['参考音频输入', 'r2v-audio', ['voice']] ];
   for (const [group, port, ids] of groups) {
     await setDragged(ids);
     await card.getByRole('group', { name: group, exact: true }).dispatchEvent('drop');

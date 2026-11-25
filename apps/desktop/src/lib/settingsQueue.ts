@@ -63,6 +63,7 @@ export function settingsQueue(read: () => Promise<AppSettings>, write: (value: A
           semanticFailure = null;
         }
       } catch (cause) {
+        console.error("settings.save_failed", { keys: Object.keys(patch), cause });
         const retry = { ...patch };
         for (const later of pending) if (later !== patch) {
           for (const key of Object.keys(later) as (keyof Patch)[]) delete retry[key];

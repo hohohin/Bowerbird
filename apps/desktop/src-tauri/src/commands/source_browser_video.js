@@ -1,6 +1,7 @@
 // Source-document observations only. Native code owns capture authorization and saving.
 (() => {
   if (window.__bbSourceVideo) return;
+  const rules = __BOWERBIRD_SITE_RULES__;
   const fetchResource = window.fetch.bind(window);
   const objectUrls = new Map(), gestures = new Map(), manifests = new Map(), reads = new Map();
   const buffers = new WeakMap(), sourceBuffers = new WeakMap(), appended = new WeakMap();
@@ -123,7 +124,7 @@
   function sources(video) { return [video.currentSrc, video.src, ...[...video.querySelectorAll('source[src]')].map(node => node.src)]; }
   function pageUrl(video, fallback) {
     const [kind] = identity(location.href);
-    const card = video.closest(kind === 'pin' ? '[data-test-id="pinWrapper"]' : kind === 'xhs' ? '.note-item' : 'a[href]');
+    const card = video.closest(kind === 'pin' ? `[data-test-id="${rules.pinterest.pinWrapper}"]` : kind === 'xhs' ? `.${CSS.escape(rules.xiaohongshu.noteCardClass)}` : 'a[href]');
     if (!card) return fallback;
     const links = [...card.querySelectorAll('a[href]')].map(link => link.href).filter(url => new URL(url).origin === location.origin && identity(url)[0] === kind && identity(url)[1]);
     const ids = new Set(links.map(url => identity(url)[1]));
@@ -141,6 +142,9 @@
   function unref(value) {
     for (let depth = 0; depth < 4 && value?.__v_isRef === true; depth++) value = value.value;
     return value;
+  }
+  function field(root, path) {
+    return path.split('.').reduce((value, key) => unref(value)?.[key], root);
   }
   function acceptIdentified(kind, id, record, accept) {
     if (id) accept(kind, String(id), record);
@@ -179,9 +183,8 @@
     if (!state) return [];
     // Live app state includes reactive dependency graphs and the entire feed.
     // Read the known ID index before the bounded generic response traversal.
-    const maps = kind === 'xhs'
-      ? [unref(unref(state.note)?.noteDetailMap)]
-      : [state.pins, state.initialReduxState?.pins, state.props?.initialReduxState?.pins];
+    const paths = kind === 'xhs' ? [rules.xiaohongshu.videoIndex] : rules.pinterest.videoIndexes;
+    const maps = paths.map(path => field(state, path));
     const indexed = maps.flatMap(map => records({[id]:unref(map)?.[id]},kind,id));
     return indexed.length ? indexed : records(state,kind,id);
   }
@@ -191,12 +194,13 @@
     visitRecords(value, (kind, id, record) => bounded(metadata, kind + ':' + id, record, 128));
   }
   function noteVideoUrls(video) {
-    const stream = video.media?.stream || {};
+    const note = rules.xiaohongshu;
+    const stream = field(video, note.streamPath) || {};
     // The API also uses opaque codec keys (EF4/EF5). The URLs belong to the
     // already identified note; group names are not a media format contract.
     const variants = Object.values(stream).flatMap(group => Array.isArray(group) ? group : []);
-    const urls = variants.flatMap(item => [item?.masterUrl, item?.master_url, item?.url]);
-    return [...urls, video.url, video.playUrl].map(http).filter(Boolean).slice(0, 1);
+    const urls = variants.flatMap(item => note.variantUrlKeys.map(key => item?.[key]));
+    return [...urls, ...note.videoUrlKeys.map(key => video[key])].map(http).filter(Boolean).slice(0, 1);
   }
   function pinVariants(group) {
     if (!group) return [];
@@ -231,7 +235,7 @@
     // Pinterest keeps first-load GraphQL responses outside the legacy Redux
     // bootstrap. Read only the known Pin result, not the surrounding account data.
     const requests = Object.values(window.__PWS_RELAY_SSR_REQUESTS__ || {}).slice(0, 128);
-    return requests.flatMap(request => records(request?.response?.data?.v3GetPinQueryv2?.data, 'pin', id)).flatMap(record => videoUrls(record, 'pin', video));
+    return requests.flatMap(request => records(field(request, rules.pinterest.relayVideoPath), 'pin', id)).flatMap(record => videoUrls(record, 'pin', video));
   }
   function videoUrls(record, kind, video) {
     if (record.is_drm || record.drm || record.video?.is_drm || record.video?.drm_type) fail('此视频受播放保护，无法采集。');
@@ -262,7 +266,7 @@
     const matches = [...manifests].filter(([,entry]) => segments.some(segment => entry.patterns.some(pattern => pattern.test(segment.url))));
     if (matches.length === 1) return matches[0][0];
     if (matches.length > 1) fail('检测到多个分段清单，暂时无法确认本次拖动的视频。');
-    if (object && !(object instanceof Blob)) fail('尚未找到当前视频的分段清单，请播放视频后重新拖入。');
+    if (object && !(object instanceof Blob)) fail(id ? 'site-video-rules-miss' : '尚未找到当前视频的分段清单，请播放视频后重新拖入。');
     return source; // A pre-existing ordinary Blob can still be read in its creating document.
   }
   async function close(id) {

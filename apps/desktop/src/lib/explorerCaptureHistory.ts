@@ -44,11 +44,20 @@ export interface CaptureAttempt {
 }
 interface SessionCapture {
   run: (attempt: CaptureAttempt) => Promise<void>; discard: () => void; captureId: string;
+  mediaKind: ExplorerCaptureRecord["mediaKind"];
   cancelRequested: boolean; running: boolean; nativeStarted: boolean; cancelInFlight: boolean;
   nativePhase?: "resolving" | "downloading" | "merging" | "saving";
 }
 const sessions = new Map<string, SessionCapture>();
-let queue = Promise.resolve();
+interface CaptureLane {
+  limit: number;
+  running: number;
+  pending: Array<{ id: string; session: SessionCapture }>;
+}
+const lanes: Record<SessionCapture["mediaKind"], CaptureLane> = {
+  image: { limit: 2, running: 0, pending: [] },
+  video: { limit: 1, running: 0, pending: [] },
+};
 let progressReady: Promise<unknown> | undefined;
 function patch(id: string, value: Partial<ExplorerCaptureRecord>) {
   useExplorerCaptures.setState(state => ({ records: state.records.map(item => item.id === id ? { ...item, ...value } : item) }));
@@ -93,6 +102,9 @@ function captureAttempt(id: string, session: SessionCapture): CaptureAttempt {
   }, saved: asset => savedAsset(id, asset) };
 }
 function discardSession(id: string, session: SessionCapture) {
+  const pending = lanes[session.mediaKind].pending;
+  const index = pending.findIndex(item => item.id === id);
+  if (index !== -1) pending.splice(index, 1);
   patch(id, { phase: "cancelled", retryable: false });
   session.discard(); sessions.delete(id);
 }
@@ -119,28 +131,57 @@ async function runSession(id: string, session: SessionCapture) {
   } catch (error) { failedSession(id, session, error); }
   finally { session.running = false; }
 }
+function startPending(lane: CaptureLane) {
+  while (lane.running < lane.limit && lane.pending.length > 0) {
+    const { id, session } = lane.pending.shift()!;
+    lane.running += 1;
+    void Promise.resolve().then(() => runSession(id, session))
+      .catch(error => console.error("Explorer capture queue failed", error))
+      .finally(() => { lane.running -= 1; startPending(lane); });
+  }
+}
 function schedule(id: string, session: SessionCapture) {
   session.captureId = crypto.randomUUID(); session.cancelRequested = false; session.nativeStarted = false; session.nativePhase = undefined; session.cancelInFlight = false;
   patch(id, { phase: "queued", error: undefined, retryable: false, receivedBytes: 0, totalBytes: undefined, completedSegments: undefined, totalSegments: undefined });
-  queue = queue.then(() => runSession(id, session)).catch(error => console.error("Explorer capture queue failed", error));
+  const lane = lanes[session.mediaKind];
+  lane.pending.push({ id, session });
+  startPending(lane);
 }
-export function enqueueExplorerCapture(input: { mediaKind?: "image" | "video"; pageUrl: string; thumbnail?: string }, run: SessionCapture["run"], discard = () => {}) {
+export function enqueueExplorerCapture(
+  input: { mediaKind?: "image" | "video"; pageUrl: string; thumbnail?: string; authorize?: () => Promise<string | null> },
+  run: (attempt: CaptureAttempt, admission?: Promise<string | null>) => Promise<void>,
+  discard = () => {},
+) {
   const previous = useExplorerCaptures.getState().records;
   if (previous.filter(isCaptureActive).length >= 50) throw new Error("采集队列已满，请等待部分任务完成后再拖入");
   const id = crypto.randomUUID();
   const item: ExplorerCaptureRecord = { id, createdAt: Date.now(), mediaKind: input.mediaKind ?? "image", sourceHost: new URL(input.pageUrl).hostname,
     thumbnail: input.thumbnail, phase: "queued", receivedBytes: 0 };
+  const admission = input.authorize?.();
   const active = previous.filter(isCaptureActive);
   const retained = new Set([...active, ...previous.filter(value => !isCaptureActive(value)).slice(0, 49 - active.length)].map(value => value.id));
   for (const key of sessions.keys()) if (!retained.has(key)) sessions.delete(key);
   useExplorerCaptures.setState({ records: [item, ...previous.filter(value => retained.has(value.id))] });
-  const session: SessionCapture = { run, discard, captureId: "", cancelRequested: false, running: false, nativeStarted: false, cancelInFlight: false };
+  const session: SessionCapture = { run: attempt => run(attempt, admission), discard, mediaKind: item.mediaKind, captureId: "",
+    cancelRequested: false, running: false, nativeStarted: false, cancelInFlight: false };
   sessions.set(id, session); schedule(id, session);
   return id;
 }
 export function retryExplorerCapture(id: string) {
   const session = sessions.get(id);
   if (session && record(id)?.phase === "failed") schedule(id, session);
+}
+export function retryFailedExplorerCaptures() {
+  for (const item of useExplorerCaptures.getState().records.slice().reverse()) {
+    if (item.phase === "failed" && item.retryable) retryExplorerCapture(item.id);
+  }
+}
+export function clearFinishedExplorerCaptures() {
+  const current = useExplorerCaptures.getState().records;
+  for (const item of current) {
+    if (!isCaptureActive(item)) sessions.delete(item.id);
+  }
+  useExplorerCaptures.setState({ records: current.filter(isCaptureActive) });
 }
 function restoreAfterCancel(id: string, session: SessionCapture, captureId: string, error?: unknown) {
   if (session.captureId !== captureId) return;

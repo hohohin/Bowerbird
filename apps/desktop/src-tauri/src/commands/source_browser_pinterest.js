@@ -2,12 +2,14 @@
 (() => {
   const origin = location.origin;
   if (window.top !== window || (origin !== "https://www.pinterest.com" && origin !== "https://pinterest.com")) return;
+  const rules = __BOWERBIRD_SITE_RULES__;
   const request = __BOWERBIRD_PINTEREST_REQUEST__;
   // A late load event must not feed a new image to an old, still-busy uploader.
   if (performance.timeOrigin < request.documentAfter) return;
   const bridge = "__BOWERBIRD_PINTEREST_BRIDGE__";
   // Pinterest localizes the search-bar button in the Chinese site.
-  const lensSelector = 'button[aria-label="Lens"], button[aria-label="Pinterest 镜头"]';
+  const lensSelector = rules.pinterest.lensButtonLabels.map(label => `button[aria-label="${CSS.escape(label)}"]`).join(", ");
+  const popoverSelector = `[aria-label="${CSS.escape(rules.pinterest.lensPopoverLabel)}"], [data-test-id="lens-file-upload"]`;
   const previous = window.__bowerbirdPinterestSearch;
   if (previous?.requestId === request.requestId) return;
   previous?.cancel();
@@ -27,13 +29,13 @@
     request.base64 = "";
   }
   window.__bowerbirdPinterestSearch = { requestId: request.requestId, cancel };
-  function report(status, message) {
+  function report(status, reason) {
     if (stopped || lastStatus === status) return;
     lastStatus = status;
-    window.open(`${bridge}/status?data=${encodeURIComponent(JSON.stringify({ requestId: request.requestId, status, ...(message ? { message } : {}) }))}`);
+    window.open(`${bridge}/status?data=${encodeURIComponent(JSON.stringify({ requestId: request.requestId, status, ...(reason ? { reason } : {}) }))}`);
   }
-  function fail(message) {
-    report("error", message);
+  function fail(reason) {
+    report("error", reason);
     cancel();
   }
   function loggedOut() {
@@ -56,7 +58,7 @@
       input.files = transfer.files;
       input.dispatchEvent(new Event("change", { bubbles: true }));
     } catch {
-      fail("图片未能交给搜索网页，请重新发起以图搜图。");
+      fail("handoff-failed");
     }
   }
   function followUpload() {
@@ -64,13 +66,13 @@
       report("submitted");
       cancel();
     } else if (document.querySelector('#lens-file-upload[aria-invalid="true"]')) {
-      fail("网页未能接收这张图片，请重新发起以图搜图。");
+      fail("image-rejected");
     } else if (Date.now() - uploadStarted > 120_000) {
-      fail("网页尚未完成图片搜索，请检查网络后重试。");
+      fail("search-timeout");
     }
   }
   function openLens() {
-    if (document.querySelector('[aria-label="Lens popover"], [data-test-id="lens-file-upload"]')) return;
+    if (document.querySelector(popoverSelector)) return;
     const lens = document.querySelector(lensSelector);
     if (!lens || lens.disabled || !lens.getClientRects().length) return;
     // A server-rendered button may precede its React click handler.
@@ -80,7 +82,7 @@
   }
   function tick() {
     if (stopped) return;
-    if (Date.now() - started > 600_000) return fail("此次搜图等待已结束，请重新发起以图搜图。");
+    if (Date.now() - started > 600_000) return fail("wait-expired");
     if (handedOff) return followUpload();
     const input = document.querySelector('input#lens-file-upload[type="file"][data-test-id="lens-file-upload"]');
     if (input && !input.disabled && !document.querySelector('input[type="password"]')) return handoff(input);
@@ -91,7 +93,7 @@
     }
     uploaderStarted ??= Date.now();
     openLens();
-    if (Date.now() - uploaderStarted > 30_000) fail("未找到网页的图片搜索入口，请稍后重试。");
+    if (Date.now() - uploaderStarted > 30_000) fail("lens-unavailable");
   }
   timer = setInterval(tick, 250);
   tick();

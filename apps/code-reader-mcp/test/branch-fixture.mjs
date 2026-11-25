@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { startBranchConsole } from '../branch-console.mjs';
 import { MAX_FILE_BYTES } from '../core.mjs';
 
-export async function fixture(t) {
+export async function fixture(t, consoleOptions) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'bb-console-test-'));
   let app;
   t.after(async () => {
@@ -41,7 +41,7 @@ export async function fixture(t) {
   git('add', 'PROJECT.md');
   await writeFile(project, 'working tree');
   await writeFile(path.join(root, 'untracked.txt'), 'untracked');
-  app = await startBranchConsole(root, output, 0);
+  app = await startBranchConsole(root, output, 0, consoleOptions);
   const state = () => fetch(app.origin + '/api/status').then(res => res.json());
   const branches = await fetch(app.origin + '/api/branches').then(res => res.json());
   const post = (branch, clean = true, headers = {}) => fetch(app.origin + '/api/export', {

@@ -3,7 +3,7 @@ use crate::core::paths::LibraryPaths;
 use crate::core::settings::SettingsState;
 use crate::db::Database;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,10 +120,9 @@ pub async fn global_classification_view(db: State<'_, Arc<Database>>, paths: Vec
 #[tauri::command]
 pub async fn global_classification_start(app: AppHandle, classifier: State<'_, Arc<LocalClassifier>>,
     db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, files: State<'_, Arc<crate::core::file_workspace::FileWorkspace>>,
-    settings: State<'_, SettingsState>, pending_only: bool, tag_id: Option<String>) -> Result<(), String> {
-    let settings = settings.get();
-    let key = settings.jev_image_classification_enabled;
-    classifier.start_global(app, db.inner().clone(), paths.inner().clone(), files.snapshot(), tag_id, key, pending_only)
+    pending_only: bool, tag_id: Option<String>, ensure_cloud: Option<bool>) -> Result<(), String> {
+    let use_jev = manual_classification_use_jev(&app, ensure_cloud).await?;
+    classifier.start_global(app, db.inner().clone(), paths.inner().clone(), files.snapshot(), tag_id, use_jev, pending_only)
 }
 
 #[tauri::command]
@@ -133,10 +132,10 @@ pub async fn project_classification_labels(db: State<'_, Arc<Database>>, project
 
 #[tauri::command]
 pub async fn project_classification_start(app: AppHandle, classifier: State<'_, Arc<LocalClassifier>>,
-    db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, settings: State<'_, SettingsState>,
-    project_id: String, pending_only: bool, tag_id: Option<String>) -> Result<(), String> {
-    classifier.start_project(app, db.inner().clone(), paths.inner().clone(), project_id, tag_id,
-        settings.get().jev_image_classification_enabled, pending_only)
+    db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>,
+    project_id: String, pending_only: bool, tag_id: Option<String>, ensure_cloud: Option<bool>) -> Result<(), String> {
+    let use_jev = manual_classification_use_jev(&app, ensure_cloud).await?;
+    classifier.start_project(app, db.inner().clone(), paths.inner().clone(), project_id, tag_id, use_jev, pending_only)
 }
 
 #[tauri::command]
@@ -160,11 +159,10 @@ pub async fn folder_classification_images(classifier: State<'_, Arc<LocalClassif
 pub async fn folder_classification_start(
     app: AppHandle, classifier: State<'_, Arc<LocalClassifier>>, paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
-    settings: State<'_, SettingsState>, root: String, recursive: bool, pending_only: bool, tag_id: Option<String>,
+    root: String, recursive: bool, pending_only: bool, tag_id: Option<String>, ensure_cloud: Option<bool>,
 ) -> Result<(),String> {
-    let settings=settings.get();
-    let key=settings.jev_image_classification_enabled;
-    classifier.start_folder(app,paths.inner().clone(),db.local_labels().map_err(|e| e.to_string())?,root,recursive,pending_only,tag_id,key)
+    let use_jev = manual_classification_use_jev(&app, ensure_cloud).await?;
+    classifier.start_folder(app,paths.inner().clone(),db.local_labels().map_err(|e| e.to_string())?,root,recursive,pending_only,tag_id,use_jev)
 }
 
 /// Resolve creation evidence on demand; membership is never used as provenance.
@@ -209,13 +207,12 @@ pub async fn local_classification_start(
     classifier: State<'_, Arc<LocalClassifier>>,
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
-    settings: State<'_, SettingsState>,
     install: bool,
     tag_id: Option<String>,
     pending_only: bool,
+    ensure_cloud: Option<bool>,
 ) -> Result<(), String> {
-    let snapshot = settings.get();
-    let use_jev = snapshot.jev_image_classification_enabled;
+    let use_jev = !install && manual_classification_use_jev(&app, ensure_cloud).await?;
     classifier.inner().start(
         app,
         db.inner().clone(),
@@ -226,6 +223,27 @@ pub async fn local_classification_start(
         pending_only,
     )
 }
+
+async fn manual_classification_use_jev<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    ensure_cloud: Option<bool>,
+) -> Result<bool, String> {
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let settings = app.state::<SettingsState>();
+        if ensure_cloud == Some(true) {
+            settings.enable_jev_image_classification(|| Ok(()))?;
+            return Ok(true);
+        }
+        Ok(settings.get().jev_image_classification_enabled)
+    })
+    .await
+    .map_err(|error| format!("CLASSIFICATION_START_SETTINGS: {error}"))?
+    .map_err(|error: crate::error::AppError| format!("CLASSIFICATION_START_SETTINGS: {error}"))
+}
+
+#[cfg(test)]
+mod manual_classification_tests;
 
 #[tauri::command]
 pub async fn local_classification_vector_install(
@@ -256,12 +274,34 @@ pub async fn local_classification_stop(
 }
 
 #[tauri::command]
-pub async fn local_classification_enable(
+pub async fn local_classification_enable<R: tauri::Runtime>(
+    app: AppHandle<R>,
     db: State<'_, Arc<Database>>,
     enabled: bool,
-) -> Result<(), String> {
-    db.set_local_enabled(enabled).map_err(|e| e.to_string())
+) -> Result<bool, String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let settings = app.state::<SettingsState>();
+        db.set_local_enabled_with_cloud(&settings, enabled)
+            .map(|()| enabled)
+            .map_err(classification_auto_error)
+    })
+    .await
+    .map_err(|error| format!("CLASSIFICATION_AUTO_WORKER: {error}"))?
 }
+
+fn classification_auto_error(error: crate::error::AppError) -> String {
+    use crate::error::AppError;
+    let step = match &error {
+        AppError::Io(_) => "SETTINGS",
+        AppError::Db(_) => "DATABASE",
+        _ => "WORKER",
+    };
+    format!("CLASSIFICATION_AUTO_{step}: {error}")
+}
+
+#[cfg(test)]
+mod auto_classification_tests;
 
 #[tauri::command]
 pub async fn local_classification_labels(
@@ -306,13 +346,20 @@ pub async fn local_classification_example(
     asset_ids: Vec<String>,
     positive: bool,
     project_id: Option<String>,
+    assigned_only: Option<bool>,
 ) -> Result<(), String> {
-    if let Some(project) = project_id {
-        let scope = crate::core::local_classification::global::project_ids(&db, &project)?;
-        if asset_ids.iter().any(|id| !scope.contains(id)) { return Err("所选素材不属于当前项目".into()); }
-    }
-    db.local_example(&tag_id, &asset_ids, positive)
-        .map_err(|e| e.to_string())?;
-    let _ = app.emit("library://assets-changed", ());
+    let db = Arc::clone(db.inner());
+    let changed_assets = tokio::task::spawn_blocking(move || {
+        if let Some(project) = project_id {
+            let scope = crate::core::local_classification::global::project_ids(&db, &project)?;
+            if asset_ids.iter().any(|id| !scope.contains(id)) {
+                return Err("所选素材不属于当前项目".into());
+            }
+        }
+        db.local_example_with_options(&tag_id, &asset_ids, positive, assigned_only.unwrap_or(false))
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(asset_ids)
+    }).await.map_err(|e| e.to_string())??;
+    let _ = app.emit("library://assets-changed", serde_json::json!({ "assetTagIds": changed_assets }));
     Ok(())
 }

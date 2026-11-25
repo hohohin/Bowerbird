@@ -201,6 +201,11 @@ fn gallery_counts_pages_filters_and_members_keep_folder_entry_identity() {
     let ids = f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 1, &grouped).unwrap();
     assert_eq!(ids, vec![new.id.clone()]); // Latest member, still sorted by filename.
     assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 1, 1, &grouped).unwrap(), vec![ordinary.id.clone()]);
+    let capture = ConnectionFilter { grouped: true, first_asset_id: Some(ordinary.asset_id.clone()), ..Default::default() };
+    let capture_ids = |offset| f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), offset, 1, &capture).unwrap();
+    assert_eq!(capture_ids(0), vec![ordinary.id.clone()]);
+    assert_eq!(capture_ids(1), vec![new.id.clone()]);
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&target), None, Some("images"), 0, 20, &capture).unwrap().len(), 1);
     let mut page = f.db.resolve_connection_entries(&ids).unwrap();
     f.db.connection_entry_groups(&mut page, None, Some("images"), &grouped).unwrap();
     assert_eq!(page[0].group.iter().map(|e| &e.id).collect::<Vec<_>>(), vec![&old.id, &new.id]);
@@ -1455,6 +1460,107 @@ fn original_moves_update_references_without_changing_creative_identity() {
             || cfg!(not(windows))
     );
 }
+
+fn dated_reference(path: &Path) -> (Vec<u8>, std::time::SystemTime) {
+    fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+        .unwrap();
+    reference_snapshot(path)
+}
+
+fn reference_snapshot(path: &Path) -> (Vec<u8>, std::time::SystemTime) {
+    (fs::read(path).unwrap(), fs::metadata(path).unwrap().modified().unwrap())
+}
+
+#[test]
+fn renaming_an_original_or_its_reference_only_updates_changed_targets() {
+    let f = Fixture::new();
+    fs::copy(f.source.join("one.png"), f.source.join("other.png")).unwrap();
+    let source = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let originals = f.entries(&source);
+    let original = originals.iter().find(|e| e.name == "one.png").unwrap();
+    for asset in &originals {
+        f.db.add_material_reference(&asset.asset_id, &target).unwrap();
+    }
+    let unrelated = f.target.join("other.png.bowerbird");
+    let unrelated_before = dated_reference(&unrelated);
+    let descriptor = f.target.join("one.png.bowerbird");
+
+    f.db.rename_connection_entry(&original.id, "renamed.png").unwrap();
+    let updated = load_reference(&descriptor).unwrap();
+    assert_eq!(updated.target_path, string(&f.source.join("renamed.png")));
+    assert_eq!(updated.target_relative.as_deref(), Some("../source/renamed.png"));
+    assert_eq!(reference_snapshot(&unrelated), unrelated_before);
+
+    let entry = f.entries(&target).into_iter().find(|e| e.asset_id == original.asset_id).unwrap();
+    let before = dated_reference(&descriptor);
+    f.db.rename_connection_entry(&entry.id, "clone").unwrap();
+    assert!(!descriptor.exists());
+    assert_eq!(reference_snapshot(&f.target.join("clone.bowerbird")), before);
+    assert_eq!(reference_snapshot(&unrelated), unrelated_before);
+}
+
+#[test]
+fn renaming_moving_and_relocating_a_directory_leave_unrelated_references_untouched() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.source.join("child/nested")).unwrap();
+    fs::copy(f.source.join("one.png"), f.source.join("child/nested/two.png")).unwrap();
+    let outside = f._temp.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    let outside = directory(&outside).unwrap();
+    let source = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let outside_id = f.connect(&outside);
+    let folders = f.db.connection_folders(None, None).unwrap();
+    let child = folders.iter().find(|folder| folder.name == "child").unwrap();
+    let nested = folders.iter().find(|folder| folder.name == "nested").unwrap();
+    let affected = f.entries(&nested.id).pop().unwrap();
+    let unrelated = f.entries(&source).pop().unwrap();
+    for entry in [&affected, &unrelated] {
+        f.db.add_material_reference(&entry.asset_id, &target).unwrap();
+    }
+    let descriptor = f.target.join("two.png.bowerbird");
+    let unrelated_descriptor = f.target.join("one.png.bowerbird");
+    let before = dated_reference(&unrelated_descriptor);
+
+    f.db.rename_connected_directory(&child.id, "renamed").unwrap();
+    assert_eq!(load_reference(&descriptor).unwrap().target_path, string(&f.source.join("renamed/nested/two.png")));
+    assert_eq!(reference_snapshot(&unrelated_descriptor), before);
+
+    f.db.move_connected_directory(&child.id, &outside_id).unwrap();
+    assert_eq!(load_reference(&descriptor).unwrap().target_path, string(&outside.join("renamed/nested/two.png")));
+    assert_eq!(reference_snapshot(&unrelated_descriptor), before);
+
+    let relocated = outside.with_file_name("relocated");
+    fs::rename(&outside, &relocated).unwrap();
+    f.db.relocate_connected_directory(&outside_id, &relocated).unwrap();
+    assert_eq!(load_reference(&descriptor).unwrap().target_path, string(&relocated.join("renamed/nested/two.png")));
+    assert_eq!(reference_snapshot(&unrelated_descriptor), before);
+}
+
+#[test]
+fn moving_a_reference_directory_updates_relative_paths_to_originals_outside_it() {
+    let f = Fixture::new();
+    fs::create_dir(f.source.join("clones")).unwrap();
+    let source = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let clones = f.db.connection_folders(None, None).unwrap().into_iter()
+        .find(|folder| folder.name == "clones").unwrap();
+    let original = f.entries(&source).pop().unwrap();
+    f.db.add_material_reference(&original.asset_id, &clones.id).unwrap();
+    let descriptor = f.source.join("clones/one.png.bowerbird");
+    assert_eq!(load_reference(&descriptor).unwrap().target_relative.as_deref(), Some("../one.png"));
+
+    f.db.move_connected_directory(&clones.id, &target).unwrap();
+    let updated = load_reference(&f.target.join("clones/one.png.bowerbird")).unwrap();
+    assert_eq!(updated.target_path, original.path);
+    assert_eq!(updated.target_relative.as_deref(), Some("../../source/one.png"));
+}
+
 #[test]
 fn cached_entries_survive_offline_and_disconnect_does_not_delete_assets() {
     let f = Fixture::new();
@@ -1869,6 +1975,32 @@ fn cross_volume_copy_checks_bytes_before_committing_and_deleting_source() {
     .unwrap();
     assert!(!original.exists());
     assert_eq!(fs::read(&target).unwrap(), expected);
+}
+#[cfg(windows)]
+#[test]
+fn cross_volume_copy_hides_only_internal_directories() {
+    use std::os::windows::fs::MetadataExt;
+    use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
+
+    let f = Fixture::new();
+    for name in [".bowerbird", ".bowerbird-quick-transfer", "ordinary"] {
+        let dir = f.source.join(name);
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("record.json"), b"record data").unwrap();
+    }
+    fs::write(f.source.join(".bowerbird-plain.txt"), b"visible file").unwrap();
+    let destination = f.target.join("moved");
+    copy_move_with(&f.source, &destination, || Ok(())).unwrap();
+
+    assert!(!f.source.exists());
+    for name in [".bowerbird", ".bowerbird-quick-transfer"] {
+        let dir = destination.join(name);
+        assert_ne!(fs::metadata(&dir).unwrap().file_attributes() & FILE_ATTRIBUTE_HIDDEN.0, 0);
+        assert_eq!(fs::read(dir.join("record.json")).unwrap(), b"record data");
+    }
+    for name in ["ordinary", ".bowerbird-plain.txt"] {
+        assert_eq!(fs::metadata(destination.join(name)).unwrap().file_attributes() & FILE_ATTRIBUTE_HIDDEN.0, 0);
+    }
 }
 #[test]
 fn cross_volume_conflict_and_database_failure_keep_the_complete_source() {
@@ -2315,7 +2447,7 @@ fn missing_original_cleanup_preserves_identity_metadata_cache_and_project_member
     assert!(f.db.catalog_page(&filter, 0, 50).unwrap().is_empty());
     assert!(f.db.material_catalog_assets("tags", None, Some("missing-project")).unwrap().is_empty());
     assert!(f.db.list_assets(None, Some("missing-project"), 50, 0).unwrap().is_empty());
-    let project_filter = CatalogFilter { project_id: Some("missing-project".into()), ..filter.clone() };
+    let project_filter = CatalogFilter { kind: "tags".into(), project_id: Some("missing-project".into()), ..filter.clone() };
     let overview = f.db.catalog_overview(&project_filter, Some("missing-project")).unwrap();
     assert_eq!(overview.total, 0);
     assert!(overview.catalog.tags.iter().all(|tag| tag.count == 0 && tag.project_count == 0));

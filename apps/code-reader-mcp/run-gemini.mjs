@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { attachOAuthStateFile } from './oauth-state-file.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -34,7 +35,20 @@ function stop(code) {
 const startup = setTimeout(() => { console.error('Gemini MCP startup timed out.'); stop(1); }, 10_000);
 function connect() {
   if (stopping) return;
-  tunnel = spawn('ssh', ['-N', '-T', '-i', path.join(local, 'id_ed25519'),
+  const bindArgs = [];
+  try {
+    const name = readFileSync(path.join(local, 'ssh-interface.txt'), 'utf8').trim();
+    const address = networkInterfaces()[name]?.find(entry => entry.family === 'IPv4' && !entry.internal);
+    if (!address) throw new Error('Interface unavailable');
+    bindArgs.push('-b', address.address);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error('Configured Gemini SSH interface unavailable. Retrying in 5 seconds.');
+      reconnect = setTimeout(connect, 5000);
+      return;
+    }
+  }
+  tunnel = spawn('ssh', [...bindArgs, '-N', '-T', '-i', path.join(local, 'id_ed25519'),
     '-o', 'UserKnownHostsFile=' + path.join(local, 'known_hosts'), '-o', 'StrictHostKeyChecking=yes',
     '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ExitOnForwardFailure=yes',
     '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',

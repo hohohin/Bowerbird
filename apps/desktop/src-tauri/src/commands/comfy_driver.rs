@@ -44,6 +44,11 @@ pub async fn detect() -> Hardware {
     if !cfg!(all(windows, target_arch = "x86_64")) {
         return Hardware { gpus: vec![], driver_required: false, os_id: None, issue: Some("一键安装目前支持 Windows x64 + NVIDIA；其他系统请连接已有 ComfyUI".into()) };
     }
+    static CACHE: tokio::sync::Mutex<Option<(std::time::Instant, Hardware)>> = tokio::sync::Mutex::const_new(None);
+    let mut cache = CACHE.lock().await;
+    if let Some((at, hardware)) = cache.as_ref() {
+        if at.elapsed() < Duration::from_secs(15) { return hardware.clone(); }
+    }
     let (smi, system) = tokio::join!(
         output("nvidia-smi", &["--query-gpu=name,driver_version,memory.total", "--format=csv,noheader,nounits"]),
         output("powershell.exe", &["-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); $os=Get-CimInstance Win32_OperatingSystem; $gpu=@(Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -match 'VEN_10DE' } | ForEach-Object { $_.Name }); @{build=$os.BuildNumber;version=$os.Version;productType=$os.ProductType;gpus=$gpu} | ConvertTo-Json -Compress"])
@@ -57,7 +62,9 @@ pub async fn detect() -> Hardware {
     let os_id = if system["productType"].as_u64() == Some(1) && system["version"].as_str().is_some_and(|v| v.starts_with("10.")) {
         system["build"].as_str().and_then(|v| v.parse::<u32>().ok()).map(|build| if build >= 22000 { 135 } else { 57 })
     } else { None };
-    classify(gpus, os_id)
+    let result = classify(gpus, os_id);
+    *cache = Some((std::time::Instant::now(), result.clone()));
+    result
 }
 fn normalized(name: &str) -> String {
     let name = name.trim().to_ascii_lowercase();

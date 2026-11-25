@@ -6,7 +6,7 @@
 
 - **用途／关键词**：代码分享、快照、GPT、Gemini、OAuth。
 - **入口**：[core.mjs](../../apps/code-reader-mcp/core.mjs) 提供 TOOLS、callTool、validateSnapshot。[export.mjs](../../apps/code-reader-mcp/export.mjs) 负责脱敏导出，[dependencies.mjs](../../apps/code-reader-mcp/dependencies.mjs) 负责依赖覆盖。
-- **调用**：stdio 与 Gemini 通过 [snapshot-store.mjs](../../apps/code-reader-mcp/snapshot-store.mjs) 热读取同一份有效快照。本机[分支控制台](../../apps/code-reader-mcp/branch-console.mjs)复用导出器，按工作区或指定分支的提交切换快照。run-gemini.mjs 通过 oauth-state-file.mjs 管理重启后可恢复的授权状态。
+- **调用**：stdio 与 Gemini 通过 [snapshot-store.mjs](../../apps/code-reader-mcp/snapshot-store.mjs) 热读取同一份有效快照。本机[分支控制台](../../apps/code-reader-mcp/branch-console.mjs)复用导出器，按工作区或指定分支的提交切换快照。[service-status.mjs](../../apps/code-reader-mcp/service-status.mjs) 提供双端运行状态探测。run-gemini.mjs 通过 oauth-state-file.mjs 管理重启后可恢复的授权状态。 Windows [MCP 小窗](../../apps/code-reader-mcp/mini-window.ps1)复用同一本机控制台接口。
 - **边界／状态**：仅供私有开发，HTTP 子进程保持只读。[MCP 接入与维护](../../apps/code-reader-mcp/README.md)。
 
 ## 接入图片模型
@@ -21,13 +21,14 @@
 - **用途／关键词**：原文件路径、外拖、ZIP、后台文件任务。
 - **入口**：[external_files.rs](../../apps/desktop/src-tauri/src/core/external_files.rs) 的 Database::resolve_asset_original 共用原件解析；[assetArchive.ts](../../apps/desktop/src/lib/assetArchive.ts) 提供导出。[fileTasks.ts](../../apps/desktop/src/lib/fileTasks.ts) 提供 startFileTask。
 - **调用**：菜单和画板在系统选择框前冻结素材 ID，走 [asset_archive.rs](../../apps/desktop/src-tauri/src/commands/asset_archive.rs) 校验及命名。批量操作由 [file_tasks.rs](../../apps/desktop/src-tauri/src/commands/file_tasks.rs) 管理，进度与重试复用 [FileTaskStatus](../../apps/desktop/src/components/FileTaskStatus.tsx)。
+- **内部目录**：[file_workspace.rs](../../apps/desktop/src-tauri/src/core/file_workspace.rs) 的 `ensure_hidden_dir` 供随图资料、分类、快传和迁移创建内部目录。Windows 追加 Hidden 属性，设置失败只记警告。连接扫描和独占复制路径用 `hide_existing_internal_dir` 处理已经创建的目录。
 - **边界／状态**：只解析当前登记原件或已核验哈希的同素材历史路径。已清理或已回收时阻断；删除仍走独立的 preview_asset_originals 确认协议。[文件契约](../FOLDER-MODE.md)。
 
 ## 读取画板可见节点与生成组图
 
 - **用途／关键词**：画板自动接线、组图、显式合组、来源索引。
 - **入口**：[project_canvas.rs](../../apps/desktop/src-tauri/src/core/project_canvas.rs) 提供画板读取，[generation_gallery_manual.rs](../../apps/desktop/src-tauri/src/core/generation_gallery_manual.rs) 写入显式合组。
-- **调用**：用 api.projectCanvasVisibleNodes 读指定可见实例；历史和会话恢复使用 api.projectCanvasGet。调用 api.mergeGenerationGalleries／undoGenerationGalleryMerge 修改展示，读取上一生成用 previousGalleryGeneration。
+- **调用**：用 api.projectCanvasVisibleNodes 读指定可见实例。项目素材菜单用 `api.projectCanvasHasAsset(projectId, assetId)` 检查画板中是否存在该素材的可见实例，画板缺失时返回错误。历史和会话恢复使用 api.projectCanvasGet。调用 api.mergeGenerationGalleries／undoGenerationGalleryMerge 修改展示，读取上一生成用 previousGalleryGeneration。
 - **边界／状态**：catalog 和文件夹用 [with_gallery_cache](../../apps/desktop/src-tauri/src/core/generation_gallery.rs) 共用索引与失效条件。筛选、合组及解散按查询计算，0057 只存展示别名，生成及 provider 身份保持。[工作流](../CANVAS-WORKFLOW.md)。
 
 ## 通过 DSH 受控建卡
@@ -93,9 +94,11 @@ H3 图片文生图／编辑共用直接提示词图谱，`h3_image::reference_pr
 
 本机 H3 使用独立的既有持久任务协议：前端 [comfyVideo.ts](../../apps/desktop/src/lib/comfyVideo.ts) 的 `comfyVideo`／`comfyEnvironment`，Rust [comfy_video.rs](../../apps/desktop/src-tauri/src/commands/comfy_video.rs) 的固定模式 graph 与恢复、[comfy_setup.rs](../../apps/desktop/src-tauri/src/commands/comfy_setup.rs) 的按模式环境准备。`frames`／`reference`／`text` 由显式选择确定，缺省兼容旧首尾帧；[composerLocalVideo.ts](../../apps/desktop/src/lib/composerLocalVideo.ts) 让主屏和画板先保存同一 H3 卡片再执行。模式选择复用 `comfyVideoOptionsForMode`，环境响应的 `mode`／`modelsRequired` 用于当前模式就绪判断，`canAddModels` 仅表示托管环境可以补模型。此接口限定桌面与本机 loopback，不接受任意工作流；见 [三模式契约](../COMFYUI-LOCAL-VIDEO.md)。
 
+卡片与创作框使用 [comfyEnvironmentState.ts](../../apps/desktop/src/lib/comfyEnvironmentState.ts) 共用检测快照、窗口聚焦刷新和安装状态轮询。已有 ComfyUI 的可用模型与节点随模式和端口变化，快照按账号及实际检查参数复用。图片或视频同类控件共用当前安装进度，并在安装结束后重新检查各模式。
+
 普通 H3 视频生成使用现有 `prepare` 启动已选择的环境。取回已提交任务使用 `recover`，绑定原端口、模式与已记录的安装路径，并复用原请求 UUID 和入库记录。进程识别及崩溃恢复统一由 `comfy_setup.rs` 管理。[环境恢复](../COMFYUI-LOCAL-VIDEO.md#h3-视频环境自行恢复桌面源码)
 
-H3 视频三模式共用可选录音素材 ID 与既有媒体连线，`comfy_video.rs` 通过素材原件解析和音频解码验证后送入本机 ComfyUI。首尾帧、文生从第 0 帧加入音频引导，单图采用 Ref2VA 音色参考。入口及实机证据见 [H3 视频参考录音](../COMFYUI-LOCAL-VIDEO.md#2026-11-20-h3-视频参考录音桌面源码)。
+H3 视频卡、音频端口和创作框复用 `comfyAudioLabel(mode)` 与 `comfyAudioHint(mode)` 区分录音用途。首尾帧与文生从第 0 帧按录音内容和节奏引导，单图与多素材参考可借用指定录音的音色和语调朗读新台词。录音通过本机解码校验后送入 ComfyUI。[H3 视频参考录音](../COMFYUI-LOCAL-VIDEO.md#2026-11-20-h3-视频参考录音桌面源码)
 
 - **用途／关键词**：GenJob、jobId、submit_id、幂等、恢复、终态、入库。
 - **入口**：[task_queue.rs](../../apps/desktop/src-tauri/src/core/task_queue.rs) 的 `GenJob`／`Task::upsert_gen_job`；[generation_worker.rs](../../apps/desktop/src-tauri/src/core/generation_worker.rs) 的 `spawn_recovery`／`finalize_generation_assets`。前端沿 `startGeneration`、`api.cancelCodexCreate`、`api.listGenJobs` 接入；**Cloud 视频取回原任务用 `api.recoverCloudVideo(jobId)`** → `recover_cloud_video`，不重新创建生成。
@@ -166,6 +169,10 @@ H3 视频三模式共用可选录音素材 ID 与既有媒体连线，`comfy_vid
 Edge 接收 JSON 对象时可复用 [_shared/limits.ts](../../apps/cloud/supabase/functions/_shared/limits.ts) 的 `readJsonBody`，传入接口的字节预算。支付通知需要原始正文验签，沿用 `readPaymentBody`。
 
 VPS 的 Agent、生成、理解和视觉提炼消费循环复用 [ControlTransport](../../apps/agent-worker/src/control-plane/control-transport.ts) 发送控制请求。每个串行消费者单独持有实例，按领取和续租回执跟踪有效期。控制请求超时后按原任务恢复，模型请求、签名对象传输仍由各自的客户端处理。
+
+## 拆分图片和保存分层工程
+
+素材右键与工作流使用 `layerCloudRequest` 和 `prepareLayerReference` 提交任务，沿同一个幂等键恢复。工作流复用已有工程，并在导出时保持单层素材隐藏。桌面通过 `layer_workspace_load/save` 读写工程，现有调用方继续使用 `LayerWorkspace`。目录存储和历史图片去重由 Rust 处理。分层计费使用同一 Bcoin 预留账本，报价由 `layer_quote` 返回。[分层协议、兼容与验证](../LAYER-EDITING.md)
 
 ## 复用 Bcoin 预授权与结算
 

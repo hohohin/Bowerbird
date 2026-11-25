@@ -13,6 +13,8 @@ export const CODEX_ONBOARDING_ENABLED = false;
 export const DREAMINA_ONBOARDING_ENABLED = false;
 // 旧版本功能：浏览器扩展状态/引导、Shift 引入与隐藏项目素材设置不再显示；保留旧配置兼容。
 export const LEGACY_SETTINGS_ENABLED = false;
+// 素材视频文本打标签尚未开放。
+export const VIDEO_TEXT_TAGGING_ENABLED = false;
 // Agent Z（创作板 × Claude Code TUI 互通，dev 测试）：仅 debug 构建且本机能找到 claude CLI 时生效。
 export const AGENT_Z_ENABLED = true;
 // Agent DS（创作板 × DeepSeek 对话 harness，dev 测试）：对话发生在创作板内（回复追加进编辑器），

@@ -2209,6 +2209,21 @@ impl Database {
         Ok(snapshot)
     }
 
+    /// Check persisted visible asset instances without loading the canvas snapshot.
+    pub fn project_canvas_has_asset(&self, project_id: &str, asset_id: &str) -> AppResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM canvas_nodes
+                 WHERE project_id=?1 AND asset_id=?2 AND kind='asset' AND hidden_at IS NULL
+             ) FROM project_canvases WHERE project_id=?1",
+            params![project_id, asset_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| AppError::NotFound(format!("project canvas {project_id}")))
+    }
+
     /// Provider 启动前的项目画板事实投影。执行身份与 thread 分离，稳定键重放时只更新 payload，
     /// 不覆盖用户已经调整过的节点坐标。
     pub fn begin_project_generation_turn(
@@ -3473,6 +3488,36 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0], db.get_canvas_node("visible").unwrap().unwrap());
         assert!(db.visible_canvas_nodes("p", &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn project_canvas_has_asset_checks_visible_instances_in_the_requested_project() {
+        let db = db();
+        for project in ["p", "other"] {
+            materialize(&db, project);
+        }
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO assets(id,name,ext,source,created_at) VALUES('a','a','png','imported',1)", []).unwrap();
+            for (id, project, kind, role, hidden) in [
+                ("hidden", "p", "asset", Some("reference"), Some(1)),
+                ("note", "p", "note", None, None),
+                ("foreign", "other", "asset", Some("reference"), None),
+            ] {
+                conn.execute(
+                    "INSERT INTO canvas_nodes
+                     (id,project_id,kind,asset_id,role,payload_json,x,y,width,height,hidden_at,created_at,updated_at)
+                     VALUES (?1,?2,?3,'a',?4,'{\"schema_version\":1}',0,0,10,10,?5,1,1)",
+                    params![id, project, kind, role, hidden],
+                ).unwrap();
+            }
+        }
+        assert!(!db.project_canvas_has_asset("p", "a").unwrap());
+        assert!(db.project_canvas_has_asset("other", "a").unwrap());
+        assert!(!db.project_canvas_has_asset("other", "missing").unwrap());
+        assert!(matches!(db.project_canvas_has_asset("missing", "a"), Err(AppError::NotFound(_))));
+        db.conn.lock().unwrap().execute("UPDATE canvas_nodes SET hidden_at=NULL WHERE id='hidden'", []).unwrap();
+        assert!(db.project_canvas_has_asset("p", "a").unwrap());
     }
 
     #[test]

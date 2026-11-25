@@ -4,6 +4,9 @@
   if (window.top !== window || (origin !== "https://www.pinterest.com" && origin !== "https://pinterest.com")) return;
   if (window.__bowerbirdPinterestLayout) return;
   window.__bowerbirdPinterestLayout = true;
+  const rules = __BOWERBIRD_SITE_RULES__;
+  const pin = rules.pinterest;
+  const testId = value => `[data-test-id="${value}"]`;
 
   const attribute = "data-bowerbird-lens";
   const style = document.createElement("style");
@@ -28,7 +31,7 @@
     }
     [data-bowerbird-lens="placeholder"],
     [data-bowerbird-lens="source"] > :not(:first-child),
-    [data-bowerbird-lens="source"] [data-test-id="visual-search-cropper"] {
+    [data-bowerbird-lens="source"] ${testId(pin.lensCropper)} {
       display: none !important;
     }
     [data-bowerbird-lens="results"] {
@@ -41,14 +44,14 @@
 
   function findParts() {
     if (location.pathname !== "/lens-search/" && location.pathname !== "/lens-search") return null;
-    const source = document.querySelector('[data-test-id="visual-search-image-container"]');
+    const source = document.querySelector(testId(pin.lensImageContainer));
     return source?.parentElement ? partsForSource(source) : null;
   }
 
   function partsForSource(source) {
     const parent = source.parentElement;
     const siblings = [...parent.children];
-    const placeholder = siblings.find(node => node.matches('[data-test-id="visual-search-image-container-placeholder"]'));
+    const placeholder = siblings.find(node => node.matches(testId(pin.lensImagePlaceholder)));
     const results = siblings.filter(node => node !== source && node !== placeholder);
     const image = source.firstElementChild?.querySelector("img");
     if (!placeholder || results.length !== 1 || !image) return null;

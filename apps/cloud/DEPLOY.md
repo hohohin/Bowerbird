@@ -1,5 +1,11 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-24 H3 空槽预优化与音色参考已部署
+
+北京时间 11:45:44，现役 VPS Worker 切换到 `sha256:efbb87fbddc4d1f7fc1ec50e457827f35748026571dd8190ba939f089643f633`。本次发布范围为 Worker 的 `cloud-text-skills.ts`（SHA-256 `7ffc6b998898f1b6503921d48a7fc562ea9931c554816416047bcd6177b60c4b`）和只读挂载的 H3 视频 Skill（`50dbb22adfb8c7ea7edc5bec091c9ae5155de1cb3ed8ec53db5eb79d99882b42`）。切换前断网候选通过 10 项专项测试，切换后独立核对了现役文件、运行配置、挂载和容器状态。11:45 和 11:47 两次查询的五类活动队列均为空。
+
+一次临时 QA 登录通过正式 Agent Run 接口完成了单图 Ref2VA 的真实优化，返回六个字段。结果把声音属性限定给 (S1)，保留新对白 `<d>[English] The train leaves at noon.</d>`。登录已清理。候选、哈希和优化后正文位于 `.tmp/h3-ref-voice-20261124/`。回退时先确认共用 Worker 队列空闲，再在 VPS 执行 `sudo bash /opt/bowerbird/deploy-backups/h3-ref-voice-20261124/release.sh restore`。
+
 ## 素材库画面分析关闭态候选
 
 本候选包含 `0100_library_visual_catalog.sql`、`0101_library_visual_jobs.sql`、`understand-proxy`、`understand-worker` 和 VPS 理解 Worker。按顺序先应用迁移，再部署两个 Edge 入口，最后切换 Worker。生产配置保持 `LIBRARY_VISUAL_ENABLED` 未设置，`library_video_analysis` 目录条目保持 inactive 且 `pricing_ready=false`。只有另行获准启价时才设置经过账单核验的每小时 Bcoin 和报价版本，并配置 `ARK_LIBRARY_VISUAL_MODEL`。现有私有暂存桶必须允许 MP4、对象上限至少为 32,000,000 字节。校验匿名拒绝、已登录用户不可报价，以及原转录、复刻和图片理解兼容。

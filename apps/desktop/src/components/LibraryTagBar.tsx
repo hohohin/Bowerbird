@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import type { TagCount } from "../lib/types";
+import { useCatalogRevision } from "../lib/useCatalogRevision";
 import { useStore } from "../store";
 import { LocalClassificationDialog } from "./LocalClassificationDialog";
 import { TagIndex } from "./TagIndex";
@@ -12,6 +13,7 @@ export function LibraryTagBar({ projectId = null }: { projectId?: string | null 
   const [management, setManagement] = useState(false);
   const manageButton = useRef<HTMLButtonElement>(null);
   const autoTags = useStore(s => s.autoTags);
+  const catalogRevision = useCatalogRevision();
   const filter = useStore(s => s.smartFilter);
   const active = filter?.startsWith("tag:") ? filter.slice(4) : null;
   useEffect(() => {
@@ -20,7 +22,7 @@ export function LibraryTagBar({ projectId = null }: { projectId?: string | null 
     api.listTags("all", projectId).then(result => { if (alive) setTags(result); })
       .catch(() => { if (alive) setFailed(true); });
     return () => { alive = false; };
-  }, [projectId, autoTags, revision]);
+  }, [projectId, autoTags, revision, catalogRevision]);
   function select(name: string | null) {
     const state = useStore.getState();
     state.setSearchQuery("");

@@ -53,6 +53,20 @@ pub async fn project_canvas_get(
 }
 
 #[tauri::command]
+pub async fn project_canvas_has_asset(
+    paths: State<'_, Arc<LibraryPaths>>,
+    project_id: String,
+    asset_id: String,
+) -> AppResult<bool> {
+    let path = paths.db.clone();
+    tokio::task::spawn_blocking(move || {
+        Database::open_read_only(&path)?.project_canvas_has_asset(&project_id, &asset_id)
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))?
+}
+
+#[tauri::command]
 pub async fn project_canvas_visible_nodes(
     db: State<'_, Arc<Database>>,
     project_id: String,

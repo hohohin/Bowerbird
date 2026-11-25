@@ -1,0 +1,156 @@
+.source-browser-panel .source-browser-header {
+  position: relative;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.source-browser-navigation-row {
+  display: flex;
+  position: relative;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.source-browser-navigation-row .source-browser-address { min-width: 0; }
+.source-browser-address [role="img"] { flex: none; }
+.source-browser-nav button:disabled { opacity: .45; }
+.source-browser-navigation-hint {
+  flex-shrink: 0;
+  padding: 5px 8px;
+  color: var(--bb-muted);
+}
+
+.source-browser-address-history.app-popover {
+  position: absolute;
+  inset: calc(100% + 3px) 0 auto;
+  z-index: 51;
+  max-height: min(252px, 42vh);
+  overflow: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bb-surface);
+  border: 1px solid var(--bb-line-strong);
+}
+
+.source-browser-address-history[hidden] { display: none; }
+.source-browser-address-history li {
+  display: grid;
+  min-width: 0;
+  padding: 5px 7px;
+  cursor: pointer;
+}
+.source-browser-address-history li:is(:hover, [aria-selected="true"]) {
+  color: var(--bb-blue);
+  background: var(--bb-surface-hover);
+}
+.source-browser-address-history li > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-browser-address-history li small { color: var(--bb-muted); }
+
+.source-browser-progress {
+  position: absolute;
+  inset: auto 0 0;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.source-browser-progress::before {
+  display: block;
+  height: 100%;
+  width: 42%;
+  background: var(--bb-blue);
+  content: "";
+  animation: source-browser-loading 1.5s ease-in-out infinite;
+}
+@keyframes source-browser-loading {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(240%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .source-browser-progress::before { animation: none; }
+}
+
+.source-browser-panel .explore-sites {
+  flex-wrap: nowrap;
+  gap: 3px;
+  padding: 3px 7px;
+}
+.explore-site-links {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+  overflow: auto hidden;
+}
+.source-browser-panel .explore-sites button {
+  display: inline-flex;
+  flex: none;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+  background: transparent;
+  white-space: nowrap;
+}
+.source-browser-panel .explore-sites button[aria-current="page"] { color: var(--bb-blue); }
+.explore-site-links button[aria-current="page"]::before {
+  width: 4px;
+  height: 4px;
+  margin-right: 5px;
+  background: currentColor;
+  content: "";
+}
+.source-browser-panel .explore-sites :is(.explore-manage-sites, .source-browser-extension-entry, .video-collection-entry) {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+}
+.source-browser-panel .explore-sites :is(.source-browser-extension-entry, .video-collection-entry) span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.explore-manage-sites { border-left: 1px solid var(--bb-line); }
+
+.explore-shortcut-editor { display: grid; gap: 8px; }
+.explore-shortcut-rows { margin: 0; padding: 0; list-style: none; }
+.explore-shortcut-rows li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--bb-line);
+}
+.explore-shortcut-name { display: grid; flex: 1; min-width: 0; }
+.explore-shortcut-name > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explore-shortcut-name small { color: var(--bb-muted); }
+.explore-shortcut-editor button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+  color: var(--bb-muted);
+}
+.explore-shortcut-editor button:enabled:hover { background: var(--bb-surface-hover); color: var(--bb-ink); }
+.explore-shortcut-editor button:disabled { opacity: .45; }
+.explore-shortcut-form, .explore-shortcut-form label { display: grid; gap: 5px; }
+.explore-shortcut-form input {
+  width: 100%;
+  min-height: 30px;
+  padding: 3px 6px;
+  background: var(--bb-surface-2);
+  border: 1px solid var(--bb-line-strong);
+  color: var(--bb-ink);
+}
+.explore-shortcut-form p { margin: 0; color: var(--bb-danger); }
+.explore-shortcut-form button, .explore-shortcut-reset { justify-self: start; }

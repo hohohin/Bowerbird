@@ -5,6 +5,7 @@ import { FileDropImport } from "../../../src/components/FileDropImport";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { LibraryHome } from "../../../src/components/LibraryHome";
 import { LibraryCatalog } from "../../../src/components/LibraryCatalog";
+import { ExploreLibrary } from "../../../src/components/ExploreLibrary";
 import { TextWorkspaceLibrary } from "../../../src/components/TextWorkspaceLibrary";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
@@ -14,6 +15,9 @@ import "../../../src/components/LocalFileWorkspace.css";
 import "../../../src/components/IndustrialTheme.css";
 import "../../../src/components/IndustrialMenus.css";
 import type { CatalogFilter } from "../../../src/lib/materialCatalog";
+import type { LocalClassificationStatus } from "../../../src/lib/localClassification";
+import { resolveCaptureDropTarget } from "../../../src/lib/captureDropTarget";
+import type { ExploreCaptureReceipt } from "../../../src/lib/exploreCaptureOrder";
 const w = window as any;
 const listeners = new Map<number, (event: unknown) => void>();
 const eventNames = new Map<number, string>();
@@ -21,18 +25,29 @@ let callbackId = 0;
 const thumb = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160"><rect width="240" height="160" fill="#7b9eaa"/></svg>');
 w.total ??= 300000; w.requests = []; w.inFlight = 0; w.maxInFlight = 0; w.failOffset = -1; w.delay = 0;
 w.mode = useLocalFileMode; w.store = useStore;
+const exploreLibrary = new URLSearchParams(location.search).has("explore-library");
+const exploreCapture = exploreLibrary && new URLSearchParams(location.search).has("capture");
 const asset = (i: number) => ({ id: `asset-${i}`, name: `素材${i}.png`, ext: "png", source: "imported", width: 240, height: i % 5 ? 160 : 320,
   store_path: `/asset-${i}.png`, thumb_path: i === 0 ? null : thumb, generation_session_id: i % 2 ? "generated" : null,
   ...w.assetDimensions?.(i) });
 function range(f: CatalogFilter) {
   let first = f.id === "last" ? Math.max(0,w.total - 60) : 0;
   let count = f.id === "last" ? Math.min(60,w.total) : w.total;
-  if (f.query) count = f.query === "small" ? 180 : f.query === "slow" ? 120 : f.query === "empty" ? 0 : 3;
+  if (f.query) count = f.query === "small" ? 180 : f.query === "batch" ? 200 : f.query === "slow" ? 120 : f.query === "empty" ? 0 : 3;
   if (f.projectId) count = Math.min(count,120);
   if (f.kind === "collections") count = f.id ? Math.min(count,90) : 0;
   if (f.color) count = Math.min(count,30);
   if (f.media === "videos") count = 0;
   return { first, count };
+}
+const exploreFolders = [
+  { id: "wood", root_id: "wood", parent_id: null, name: "材质参考", path: "C:/fixture/wood", count: 3, available: true },
+  { id: "child", root_id: "wood", parent_id: "wood", name: "子目录", path: "C:/fixture/wood/child", count: 1, available: true },
+  { id: "offline", root_id: "offline", parent_id: null, name: "离线参考", path: "C:/fixture/offline", count: 0, available: false },
+].map(folder => ({ ...folder, scanning: false, error: null }));
+function capturedFirst(ids: number[], firstAssetId?: string) {
+  const index = ids.findIndex(id => `asset-${id}` === firstAssetId);
+  return index > 0 ? [ids[index], ...ids.slice(0, index), ...ids.slice(index + 1)] : ids;
 }
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.__TAURI_INTERNALS__ = {
@@ -48,19 +63,30 @@ w.__TAURI_INTERNALS__ = {
     if (command === "project_covers") return { p: { asset_count: 1, paths: [thumb] }, q: { asset_count: 1, paths: [thumb] } };
     if (command === "remove_assets_from_project") return args.assetIds.length;
     if (command === "list_projects") return useStore.getState().projects;
-    if (command === "folder_connections") return [];
+    if (command === "folder_connections") return exploreLibrary ? exploreFolders : [];
+    if (exploreLibrary && command === "connection_entries") {
+      const ids = capturedFirst(args.folderId === "wood" ? [0, 1, 2] : args.folderId === "child" ? [3] : [], args.filter.firstAssetId);
+      return ids.slice(args.offset, args.offset + args.limit).map(id => ({ id: `entry-${id}`, folder_id: args.folderId, is_reference: true,
+        asset_id: `asset-${id}`, name: `素材${id}.png`, path: `C:/fixture/${id}.bowerbird`, available: true, asset: { ...asset(id), thumb_path: thumb } }));
+    }
     if (command === "file_workspace_status") return { config: { root: "C:/library", places: [], projects: {} }, proposed_root: "C:/library" };
     if (command === "external_files_browse") return { path: args.path ?? "C:/library", parent: null, entries: [], total: 0 };
     if (command === "folder_classification_view") return { root: args.path, record: { labels: [], pictures: [] }, counts: [] };
     if (command === "claim_source_browser_analysis") return false;
     if (command === "release_source_browser_analysis") return;
-    if (command === "capture_source_browser_image") { w.captured = args; return asset(0); }
+    if (command === "capture_source_browser_image") {
+      w.captured = args;
+      return exploreCapture ? { ...asset(Number(args.imageUrl.match(/\/(\d+)\.png$/)[1])), thumb_path: thumb } : asset(0);
+    }
+    if (exploreCapture && ["open_source_browser", "resize_source_browser", "hide_source_browser", "create_material_references"].includes(command)) return null;
     if(command === "catalog_prepare_colors") return {after:null,more:false,failed:0,updated:0};
     if (command === "catalog_project_counts") return Object.fromEntries(useStore.getState().projects
       .map(project => [project.id, range({ ...args.filter, projectId: project.id }).count]));
     if (command === "catalog_overview") {
       if (args.filter.query === "slow") await new Promise(r => setTimeout(r,400));
       const {count} = range(args.filter);
+      if (args.filter.kind === "all") return { total: count, untagged: 0,
+        catalog: { tags: [], prompts: [], tag_asset_ids: {}, collections: [] } };
       return { total: count, untagged: 0, catalog: { tags: [
         {id:"first",name:"A 素材",count,projectCount:0,description:""},
         {id:"last",name:"Z 末尾",count:Math.min(count,60),projectCount:1,description:""}],
@@ -72,6 +98,8 @@ w.__TAURI_INTERNALS__ = {
         await new Promise(r => setTimeout(r,w.delay || 20));
         if (w.failOffset === args.offset) throw new Error("模拟分页读取失败");
         const {first,count} = range(args.filter);
+        if (exploreLibrary) return capturedFirst(Array.from({ length: count }, (_, index) => first + index), args.filter.firstAssetId)
+          .slice(args.offset, args.offset + args.limit).map(id => ({ ...asset(id), thumb_path: thumb }));
         return Array.from({length:Math.min(args.limit,Math.max(0,count-args.offset))},(_,i)=>{
           const value = { ...asset(first+args.offset+i), project_count: first + args.offset + i === 0 ? 2 : 1 };
           return w.distinctProjects ? { ...value, id: `${args.filter.projectId ?? "global"}:${value.id}` } : value;
@@ -85,6 +113,15 @@ w.__TAURI_INTERNALS__ = {
     if (command === "list_generation_groups") return w.generationGroups ?? {};
     if (command === "get_assets_by_ids") return args.assetIds.map((id:string)=>asset(Number(id.split('-')[1])));
     if (command === "external_files_preview" || command === "external_files_media") return thumb;
+    if (command === "local_classification_status") return {
+      supported: true, installed: true, enabled: false, busy: false, phase: "idle", done: 0, total: 0, failed: 0,
+      jev_done: 0, cloud_running: 0, cloud_queued: 0, download_done: 0, download_total: 0, message: "", last_error: "",
+      current_asset: null, jev_progress: null, model: "jev-test", acceleration: "", vector_supported: false, vector_installed: false,
+    } satisfies LocalClassificationStatus;
+    if (command === "local_classification_labels" || command === "project_classification_labels") return [
+      { id: "first", name: "A 素材", description: "前部标签", enabled: true, count: w.total, has_examples: false },
+      { id: "last", name: "Z 末尾", description: "末尾标签", enabled: true, count: Math.min(w.total, 60), has_examples: false },
+    ];
     if (command === "local_classification_example") { w.classified = args; return; }
     if (command === "set_collection_members") { w.assigned = args.assetIds; return; }
     throw new Error(`Unexpected IPC: ${command}`);
@@ -114,8 +151,31 @@ function NavigationFixture() {
   return <div style={{ position: "fixed", inset: 0 }}><LibraryCatalog media={media} projectId={project ? "p" : null} semanticSearchEnabled={new URLSearchParams(location.search).has("semantic")}
     onClose={() => {}}/><AssetContextMenu/></div>;
 }
+function ExploreLibraryFixture() {
+  const [active, setActive] = React.useState(true);
+  const [middleOpen, setMiddle] = React.useState(true);
+  const [sidebarOpen, setSidebar] = React.useState(true);
+  const [dockOpen, setDock] = React.useState(false);
+  const [captureReceipts, setReceipts] = React.useState<ExploreCaptureReceipt[]>([]);
+  const setCapture = (receipt: ExploreCaptureReceipt) => setReceipts(receipts => [receipt, ...receipts]);
+  w.explorePanel = { setActive, setMiddle, setSidebar, setDock, setCapture };
+  w.resolveExploreDrop = (element: Element) => {
+    const { kind, id, projectId, disabled } = resolveCaptureDropTarget(element, useStore.getState());
+    return { kind, id, projectId, disabled };
+  };
+  return <div style={{ position: "fixed", inset: 0, display: "flex" }}>
+    <ExploreLibrary active={active} middleOpen={middleOpen} sidebarOpen={sidebarOpen} dockOpen={dockOpen}
+      onCloseMiddle={() => setMiddle(false)} onToggleSidebar={() => setSidebar(value => !value)}
+      onOpenProject={id => { (w.exploreVisits ??= []).push(id); }} captureReceipts={captureReceipts}/>
+  </div>;
+}
+function ExploreCaptureFixture() {
+  return <div style={{ position: "fixed", inset: 0, display: "flex" }}>
+    <ExploreWorkspace layout="home" open url="https://example.com/" onClose={() => {}}>{null}</ExploreWorkspace>
+  </div>;
+}
 const params = new URLSearchParams(location.search);
 const root = createRoot(document.getElementById("root")!);
 root.render(params.has("text") ? <div className="text-workspace-layout canvas-workspace" style={{ position:"fixed", inset:0 }}>
   <TextWorkspaceLibrary open projectId="p" onClose={() => {}} onNavigate={() => {}} onInsert={() => {}} onReusePrompt={() => {}}/>
-</div> : params.has("navigation") ? <NavigationFixture/> : params.has("split") ? <SplitFixture/> : <Fixture/>);
+</div> : exploreCapture ? <ExploreCaptureFixture/> : exploreLibrary ? <ExploreLibraryFixture/> : params.has("navigation") ? <NavigationFixture/> : params.has("split") ? <SplitFixture/> : <Fixture/>);

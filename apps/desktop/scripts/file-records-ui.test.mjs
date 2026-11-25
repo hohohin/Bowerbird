@@ -12,7 +12,11 @@ const restore = () => dialog.getByRole('button', { name: /恢复可用项/ });
 const calls = command => page.evaluate(command => window.calls.filter(c => c.command === command), command);
 try {
   await page.goto('http://127.0.0.1:1676/scripts/fixtures/folder-mode/preview.html');
-  await page.getByRole('button', { name: '文件浏览器', exact: true }).click();
+  await page.waitForFunction(() => window.mode);
+  await page.evaluate(() => {
+    window.mode.getState().setMode('files');
+    window.mode.getState().openBrowser();
+  });
   await page.getByRole('button', { name: 'photo.png', exact: true }).waitFor();
   await page.evaluate(() => {
     window.recordItems = [
@@ -75,7 +79,7 @@ try {
   await page.evaluate(() => { window.recordItems = []; window.recordPreviewDelay = 0; });
   await page.getByRole('button', { name: '更多文件操作', exact: true }).click();
   await page.getByRole('button', { name: '随图资料', exact: true }).click();
-  await dialog.getByText(/未找到随图资料/).waitFor();
+  await dialog.getByText('未找到随图资料。可先在原设备保存资料，再复制整个素材文件夹。', { exact: true }).waitFor();
   await page.waitForTimeout(450);
   assert.equal(await dialog.getByRole('listitem').count(), 0);
   assert.equal(await restore().isEnabled(), false);

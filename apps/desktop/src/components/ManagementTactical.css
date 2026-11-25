@@ -85,6 +85,18 @@ html[data-theme] .classification-panel section:is(.classification-section,.class
 .classification-panel .classification-label-row > div > button { position: relative; }
 .classification-panel .classification-label-row button:not(.text-red-400):hover:not(:disabled) { color: var(--holo-ink); }
 .classification-panel .classification-label-row button[aria-expanded=true] { background: var(--holo-selection); color: var(--holo-ink); }
+.classification-label-filters {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.classification-label-filters input { flex: 1 1 180px; min-width: 0; }
+.classification-label-filters :is(input, .tactical-select-trigger) {
+  min-height: 30px; padding: 3px 8px; border: 1px solid var(--bb-line);
+}
+.classification-label-summary {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: 6px;
+}
+.classification-label-meta { display: grid; justify-items: end; white-space: nowrap; }
+.classification-label-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-inline-start: 18px; }
 .classification-panel .classification-label-details { margin-inline: 8px; }
 .classification-panel .classification-label-details::before {
   content: ""; position: absolute; top: 0; left: 12px; width: 28px; height: 1px; background: var(--holo-rule); pointer-events: none;

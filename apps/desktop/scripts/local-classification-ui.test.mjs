@@ -11,6 +11,7 @@ const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1050, height: 950 } });
   const errors = []; page.on("pageerror", e => errors.push(e.message));
+  const consoleErrors = []; page.on("console", msg => { if (msg.type() === "error") consoleErrors.push(msg.text()); });
   await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
   await page.goto("http://127.0.0.1:1456/scripts/fixtures/local-classification/preview.html");
   const dialog = page.getByRole("dialog", { name: "自动分类", exact: true });
@@ -32,6 +33,7 @@ try {
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_save_label").length), 1);
   const start = await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_start").at(-1));
   assert.equal(start.args.tagId, "label-0");
+  assert.equal(start.args.ensureCloud, true);
   const preview = dialog.getByLabel("当前处理素材", { exact: true });
   await preview.getByRole("img", { name: "正在处理：柔光羊羔.png", exact: true }).waitFor();
   await page.waitForFunction(() => document.querySelector('img[alt="正在处理：柔光羊羔.png"]')?.naturalWidth > 0);
@@ -83,18 +85,23 @@ try {
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_start").at(-1).args.tagId), null);
   await dialog.getByRole("button", { name: "停止", exact: true }).click();
   await rescanOption.uncheck();
+  const showTagActions = (target, name) => target.getByRole("button", { name: `更多操作 ${name}`, exact: true }).click();
+  await showTagActions(dialog, "水彩植物");
   await dialog.getByRole("button", { name: "加入所选 2 张作为示例" }).click();
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_example").at(-1).args.positive), true);
   await dialog.getByRole("button", { name: "排除所选素材", exact: true }).click();
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_example").at(-1).args.positive), false);
   assert.equal(await page.evaluate(() => window.settings.jev_image_classification_enabled),true,"matching defaults to cloud even without local models");
   assert.equal(await dialog.getByLabel("标签名称").count(),0,"saving collapses the editor");
-  await page.evaluate(() => { window.settings.jev_image_classification_enabled = false; window.failure = "update_settings"; });
-  const startsBefore = await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_start").length);
+  await page.evaluate(() => {
+    window.settings.jev_image_classification_enabled = false;
+    window.failure = "local_classification_start";
+    window.failureReason = "CLASSIFICATION_START_SETTINGS: attempt to write a readonly file";
+  });
   await dialog.getByRole("button", {name:"寻找匹配",exact:true}).click();
-  await dialog.getByRole("alert").waitFor();
-  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_start").length),startsBefore,"failed cloud setup must not fall back to local");
-  await page.evaluate(() => { window.failure = null; window.classificationStatus.supported = false; });
+  await dialog.getByText("分类设置无法写入，请检查设置文件或资料库是否为只读。", {exact:true}).waitFor();
+  assert.equal(await page.evaluate(() => window.classificationStatus.busy),false,"failed cloud setup must not start a task");
+  await page.evaluate(() => { window.failure = null; window.failureReason = null; window.classificationStatus.supported = false; });
   await mkdir(".tmp/classification-modes", {recursive:true});
   await page.screenshot({path:".tmp/classification-modes/cloud-dark.png"});
   await page.evaluate(() => document.documentElement.dataset.theme = "light");
@@ -173,6 +180,7 @@ try {
   assert.equal(await page.evaluate(() => window.classificationStatus.enabled), true);
   await dialog.getByLabel("自动处理新素材", { exact: true }).uncheck();
   await page.evaluate(() => window.failure = "local_classification_start");
+  await showTagActions(dialog, "水彩植物");
   await dialog.getByRole("button", { name: "寻找匹配", exact: true }).click();
   await dialog.getByRole("alert").waitFor();
   await page.evaluate(() => window.failure = null);
@@ -226,6 +234,7 @@ try {
   assert.equal(await page.evaluate(() => window.getSmartFilter()), "tag:水彩植物");
   await page.getByRole("button", { name: "打开自动分类", exact: true }).click();
   await dialog.getByRole("button", { name: "编辑", exact: true }).click();
+  await showTagActions(dialog, "水彩植物");
   await dialog.getByRole("button", { name: "删除标签 水彩植物", exact: true }).click();
   await confirmation.getByRole("button", { name: "确认删除", exact: true }).click();
   await confirmation.waitFor({ state: "hidden" });
@@ -248,34 +257,52 @@ try {
   await dialog.getByLabel("标签名称").waitFor({state:"hidden"});
   assert.equal(await page.evaluate(() => window.labels.length),1,"retry reuses the already saved label");
   await dialog.getByRole("button", {name:"停止",exact:true}).click();
-  await page.evaluate(() => window.failure = "get_settings");
-  const countBeforeFailure = await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_start").length);
+  await page.evaluate(() => window.failure = "update_settings");
   await dialog.getByRole("button", {name:"进行分类",exact:true}).click();
-  await dialog.getByRole("alert").waitFor();
-  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_start").length),countBeforeFailure);
+  await dialog.getByRole("button", {name:"停止",exact:true}).waitFor();
+  assert.equal(await page.evaluate(() => window.calls.some(c => c.command === "get_settings" || c.command === "update_settings")),false,
+    "manual runs persist cloud settings through the start command");
   for (const scope of ["labels", "project"]) {
     await page.goto(`http://127.0.0.1:1456/scripts/fixtures/local-classification/preview.html?${scope}`);
-    const settings = page.getByRole("dialog", {name:"管理分类数据",exact:true});
+    const settings = page.getByRole("dialog", {name:"标签管理",exact:true});
     const automatic = settings.getByRole("checkbox", {name:"自动处理新素材",exact:true});
     await automatic.waitFor();
     assert.equal(await settings.getByText(/^全库设置：/).count(),1);
     assert.equal(await page.evaluate(() => window.calls.some(c => c.command === "update_settings" || c.command === "local_classification_enable")),false,"opening management does not enable automatic classification");
+    await page.evaluate(() => window.failRefreshAfterEnable = true);
     await automatic.check();
     assert.equal(await page.evaluate(() => window.classificationStatus.enabled),true);
+    await settings.getByText("分类状态或标签暂时无法刷新，将自动重试。", { exact: true }).waitFor();
+    assert.equal(await automatic.isChecked(),true,"a successful save remains visible when refresh fails");
+    assert.equal(await settings.getByRole("alert").count(),0,"refresh failure is separate from save failure");
+    assert.equal(await page.evaluate(() => window.calls.some(c => c.command === "get_settings" || c.command === "update_settings")),false);
+    assert.equal(await page.evaluate(() => window.settings.jev_image_classification_enabled),true);
+    await page.evaluate(() => { window.failRefreshAfterEnable = false; window.failure = null; });
     assert.deepEqual(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_enable").at(-1).args),{enabled:true},"project panel changes the explicit global setting");
     await page.keyboard.press("Escape");
     await page.getByRole("button", {name:"打开自动分类",exact:true}).click();
     await page.waitForFunction(() => document.querySelector('section[aria-label="新素材自动分类"] input')?.checked);
     await automatic.uncheck();
     assert.equal(await page.evaluate(() => window.classificationStatus.enabled),false);
-    await page.evaluate(() => window.failure = "local_classification_enable");
+    await page.evaluate(() => {
+      window.failure = "local_classification_enable";
+      window.failureReason = "CLASSIFICATION_AUTO_DATABASE: database is locked";
+    });
     await automatic.click();
     await settings.getByRole("alert").waitFor();
+    assert.equal(await settings.getByRole("alert").innerText(),"资料库正忙，请稍候再试。");
+    assert.ok(consoleErrors.some(message => message.includes("local_classification_enable") && message.includes("database is locked")));
     assert.equal(await automatic.isChecked(),false,"failed saving does not leave the switch enabled");
-    await page.evaluate(() => window.failure = null);
+    await page.evaluate(() => {
+      window.failureReason = "CLASSIFICATION_AUTO_SETTINGS: attempt to write a readonly file";
+    });
+    await automatic.click();
+    await settings.getByText("分类设置无法写入，请检查设置文件或资料库是否为只读。",{exact:true}).waitFor();
+    await page.evaluate(() => { window.failure = null; window.failureReason = null; });
+    await automatic.check();
   }
   await page.goto("http://127.0.0.1:1456/scripts/fixtures/local-classification/preview.html?project");
-  const management = page.getByRole("dialog", {name:"管理分类数据",exact:true});
+  const management = page.getByRole("dialog", {name:"标签管理",exact:true});
   const classify = management.getByRole("button", {name:"进行分类",exact:true});
   const includeTagged = management.getByRole("checkbox", {name:"重新分类已有标签的素材",exact:true});
   await classify.waitFor();
@@ -289,7 +316,7 @@ try {
   await classify.click();
   assert.equal(await page.getByRole("dialog",{name:"确认重新分类",exact:true}).count(),0);
   assert.deepEqual(await page.evaluate(() => window.calls.find(c => c.command === "project_classification_start").args),
-    {projectId:"project-test",tagId:null,pendingOnly:true});
+    {projectId:"project-test",tagId:null,pendingOnly:true,ensureCloud:true});
   assert.equal(await includeTagged.isDisabled(),true);
   await management.getByRole("button",{name:"停止",exact:true}).click();
   await includeTagged.check();
@@ -297,7 +324,7 @@ try {
   await rescanDialog.getByRole("button",{name:"确认并进行分类",exact:true}).click();
   await rescanDialog.waitFor({state:"hidden"});
   assert.deepEqual(await page.evaluate(() => window.calls.filter(c => c.command === "project_classification_start").at(-1).args),
-    {projectId:"project-test",tagId:null,pendingOnly:false});
+    {projectId:"project-test",tagId:null,pendingOnly:false,ensureCloud:true});
   await management.getByRole("button",{name:"停止",exact:true}).click();
   const stoppedStarts = await page.evaluate(() => window.calls.filter(c => c.command.endsWith('classification_start')).length);
   await management.getByRole('button',{name:'关闭',exact:true}).click();
@@ -308,6 +335,34 @@ try {
   await includeTagged.uncheck();
   await page.evaluate(() => window.labels = ["海报","标志","字体排版","图案纹样","包装展示图","品牌应用图","白底产品图","场景产品图","产品局部特写","产品图解","标题卡","图文卡片","信息图","漫画页","表情贴图","分镜板","角色设定图","场景图","道具图","角色立绘","面部特写","半身人像","全身人像","群像","静物","材质纹理","布光示意图"].map((name,i) => ({id:`preset-${i}`,name,description:"",enabled:true,count:0})));
   await management.getByText("#海报",{exact:true}).waitFor();
+  await page.evaluate(() => {
+    window.labels[0].description = "唯一检索说明";
+    window.labels[0].count = 4;
+    window.labels[1].enabled = false;
+    window.labels[1].count = 9;
+    for (let index = 0; index < 100; index++) {
+      window.labels.push({ id: `sample-${index}`, name: `样例 ${index}`, description: "", count: 0, enabled: true });
+    }
+  });
+  await management.getByText("已有标签 · 127",{exact:true}).waitFor();
+  const search = management.getByRole("searchbox", {name:"搜索标签"});
+  await search.fill("唯一检索说明");
+  await management.locator(".classification-label-row").waitFor({timeout:1000});
+  assert.equal(await management.locator(".classification-label-row").count(),1);
+  await search.clear();
+  const filter = management.getByRole("combobox", {name:"筛选标签"});
+  await filter.focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  assert.equal(await management.locator(".classification-label-row").count(),125);
+  await filter.click();
+  await page.getByRole("option", {name:"全部标签",exact:true}).click();
+  await management.getByRole("combobox", {name:"标签排序"}).click();
+  await page.getByRole("option", {name:"数量降序",exact:true}).click();
+  assert.equal(await management.locator(".classification-label-row").first().getByRole("button",{name:"#标志",exact:true}).count(),1);
+  assert.equal(await management.getByText("视频文本打标签",{exact:true}).count(),0);
+  assert.equal(await page.evaluate(() => window.calls.some(c => c.command === "material_catalog_page")),false);
   await management.screenshot({path:".tmp/classification-preview/management-dark.png"});
   await page.evaluate(() => document.documentElement.dataset.theme = "light");
   await page.setViewportSize({width:540,height:900});
@@ -330,6 +385,7 @@ try {
     await rescanDialog.getByRole("button",{name:"确认并进行分类",exact:true}).click();
     await rescanDialog.waitFor({state:"hidden"});
     const args = await page.evaluate(command => window.calls.filter(c => c.command === command).at(-1).args,command);
+    assert.equal(args.ensureCloud,true);
     assert.equal(args.pendingOnly,false);
     assert.equal(args.tagId,null);
     if (scope === "folder") assert.equal(args.root,"D:/fixture");

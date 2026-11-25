@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
+import { loadSourceScript } from './fixtures/explorer/source-script.mjs';
 import {readFile} from 'node:fs/promises';
 import {chromium} from '../../html-renderer/node_modules/playwright/index.mjs';
 import {startBrowserDrag,finishBrowserDrag} from './fixtures/explorer/native-drag.mjs';
 
-const script=await readFile(process.env.BOWERBIRD_SOURCE_VIDEO_PATH || 'src-tauri/src/commands/source_browser_video.js','utf8');
+const script=await loadSourceScript(process.env.BOWERBIRD_SOURCE_VIDEO_PATH || 'src-tauri/src/commands/source_browser_video.js');
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const failures=[];
-const drag=(await readFile('src-tauri/src/commands/source_browser_drag.js','utf8')).replace('__BOWERBIRD_DRAG_BRIDGE__','bowerbird-explorer://fixture');
+const drag=(await loadSourceScript('src-tauri/src/commands/source_browser_drag.js')).replace('__BOWERBIRD_DRAG_BRIDGE__','bowerbird-explorer://fixture');
 async function check(name,run){try{await run();console.log('PASS '+name);}catch(error){failures.push(name);console.error('FAIL '+name+': '+error.message);}}
 async function fixture(url){
   const page=await browser.newPage();
@@ -46,7 +47,7 @@ try{
       await page.evaluate(async()=>{await(await fetch('/_/graphql/')).json();history.pushState({},'','/pin/123456789/');});
       assert.equal(await resolve(page),'https://cdn.example/right.mp4');
       await page.evaluate(()=>history.pushState({},'','/pin/987654321/'));
-      await assert.rejects(resolve(page),/尚未找到/,'the GraphQL entity must belong to the current Pin');
+      await assert.rejects(resolve(page),/site-video-rules-miss/,'the GraphQL entity must belong to the current Pin');
     }finally{await page.close();}
   });
   await check('Pinterest GraphQL direct video and multi-video identity stay bounded',async()=>{
@@ -65,7 +66,7 @@ try{
       await page.evaluate(()=>{target.poster='https://cdn.example/other.jpg';});
       assert.equal(await resolve(page),'https://cdn.example/other.m3u8');
       await page.evaluate(()=>{window.__PWS_DATA__.pins['123456789'].entityId='987654321';});
-      await assert.rejects(resolve(page),/尚未找到/,'the index cannot override an explicit different GraphQL entity');
+      await assert.rejects(resolve(page),/site-video-rules-miss/,'the index cannot override an explicit different GraphQL entity');
     }finally{await page.close();}
   });
   for(const [site,origin,start,end,record] of [
@@ -159,13 +160,13 @@ try{
     const page=await fixture('https://www.xiaohongshu.com/explore/note-a');
     try{
       await page.evaluate(record=>{window.__INITIAL_STATE__={note:{noteDetailMap:{'note-a':{note:{...record.note_card,noteId:'note-b'}}}}};},xhsRecord);
-      await assert.rejects(resolve(page),/尚未找到/,'an indexed entry cannot override a conflicting explicit note ID');
+      await assert.rejects(resolve(page),/site-video-rules-miss/,'an indexed entry cannot override a conflicting explicit note ID');
       await page.route('**/api/feed',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({data:{items:[{...xhsRecord,id:'note-b'}]}})}));
       await page.evaluate(async()=>{await(await fetch('/api/feed')).json();});
-      await assert.rejects(resolve(page),/尚未找到/);
+      await assert.rejects(resolve(page),/site-video-rules-miss/);
       await page.route('**/api/feed',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({record:xhsRecord,padding:'x'.repeat(1024*1024)})}));
       await page.evaluate(async()=>{await new Promise(resolve=>{const xhr=new XMLHttpRequest();xhr.open('GET','/api/feed');xhr.responseType='json';xhr.onload=resolve;xhr.send();});});
-      await assert.rejects(resolve(page),/尚未找到/);
+      await assert.rejects(resolve(page),/site-video-rules-miss/);
       const payload={record:xhsRecord,padding:''};
       payload.padding='x'.repeat(1024*1024-JSON.stringify(payload).length);
       await page.route('**/api/feed',route=>route.fulfill({contentType:'application/json',body:JSON.stringify(payload)}));

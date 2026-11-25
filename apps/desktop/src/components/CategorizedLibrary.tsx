@@ -13,7 +13,7 @@ import { materialCatalog, type CatalogKind, type MaterialCatalog, type CatalogFi
 import { catalogInitial, orderCatalogTags, UNTAGGED_SECTION } from "../lib/materialCatalogOrder";
 import { type LibraryMedia } from "../lib/localFileMode";
 import { api } from "../lib/api";
-import { VirtualCatalog, type CatalogLocation } from "./VirtualCatalog";
+import { VirtualCatalog, type CatalogJump, type CatalogLocation } from "./VirtualCatalog";
 import type { CatalogSectionInfo } from "../lib/catalogVirtualLayout";
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { addMaterialAssets } from "../lib/materialActions";
@@ -24,6 +24,7 @@ import { useStore } from "../store";
 import type { Asset, Project } from "../lib/types";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { CatalogSelectionBar } from "./CatalogSelectionBar";
+import { BatchAssetTagDialog } from "./AssetTagPicker";
 import { LibraryCatalogControls } from "./LibraryCatalogControls";
 import { LibrarySemanticSearch, emptySemanticResultMessage, useLibrarySemanticSearch } from "./LibrarySemanticSearch";
 import { LibraryMotion } from "./LibraryMotion";
@@ -40,16 +41,26 @@ import { isTextAsset } from "../lib/textMedia";
 import { LocalFileBrowser } from "./LocalFileBrowser";
 import { CollectionAssignDialog, CollectionMoveDialog } from "./CollectionDialogs";
 import { ModalShell } from "./ModalShell";
-import { CatalogTagIndex } from "./CatalogTagIndex";
+import { CatalogTagIndex, type CatalogTagAction } from "./CatalogTagIndex";
+import { captureForScope, type ExploreCaptureReceipt } from "../lib/exploreCaptureOrder";
 import "./CategorizedLibrary.css";
 
 const browsePositions = new Map<string, LibraryBrowsePosition>();
 
-export function CategorizedLibrary({ kind, media = "images", projectId = null, browseProjectId = projectId, projectScope = false, overviewProjects, sidebarBody, onClose, onNavigate, onCreateProject, onAssetsChange, onInsertAsset, onOpenAsset, onAssetContextMenu, positionId = "default", toolbarActions, dropPreview = false, semanticSearchEnabled = false }: {
+export type CatalogPreview = {
+  show: boolean;
+  heading: (name: string, count: number, projectId?: string) => ReactNode;
+  captureReceipts?: readonly ExploreCaptureReceipt[];
+  tagId?: string;
+  onSelectTag?: (id: string) => void;
+};
+
+export function CategorizedLibrary({ kind, media = "images", projectId = null, browseProjectId = projectId, projectScope = false, overviewProjects, sidebarBody, labelToLocate, onLabelLocated, onManageTags, onClose, onNavigate, onCreateProject, onAssetsChange, onInsertAsset, onOpenAsset, onAssetContextMenu, positionId = "default", toolbarActions, dropPreview = false, semanticSearchEnabled = false, catalogPreview }: {
   kind: Exclude<CatalogKind, "collections">; projectId?: string | null; browseProjectId?: string | null; projectScope?: boolean; onClose: () => void; onNavigate?: () => void; onCreateProject?: (ids?: string[]) => Promise<unknown>;
   overviewProjects?: Project[]; sidebarBody?: HTMLElement | null;
+  labelToLocate?: CatalogJump | null; onLabelLocated?: (jump: CatalogJump) => void; onManageTags?: (action?: CatalogTagAction) => void;
   media?: LibraryMedia; positionId?: string;
-  toolbarActions?: ReactNode; dropPreview?: boolean; semanticSearchEnabled?: boolean;
+  toolbarActions?: ReactNode; dropPreview?: boolean; semanticSearchEnabled?: boolean; catalogPreview?: CatalogPreview;
   onAssetsChange?: (assets: Asset[]) => void;
   onInsertAsset?: (asset: Asset) => void; onOpenAsset?: (asset: Pick<Asset, "id">) => void;
   onAssetContextMenu?: ReturnType<typeof useStore.getState>["openContextMenu"];
@@ -71,12 +82,13 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const [untagged, setUntagged] = useState(0);
   const [catalogError, setCatalogError] = useState("");
   const [catalogLoading, setCatalogLoading] = useState(true);
-  const loadedCatalogScope = useRef<string | null>(null);
+  const loadedCatalog = useRef<{ filterKey: string; revision: number }>();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const pendingDeletion = usePendingOriginalDeletion();
   const [multiple, setMultiple] = useState(false);
   const alphabetic = true;
   const [assign, setAssign] = useState<string[] | null>(null);
+  const [tagSelection, setTagSelection] = useState<string[] | null>(null);
   const [moveIds, setMoveIds] = useState<string[] | null>(null);
   const [references, setReferences] = useState(false);
   const [preview, setPreview] = useState<{ asset: Asset; path: string; sourceKey: string; projectId: string | null } | null>(null);
@@ -90,7 +102,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const onBrowseGroup = useCallback((head: string, shown: string | null) => { if (shown) shownGroupAssets.current.set(head, shown); else shownGroupAssets.current.delete(head); }, []);
   const alive = useRef(true);
   const previewVersion = useRef(0);
-  const [jump, setJump] = useState<{ id: string; sequence: number } | null>(null);
+  const [jump, setJump] = useState<CatalogJump | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const query = useLocalFileMode(s => s.query.trim());
   const searching = !!query;
@@ -106,9 +118,20 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const { width } = useLibraryThumbnail("library");
   const pinch = useThumbnailPinch("library");
   const tags = useMemo(() => orderCatalogTags(catalog.tags, [], false, pinnedTags), [catalog, pinnedTags]);
+  const previewTag = catalogPreview && !flow && (tags.find(tag => tag.id === catalogPreview.tagId) ?? tags[0]);
+  const browseKey = previewTag ? `${positionKey}:${previewTag.id}` : positionKey;
+  const receipt = previewTag ? captureForScope(catalogPreview?.captureReceipts, "tag", previewTag.id)
+    : catalogProjectId ? captureForScope(catalogPreview?.captureReceipts, "project", catalogProjectId)
+    : flow && !projectOverview ? captureForScope(catalogPreview?.captureReceipts, "global", null) : undefined;
+  const captureRevision = receipt?.revision;
+  const previewPosition = positions.get(browseKey);
+  const previewTop = captureRevision !== undefined && captureRevision !== previewPosition?.captureRevision ? 0 : previewPosition?.top ?? 0;
   const filter = useMemo<CatalogFilter>(() => ({ kind: flat ? "all" : "tags", id: null, projectId: projectScope ? browseProjectId : null, media,
     query, generated: (media === "all" || media === "images" || media === "videos") && generatedFilter ? generatedFilter === "source:generated" : null, color: media === "images" ? color : null }), [flat, projectScope, browseProjectId, media, query, generatedFilter, color]);
   const filterKey = JSON.stringify([filter, projectOverview]);
+  const pageFilter = useMemo<CatalogFilter>(() => previewTag || receipt ? {
+    ...filter, id: previewTag ? previewTag.id : filter.id, firstAssetId: receipt?.assetId,
+  } : filter, [filter, previewTag && previewTag.id, receipt?.assetId]);
   const semanticPaneInstance = useId();
   const browseBeforeSearch = useRef<{ key: string; top: number } | null>(null);
   const semantic = useLibrarySemanticSearch({ paneId: `${pane?.id ?? positionId}:${semanticPaneInstance}`, filter, revision,
@@ -116,8 +139,8 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     onResults: () => { if (browseBeforeSearch.current?.key !== filterKey) browseBeforeSearch.current = { key: filterKey, top: scroll.current?.scrollTop ?? 0 }; } });
   const session = semantic.result?.session;
   const sessionId = session?.sessionId;
-  const galleryTotal = projectOverview ? overviewProjects.reduce((sum, project) => sum + (projectCounts[project.id] ?? 0), 0) : session?.resultCount ?? total;
-  const galleryKey = sessionId ? `${filterKey}:${sessionId}` : filterKey;
+  const galleryTotal = projectOverview ? overviewProjects.reduce((sum, project) => sum + (projectCounts[project.id] ?? 0), 0) : session?.resultCount ?? (previewTag ? previewTag.count : total);
+  const galleryKey = sessionId ? `${filterKey}:${sessionId}` : catalogPreview ? JSON.stringify([filterKey, pageFilter.id, captureRevision]) : filterKey;
   const galleryKeyRef = useRef(galleryKey); galleryKeyRef.current = galleryKey;
   const loadedMenuAssets = useRef<{ key: string; assets: Map<string, Asset> }>();
   const catalogAssetsChanged = useCallback((assets: Asset[]) => {
@@ -125,32 +148,46 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     onAssetsChange?.(assets);
   }, [galleryKey, onAssetsChange]);
   const scopedProjectName = useStore(state => projectScope ? state.projects.find(project => project.id === browseProjectId)?.name : null);
+  const previewName = previewTag ? previewTag.name : scopedProjectName ?? (projectOverview ? "全部项目素材" : flow ? "全部素材" : "全局标签");
   const reading = !session && catalogLoading;
   const colorsPrepared = invalidateCatalog;
   const returnPosition = searchReturn.current ?? savedPosition;
-  const galleryReady = loadedCatalogScope.current === filterKey;
+  const galleryReady = loadedCatalog.current?.filterKey === filterKey;
+  const labelJump = galleryReady && loadedCatalog.current?.revision === revision ? labelToLocate : null;
   useLayoutEffect(() => {
     if (!searching && galleryReady) searchReturn.current = undefined;
   });
   const sections = useMemo<CatalogSectionInfo[]>(() => overviewProjects
     ? overviewProjects.map(project => ({ id: project.id, name: project.name, count: projectCounts[project.id] ?? 0, tagId: null, projectId: project.id }))
+    : previewTag ? [{ id: previewTag.id, name: previewTag.name, count: previewTag.count, tagId: previewTag.id }]
     : flat ? [{ id: "all", name: "", count: galleryTotal, tagId: null }]
     : [...tags.map(tag => ({ id: tag.id, name: tag.name, count: tag.count, tagId: tag.id })),
-      ...(untagged ? [{ id: UNTAGGED_SECTION, name: "未分类", count: untagged, tagId: UNTAGGED_SECTION }] : [])], [overviewProjects, projectCounts, flat, galleryTotal, tags, untagged]);
-  const onActive = useCallback((id: string | null) => { if (!flat) setActive(id); }, [flat]);
-  const position = useRef({ active, alphabetic, color, query, generatedFilter });
-  position.current = { active, alphabetic, color, query, generatedFilter };
+      ...(untagged ? [{ id: UNTAGGED_SECTION, name: "未分类", count: untagged, tagId: UNTAGGED_SECTION }] : [])], [overviewProjects, projectCounts, flat, galleryTotal, tags, untagged, previewTag]);
+  const compact = !!catalogPreview;
+  const onActive = useCallback((id: string | null) => { if (!flat && !compact) setActive(id); }, [flat, compact]);
+  const position = useRef({ active, alphabetic, color, query, generatedFilter, captureRevision });
+  position.current = { active, alphabetic, color, query, generatedFilter, captureRevision };
   useLayoutEffect(() => {
-    if (sessionId || searching) return;
+    if (sessionId || searching || catalogPreview?.show === false) return;
     const view = scroll.current;
-    const save = () => positions.set(positionKey, { ...position.current, top: browseBeforeSearch.current?.key === filterKey ? browseBeforeSearch.current.top : view?.scrollTop ?? 0 });
+    const save = () => positions.set(browseKey, { ...position.current, top: browseBeforeSearch.current?.key === filterKey ? browseBeforeSearch.current.top : view?.scrollTop ?? 0 });
     view?.addEventListener("scroll", save, { passive: true });
     return () => view?.removeEventListener("scroll", save);
-  }, [positionKey, positions, sessionId, filterKey, searching]);
+  }, [browseKey, positions, sessionId, filterKey, searching, catalogPreview?.show]);
   useLayoutEffect(() => {
-    if (!sessionId && !searching && loadedCatalogScope.current === filterKey) positions.set(positionKey, { ...position.current, top: browseBeforeSearch.current?.key === filterKey ? browseBeforeSearch.current.top : scroll.current?.scrollTop ?? 0 });
-  }, [positions, positionKey, active, alphabetic, color, query, generatedFilter, sessionId, filterKey, searching, catalogLoading]);
-  function navigateTag(id: string) { setActive(id); setJump(previous => ({ id, sequence: (previous?.sequence ?? 0) + 1 })); }
+    if (!sessionId && !searching && galleryReady && catalogPreview?.show !== false) positions.set(browseKey, { ...position.current, top: browseBeforeSearch.current?.key === filterKey ? browseBeforeSearch.current.top : scroll.current?.scrollTop ?? 0 });
+  }, [positions, browseKey, active, alphabetic, color, query, generatedFilter, sessionId, filterKey, searching, galleryReady, catalogLoading, catalogPreview?.show, captureRevision]);
+  const onSelectPreviewTag = catalogPreview?.onSelectTag;
+  const navigateTag = useCallback((id: string) => {
+    if (onSelectPreviewTag) { onSelectPreviewTag(id); return; }
+    setActive(id);
+    setJump({ id });
+  }, [onSelectPreviewTag]);
+  const onJumped = useCallback((located: CatalogJump) => {
+    if (located !== labelJump) return;
+    setJump(null);
+    onLabelLocated?.(located);
+  }, [labelJump, onLabelLocated]);
   function navigateLetter(letter: string) {
     const target = tags.find(tag => !pinnedTags.includes(tag.id) && catalogInitial(tag.name) === letter)
       ?? tags.find(tag => catalogInitial(tag.name) === letter);
@@ -164,28 +201,37 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     let current = true; setCatalogError("");
     const key = `overview:${filterKey}`;
     if (projectOverview) {
-      const apply = (value: Record<string, number>) => {
-        loadedCatalogScope.current = filterKey;
+      const apply = (value: Record<string, number>, dataRevision = revision) => {
+        loadedCatalog.current = { filterKey, revision: dataRevision };
         setProjectCounts(value); setCatalogLoading(false);
       };
       const cached = catalogCache.peek<Record<string, number>>(key);
-      if (cached) apply(cached.value);
-      else if (loadedCatalogScope.current !== filterKey) setCatalogLoading(true);
+      if (cached) apply(cached.value, cached.revision);
+      else if (loadedCatalog.current?.filterKey !== filterKey) setCatalogLoading(true);
       void catalogCache.read(key, () => materialCatalog.projectCounts(filter), !!filter.color).then(value => {
         if (current && revision === catalogCache.revision(!!filter.color)) apply(value);
       }).catch(error => { if (current) { setCatalogError(String(error)); setCatalogLoading(false); } });
       return () => { current = false; };
     }
-    const apply = (value: Awaited<ReturnType<typeof materialCatalog.overview>>) => {
-      loadedCatalogScope.current = filterKey;
-      setCatalog(value.catalog); setTotal(value.total); setUntagged(value.untagged);
+    const apply = (value: Awaited<ReturnType<typeof materialCatalog.overview>>, dataRevision = revision) => {
+      loadedCatalog.current = { filterKey, revision: dataRevision };
+      if (filter.kind === "tags") {
+        setCatalog(value.catalog);
+        setUntagged(value.untagged);
+      }
+      setTotal(value.total);
       setCatalogLoading(false);
     };
     const cached = catalogCache.peek<Awaited<ReturnType<typeof materialCatalog.overview>>>(key);
-    if (cached) apply(cached.value);
-    else if (loadedCatalogScope.current !== filterKey) setCatalogLoading(true);
+    if (cached) apply(cached.value, cached.revision);
+    else if (loadedCatalog.current?.filterKey !== filterKey) setCatalogLoading(true);
     void catalogCache.read(key, () => materialCatalog.overview(filter, catalogProjectId), !!filter.color).then(value => {
-      if (current && revision === catalogCache.revision(!!filter.color)) apply(value);
+      if (revision !== catalogCache.revision(!!filter.color)) return;
+      if (current) apply(value);
+      else if (filter.kind === "tags" && alive.current && position.current.query) {
+        // An initial tags request may finish after search has replaced the gallery.
+        setCatalog(value.catalog);
+      }
     }).catch(error => { if (current) setCatalogError(String(error)); }).finally(() => { if (current) setCatalogLoading(false); });
     return () => { current = false; };
   }, [filterKey, revision]);
@@ -199,6 +245,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   }, [galleryKey, filterKey, sessionId]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if (catalogPreview && !catalogPreview.show) return;
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "a" || libraryHasOverlay(root.current)) return;
       const target = event.target as HTMLElement | null;
       if (!target || !root.current?.closest(".library-catalog")?.contains(target) || target.closest('input,textarea,select,[role="combobox"],[contenteditable="true"]')) return;
@@ -206,7 +253,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [galleryKey, galleryTotal, working, reading, sections]);
+  }, [galleryKey, galleryTotal, working, reading, sections, catalogPreview?.show]);
   function finishSelection() { selectionVersion.current++; setSelected(new Set()); setMultiple(false); anchor.current = null; }
   async function readIds(queryFilter: CatalogFilter, start: number, count: number) {
     const result: string[] = [], version = selectionVersion.current;
@@ -233,9 +280,9 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       if (projectOverview) {
         for (const section of sections) {
           if (!alive.current || selectionVersion.current !== version) return;
-          for (const id of await readIds({ ...filter, projectId: section.projectId! }, 0, section.count)) ids.add(id);
+          for (const id of await readIds({ ...pageFilter, projectId: section.projectId! }, 0, section.count)) ids.add(id);
         }
-      } else for (const id of await readIds(filter, 0, galleryTotal)) ids.add(id);
+      } else for (const id of await readIds(pageFilter, 0, galleryTotal)) ids.add(id);
       if (alive.current && selectionVersion.current === version && galleryKeyRef.current === galleryKey) { setSelected(new Set(ids)); setMultiple(true); }
     });
   }
@@ -273,7 +320,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
           for (let i = Math.min(a,b); i <= Math.max(a,b); i++) {
             const section = sections[i], start = section.id === first.section ? first.index : 0;
             const end = section.id === last.section ? last.index : section.count - 1;
-            const pageIds = await readIds({ ...filter, id: section.tagId ?? filter.id, projectId: section.projectId ?? filter.projectId }, start, end - start + 1);
+            const pageIds = await readIds({ ...pageFilter, id: section.tagId ?? pageFilter.id, projectId: section.projectId ?? pageFilter.projectId }, start, end - start + 1);
             // Range endpoints can be an older image currently shown in a group.
             for (const endpoint of [first, last]) if (endpoint.section === section.id && endpoint.assetId && pageIds.length) pageIds[endpoint.index - start] = endpoint.assetId;
             for (const id of pageIds) ids.push(id);
@@ -315,7 +362,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     else openDetail(asset);
   }
   function canShowOverlay() {
-    return alive.current && !!root.current?.isConnected && !root.current.closest('[inert], [aria-hidden="true"]');
+    return alive.current && !!root.current?.isConnected && !root.current.closest('[hidden], [inert], [aria-hidden="true"]');
   }
   async function openPreview(asset: Asset, location?: CatalogLocation) {
     const version = ++previewVersion.current;
@@ -384,7 +431,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
         notifySuccess("已添加手动分类");
       });
     }} data-creation-pick-disabled={multiple || working} data-drop-target={dropTarget ?? undefined} data-file-import-project-id={projectScope ? browseProjectId ?? "" : ""}
-      data-catalog-searching={searching || undefined}
+      data-catalog-searching={searching || undefined} data-explore-tag-id={previewTag ? previewTag.id : undefined} data-tag-name={previewTag ? previewTag.name : undefined}
       className={`categorized-library library-tactical${!flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : "按标签浏览素材"}
     style={glass.style as CSSProperties}>
     {dropPreview && dropTarget && dropName && <LibraryDropPreview {...dragItem} target={dropName} collection={false}/>}
@@ -393,8 +440,9 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     <div className="file-view-heading">
       {selected.size > 0 || multiple ? <CatalogSelectionBar count={selected.size} busy={working} projectId={projectId} onFinish={finishSelection}
         onSelectAll={() => void selectAll()} onAssign={() => setAssign([...selected])} onMove={() => setMoveIds([...selected])}
+        onTags={() => setTagSelection([...selected])}
         onAdd={media !== "audios" ? () => void run(async () => { const key = galleryKey; const assets = await resolveSelection(); if (!alive.current || galleryKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onNavigate ?? onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); }) : undefined}/>
-      :
+      : catalogPreview ? catalogPreview.heading(previewName, galleryTotal, catalogProjectId ?? undefined) :
       <div className="video-collection-controls">
       <LibraryCatalogControls filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared} onSearchStart={() => {
         if (galleryReady) searchReturn.current = { ...position.current, top: scroll.current?.scrollTop ?? 0 };
@@ -408,27 +456,28 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       </LibraryCatalogControls>
       </div>}
     </div>
-    <div className="catalog-body">
       {!flow && sidebarBody && createPortal(<>
         {catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => invalidateCatalog()}>重试</button></p>}
-        <CatalogTagIndex tags={tags} active={active} dropTarget={dropTarget} alphabetic pinned={pinnedTags} onTogglePin={id => { togglePin(id); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} onNavigate={navigateTag} onLetter={navigateLetter}/>
+        <CatalogTagIndex tags={tags} active={previewTag ? previewTag.id : active} dropTarget={dropTarget} alphabetic pinned={pinnedTags} onTogglePin={id => { togglePin(id); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} onNavigate={navigateTag} onLetter={navigateLetter} onManageTags={onManageTags}/>
       </>, sidebarBody)}
+    <div className="catalog-body">
       <div ref={pinch} className="catalog-gallery">
         <LibraryTacticalBackdrop />
         {flat && !session && catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => invalidateCatalog()}>重试</button></p>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none" }}>
           {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !galleryTotal && (session || !catalogError) ? <p className="catalog-hint catalog-empty">{session ? emptySemanticResultMessage(session) : query || color || generatedFilter ? "没有匹配的素材。" : "还没有已登记的素材。"}</p> : null}
-          {(session || galleryReady) && <VirtualCatalog key={galleryKey} filter={filter} sections={sections} headings={projectOverview || !flat} width={width} revision={revision} scroll={scroll}
-            selected={selected} jump={flat ? null : jump} pageScope={projectOverview ? "projects" : sessionId} emptySection={projectOverview || !flat ? () => null : undefined} readPage={session ? (_section, offset, limit) => semantic.readPage(session, offset, limit) : undefined}
-            initialTop={session ? 0 : browseBeforeSearch.current?.key === filterKey ? browseBeforeSearch.current.top : returnPosition?.query === query && returnPosition?.color === color && returnPosition?.generatedFilter === generatedFilter ? returnPosition.top : 0}
+          {(session || galleryReady) && <VirtualCatalog key={galleryKey} filter={pageFilter} sections={sections} headings={projectOverview || (!flat && !catalogPreview)} width={width} compact={!!catalogPreview} revision={revision} scroll={scroll}
+            selected={selected} jump={flat || catalogPreview ? null : labelJump ?? jump} onJumped={onJumped} pageScope={projectOverview ? "projects" : sessionId} emptySection={projectOverview || (!flat && !catalogPreview) ? () => null : undefined} readPage={session ? (_section, offset, limit) => semantic.readPage(session, offset, limit) : undefined}
+            initialTop={session ? 0 : catalogPreview ? previewTop : browseBeforeSearch.current?.key === filterKey ? browseBeforeSearch.current.top : returnPosition?.query === query && returnPosition?.color === color && returnPosition?.generatedFilter === generatedFilter ? returnPosition.top : 0}
             onActive={onActive} onAssetsChange={catalogAssetsChanged} onBrowseGroup={onBrowseGroup} onSelect={select} onActivate={multiple || working ? undefined : activate} onOpen={openAsset} onContextMenu={context}/>}
         </OverlayScrollArea>
-        <ThumbnailSizeSlider scope="library"/>
+        {!catalogPreview && <ThumbnailSizeSlider scope="library"/>}
       </div>
     </div>
     {preview && <LibraryVideoPreview {...preview} onClose={() => setPreview(null)}/>}
     {references && <ModalShell title="外部引用" width="lg" onClose={() => setReferences(false)}><LocalFileBrowser initialTab="references" onClose={() => setReferences(false)} onCreateProject={() => void onCreateProject?.()}/></ModalShell>}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); invalidateCatalog(); }}/>}
+    {tagSelection && <BatchAssetTagDialog assetIds={tagSelection} onClose={() => setTagSelection(null)}/>}
     {moveIds && <CollectionMoveDialog selection={{ assetIds: moveIds }} onClose={() => setMoveIds(null)} onSaved={finishSelection}/>}
   </section>;
 }

@@ -3,12 +3,13 @@ use std::{path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Orderin
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use crate::{cloud::{AuthClient, EntitlementService}, error::{AppError, AppResult}};
 use super::comfy_video;
 use super::comfy_video::Mode as VideoMode;
 use crate::codex::h3_image;
 use super::comfy_discovery::{self, Installation};
+use super::install_download::{transfer, wait_cancel, TransferProgress};
 #[path = "comfy_driver.rs"]
 mod driver;
 
@@ -64,10 +65,11 @@ const IMAGE_DOWNLOADS: &[Download] = &[
     Download { file: "models/vae/minimax_h3_image_vae_fp16.safetensors", size: 1168505312, sha: "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af" },
 ];
 fn downloads(mode: Mode) -> Vec<&'static Download> {
+    if !mode.image() { return DOWNLOADS.iter().collect(); }
     let names = mode.names();
-    (if mode.image() { IMAGE_DOWNLOADS } else { DOWNLOADS }).iter().filter(|item| item.file == "portable.7z" || names.contains(&item.file.rsplit('/').next().unwrap())).collect()
+    IMAGE_DOWNLOADS.iter().filter(|item| item.file == "portable.7z" || names.contains(&item.file.rsplit('/').next().unwrap())).collect()
 }
-fn tos_available(item: &Download) -> bool { DOWNLOADS[..6].iter().any(|known| known.file == item.file) }
+fn tos_available(item: &Download) -> bool { DOWNLOADS.iter().any(|known| known.file == item.file) }
 fn modelscope_url(item: &Download) -> Option<String> {
     let path = item.file.strip_prefix("models/")?;
     if IMAGE_DOWNLOADS.iter().any(|v| v.file == item.file) {
@@ -109,7 +111,7 @@ pub struct Environment {
     hardware: Option<driver::Hardware>,
     driver_download: Option<driver::DriverDownload>,
 }
-struct Job { owner: String, state: Environment, cancel: Arc<AtomicBool> }
+struct Job { owner: String, state: Environment, cancel: Arc<AtomicBool>, resumed_bytes: u64 }
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
 struct VideoProcess { child: std::process::Child, log: PathBuf, installation: PathBuf }
 static VIDEO_PROCESSES: Mutex<Option<std::collections::HashMap<String, VideoProcess>>> = Mutex::new(None);
@@ -126,7 +128,7 @@ fn retain_setup_outcome(state: &mut Environment, previous: Option<&Environment>)
     }
 }
 fn progress(message: String, bytes: u64) {
-    if let Some(job) = JOB.lock().unwrap().as_mut() { job.state.message = message; job.state.completed_bytes = bytes; }
+    if let Some(job) = JOB.lock().unwrap().as_mut() { job.state.message = message; job.state.completed_bytes = bytes.saturating_sub(job.resumed_bytes).min(job.state.download_bytes); }
 }
 fn cancelled(cancel: &AtomicBool) -> AppResult<()> {
     if cancel.load(Ordering::Relaxed) { Err(err("已取消，保留已下载文件，下次可继续")) } else { Ok(()) }
@@ -157,6 +159,25 @@ fn command(name: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     let mut cmd = std::process::Command::new(name);
     #[cfg(windows)] { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
     cmd
+}
+fn kill_process_tree(child: &mut std::process::Child) -> std::io::Result<()> {
+    if child.try_wait()?.is_some() { return Ok(()); }
+    #[cfg(windows)]
+    {
+        // A venv launcher may leave the Python process holding the listening socket.
+        let _ = command("taskkill.exe").args(["/PID", &child.id().to_string(), "/T", "/F"]).output();
+    }
+    if child.try_wait()?.is_none() {
+        if let Err(error) = child.kill() {
+            if child.try_wait()?.is_none() { return Err(error); }
+        }
+    }
+    child.wait().map(|_| ())
+}
+fn stop_process_tree(child: &mut std::process::Child) {
+    if let Err(error) = kill_process_tree(child) {
+        tracing::warn!(pid = child.id(), %error, "ComfyUI owned process cleanup failed");
+    }
 }
 fn prerequisites(hardware: &driver::Hardware) -> Result<(), String> {
     if let Some(issue) = &hardware.issue { return Err(issue.clone()); }
@@ -193,6 +214,9 @@ fn check_disk_space(available: u64, required: u64) -> AppResult<()> {
     if available >= required { return Ok(()); }
     Err(err(format!("安装磁盘空间不足：需空闲 {:.1} GB，当前可用 {:.1} GB，还差 {:.1} GB。请清理磁盘或通过“安装位置”更换磁盘后重试。",
         required as f64 / 1e9, available as f64 / 1e9, (required - available) as f64 / 1e9)))
+}
+fn supplement_message(state: &Environment) -> String {
+    format!("补充缺失模型（约 {:.1} GB），已有环境与模型直接复用", state.download_bytes as f64 / 1e9)
 }
 fn plan(root: &Path, mode: Mode) -> Environment {
     let download_bytes = downloads(mode).iter().map(|item| {
@@ -262,7 +286,7 @@ async fn detect_scoped(root: &Path, preferred: &str, existing: Vec<Installation>
         // An owned running installation can add this mode's missing model without replacing its runtime.
         if base == mode.endpoint() && runtime_installed(root, mode) && !state.installed {
             match free_bytes(root).and_then(|bytes| check_disk_space(bytes, state.required_bytes)) {
-                Ok(()) => { state.can_install = true; state.can_add_models = true; }
+                Ok(()) => { state.can_install = true; state.can_add_models = true; state.message = supplement_message(&state); }
                 Err(error) => state.message = error.to_string(),
             }
             state.existing.clear();
@@ -315,7 +339,7 @@ async fn detect_scoped(root: &Path, preferred: &str, existing: Vec<Installation>
             }
             match free_bytes(root) {
                 Ok(bytes) => match if state.installed { Ok(()) } else { check_disk_space(bytes, state.required_bytes) } {
-                    Ok(()) => { state.can_install = true; state.can_add_models = runtime_installed(root, mode) && !state.installed; }
+                    Ok(()) => { state.can_install = true; state.can_add_models = runtime_installed(root, mode) && !state.installed; if state.can_add_models { state.message = supplement_message(&state); } }
                     Err(error) => state.message = error.to_string(),
                 },
                 Err(error) => state.message = format!("无法检查安装磁盘 {}：{error}。请确认磁盘已连接，并通过“安装位置”选择可访问的磁盘。", root.display()),
@@ -358,62 +382,56 @@ async fn download_grant(app: &AppHandle, http: &reqwest::Client, item: &Download
     if auth.snapshot().user_id.as_deref() != Some(owner) { return Err(err("账号已切换，安装已停止")); }
     validate_grant(grant, item)
 }
-async fn download<F, Fut>(http: &reqwest::Client, item: &Download, root: &Path, cancel: &AtomicBool, done: u64, mut grant: F) -> AppResult<()>
+// Old frame installs wrote ready.txt only after verifying every frame resource.
+fn legacy_frames_verified_at(root: &Path, mode: Mode) -> Option<std::time::SystemTime> {
+    if mode.image() || !runtime_installed(root, mode) || root.join(DOWNLOADS.last()?.file).exists() { return None; }
+    if !DOWNLOADS[1..6].iter().all(|item| std::fs::metadata(root.join(item.file)).is_ok_and(|m| m.is_file() && m.len() == item.size)) { return None; }
+    std::fs::metadata(root.join("ready.txt")).ok()?.modified().ok()
+}
+
+fn migrate_frame_receipt(path: &Path, item: &Download, verified_at: std::time::SystemTime) {
+    let cache = path.with_extension("verified");
+    if cache.exists() { return; }
+    let Ok(meta) = std::fs::metadata(path) else { return; };
+    if meta.len() != item.size || ![meta.modified(), meta.created()].into_iter().all(|t| t.is_ok_and(|time| time <= verified_at)) { return; }
+    if let Some(stamp) = metadata_stamp(&meta, item) { let _ = std::fs::write(cache, stamp); }
+}
+
+fn verification_stamp(path: &Path, item: &Download) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    metadata_stamp(&metadata, item)
+}
+fn metadata_stamp(metadata: &std::fs::Metadata, item: &Download) -> Option<String> {
+    let modified = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}:{}:{}", metadata.len(), modified.as_nanos(), item.sha))
+}
+async fn download<F, Fut>(http: &reqwest::Client, item: &Download, root: &Path, cancel: &AtomicBool, done: u64, grant: F) -> AppResult<()>
 where F: FnMut() -> Fut, Fut: std::future::Future<Output = AppResult<String>> {
     cancelled(cancel)?;
     let target = root.join(item.file); let part = target.with_extension("part");
     tokio::fs::create_dir_all(target.parent().unwrap()).await?;
     if target.is_file() {
         progress(format!("正在校验{}…", label(item)), done);
-        if tokio::fs::metadata(&target).await?.len() == item.size && hash(&target, cancel).await? == item.sha { return Ok(()); }
-        return Err(err(format!("已存在的文件校验失败：{}。请移走该文件后重试", target.display())));
-    }
-    let mut offset = tokio::fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
-    if offset > item.size { return Err(err("断点文件大小异常，请更换安装位置")); }
-    let mut attempts = 0;
-    while offset < item.size {
-        cancelled(cancel)?;
-        if attempts >= 4 { return Err(err("下载暂时中断，已保留进度，点击重试可继续")); }
-        if attempts > 0 {
-            progress(format!("正在恢复{}下载…", label(item)), done + offset);
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(attempts)) => {},
-                _ = wait_cancel(cancel) => return cancelled(cancel),
+        if tokio::fs::metadata(&target).await?.len() == item.size {
+            let stamp = verification_stamp(&target, item);
+            let cache = target.with_extension("verified");
+            if stamp.as_ref().is_some_and(|s| std::fs::read_to_string(&cache).ok().as_ref() == Some(s)) { return Ok(()); }
+            if hash(&target, cancel).await? == item.sha {
+                if let Some(s) = stamp { let _ = std::fs::write(cache, s); }
+                return Ok(());
             }
         }
-        attempts += 1;
-        let url = tokio::select! { value = grant() => value?, _ = wait_cancel(cancel) => return cancelled(cancel) };
-        // TOS grants are refreshed for each connection; ModelScope resolves its pinned revision again.
-        // Never put account credentials on resource requests or include signed URLs in errors/logs.
-        let mut request = http.get(url);
-        if offset > 0 { request = request.header(reqwest::header::RANGE, format!("bytes={offset}-")); }
-        let mut response = tokio::select! {
-            result = request.send() => match result { Ok(response) => response, Err(_) => continue },
-            _ = wait_cancel(cancel) => return cancelled(cancel),
-        };
-        if matches!(response.status().as_u16(), 401 | 403 | 408 | 429 | 500..=599) { continue; }
-        if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-            let expected = format!("bytes {offset}-{}/{}", item.size - 1, item.size);
-            if response.headers().get(reqwest::header::CONTENT_RANGE).and_then(|h| h.to_str().ok()) != Some(expected.as_str()) { return Err(err("下载服务器返回了错误的断点范围")); }
-        } else if response.status() == reqwest::StatusCode::OK { offset = 0; }
-        else { return Err(err(format!("下载服务返回 {}，可稍后重试", response.status()))); }
-        let mut file = tokio::fs::OpenOptions::new().create(true).write(true).truncate(offset == 0).append(offset > 0).open(&part).await?;
-        loop {
-            let chunk = tokio::select! {
-                result = response.chunk() => match result { Ok(chunk) => chunk, Err(_) => break },
-                _ = wait_cancel(cancel) => { file.sync_all().await?; return cancelled(cancel); },
-            };
-            let Some(chunk) = chunk else { break; };
-            if offset + chunk.len() as u64 > item.size { return Err(err("下载文件超过已知大小")); }
-            file.write_all(&chunk).await?; offset += chunk.len() as u64;
-            progress(format!("正在下载{}…", label(item)), done + offset);
-        }
-        file.sync_all().await?;
+        return Err(err(format!("已存在的文件校验失败：{}。请移走该文件后重试", target.display())));
     }
-    progress(format!("正在校验{}…", label(item)), done + offset);
-    if offset != item.size { return Err(err("下载不完整，点击重试可继续下载")); }
+    // TOS re-signs on each attempt. Public mirrors resolve the same pinned revision.
+    transfer(http, &part, item.size, cancel, grant, |state| match state {
+        TransferProgress::Downloading(offset) => progress(format!("正在下载{}…", label(item)), done + offset),
+        TransferProgress::Reconnecting(offset) => progress(format!("正在恢复{}下载…", label(item)), done + offset),
+    }).await?;
+    progress(format!("正在校验{}…", label(item)), done + item.size);
     if hash(&part, cancel).await? != item.sha { tokio::fs::remove_file(&part).await?; return Err(err("下载校验失败，损坏的临时文件已清除，请重试")); }
-    tokio::fs::rename(part, target).await?;
+    tokio::fs::rename(part, &target).await?;
+    if let Some(s) = verification_stamp(&target, item) { let _ = std::fs::write(target.with_extension("verified"), s); }
     Ok(())
 }
 async fn download_resource<F, Fut>(http: &reqwest::Client, mirror: Option<(&reqwest::Client, &str)>, item: &Download, root: &Path, cancel: &AtomicBool, done: u64, grant: F) -> AppResult<()>
@@ -421,14 +439,17 @@ where F: FnMut() -> Fut, Fut: std::future::Future<Output = AppResult<String>> {
     // Reuse verified files without contacting either source. Both sources share the same hash and .part.
     if !root.join(item.file).is_file() {
         if let Some((mirror_http, url)) = mirror {
-            if download(mirror_http, item, root, cancel, done, || std::future::ready(Ok(url.to_owned()))).await.is_ok() { return Ok(()); }
+            let error = match download(mirror_http, item, root, cancel, done, || std::future::ready(Ok(url.to_owned()))).await {
+                Ok(()) => return Ok(()),
+                Err(error) => error,
+            };
             cancelled(cancel)?;
+            tracing::warn!(file = item.file, source = "modelscope", %error, "switching ComfyUI download source");
             progress(format!("正在切换备用下载源：{}…", label(item)), done);
         }
     }
     download(http, item, root, cancel, done, grant).await
 }
-async fn wait_cancel(cancel: &AtomicBool) { while !cancel.load(Ordering::Relaxed) { tokio::time::sleep(Duration::from_millis(200)).await; } }
 async fn write_licenses(root: &Path) -> AppResult<()> {
     let directory = root.join("licenses");
     tokio::fs::create_dir_all(&directory).await?;
@@ -466,6 +487,10 @@ async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str,
         let http = reqwest::Client::builder().no_proxy().https_only(true).redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(30)).read_timeout(Duration::from_secs(60)).build().map_err(|e| err(e.to_string()))?;
         // Separate unauthenticated client: only ModelScope downloads may follow its CDN redirects.
         let mirror_http = modelscope_client()?;
+        let public = if mode.image() {
+            Some(reqwest::Client::builder().https_only(true).connect_timeout(Duration::from_secs(30))
+                .read_timeout(Duration::from_secs(60)).build().map_err(|_| err("无法初始化图片安装下载"))?)
+        } else { None };
         let mut done = 0;
         if mode.image() {
             let licenses = root.join("licenses");
@@ -473,32 +498,44 @@ async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str,
             tokio::fs::write(licenses.join("sources.txt"), "Runtime: https://github.com/Comfy-Org/ComfyUI/releases/tag/v0.45.0\nModels: https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/0bb149f51e3156ed4b90dd45d5620346bfe1df8f\nWorkflows: https://github.com/Comfy-Org/workflow_templates/tree/main/templates\n").await?;
             tokio::fs::write(licenses.join("MiniMax-H3-Image-LICENSE.txt"), include_str!("../../../src/assets/comfy-licenses/MiniMax-H3-Image-LICENSE.txt")).await?;
         } else { write_licenses(root).await?; }
+        let legacy_receipt = legacy_frames_verified_at(root, mode);
         for item in downloads(mode) {
             check_owner()?;
-            if item.file == "portable.7z" && runtime_installed(root, mode) { done += item.size; continue; }
+            if item.file == "portable.7z" && runtime_installed(root, mode) { continue; }
             if comfy_video::account(&app.state::<AuthClient>(), &app.state::<EntitlementService>()).await? != owner { return Err(err("账号已切换，安装已停止")); }
+            let target = root.join(item.file);
+            if let Some(at) = legacy_receipt.filter(|_| DOWNLOADS[1..6].iter().any(|old| old.file == item.file)) {
+                migrate_frame_receipt(&target, item, at);
+            }
+            let already = std::fs::metadata(&target).or_else(|_| std::fs::metadata(target.with_extension("part")))
+                .map(|m| m.len().min(item.size)).unwrap_or(0);
+            if let Some(job) = JOB.lock().unwrap().as_mut() { job.resumed_bytes = if target.is_file() { 0 } else { already }; }
             let mirror_url = modelscope_url(item);
-            if mode.image() {
+            if let Some(public) = &public {
                 let url = match item.file.strip_prefix("models/") {
                     Some(path) => format!("https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/0bb149f51e3156ed4b90dd45d5620346bfe1df8f/{path}"),
                     None => "https://github.com/Comfy-Org/ComfyUI/releases/download/v0.45.0/ComfyUI_windows_portable_nvidia.7z".into(),
                 };
-                let public = reqwest::Client::builder().https_only(true).connect_timeout(Duration::from_secs(30)).read_timeout(Duration::from_secs(60)).build().map_err(|e| err(e.to_string()))?;
-                download_resource(&public, mirror_url.as_deref().map(|url| (&mirror_http,url)), item, root, cancel, done, || std::future::ready(Ok(url.clone()))).await?;
-            } else if tos_available(item) {
-                download_resource(&http, mirror_url.as_deref().map(|url| (&mirror_http, url)), item, root, cancel, done, || download_grant(app, &http, item, owner)).await?;
+                download_resource(public, mirror_url.as_deref().map(|url| (&mirror_http,url)), item, root, cancel, done, || std::future::ready(Ok(url.clone()))).await?;
+            } else if item.file.contains("ref2va") {
+                if let Err(primary) = download(&http, item, root, cancel, done, || download_grant(app, &http, item, owner)).await {
+                    if target.exists() { return Err(primary); }
+                    cancelled(cancel)?;
+                    let url = mirror_url.ok_or_else(|| err("缺少备用下载源"))?;
+                    tracing::warn!(file = item.file, source = "tos", error = %primary, "switching ComfyUI download source");
+                    download(&mirror_http, item, root, cancel, done, || std::future::ready(Ok(url.clone()))).await?;
+                }
             } else {
-                // This new model is not published in the server-side TOS grant catalog.
-                let url = mirror_url.ok_or_else(|| err("此模式的模型下载源尚未配置"))?;
-                download(&mirror_http, item, root, cancel, done, || std::future::ready(Ok(url.clone()))).await?;
+                debug_assert!(tos_available(item));
+                download_resource(&http, mirror_url.as_deref().map(|url| (&mirror_http, url)), item, root, cancel, done, || download_grant(app, &http, item, owner)).await?;
             }
-            done += item.size;
+            done += item.size - already;
         }
         if !runtime_installed(root, mode) {
             check_owner()?; progress("正在解压 ComfyUI 与 Python 环境…".into(), done);
             let mut child = command("tar.exe").arg("-xf").arg(root.join("portable.7z")).arg("-C").arg(root).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?;
             loop {
-                if let Err(error) = check_owner() { let _ = child.kill(); let _ = child.wait(); return Err(error); }
+                if let Err(error) = check_owner() { stop_process_tree(&mut child); return Err(error); }
                 if let Some(status) = child.try_wait()? { if !status.success() { return Err(err("解压失败，请检查磁盘空间与 Windows tar 版本后重试")); } break; }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
@@ -531,6 +568,31 @@ fn startup_log_tail(path: &Path) -> String {
     };
     read().unwrap_or_default()
 }
+#[tauri::command]
+pub fn comfy_video_log_tail(app: AppHandle) -> AppResult<String> {
+    let local = app.path().app_local_data_dir().map_err(|e| err(e.to_string()))?;
+    let mut paths = vec![
+        ("视频 · 已有安装", local.join("comfy-existing/startup.log")),
+        ("图片 · 已有安装", local.join("comfy-existing/image-startup.log")),
+    ];
+    for (mode, title) in [(Mode::Frames, "视频 · 托管安装"), (Mode::Image, "图片 · 托管安装")] {
+        if let Ok(root) = location(&app, None, mode) { paths.push((title, root.join("startup.log"))); }
+    }
+    Ok(setup_log_report(&paths))
+}
+fn setup_log_report(paths: &[(&str, PathBuf)]) -> String {
+    let mut report = String::new();
+    for (title, path) in paths {
+        for log in [path.with_extension("prev.log"), path.clone()] {
+            let tail = startup_log_tail(&log);
+            if tail.is_empty() { continue; }
+            let lines: Vec<_> = tail.lines().rev().take(12).collect();
+            report.push_str(&format!("\n{title} · {}\n", log.file_name().unwrap().to_string_lossy()));
+            for line in lines.into_iter().rev() { report.extend(line.chars().take(512)); report.push('\n'); }
+        }
+    }
+    report
+}
 fn startup_failure(log: &str, path: &Path) -> AppError {
     let detail = log.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("进程已退出，未提供错误详情");
     let detail: String = detail.chars().take(600).collect();
@@ -552,12 +614,12 @@ async fn video_port_occupied(endpoint: &str) -> bool {
 }
 
 fn fatal_video_log(log: &str) -> bool {
-    log.lines().any(|line| line.starts_with("Fatal Python error:"))
+    log.lines().any(|line| line.contains("Fatal Python error:") || line.contains("Windows fatal exception") || line.contains("CUDA error: an illegal memory access") || line.contains("CUDA error: the launch timed out"))
 }
 
 pub(super) fn video_abort_detected(endpoint: &str) -> bool {
-    VIDEO_PROCESSES.lock().unwrap().as_ref().and_then(|processes| processes.get(endpoint))
-        .is_some_and(|process| fatal_video_log(&startup_log_tail(&process.log)))
+    VIDEO_PROCESSES.lock().unwrap().as_mut().and_then(|processes| processes.get_mut(endpoint))
+        .is_some_and(|process| process.child.try_wait().ok().flatten().is_some_and(|s| !s.success()) || fatal_video_log(&startup_log_tail(&process.log)))
 }
 
 pub(super) fn video_installation(endpoint: &str) -> Option<PathBuf> {
@@ -579,13 +641,12 @@ fn watch_video_exit(endpoint: String, pid: u32) {
                 Ok(Some(exit)) => {
                     use std::io::Write;
                     if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&process.log) {
-                        let _ = writeln!(file, "\n[Bowerbird] ComfyUI video process exited: {exit}");
+                        let _ = writeln!(file, "\n[Bowerbird] ComfyUI process exited: {exit}");
                     }
                 }
                 Err(_) => return,
             }
-            processes.remove(&endpoint);
-            return;
+            return; // Keep the exit status and log until recovery or shutdown.
         }
     });
 }
@@ -600,47 +661,61 @@ fn reap_aborted_video(endpoint: &str) -> AppResult<bool> {
         return Ok(false);
     }
     if !fatal_video_log(&startup_log_tail(&process.log)) { return Ok(false); }
-    #[cfg(windows)]
-    {
-        // venv's Python launcher may own a second Python process that holds the listening socket.
-        let id = process.child.id().to_string();
-        let _ = command("taskkill.exe").args(["/PID", &id, "/T", "/F"]).output();
-    }
-    if process.child.try_wait()?.is_none() { process.child.kill()?; }
-    process.child.wait()?;
+    kill_process_tree(&mut process.child)?;
     processes.remove(endpoint);
     Ok(true)
+}
+pub fn shutdown() {
+    let processes = VIDEO_PROCESSES.lock().unwrap().take().unwrap_or_default();
+    for (_, mut process) in processes {
+        stop_process_tree(&mut process.child);
+    }
 }
 async fn launch(app: &AppHandle, mut cmd: std::process::Command, endpoint: &str, installation: &Path, log_path: &Path, cancel: &AtomicBool, owner: &str, mode: Mode) -> AppResult<()> {
     cancelled(cancel)?;
     let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(30)).build().map_err(|e| err(e.to_string()))?;
+    for (source, destination) in [
+        (log_path.with_extension("prev.2.log"), log_path.with_extension("prev.3.log")),
+        (log_path.with_extension("prev.log"), log_path.with_extension("prev.2.log")),
+        (log_path.to_owned(), log_path.with_extension("prev.log")),
+    ] {
+        if source.exists() { std::fs::rename(source, destination)?; }
+    }
     let log = std::fs::File::create(log_path)?;
     let mut child = cmd.stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log).spawn()?;
     let mut reason = String::new();
-    for _ in 0..120 {
+    let check_owner = || {
         if cancel.load(Ordering::Relaxed) || app.state::<AuthClient>().snapshot().user_id.as_deref() != Some(owner) {
-            let _ = child.kill(); let _ = child.wait(); return Err(err("已取消本次启动"));
+            return Err(err("已取消本次启动"));
         }
-        if child.try_wait()?.is_some() {
-            let log = startup_log_tail(log_path);
-            return Err(startup_failure(&log, log_path));
-        }
-        match mode.check(&http, endpoint).await {
-            Ok(()) => {
-                if !mode.image() {
-                    let pid = child.id();
-                    VIDEO_PROCESSES.lock().unwrap().get_or_insert_with(Default::default)
-                        .insert(endpoint.into(), VideoProcess { child, log: log_path.to_path_buf(), installation: installation.to_path_buf() });
-                    watch_video_exit(endpoint.into(), pid);
-                }
-                return Ok(());
+        Ok(())
+    };
+    let readiness = async {
+        loop {
+            check_owner()?;
+            if child.try_wait()?.is_some() { return Err(startup_failure(&startup_log_tail(log_path), log_path)); }
+            match mode.check(&http, endpoint).await {
+                Ok(()) => return check_owner(),
+                Err(error) => reason = error.to_string(),
             }
-            Err(error) => reason = error.to_string(),
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+    let result = tokio::select! {
+        biased;
+        _ = wait_cancel(cancel) => Some(Err(err("已取消本次启动"))),
+        result = tokio::time::timeout(Duration::from_secs(120), readiness) => result.ok(),
+    };
+    let result = result.unwrap_or_else(|| Err(err(format!("启动检查超过 120 秒：{reason}。日志：{}", log_path.display()))));
+    if let Err(error) = result {
+        stop_process_tree(&mut child);
+        return Err(error);
     }
-    let _ = child.kill(); let _ = child.wait();
-    Err(err(format!("启动检查未通过：{reason}。日志：{}", log_path.display())))
+    let pid = child.id();
+    VIDEO_PROCESSES.lock().unwrap().get_or_insert_with(Default::default)
+        .insert(endpoint.into(), VideoProcess { child, log: log_path.to_path_buf(), installation: installation.to_path_buf() });
+    watch_video_exit(endpoint.into(), pid);
+    Ok(())
 }
 async fn start_existing(app: &AppHandle, instance: &Installation, cancel: &AtomicBool, owner: &str, mode: Mode) -> AppResult<()> {
     let python = instance.python.as_ref().ok_or_else(|| err("未找到此安装的 Python，请在 ComfyUI Desktop 中启动"))?;
@@ -794,7 +869,7 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
             if job.owner == owner { return Err(err("另一个工作流的环境准备正在进行，请完成后重新检测")); }
             return Err(err("另一个账号的环境准备正在进行"));
         }
-        *job = Some(Job { owner: owner.clone(), state: state.clone(), cancel: cancel.clone() });
+        *job = Some(Job { owner: owner.clone(), state: state.clone(), cancel: cancel.clone(), resumed_bytes: 0 });
     }
     let allow_download = action == "install";
     tauri::async_runtime::spawn(async move {
@@ -894,7 +969,7 @@ mod tests {
     fn h3_setup_requires_fatal_evidence_before_reaping() {
         assert!(!fatal_video_log("Starting server\nCUDA out of memory. Trying again.\n"));
         assert!(fatal_video_log("Fatal Python error: Aborted\n"));
-        assert!(!fatal_video_log("Windows fatal exception: access violation\n"));
+        assert!(fatal_video_log("Windows fatal exception: access violation\n"));
         assert!(video_exit_message("CUDA out of memory\nFatal Python error: Aborted").contains("显存不足"));
     }
     #[cfg(windows)]
@@ -966,7 +1041,7 @@ mod tests {
     fn h3_setup_manifest_and_empty_plan() {
         let root = scratch(); let state = plan(&root, Mode::Frames);
         assert!(!state.installed); assert!(!root.join("ready.txt").exists());
-        assert_eq!(state.download_bytes, 44_048_479_273);
+        assert_eq!(state.download_bytes, 65_018_858_889);
         for item in downloads(Mode::Frames) {
             assert_eq!(item.sha.len(), 64);
             assert!(item.sha.chars().all(|c| c.is_ascii_hexdigit()));
@@ -985,26 +1060,24 @@ mod tests {
         let item = DOWNLOADS.iter().find(|item| item.file.contains("ref2va")).expect("reference mode must prepare its own model");
         assert_eq!(item.size, 20_970_379_616);
         assert_eq!(item.sha, "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779");
-        assert!(!tos_available(item), "new public model must not request an unpublished TOS object");
+        assert!(tos_available(item));
         assert!(modelscope_url(item).unwrap().contains("/d51b9ec4bf7d7af1ce11bcbbd1a809aadb38011e/"));
     }
     #[test]
-    fn h3_setup_mode_plans_only_download_needed_models_and_isolate_failures() {
+    fn h3_setup_video_modes_share_the_full_install_plan_and_isolate_failures() {
         let root = scratch();
         let frames = plan(&root, Mode::Frames);
         let text = plan(&root, Mode::Text);
         let mut reference = plan(&root, Mode::Reference);
-        assert_eq!(frames.download_bytes, 44_048_479_273);
+        assert_eq!(frames.download_bytes, 65_018_858_889);
         assert_eq!(frames.download_bytes, text.download_bytes);
-        assert_eq!(reference.download_bytes, 42_092_286_273);
+        assert_eq!(reference.download_bytes, 65_018_858_889);
         assert_eq!(reference.models_required, 4);
         assert_eq!(text.models_required, 5);
         for mode in [Mode::Frames, Mode::Text, Mode::Reference, Mode::R2v] {
             let items = downloads(mode);
-            assert_eq!(items.len(), mode.names().len() + 1);
-            let reference = matches!(mode, Mode::Reference | Mode::R2v);
-            assert_eq!(items.iter().any(|item| item.file.contains("ref2va")), reference);
-            assert_eq!(items.iter().any(|item| item.file.contains("loras/")), !reference);
+            assert_eq!(items.len(), DOWNLOADS.len());
+            assert!(items.iter().any(|item| item.file.contains("ref2va")));
         }
         let mut previous = frames;
         previous.phase = "failed".into(); previous.message = "首尾帧环境准备失败".into();
@@ -1036,7 +1109,8 @@ mod tests {
         }
         assert!(runtime_installed(&root, Mode::Frames));
         assert!(!root.join("portable.7z").exists());
-        assert_eq!(plan(&root, Mode::Reference).download_bytes, 42_092_286_273 - DOWNLOADS[0].size);
+        assert_eq!(plan(&root, Mode::Reference).download_bytes, 65_018_858_889 - DOWNLOADS[0].size);
+        assert_eq!(DOWNLOADS.iter().map(|d| d.size).sum::<u64>() - DOWNLOADS[..6].iter().map(|d| d.size).sum::<u64>(), 20_970_379_616);
     }
     #[tokio::test]
     async fn h3_setup_slow_server_is_detected_and_model_failure_is_not_missing_install() {
@@ -1062,6 +1136,44 @@ mod tests {
         let state = detect(&scratch(), "http://127.0.0.1:8000", existing, Mode::Frames).await.unwrap();
         println!("local environment: {} | {} | {} installation(s)", state.phase, state.message, state.existing.len());
         assert_ne!(state.phase, "missing"); assert!(!state.can_install);
+    }
+    #[test]
+    fn h3_legacy_receipt_only_migrates_unchanged_models() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("test.bin");
+        std::fs::write(&path, b"abc").unwrap();
+        let item = Download { file: "test.bin", size: 3, sha: "fixture" };
+        migrate_frame_receipt(&path, &item, std::time::UNIX_EPOCH);
+        let cache = path.with_extension("verified");
+        assert!(!cache.exists());
+        migrate_frame_receipt(&path, &item, std::time::SystemTime::now());
+        assert_eq!(std::fs::read_to_string(&cache).unwrap(), verification_stamp(&path, &item).unwrap());
+        std::fs::write(&cache, "outdated").unwrap();
+        migrate_frame_receipt(&path, &item, std::time::SystemTime::now());
+        assert_eq!(std::fs::read_to_string(cache).unwrap(), "outdated");
+    }
+
+    #[tokio::test]
+    async fn h3_setup_keeps_retrying_while_ranged_download_advances() {
+        let server = Router::new().route("/file", get(|headers: HeaderMap| async move {
+            let offset = headers.get("range").and_then(|value| value.to_str().ok())
+                .map(|value| value.trim_start_matches("bytes=").trim_end_matches('-').parse::<usize>().unwrap()).unwrap_or(0);
+            let byte = &"abcdef"[offset..offset + 1];
+            if offset == 0 { return byte.into_response(); }
+            (StatusCode::PARTIAL_CONTENT, [("content-range", format!("bytes {offset}-5/6"))], byte).into_response()
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap(); });
+        let root = tempfile::tempdir().unwrap();
+        let item = Download { file: "model.bin", size: 6, sha: "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721" };
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let result = download(&http, &item, root.path(), &AtomicBool::new(false), 0, || {
+            std::future::ready(Ok(format!("http://{address}/file")))
+        }).await;
+        task.abort();
+        result.unwrap();
+        assert_eq!(std::fs::read(root.path().join(item.file)).unwrap(), b"abcdef");
     }
     #[tokio::test]
     async fn h3_setup_download_resume_hash_and_cancel() {
@@ -1219,6 +1331,47 @@ mod tests {
             assert!(std::fs::read_to_string(root.join("licenses/NOTICE.txt")).unwrap().contains("MiniMax H3 Community License"));
         }
         task.abort();
+    }
+    #[test]
+    #[cfg(windows)]
+    fn h3_setup_kills_the_owned_windows_process_tree() {
+        use windows::Win32::{Foundation::CloseHandle, System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        }};
+        let root = tempfile::tempdir().unwrap();
+        let pid_path = root.path().join("descendant.pid");
+        let mut parent = command("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command",
+            "$leaf = Start-Process powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 12' -WindowStyle Hidden -PassThru; Set-Content -LiteralPath $env:BOWERBIRD_SETUP_TEST_PID $leaf.Id; Wait-Process -Id $leaf.Id",
+        ]).env("BOWERBIRD_SETUP_TEST_PID", &pid_path).spawn().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let leaf_pid = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_path).ok().and_then(|pid| pid.trim().parse::<u32>().ok()) { break Some(pid); }
+            if std::time::Instant::now() >= deadline || parent.try_wait().unwrap().is_some() { break None; }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let leaf = leaf_pid.and_then(|pid| unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid).ok() });
+        kill_process_tree(&mut parent).unwrap();
+        let leaf = leaf.expect("test child must be alive before tree cleanup");
+        let exit = unsafe {
+            let result = WaitForSingleObject(leaf, 2000);
+            let _ = CloseHandle(leaf);
+            result
+        };
+        assert_eq!(exit.0, 0, "descendant remained alive");
+        assert!(parent.try_wait().unwrap().is_some());
+    }
+    #[test]
+    fn h3_setup_diagnostics_include_managed_and_existing_image_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let managed = root.path().join("startup.log");
+        let existing = root.path().join("image-startup.log");
+        std::fs::write(&managed, "managed image failure").unwrap();
+        std::fs::write(&existing, "existing image failure").unwrap();
+        std::fs::write(existing.with_extension("prev.log"), "previous image failure").unwrap();
+        let report = setup_log_report(&[("图片 · 托管安装", managed), ("图片 · 已有安装", existing)]);
+        assert!(report.contains("图片 · 托管安装 · startup.log\nmanaged image failure"));
+        assert!(report.contains("图片 · 已有安装 · image-startup.log\nexisting image failure"));
+        assert!(report.contains("image-startup.prev.log\nprevious image failure"));
     }
     #[test]
     #[cfg(windows)]

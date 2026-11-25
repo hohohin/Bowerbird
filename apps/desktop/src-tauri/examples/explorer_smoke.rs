@@ -29,6 +29,59 @@ fn smoke_drag_notices(app: tauri::AppHandle) -> Vec<serde_json::Value> {
 async fn smoke_exit(app: tauri::AppHandle) { app.exit(0); }
 
 #[tauri::command]
+async fn smoke_native_pointer(app: tauri::AppHandle, x: f64, y: f64, action: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::{
+            Foundation::POINT,
+            Graphics::Gdi::ClientToScreen,
+            UI::{
+                Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_WHEEL},
+                WindowsAndMessaging::{GetAncestor, GetForegroundWindow, SetCursorPos, WindowFromPoint, GA_ROOT},
+            },
+        };
+        if std::env::var_os("BOWERBIRD_EXPLORER_TEST_VISIBLE").is_none() {
+            return Err("native pointer test requires a visible isolated window".into());
+        }
+        let window = app.get_window("main").ok_or("missing test window")?;
+        if action == "focus" {
+            window.set_focus().map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        let scale = window.scale_factor().map_err(|error| error.to_string())?;
+        let mut point = POINT { x: (x * scale).round() as i32, y: (y * scale).round() as i32 };
+        unsafe {
+            if GetForegroundWindow() != hwnd {
+                return Err("Windows did not foreground the isolated test window".into());
+            }
+            if !ClientToScreen(hwnd, &mut point).as_bool() || GetAncestor(WindowFromPoint(point), GA_ROOT) != hwnd {
+                return Err(format!("native pointer target ({x}, {y}) is outside the isolated test window"));
+            }
+            SetCursorPos(point.x, point.y).map_err(|error| error.to_string())?;
+            let mouse_input = |flags, data| INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 { mi: MOUSEINPUT { dwFlags: flags, mouseData: data, ..Default::default() } },
+            };
+            let input = match action.as_str() {
+                "click" => vec![mouse_input(MOUSEEVENTF_LEFTDOWN, 0), mouse_input(MOUSEEVENTF_LEFTUP, 0)],
+                "scroll" => vec![mouse_input(MOUSEEVENTF_WHEEL, (-120_i32) as u32)],
+                _ => return Err("unknown native pointer action".into()),
+            };
+            if SendInput(&input, std::mem::size_of::<INPUT>() as i32) as usize != input.len() {
+                return Err("Windows could not deliver the native pointer input".into());
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, x, y, action);
+        Err("native pointer test requires Windows".into())
+    }
+}
+
+#[tauri::command]
 async fn smoke_capture_resource(app: tauri::AppHandle, url: String, page_url: String, capture_id: String) -> Result<String, String> {
     use base64::Engine;
     let webview = app.get_webview("source-discovery").ok_or("missing browser")?;
@@ -70,7 +123,7 @@ fn main() {
             source_browser::navigate_source_browser, source_browser::hide_source_browser,
             source_browser::source_browser_back, source_browser::source_browser_forward,
             source_browser::reload_source_browser, smoke_capture, smoke_exit, smoke_drag_notices,
-            smoke_capture_resource, source_browser_jobs::cancel_source_browser_capture,
+            smoke_capture_resource, source_browser_jobs::cancel_source_browser_capture, smoke_native_pointer,
         ])
         .run(context)
         .expect("native explorer fixture failed");

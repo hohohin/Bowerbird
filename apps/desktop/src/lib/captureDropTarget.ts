@@ -28,8 +28,8 @@ export function resolveCaptureDropTarget(target: EventTarget | null, scope: Capt
     disabled: folder.dataset.fileImportCollectionAvailable === "false",
   };
 
-  const tag = hit?.closest<HTMLElement>(".is-tag-catalog [data-tag-id], .is-tag-catalog [data-tag-section]");
-  const tagId = tag?.dataset.tagId ?? tag?.dataset.tagSection;
+  const tag = hit?.closest<HTMLElement>(".is-tag-catalog [data-tag-id], .is-tag-catalog [data-tag-section], [data-explore-tag-id]");
+  const tagId = tag?.dataset.exploreTagId ?? tag?.dataset.tagId ?? tag?.dataset.tagSection;
   if (tag && tagId && tagId !== UNTAGGED_SECTION) return {
     kind: "tag", id: tagId, projectId, element: tag,
     name: tag.dataset.tagName || "当前标签", disabled: false,

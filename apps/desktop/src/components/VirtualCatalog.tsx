@@ -1,7 +1,7 @@
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject, type ReactNode, type CSSProperties } from "react";
 import { materialCatalog, type CatalogFilter } from "../lib/materialCatalog";
-import { catalogLayout, catalogScrollScale, masonryGeometry, masonryRatios, visibleCatalogBlocks, CATALOG_CACHE_PAGES, CATALOG_PAGE_SIZE, type CatalogSectionInfo, type CatalogPlacementCache } from "../lib/catalogVirtualLayout";
+import { catalogLayout, catalogScrollScale, masonryGeometry, masonryRatios, visibleCatalogBlocks, CATALOG_CACHE_PAGES, CATALOG_GAP, CATALOG_PAGE_SIZE, type CatalogSectionInfo, type CatalogPlacementCache } from "../lib/catalogVirtualLayout";
 import type { Asset } from "../lib/types";
 import { api } from "../lib/api";
 import { CatalogAssetCard } from "./CatalogAssetCard";
@@ -10,6 +10,7 @@ import { subscribeCatalogPreviews } from "../lib/useCatalogRevision";
 import { originalDeletionEpoch, originalDeletionFor, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 
 export interface CatalogLocation { section: string; index: number; assetId?: string }
+export interface CatalogJump { id: string }
 type PageSection = CatalogSectionInfo & { collection?: CatalogFolderScope & { available: boolean } };
 type Page = { assets: Asset[]; groups: Record<string, Asset[]>; revision: number; deletionEpoch: number };
 type EntryAsset = Asset & { connectionGroup?: EntryAsset[] };
@@ -38,9 +39,9 @@ function visiblePage(page: Page, hasPending: boolean): Page & { sourceIndices?: 
 // total height alone cannot continue uneven columns or adapt to a new width.
 const layoutHistory = new Map<string, Map<string, readonly number[]>>();
 const assetKey = (asset: Asset) => asset.id;
-export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, pageScope, browseScope, itemKey = assetKey, renderItem, emptySection }: {
-  filter: CatalogFilter; sections: PageSection[]; headings: boolean; width: number; revision: number;
-  scroll: RefObject<HTMLDivElement>; selected: Set<string>; jump: { id: string; sequence: number } | null; initialTop?: number;
+export function VirtualCatalog({ filter, sections, headings, width: thumbnailWidth, compact = false, revision, scroll, selected, jump, onJumped, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, pageScope, browseScope, itemKey = assetKey, renderItem, emptySection }: {
+  filter: CatalogFilter; sections: PageSection[]; headings: boolean; width: number; compact?: boolean; revision: number;
+  scroll: RefObject<HTMLDivElement>; selected: Set<string>; jump: CatalogJump | null; onJumped?: (jump: CatalogJump) => void; initialTop?: number;
   onActive: (id: string | null) => void; onAssetsChange?: (assets: Asset[]) => void;
   onBrowseGroup?: (head: string, shown: string | null) => void;
   onSelect: (asset: Asset, additive: boolean, range: boolean, location: CatalogLocation) => void;
@@ -56,6 +57,8 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   const pendingDeletion = usePendingOriginalDeletion();
   const colorFiltered = !!filter.color;
   const [viewport, setViewport] = useState(() => ({ top: initialTop ?? 0, height: scroll.current?.clientHeight || 800, width: scroll.current?.clientWidth || 800 }));
+  const columns = viewport.width >= 340 ? 3 : 2;
+  const width = compact ? Math.max(96, Math.floor((viewport.width - 16 + CATALOG_GAP) / columns) - CATALOG_GAP) : thumbnailWidth;
   const [tick, setTick] = useState(0);
   const geometryKey = JSON.stringify(pageScope ? [filter, pageScope] : filter);
   const pagePrefix = `pages:${geometryKey}:`;
@@ -270,10 +273,17 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
     }
   }, [layout, initialTop, scroll, browseScope, changingScope]);
   useLayoutEffect(() => {
-    if (!jump || jumped.current === jump || !scroll.current) return;
-    const index = sections.findIndex(section => section.id === jump.id);
-    if (index >= 0) { jumped.current = jump; anchor.current = null; scroll.current.scrollTop = layout.groups[index].top * scale; }
-  }, [jump, sections, scroll]);
+    const view = scroll.current;
+    if (!jump || jumped.current === jump || !view) return;
+    const destination = layout.groups[sections.findIndex(section => section.id === jump.id)];
+    if (!destination) return;
+    jumped.current = jump;
+    anchor.current = null;
+    view.scrollTop = destination.top * scale;
+    const top = view.scrollTop;
+    setViewport(current => current.top === top ? current : { ...current, top });
+    onJumped?.(jump);
+  }, [jump, sections, layout, scale, scroll, onJumped]);
   let current: string | null = headings ? sections[0]?.id ?? null : null;
   if (headings) sections.forEach((section, index) => { if (layout.groups[index].top <= logicalTop + 1) current = section.id; });
   useEffect(() => { onActive(current); }, [current, onActive]);

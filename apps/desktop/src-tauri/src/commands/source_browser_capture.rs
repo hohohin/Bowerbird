@@ -17,9 +17,41 @@ fn capture_url(raw: &str) -> AppResult<tauri::Url> {
     Ok(url)
 }
 
-use super::source_browser_network::browser_capture_resource;
+use super::source_browser_network::{browser_capture_resource, checked, CaptureResource, SOURCE_ORIGIN_CHANGED};
 use super::source_browser_jobs::CaptureControl;
-use super::source_browser::SourceMediaKind;
+use super::source_browser::{DragNotice, SourceMediaKind};
+
+#[path = "source_browser_admission.rs"]
+mod admission;
+pub(crate) use admission::CaptureAdmissions;
+
+pub(crate) fn handle_drag_notice(app: &AppHandle, start: bool, notice: DragNotice) {
+    if start {
+        if let Some(browser) = app.get_webview("source-discovery") {
+            if let Ok(current) = browser.url() {
+                app.state::<CaptureAdmissions>().remember(&notice, &current);
+            }
+        }
+    }
+    if !start || notice.media_kind != Some(SourceMediaKind::Video) {
+        crate::core::local_classification::explorer::handle_notice(app, start, notice);
+    }
+}
+
+#[tauri::command]
+pub fn authorize_source_browser_capture(
+    webview: Webview,
+    admissions: State<'_, CaptureAdmissions>,
+    image_url: String,
+    page_url: String,
+    drag_id: String,
+    media_kind: Option<SourceMediaKind>,
+) -> AppResult<Option<String>> {
+    if webview.label() != "main" {
+        return Err(AppError::Other("只允许主窗口确认采集".into()));
+    }
+    Ok(admissions.authorize(&drag_id, &image_url, &page_url, media_kind.unwrap_or(SourceMediaKind::Image)))
+}
 
 fn import_capture(
     paths: &LibraryPaths,
@@ -76,13 +108,15 @@ pub async fn capture_source_browser_image(
     media_kind: Option<SourceMediaKind>,
     capture_id: Option<String>,
     skip_classification: Option<bool>,
+    admission: Option<String>,
 ) -> AppResult<Asset> {
     if webview.label() != "main" {
         return Err(AppError::Other("只允许从素材库接收拖入图片".into()));
     }
     let original_image = image_url.clone();
     let original_page = page_url.clone();
-    let is_video = media_kind == Some(SourceMediaKind::Video);
+    let media_kind = media_kind.unwrap_or(SourceMediaKind::Image);
+    let is_video = media_kind == SourceMediaKind::Video;
     let skip_classification = skip_classification.unwrap_or(false);
     let image_url = if is_video { video_capture_url(&image_url)? } else { capture_url(&image_url)? };
     let page_url = capture_url(&page_url)?;
@@ -92,13 +126,16 @@ pub async fn capture_source_browser_image(
     let browser = app
         .get_webview("source-discovery")
         .ok_or_else(|| AppError::Other("探索浏览器尚未打开".into()))?;
-    if browser
+    let in_source_origin = browser
         .url()
         .map_err(|e| AppError::Other(e.to_string()))?
         .origin()
-        != page_url.origin()
-    {
-        return Err(AppError::Other("来源页面已切换，请重新拖入图片".into()));
+        == page_url.origin();
+    let approved = admission.as_deref().zip(drag_id.as_deref()).is_some_and(|(proof, drag_id)| {
+        app.state::<CaptureAdmissions>().verify(proof, drag_id, &original_image, &original_page, media_kind)
+    });
+    if !in_source_origin {
+        allow_detached_capture(&image_url, is_video, approved)?;
     }
     if let Some(id) = &project_id {
         if db.get_project(id)?.is_none() {
@@ -108,7 +145,9 @@ pub async fn capture_source_browser_image(
     let control = CaptureControl::begin(app.clone(), capture_id)?;
     control.report("resolving", 0, None, None, None);
     if is_video {
-        let bytes = super::source_browser_stream::capture_video(&browser, image_url.as_str(), page_url.as_str(), &control).await?;
+        let bytes = capture_from_source(&image_url, true, in_source_origin, approved, &control, async {
+            super::source_browser_stream::capture_video(&browser, image_url.as_str(), page_url.as_str(), &control).await
+        }).await?;
         control.start_saving()?;
         let paths = paths.inner().clone();
         let db = db.inner().clone();
@@ -129,7 +168,7 @@ pub async fn capture_source_browser_image(
     if skip_classification {
         if let Some(id) = &drag_id { analysis.release(id); }
     }
-    let preview = if skip_classification { None } else if let Some(id) = &drag_id {
+    let preview = if skip_classification || !in_source_origin { None } else if let Some(id) = &drag_id {
         analysis.claim(id, &original_image, &original_page);
         super::source_browser_network::checked(&control, async {
             Ok(analysis.bytes(id, &original_image, &original_page).await.ok().flatten())
@@ -137,7 +176,9 @@ pub async fn capture_source_browser_image(
     } else { None };
     let bytes = match preview {
         Some(bytes) => bytes,
-        None => Arc::new(browser_capture_resource(&browser, image_url.as_str(), 50 * 1024 * 1024, &control).await?.bytes),
+        None => Arc::new(capture_from_source(&image_url, false, in_source_origin, approved, &control, async {
+            Ok(browser_capture_resource(&browser, image_url.as_str(), &page_url, 50 * 1024 * 1024, &control).await?.bytes)
+        }).await?),
     };
     control.start_saving()?;
     let paths = paths.inner().clone();
@@ -155,12 +196,92 @@ pub async fn capture_source_browser_image(
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
-    if !skip_classification {
+    if !skip_classification && in_source_origin {
         if let Some(id) = &drag_id { analysis.bind(id, &asset.id); }
     }
     crate::core::autoname::spawn_auto_analyze(app.clone(), db, asset.clone());
     let _ = app.emit("library://assets-changed", ());
     Ok(asset)
+}
+
+const SOURCE_DOCUMENT_REQUIRED: &str = "此视频需要原网页，切站后请返回来源并重新拖入。";
+
+async fn capture_from_source(
+    url: &tauri::Url,
+    is_video: bool,
+    in_source_origin: bool,
+    approved: bool,
+    control: &CaptureControl,
+    source: impl std::future::Future<Output = AppResult<Vec<u8>>>,
+) -> AppResult<Vec<u8>> {
+    if in_source_origin {
+        match source.await {
+            Err(AppError::Other(message)) if message == SOURCE_ORIGIN_CHANGED => {}
+            result => return result,
+        }
+    }
+    allow_detached_capture(url, is_video, approved)?;
+    let max_bytes = if is_video { 200 } else { 50 } * 1024 * 1024;
+    public_capture_bytes(url.as_str(), max_bytes, is_video, control).await
+}
+
+fn allow_detached_capture(url: &tauri::Url, is_video: bool, approved: bool) -> AppResult<()> {
+    let path = url.path().to_ascii_lowercase();
+    if url.scheme() == "blob" || (is_video && (path.ends_with(".m3u8") || path.ends_with(".mpd"))) {
+        return Err(AppError::Other(SOURCE_DOCUMENT_REQUIRED.into()));
+    }
+    if !approved {
+        return Err(AppError::Other("来源页面已切换，请返回来源并重新拖入。".into()));
+    }
+    Ok(())
+}
+
+async fn public_capture_bytes(url: &str, max_bytes: usize, is_video: bool, control: &CaptureControl) -> AppResult<Vec<u8>> {
+    // Independent of the new page: no browser session, cookies, persistent
+    // proxy, or source Referer. The existing client checks and pins public DNS
+    // addresses again at every redirect.
+    let response = checked(control, ingest::download_response(url, None, "*/*")).await?;
+    read_public_capture(response, max_bytes, is_video, control).await
+}
+
+async fn read_public_capture(response: reqwest::Response, max_bytes: usize, is_video: bool, control: &CaptureControl) -> AppResult<Vec<u8>> {
+    use futures_util::StreamExt;
+    if !response.status().is_success() || response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(AppError::Other("无法公开下载此素材，请返回来源网页后重试。".into()));
+    }
+    let mut resource = CaptureResource {
+        url: response.url().to_string(),
+        bytes: Vec::new(),
+        content_type: response.headers().get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()).unwrap_or_default().into(),
+        total_bytes: response.content_length(),
+    };
+    if is_video && resource.is_manifest() {
+        return Err(AppError::Other(SOURCE_DOCUMENT_REQUIRED.into()));
+    }
+    let too_large = || AppError::Other("素材超过采集大小限制。".into());
+    if resource.total_bytes.is_some_and(|total| total > max_bytes as u64) {
+        return Err(too_large());
+    }
+    control.report("downloading", 0, resource.total_bytes, None, None);
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = checked(control, async {
+        stream.next().await.transpose().map_err(|_| AppError::Other("下载中断，请重试。".into()))
+    }).await? {
+        if resource.bytes.len() + chunk.len() > max_bytes {
+            return Err(too_large());
+        }
+        let reading_prefix = resource.bytes.len() < 2048;
+        resource.bytes.extend_from_slice(&chunk);
+        if is_video && reading_prefix && resource.is_manifest() {
+            return Err(AppError::Other(SOURCE_DOCUMENT_REQUIRED.into()));
+        }
+        control.report("downloading", resource.bytes.len() as u64, resource.total_bytes, None, None);
+    }
+    if resource.bytes.is_empty() || resource.total_bytes.is_some_and(|total| resource.bytes.len() as u64 != total) {
+        return Err(AppError::Other("网站未返回完整素材，请重试。".into()));
+    }
+    Ok(resource.bytes)
 }
 
 #[tauri::command]
@@ -169,12 +290,17 @@ pub fn claim_source_browser_analysis(
 ) -> AppResult<bool> {
     if webview.label() != "main" { return Err(AppError::Other("只允许主窗口确认采集".into())); }
     capture_url(&image_url)?;
-    capture_url(&page_url)?;
+    let page = capture_url(&page_url)?;
     if !app.state::<Arc<Database>>().local_enabled()? {
         analysis.release(&drag_id);
         return Ok(false);
     }
     // A missed/expired dragstart must not silently turn off classification.
+    if app.get_webview("source-discovery").and_then(|browser| browser.url().ok())
+        .is_none_or(|current| current.origin() != page.origin()) {
+        analysis.release(&drag_id);
+        return Ok(false);
+    }
     if !analysis.claim(&drag_id, &image_url, &page_url) {
         analysis.begin(&app, drag_id.clone(), image_url.clone(), page_url.clone()).map_err(AppError::Other)?;
     }
@@ -199,6 +325,55 @@ pub async fn finish_source_browser_analysis(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn source_browser_detached_fetch_requires_admission_and_public_addresses() {
+        let control = CaptureControl::detached();
+        let private = capture_url("http://127.0.0.1/photo.jpg").unwrap();
+        let source = || async { Err(AppError::Other(SOURCE_ORIGIN_CHANGED.into())) };
+        let error = capture_from_source(&private, false, true, false, &control, source()).await.unwrap_err();
+        assert!(error.to_string().contains("请返回来源"), "{error}");
+        let error = capture_from_source(&private, false, true, true, &control, source()).await.unwrap_err();
+        assert!(error.to_string().contains("unsafe or invalid download url"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn source_browser_public_response_can_save_exact_image_bytes_to_frozen_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = LibraryPaths::init(temp.path().join("library")).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.create_project("original", "Original", "", "original", "blank").unwrap();
+        db.create_project("later", "Later", "", "later", "blank").unwrap();
+        let photo = crate::media::phash::testutil::make_photo_file(temp.path(), "photo.png", 32, 18);
+        let bytes = std::fs::read(photo).unwrap();
+        let response = tauri::http::Response::builder()
+            .header(reqwest::header::CONTENT_TYPE, "image/png")
+            .body(bytes.clone()).unwrap().into();
+        let control = CaptureControl::detached();
+        let downloaded = read_public_capture(response, bytes.len(), false, &control).await.unwrap();
+        control.start_saving().unwrap();
+        let asset = import_capture(&paths, &db, &downloaded, "https://example.com/pin", Some("original"), true).unwrap();
+        assert_eq!(std::fs::read(asset.store_path.unwrap()).unwrap(), bytes);
+        assert_eq!(db.get_project("original").unwrap().unwrap().asset_count, 1);
+        assert_eq!(db.get_project("later").unwrap().unwrap().asset_count, 0);
+    }
+
+    #[tokio::test]
+    async fn source_browser_public_response_rejects_an_extensionless_video_manifest() {
+        let response = tauri::http::Response::new("#EXTM3U\n#EXTINF:1.0,\nclip.ts".to_string()).into();
+        let error = read_public_capture(response, 1024, true, &CaptureControl::detached()).await.unwrap_err();
+        assert_eq!(error.to_string(), SOURCE_DOCUMENT_REQUIRED);
+    }
+
+    #[test]
+    fn source_browser_detached_fetch_never_replays_blob_or_playlists() {
+        for raw in ["blob:https://example.com/id", "https://example.com/stream.M3U8", "https://example.com/stream.mpd"] {
+            let url = video_capture_url(raw).unwrap();
+            assert_eq!(allow_detached_capture(&url, true, true).unwrap_err().to_string(), SOURCE_DOCUMENT_REQUIRED);
+        }
+        let direct = video_capture_url("https://example.com/clip.mp4").unwrap();
+        assert!(allow_detached_capture(&direct, true, true).is_ok());
+    }
     #[test]
     fn global_explorer_capture_reuses_a_project_file_and_persists_a_missing_recapture() {
         let temporary = tempfile::tempdir().unwrap();

@@ -133,7 +133,12 @@ pub(super) fn installed_fonts() -> Result<Vec<String>, AppError> {
     Ok(names.into_iter().collect())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub(super) fn installed_fonts() -> Result<Vec<String>, AppError> {
+    macos_fonts::families().ok_or_else(|| AppError::Other("无法读取系统字体".into()))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(super) fn installed_fonts() -> Result<Vec<String>, AppError> {
     Ok([
         "Arial",
@@ -145,6 +150,78 @@ pub(super) fn installed_fonts() -> Result<Vec<String>, AppError> {
     ]
     .map(str::to_string)
     .to_vec())
+}
+
+#[cfg(target_os = "macos")]
+pub(super) mod macos_fonts {
+    use std::collections::BTreeSet;
+    use std::ffi::{c_char, c_void, CStr, CString};
+    use std::ptr::{null, NonNull};
+
+    type CfRef = *const c_void;
+    const UTF8: u32 = 0x0800_0100;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(value: CfRef);
+        fn CFArrayGetCount(array: CfRef) -> isize;
+        fn CFArrayGetValueAtIndex(array: CfRef, index: isize) -> CfRef;
+        fn CFStringCreateWithCString(alloc: CfRef, text: *const c_char, encoding: u32) -> CfRef;
+        fn CFStringGetLength(text: CfRef) -> isize;
+        fn CFStringGetCString(text: CfRef, buffer: *mut c_char, size: isize, encoding: u32) -> u8;
+    }
+
+    #[link(name = "CoreText", kind = "framework")]
+    unsafe extern "C" {
+        fn CTFontManagerCopyAvailableFontFamilyNames() -> CfRef;
+        fn CTFontCreateWithName(name: CfRef, size: f64, matrix: CfRef) -> CfRef;
+        fn CTFontCreateCopyWithFamily(font: CfRef, size: f64, matrix: CfRef, family: CfRef) -> CfRef;
+        fn CTFontCopyPostScriptName(font: CfRef) -> CfRef;
+    }
+
+    struct OwnedCf(NonNull<c_void>);
+
+    impl OwnedCf {
+        fn take(value: CfRef) -> Option<Self> { NonNull::new(value.cast_mut()).map(Self) }
+
+        fn as_ptr(&self) -> CfRef { self.0.as_ptr() }
+
+        fn string(value: &str) -> Option<Self> {
+            let value = CString::new(value).ok()?;
+            Self::take(unsafe { CFStringCreateWithCString(null(), value.as_ptr(), UTF8) })
+        }
+    }
+
+    impl Drop for OwnedCf {
+        fn drop(&mut self) { unsafe { CFRelease(self.as_ptr()) } }
+    }
+
+    fn rust_string(value: CfRef) -> Option<String> {
+        if value.is_null() { return None; }
+        let size = unsafe { CFStringGetLength(value) }.checked_mul(4)?.checked_add(1)?;
+        let mut buffer = vec![0_u8; usize::try_from(size).ok()?];
+        let copied = unsafe { CFStringGetCString(value, buffer.as_mut_ptr().cast(), size, UTF8) };
+        (copied != 0).then(|| CStr::from_bytes_until_nul(&buffer).ok()?.to_str().ok().map(str::to_owned)).flatten()
+    }
+
+    pub(in super::super) fn families() -> Option<Vec<String>> {
+        let array = OwnedCf::take(unsafe { CTFontManagerCopyAvailableFontFamilyNames() })?;
+        let count = unsafe { CFArrayGetCount(array.as_ptr()) };
+        let names: BTreeSet<_> = (0..count)
+            .filter_map(|index| rust_string(unsafe { CFArrayGetValueAtIndex(array.as_ptr(), index) }))
+            .filter(|name| !name.is_empty() && !name.starts_with('.'))
+            .collect();
+        Some(names.into_iter().collect())
+    }
+
+    pub(in super::super) fn postscript_name(family: &str) -> Option<String> {
+        let family = OwnedCf::string(family)?;
+        let regular = OwnedCf::string("Helvetica")?;
+        let regular = OwnedCf::take(unsafe { CTFontCreateWithName(regular.as_ptr(), 12.0, null()) })?;
+        let font = OwnedCf::take(unsafe { CTFontCreateCopyWithFamily(regular.as_ptr(), 0.0, null(), family.as_ptr()) })?;
+        let name = OwnedCf::take(unsafe { CTFontCopyPostScriptName(font.as_ptr()) })?;
+        rust_string(name.as_ptr())
+    }
 }
 
 #[cfg(test)]
@@ -169,5 +246,10 @@ mod tests {
         assert!(fonts
             .iter()
             .any(|font| font == "Arial" || font == "Microsoft YaHei" || font == "微软雅黑"));
+        #[cfg(target_os = "macos")]
+        {
+            assert!(fonts.iter().any(|font| font == "Helvetica"));
+            assert!(fonts.iter().any(|font| font.starts_with("PingFang") || font.starts_with("Songti")));
+        }
     }
 }

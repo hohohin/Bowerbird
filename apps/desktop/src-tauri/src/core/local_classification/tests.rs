@@ -9,6 +9,27 @@ fn db() -> Database {
 }
 
 #[test]
+fn batch_tag_removal_only_rejects_materials_that_had_the_tag() {
+    let db = db();
+    let tag = db.save_local_label(None, "要移除", "", true).unwrap();
+    let other = db.save_local_label(None, "要保留", "", true).unwrap();
+    db.local_example(&tag, &["a".into()], true).unwrap();
+    db.local_example(&other, &["a".into(), "b".into()], true).unwrap();
+
+    let assets = ["a".into(), "b".into()];
+    db.local_example_with_options(&tag, &assets, false, true).unwrap();
+    let revision = db.local_revision().unwrap();
+    db.local_example_with_options(&tag, &assets, false, true).unwrap();
+    assert_eq!(db.local_revision().unwrap(), revision);
+    for asset in &assets {
+        let tags = db.list_asset_tags(asset).unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].name, "要保留");
+    }
+    assert_eq!(db.local_examples(&tag, "").unwrap(), vec![("a".into(), false)]);
+}
+
+#[test]
 fn connected_content_changes_requeue_only_automatic_results_and_reject_old_inference() {
     let db = db();
     db.set_local_enabled(true).unwrap();

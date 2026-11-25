@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { loadSourceScript } from "./fixtures/explorer/source-script.mjs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 import { startBrowserDrag, finishBrowserDrag } from "./fixtures/explorer/native-drag.mjs";
@@ -6,8 +7,10 @@ import { startBrowserDrag, finishBrowserDrag } from "./fixtures/explorer/native-
 const output = ".tmp/explorer-selection";
 await mkdir(output, { recursive: true });
 const sources = await Promise.all([
-  "../extension/candidate-utils.js", "src/lib/explorerDragVisual.js", "src-tauri/src/commands/source_browser_drag.js",
-].map(file => readFile(file, "utf8")));
+  readFile("../extension/candidate-utils.js", "utf8"),
+  readFile("src/lib/explorerDragVisual.js", "utf8"),
+  loadSourceScript("src-tauri/src/commands/source_browser_drag.js"),
+]);
 const paragraph = "这里是小红书笔记正文，可以拖选复制文字与继续阅读。图片和文字应该各自保持原来的操作方式。";
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#326488"/></svg>';
 const video = await readFile("src-tauri/tests/fixtures/media/fragmented.mp4");

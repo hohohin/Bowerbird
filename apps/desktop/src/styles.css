@@ -874,13 +874,19 @@ html[data-theme="light"] .task-state-failed { color: #ba3c3c; }
 /* 素材发现：React 绘制浏览器 chrome，原生子 WebView 精确覆盖 viewport 区域。 */
 .explore-workspace { display: flex; flex: 1; min-width: 0; min-height: 0; height: 100%; }
 .explore-main { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; }
+.explore-workspace-content, .explore-home-content { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+.explore-workspace-content[hidden], .explore-home-content[hidden] { display: none; }
+.is-home-explore > .explore-main { flex: 0 0 auto; }
+.is-home-explore > .explore-main[data-explore-feedback-only] { min-width: min(220px, 30vw); }
 .explore-browser { --explore-panel-surface: var(--bb-surface); position: relative; flex-shrink: 0; min-width: 320px; max-width: calc(100% - 280px); }
+.is-home-explore > .explore-browser { flex: 1 1 auto; min-width: 0; max-width: none; }
 .explore-browser[hidden] { display: none; }
-.explore-browser > .explore-panel-handle { left: auto; right: 0; top: 50%; width: 14.4px; height: 76px; padding: 0; transform: translateY(-50%); transition: none; }
+.explore-browser > .explore-panel-handle { left: 0; top: 50%; width: 14.4px; height: 76px; padding: 0; transform: translateY(-50%); transition: none; }
 .explore-panel-handle .canvas-library-tab-shape { inset: 0; width: 100%; height: 100%; transform: none; }
 .explore-panel-handle .canvas-library-tab-fill { fill: var(--explore-panel-surface); }
 .explore-panel-handle :is(.canvas-library-close, .canvas-library-grip) { width: 100%; border-radius: 0; background: transparent; }
 .explore-panel-handle .canvas-library-close { height: 28px; }
+.explore-panel-handle[data-reveal] .canvas-library-close { height: 100%; padding: 0; font-size: 11px; writing-mode: vertical-rl; }
 .explore-panel-handle .canvas-library-grip::before { content: ""; position: absolute; top: 0; left: 3px; right: 3px; height: 1px; background: var(--bb-line); pointer-events: none; }
 .explore-panel-handle:is(:hover, :focus-within, .is-library-resizing) .canvas-library-tab-edge { stroke: var(--bb-blue); }
 .explore-panel-handle :is(.canvas-library-close, .canvas-library-grip):active { color: var(--bb-blue); }
@@ -888,11 +894,14 @@ html[data-theme="light"] .task-state-failed { color: #ba3c3c; }
 .explore-browser :is(.source-browser-panel, .source-browser-viewport) { background: var(--explore-panel-surface); }
 .explore-browser .source-browser-header { flex-wrap: wrap; gap: 5px; padding: 6px 8px; }
 .explore-browser .source-browser-heading { width: 100%; }
+.explore-open-directory { display: grid; flex: none; place-items: center; width: 27px; height: 26px; color: var(--bb-muted); }
+.explore-open-directory:hover, .explore-open-directory:focus-visible { color: var(--bb-blue); }
 .explore-sites { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--bb-line); font-size: 11px; }
 .explore-sites button { padding: 3px 8px; border-radius: 6px; background: var(--bb-surface-2); }
 .explore-sites button:hover { color: var(--bb-blue); }
 /* Native child WebViews are above DOM layers; keep notices over the collection side. */
-body:has(.explore-workspace.is-open) .toast-viewport { left: auto; right: 12px; width: 240px; }
+body:has(.explore-workspace.is-open) .toast-viewport { left: 12px; right: auto; width: 240px; }
+body:has(.explore-workspace[data-explore-full]) .toast-viewport { top: 48px; }
 .source-browser-panel {
   display: flex;
   width: 100%;

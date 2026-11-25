@@ -113,7 +113,7 @@ export function TagIndex({ tags: sourceTags, active, onSelect, onManage, manageB
       </nav>
       <div className="library-tag-actions">
         {active && <button type="button" aria-label="清除标签筛选" title="清除标签筛选" onClick={() => onSelect(null)}><X size={13} /></button>}
-        <button ref={manageButtonRef} type="button" className="library-tag-manage" aria-label="管理标签" title="分类管理" disabled={disabled} onClick={onManage}><Settings2 size={13} /></button>
+        <button ref={manageButtonRef} type="button" className="library-tag-manage" aria-label="标签管理" title="标签管理" aria-haspopup="dialog" disabled={disabled} onClick={onManage}><Settings2 size={13} aria-hidden="true" /></button>
       </div>
       </div>
     </aside>

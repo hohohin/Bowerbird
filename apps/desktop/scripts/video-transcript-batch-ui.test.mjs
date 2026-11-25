@@ -238,10 +238,11 @@ try {
   await page.keyboard.press('Escape');
   await preview().waitFor({ state: 'hidden' });
   await navigation.getByRole('button', { name: '标签模式', exact: true }).click();
-  await navigation.getByRole('button', { name: '管理标签', exact: true }).click();
-  const tags = page.getByRole('dialog', { name: '管理分类数据', exact: true });
-  await tags.getByRole('combobox', { name: '选择视频素材', exact: true }).selectOption('menu-video-global');
-  await tags.getByRole('region', { name: '视频文本打标签', exact: true }).getByText('服务暂未开放。', { exact: true }).waitFor();
+  await navigation.getByRole('button', { name: '标签管理', exact: true }).click();
+  const tags = page.getByRole('dialog', { name: '标签管理', exact: true });
+  await tags.waitFor();
+  assert.equal(await tags.getByRole('combobox', { name: '选择视频素材', exact: true }).count(), 0);
+  assert.equal(await tags.getByRole('region', { name: '视频文本打标签', exact: true }).count(), 0);
   await tags.getByRole('button', { name: '关闭', exact: true }).click();
 
   await page.goto(`${base}scripts/fixtures/connected-collections/preview.html`);
@@ -268,7 +269,7 @@ try {
   await preview().waitFor({ state: 'hidden' });
   console.log('PASS: video menus open exact transcripts and browse double-click/Enter use one shared preview across global, project and connected views');
   console.log('PASS: batch actions hidden when unpriced, no original scan, scope and full-track quote, no further submissions on unknown state or a changed price');
-  console.log('PASS: batch visual analysis totals, existing-result skip, uncertain stop, project/folder scope and classification target');
+  console.log('PASS: batch visual analysis totals, existing-result skip, uncertain stop, project/folder scope and hidden video tagging');
 } finally {
   await browser.close();
   await server.close();

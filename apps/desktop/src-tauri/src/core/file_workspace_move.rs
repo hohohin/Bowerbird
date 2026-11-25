@@ -1,6 +1,6 @@
 //! User-selected file-root migration, executed at startup before any writer/recovery worker.
 //! Copies and verifies bytes before atomically changing the index. Never deletes source files.
-use super::{creative_restore::path_key, external_files::fingerprint, file_workspace::{FileWorkspace, FileWorkspaceConfig, write_json}};
+use super::{creative_restore::path_key, external_files::fingerprint, file_workspace::{ensure_hidden_dir, is_internal_dir_name, FileWorkspace, FileWorkspaceConfig, write_json}};
 use crate::{db::Database, error::{AppError, AppResult}};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -169,8 +169,13 @@ fn copy_tree(source: &Path,target: &Path,entries:&[Entry]) -> AppResult<()> {
         let to=target.join(&entry.path);
         if to.exists() && fs::symlink_metadata(&to)?.file_type().is_symlink() {return Err(invalid("目标目录包含链接，已停止迁移"));}
         if !fs::canonicalize(to.parent().unwrap())?.starts_with(target) {return Err(invalid("目标路径越出迁移范围"));}
-        if entry.directory { fs::create_dir_all(&to)?; }
-        else {
+        if entry.directory {
+            if to.file_name().is_some_and(|name| is_internal_dir_name(&name.to_string_lossy())) {
+                ensure_hidden_dir(&to)?;
+            } else {
+                fs::create_dir_all(&to)?;
+            }
+        } else {
             fs::create_dir_all(to.parent().unwrap())?;
             let from = source.join(&entry.path);
             if !copy_remapped_sidecar(source, target, entry, &from, &to)? {
@@ -190,7 +195,7 @@ fn local_classification(files:&FileWorkspace,source:&Path,target:&Path)->AppResu
         let Some(root)=value["root"].as_str().and_then(|r|remap(r,source,target)) else {continue;};
         let next=super::local_classification::folder::local_record_root(Path::new(&root),&base);
         // Never overwrite another independently edited local record at the new location.
-        fs::create_dir_all(next.join(".bowerbird"))?;
+        ensure_hidden_dir(&next.join(".bowerbird"))?;
         copy_file(&dir.join(".bowerbird/classification.json"),&next.join(".bowerbird/classification.json"))?;
         value["root"]=serde_json::json!(root); write_json(&next.join("source.json"),&value)?;
     } Ok(())

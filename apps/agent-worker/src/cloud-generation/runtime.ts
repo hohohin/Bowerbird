@@ -4,7 +4,7 @@ import { Buffer } from "node:buffer";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 import { executeVideo } from "./video.ts";
 import type { VideoInput } from "../../../cloud/supabase/functions/_shared/video-contract.ts";
-import { LAYER_MODEL, validateLayerRequest, type LayerOptions } from "../../../cloud/supabase/functions/_shared/layer-contract.ts";
+import { layerDecompositionOptions, LAYER_MAX_OUTPUTS, LAYER_MODEL, validateLayerRequest, type LayerOptions } from "../../../cloud/supabase/functions/_shared/layer-contract.ts";
 import { layerPayload, parseLayerResult } from "./layers.ts";
 import { GPT_IMAGE_MODELS, gptImageRequest, generateGptImage } from "./gpt-image.ts";
 import { imageMetadata } from "../../../cloud/supabase/functions/_shared/image-metadata.ts";
@@ -72,7 +72,7 @@ export interface GenerationInput {
   transparent?: boolean;
   mock_scenario?: string | null;
   layer_options?: LayerOptions;
-  billing?: { output_size?: string };
+  billing?: { output_size?: string; max_outputs?: number; settlement?: string };
 }
 
 interface GeneratedImage {
@@ -88,7 +88,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export function outputLayerPixels(bundle: Uint8Array): number[] {
   const value = JSON.parse(new TextDecoder().decode(bundle));
   const layers = value?.document?.layers;
-  if (!Array.isArray(layers) || layers.length < 1 || layers.length > 17) throw new Error("invalid_billing_layers");
+  if (!Array.isArray(layers) || layers.length < 1 || layers.length > LAYER_MAX_OUTPUTS) throw new Error("invalid_billing_layers");
   return layers.map(layer => {
     const data = typeof layer.dataUrl === "string" ? layer.dataUrl.split(",")[1] : undefined;
     const meta = data ? imageMetadata(Buffer.from(data, "base64")) : null;
@@ -407,6 +407,10 @@ async function executeClaim(
     if (!service.startsWith("image_")) throw new Error("image_service_mismatch");
     const layerOptions = validateLayerRequest(input as unknown as Record<string, unknown>, service);
     if (layerOptions && config.mock) throw new KnownProviderError("layer_mock_disabled", "分层服务需要真实模型，当前尚未启用");
+    if (layerOptions?.operation === "decompose" && input.billing?.settlement === "per_layer" &&
+        input.billing.max_outputs !== layerDecompositionOptions(layerOptions).max_images) {
+      throw new KnownProviderError("layer_price_mismatch", "分层请求与已确认的输出上限不一致");
+    }
     const choice: ServiceModelChoice = layerOptions ? { model: LAYER_MODEL, optimizePromptMode: null } : modelForService(config, service);
     // Validate and serialize before the durable submission boundary. OpenAI edits
     // use their own JSON contract, never the Ark image/watermark parameters.

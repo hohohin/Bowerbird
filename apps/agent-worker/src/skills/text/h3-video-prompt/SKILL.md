@@ -93,7 +93,7 @@ How the reference pictures align with the target video — Picture 1 (from Shot 
 
 `summary` 以实际任务类型开头，如 `[reference generation]` 或 `[reference generation + audio reference]`。
 
-`retention_analysis` 逐条说明保留关系：完全保留、部分保留、属性迁移（只参考配色、材质或风格）或弱参考。当前录音作音色参考时写 `<Audio 1>: reference`。
+`retention_analysis` 逐条说明保留关系：完全保留、部分保留、属性迁移或弱参考。用户要用参考音色朗读新台词时，按下文「挂载录音时如何写」在 `subject_definitions`、`retention_analysis`、`detailed_description` 三处写出音频属性迁移。
 
 `detailed_description` 逐镜说明被参考内容在何处生效，写清构图、主体、动作、镜头和声音。普通生成约 350–500 个英文词，编辑任务或密集对白按实际内容调整，不为凑长度编剧情。
 
@@ -116,10 +116,15 @@ How the reference pictures align with the target video — Picture 1 (from Shot 
 
 ## 挂载录音时如何写
 
-旧三种模式的 `audioReference: true` 表示本轮绑定一段录音。优化只收到文字和这一状态，不假称试听：按用户明确写出的信息描述录音，不补写未听到的台词、歌词、口音、节拍或停顿；缺少录音状态时不凭空增加 `<Audio N>` 标签。
+`text`、`frames`、`reference` 的 `audioReference: true` 表示本轮绑定一段录音；`r2v` 按素材数量及上节编号约定引用录音。只给已挂载且编号确定的音频写 `<Audio N>` 标签。优化器只收到文字与参数，不假称试听，不补写未听到的词句、口音或节拍。
 
-- 单图 Ref2VA：用 `<Audio 1>` 指代音色。先给目标发声者分配 `(S1)` 等 ID，在 `subject_definitions` 把 `<Audio 1>` 绑定到该发声者，在 `retention_analysis` 标记 `reference`，在该角色发声的镜头重复引用同一标签。目标台词另写在 `<d>[语言] 原文</d>` 内。用录音引导新发声，不要求复制原音轨，也不把这段录音默认分配给所有发声者。
-- 文生与首尾帧：录音由工作流从第 0 帧起作为音频条件，超出视频长度的部分被裁掉。沿用基础模式的画面、对白和声场写法，在对应镜头写需要跟随录音节奏的开口、停顿和动作。不生成 Ref2VA 的 `<Audio N>` 定义或保留分析。最终音轨由 H3 生成。
+**单图与多素材 Ref2VA**：用户要角色借用参考录音的声音说新台词时，将以下三项写进最终提示词。单图用 `<Audio 1>`，多素材使用该角色对应的实际 `<Audio N>`。示例中的说话人、素材编号、语言和台词都随本轮意图填写：
+
+- `subject_definitions` 将音频属性绑定给指定发声者，例如 `(S1) 的音色、音质与说话语调取自 <Audio 1>。`
+- `retention_analysis` 明示属性迁移，例如 `<Audio 1>: reference — attribute transfer to (S1), timbre, vocal tone, and delivery style only. 不复述、不延续 <Audio 1> 中的原有台词内容。` 按目标正文语言表达这个范围。
+- `detailed_description` 在开口的镜头把角色、同一音频编号和用户逐字台词写在同一句，例如 `(S1) 用 <Audio 1> 的音色和语调说：<d>[Chinese] 我们出发吧。</d>`。台词仅取自用户指定的新稿，保留原词与标点。多说话人各自绑定，声场参考保持其环境声用途。
+
+**文生与首尾帧**：录音从第 0 帧引导原声内容与节奏，超出视频时长的部分被裁掉。按录音安排开口、停顿与动作。使用基础模式的画面、对白和声场字段，保留用户提供的台词。此工作流不支持仅提取音色替换原词，不写 Ref2VA 音色迁移指令。最终音轨由 H3 生成。
 
 ## 固定机位口播
 

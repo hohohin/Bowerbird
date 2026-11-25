@@ -1,14 +1,29 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { Plus, Search, X } from "lucide-react";
+import { Plus, Search, Tags, X } from "lucide-react";
 import { api } from "../lib/api";
 import { localClassification } from "../lib/localClassification";
 import { userErrorMessage } from "../lib/userError";
 import { useImeGuard } from "../lib/useImeGuard";
 import type { AssetTag } from "../lib/types";
 import { OverlayScrollArea } from "./CollectionScrollArea";
+import { LocalClassificationDialog } from "./LocalClassificationDialog";
+import { ModalShell } from "./ModalShell";
 import { normalizeTagName, tagPickerColumns, type TagChoice } from "./assetTagPickerLogic";
 import "./AssetTagPicker.css";
+
+async function resolveTag(name: string, create: boolean) {
+  // Resolve fresh identities before creating or changing a tag assignment.
+  const labels = await localClassification.labels();
+  const normalized = normalizeTagName(name);
+  let choice: TagChoice | undefined = labels.find(tag => normalizeTagName(tag.name) === normalized);
+  if (!choice && create) {
+    const clean = name.trim().replace(/^#+\s*/, "");
+    choice = { id: await localClassification.save(null, clean, "", true), name: clean };
+    labels.push({ ...choice, description: "", enabled: true, count: 0, has_examples: false });
+  }
+  return { labels, choice };
+}
 
 function TagPickerError({ error, retry }: { error: unknown; retry?: () => void }) {
   return <div role="alert" className="asset-tags-error">
@@ -17,8 +32,24 @@ function TagPickerError({ error, retry }: { error: unknown; retry?: () => void }
   </div>;
 }
 
+function TagPickerList({ columns, query, children }: {
+  columns: ReturnType<typeof tagPickerColumns>;
+  query: string;
+  children: (tag: TagChoice) => React.ReactNode;
+}) {
+  return <OverlayScrollArea className="asset-tag-picker-scroll" label="标签列表滚动条">
+    {columns.some(column => column.length) ? <div className="asset-tag-picker-columns" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
+      {columns.map((column, index) => <div className="asset-tag-picker-column" key={index}>{column.map(group => <section key={group.letter} aria-label={group.letter}>
+        <h4 className="asset-tag-picker-letter">{group.letter}</h4>
+        {group.tags.map(tag => <label key={tag.id} className="asset-tag-picker-option">{children(tag)}<span>{tag.name}</span></label>)}
+      </section>)}</div>)}
+    </div> : <div className="asset-tag-picker-status">{query ? "没有匹配的标签" : "暂无标签"}</div>}
+  </OverlayScrollArea>;
+}
+
 export function AssetTagPicker({ assetId, tags, onChange }: { assetId: string; tags: AssetTag[]; onChange: (tags: AssetTag[]) => void }) {
   const [open, setOpen] = useState(false);
+  const [managing, setManaging] = useState(false);
   const [labels, setLabels] = useState<TagChoice[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -54,19 +85,20 @@ export function AssetTagPicker({ assetId, tags, onChange }: { assetId: string; t
     }
   }
   function show() { setQuery(""); setOpen(true); if (!writing.current) void load(); }
+  function closeManagement() {
+    setManaging(false);
+    trigger.current?.focus({ preventScroll: true });
+    const version = ++readVersion.current;
+    void api.listAssetTags(assetId).then(assigned => {
+      if (mounted.current && version === readVersion.current) onChange(assigned);
+    }).catch(cause => console.error("Refreshing tags after management failed", cause));
+  }
 
   async function change(name: string, positive: boolean) {
     if (writing.current) return;
     writing.current = true; readVersion.current++; setBusy(true); setError("");
     try {
-      // Resolve fresh identities before writing; never replace another tag's assignment.
-      const all = await localClassification.labels();
-      let choice: TagChoice | undefined = all.find(tag => normalizeTagName(tag.name) === normalizeTagName(name));
-      if (!choice && positive) {
-        const clean = name.trim().replace(/^#+\s*/, "");
-        choice = { id: await localClassification.save(null, clean, "", true), name: clean };
-        all.push({ ...choice, description: "", enabled: true, count: 0, has_examples: false });
-      }
+      const { labels: all, choice } = await resolveTag(name, positive);
       if (mounted.current) setLabels(all);
       if (choice) await localClassification.example(choice.id, [assetId], positive);
       const assigned = await api.listAssetTags(assetId);
@@ -153,19 +185,121 @@ export function AssetTagPicker({ assetId, tags, onChange }: { assetId: string; t
         {query && <button type="button" aria-label="清除搜索" onClick={() => { setQuery(""); search.current?.focus(); }}><X size={14} aria-hidden="true"/></button>}
       </div>
       {!!error && <TagPickerError error={error} retry={loadFailed ? () => void load() : undefined}/>}
-      {loading ? <div role="status" className="asset-tag-picker-status">正在读取标签…</div> : !loadFailed && <OverlayScrollArea className="asset-tag-picker-scroll" label="标签列表滚动条">
-        {columns.some(column => column.length) ? <div className="asset-tag-picker-columns" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
-          {columns.map((column, index) => <div className="asset-tag-picker-column" key={index}>{column.map(group => <section key={group.letter} aria-label={group.letter}>
-            <h4 className="asset-tag-picker-letter">{group.letter}</h4>
-            {group.tags.map(tag => <label key={tag.id} className="asset-tag-picker-option">
-              <input type="checkbox" checked={selected.has(tag.name)} disabled={busy} onChange={event => void change(tag.name, event.target.checked)}/><span>{tag.name}</span>
-            </label>)}
-          </section>)}</div>)}
-        </div> : <div className="asset-tag-picker-status">{query ? "没有匹配的标签" : "暂无标签"}</div>}
-      </OverlayScrollArea>}
-      {!existing && <div className="asset-tag-picker-footer"><button type="button" data-create disabled={busy || loading || loadFailed || !!query && !normalizeTagName(query)}
+      {loading ? <div role="status" className="asset-tag-picker-status">正在读取标签…</div> : !loadFailed && <TagPickerList columns={columns} query={query}>
+        {tag => <input type="checkbox" checked={selected.has(tag.name)} disabled={busy} onChange={event => void change(tag.name, event.target.checked)}/>}
+      </TagPickerList>}
+      <div className="asset-tag-picker-footer">{!existing && <button type="button" data-create disabled={busy || loading || loadFailed || !!query && !normalizeTagName(query)}
         onClick={() => normalizeTagName(query) ? void change(query, true) : search.current?.focus()}><Plus size={14} aria-hidden="true"/>
-        {query.trim() ? `新建并添加“${query.trim()}”` : "新建标签"}</button></div>}
+        {query.trim() ? `新建并添加“${query.trim()}”` : "新建标签"}</button>}
+        <button type="button" data-manage disabled={busy} onClick={() => { close(true); setManaging(true); }}><Tags size={14} aria-hidden="true"/>标签管理…</button>
+      </div>
     </div>, document.body)}
+    {managing && <LocalClassificationDialog initialView="labels" onClose={closeManagement}/>}
   </div>;
+}
+
+const ASSET_TAG_BATCH_SIZE = 100;
+
+export function BatchAssetTagDialog({ assetIds, onClose }: { assetIds: string[]; onClose: () => void }) {
+  const [labels, setLabels] = useState<TagChoice[]>([]);
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [readAttempt, setReadAttempt] = useState(0);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [progress, setProgress] = useState<{ tag: string; adding: boolean; done: number } | null>(null);
+  const lock = useRef(false);
+  const search = useRef<HTMLInputElement>(null);
+  const ime = useImeGuard();
+  const choiceName = useId();
+  const ids = useMemo(() => [...new Set(assetIds)], [assetIds]);
+  const columns = useMemo(() => tagPickerColumns(labels, query, 2), [labels, query]);
+  const name = normalizeTagName(query);
+  const tagId = selected || (name ? labels.find(tag => normalizeTagName(tag.name) === name)?.id : undefined);
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setLoadFailed(false);
+    setError(null);
+    void localClassification.labels().then(result => {
+      if (active) setLabels(result);
+    }).catch(cause => {
+      console.error("Loading tags for selection failed", cause);
+      if (active) { setLoadFailed(true); setError(cause); }
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [readAttempt]);
+
+  async function apply(adding: boolean) {
+    if (lock.current || loading || loadFailed || !ids.length || (!tagId && (!adding || !name))) return;
+    lock.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      let tag = tagId;
+      if (!tag) {
+        setProgress(null);
+        const { labels: all, choice } = await resolveTag(query, true);
+        if (!choice) return;
+        tag = choice.id;
+        setLabels(all);
+        setSelected(tag);
+      }
+      const completed = progress?.tag === tag && progress.adding === adding ? progress.done : 0;
+      const operation = { tag, adding, done: completed < ids.length ? completed : 0 };
+      setProgress(operation);
+      for (let offset = operation.done; offset < ids.length; offset += ASSET_TAG_BATCH_SIZE) {
+        const batch = ids.slice(offset, offset + ASSET_TAG_BATCH_SIZE);
+        await localClassification.example(tag, batch, adding, !adding);
+        setProgress({ ...operation, done: offset + batch.length });
+      }
+    } catch (cause) {
+      console.error("Updating tags for selection failed", cause);
+      setError(cause);
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
+
+  const disabled = busy || loading || loadFailed || !ids.length;
+  const complete = progress?.done === ids.length;
+  const creating = !tagId && !!name;
+  const completedTag = labels.find(tag => tag.id === progress?.tag)?.name;
+  return <ModalShell title="编辑标签" description={`已选 ${ids.length} 项素材`} width="md" className="asset-tag-batch" onClose={onClose} preventClose={busy}
+    footer={<div className="asset-tag-batch-footer">
+      {!creating && <button type="button" className="app-modal-button asset-tag-batch-create" disabled={disabled} onClick={() => {
+        setQuery("");
+        setSelected("");
+        search.current?.focus();
+      }}>新建标签</button>}
+      <button type="button" className="app-modal-button" disabled={disabled || !tagId} onClick={() => void apply(false)}>移除标签</button>
+      <button type="button" className="app-button-accent" disabled={disabled || (!tagId && !creating)}
+        onClick={() => void apply(true)}>{creating ? "新建并添加" : "添加标签"}</button>
+    </div>}>
+    <div className="asset-tag-batch-content" aria-busy={loading || busy}>
+      <div className="asset-tag-picker-search"><Search size={15} aria-hidden="true"/>
+        <input ref={search} data-modal-autofocus aria-label="搜索标签" placeholder="搜索或新建标签" value={query} maxLength={40} disabled={busy}
+          onChange={event => { setQuery(event.target.value); setSelected(""); }}
+          onCompositionStart={ime.onCompositionStart} onCompositionEnd={ime.onCompositionEnd}
+          onKeyDown={event => {
+            if (event.key === "Enter" && !ime.isComposing(event.nativeEvent) && (tagId || name)) {
+              event.preventDefault();
+              void apply(true);
+            }
+          }}/>
+      </div>
+      {loading ? <div role="status" className="asset-tag-picker-status">正在读取标签…</div> : !loadFailed && <TagPickerList columns={columns} query={query}>
+        {tag => <input type="radio" name={choiceName} checked={tag.id === tagId} disabled={busy} onChange={() => setSelected(tag.id)}/>}
+      </TagPickerList>}
+    </div>
+    <p role="status" className="asset-tag-batch-feedback">{progress &&
+      (complete ? `${progress.adding ? "添加" : "移除"}标签${completedTag ? `「${completedTag}」` : ""}完成 · 已处理 ${ids.length} 项`
+        : `${progress.adding ? "添加" : "移除"}标签 · 已处理 ${progress.done} / ${ids.length} 项`)}</p>
+    {!!error && <TagPickerError error={error} retry={loadFailed ? () => setReadAttempt(attempt => attempt + 1) : undefined}/>}
+  </ModalShell>;
 }

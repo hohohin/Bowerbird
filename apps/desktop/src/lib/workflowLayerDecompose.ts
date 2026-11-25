@@ -1,13 +1,14 @@
 import { api } from "./api";
 import { useStore } from "../store";
-import { decodeLayerImage, packLayerHistory, unpackLayerHistory, type LayerWorkspace } from "./layerDocument";
+import { packLayerHistory, unpackLayerHistory, type LayerWorkspace } from "./layerDocument";
+import { prepareLayerReference, verifyLayerImages } from "./layerImages";
 import { cloudAccountIssue } from "./generationAvailability";
 
 const activeAssets = new Set<string>();
 
 export async function layerDecompositionAvailable() {
-  const quote = await api.layerCloudRequest({ action: "layer_quote" });
-  return !!quote.services?.some(service => service.service === "image_layer_decompose" && service.available);
+  const quote = await api.layerCloudRequest({ action: "layer_quote", max_images: 30 });
+  return quote.layer_protocol === 2 && !!quote.services?.some(service => service.service === "image_layer_decompose" && service.available);
 }
 
 /** Same persisted request/result contract as the editor's Start decomposition button. */
@@ -36,15 +37,9 @@ export async function workflowLayerDecompose(assetId: string, path: string, prom
     if (create && !workspace.pending) {
       progress("检查拆分服务与输入图片");
       if (!await layerDecompositionAvailable()) throw new Error("拆分服务暂不可用");
-      const source = await decodeLayerImage(await api.readImageDataUrl(path));
-      const pixels = source.naturalWidth * source.naturalHeight, ratio = source.naturalWidth / source.naturalHeight;
-      if (pixels < 262144 || pixels > 36000000 || ratio < 1 / 16 || ratio > 16) throw new Error("拆分图片需为 26 万至 3600 万像素，宽高比在 1:16 至 16:1 之间");
-      const canvas = document.createElement("canvas"); canvas.width = source.naturalWidth; canvas.height = source.naturalHeight;
-      canvas.getContext("2d")!.drawImage(source, 0, 0);
-      const base64 = canvas.toDataURL("image/png").split(",")[1];
-      if (base64.length * 3 / 4 > 10 * 1024 * 1024) throw new Error("当前云上传单图上限为 10 MB，请先缩小图片");
+      const image = await prepareLayerReference(await api.readImageDataUrl(path), true);
       workspace = { ...workspace, pending: { userId: auth.user_id!, layerId: null, request: { idempotency_key: key, media: "image",
-        service: "image_layer_decompose", prompt: prompt.trim(), reference_images: [{ mime: "image/png", base64 }], layer_options: { operation: "decompose", size: "auto" } } } };
+        service: "image_layer_decompose", prompt: prompt.trim(), reference_images: [image], layer_options: { operation: "decompose", size: "auto", max_images: 30, text_recognition: true } } } };
       progress("保存拆分任务，准备提交");
       check(); await api.layerWorkspaceSave(assetId, workspace);
     }
@@ -66,7 +61,7 @@ export async function workflowLayerDecompose(assetId: string, path: string, prom
     const next = result.layer_result?.document;
     progress("校验图层包并保存工程");
     if (!next?.layers.length) throw new Error("云端未返回完整图层包");
-    await Promise.all(next.layers.map(layer => decodeLayerImage(layer.dataUrl))); check();
+    await verifyLayerImages(next.layers); check();
     const history = unpackLayerHistory(workspace);
     if (workspace.document) history.push(workspace.document);
     await api.layerWorkspaceSave(assetId, { document: next, pending: null, history: packLayerHistory(next, history) });

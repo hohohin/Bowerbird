@@ -26,11 +26,16 @@ test('Gemini preserves grants across SSH drops and launcher restarts, including 
   const preload = path.join(dir, 'fixture-preload.mjs');
   await writeFile(preload, `
     import cp from 'node:child_process';
+    import os from 'node:os';
+    import {existsSync} from 'node:fs';
     import {syncBuiltinESMExports} from 'node:module';
     import {EventEmitter} from 'node:events';
     const realSpawn=cp.spawn; let attempts=0;
+    os.networkInterfaces=()=>({'Fixture WLAN':[{family:'IPv4',internal:false,address:'192.0.2.'+(attempts+1)}]});
     cp.spawn=(command,args,options)=>{
       if(command==='ssh'){
+        const bound=existsSync(new URL('./.local/gemini/ssh-interface.txt',import.meta.url));
+        if(bound ? args[0]!=='-b'||args[1]!=='192.0.2.'+(attempts+1) : args.includes('-b'))throw new Error('Wrong SSH source address');
         const child=new EventEmitter();
         child.kill=()=>{child.emit('close',0);return true;};
         console.log('TEST_SSH_ATTEMPT '+(++attempts));
@@ -78,6 +83,7 @@ test('Gemini preserves grants across SSH drops and launcher restarts, including 
   assert.equal(registration.status, 201);
   const client = await registration.json();
   await launcher.until(/Retrying in 5 seconds/);
+  await writeFile(path.join(dir, '.local/gemini/ssh-interface.txt'), 'Fixture WLAN');
   assert.equal((await launcher.request('/healthz')).status, 204);
   await launcher.until(/TEST_SSH_ATTEMPT 2/);
   const origin = 'https://mcp.bowerbird.cn';

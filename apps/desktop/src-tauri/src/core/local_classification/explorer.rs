@@ -148,8 +148,10 @@ impl ExplorerAnalysis {
             let mut demand = Some(demand);
             let mut lease_tx = Some(lease_tx);
             let result = async {
-                let bytes = crate::commands::source_browser_network::browser_bytes(&browser, &source)
-                    .await.map(Arc::new).map_err(|e| e.to_string());
+                let control = crate::commands::source_browser_jobs::CaptureControl::detached();
+                let bytes = crate::commands::source_browser_network::browser_capture_resource(
+                    &browser, &source, &page, 50 * 1024 * 1024, &control,
+                ).await.map(|resource| Arc::new(resource.bytes)).map_err(|e| e.to_string());
                 let _ = bytes_tx.send(Some(bytes.clone()));
                 let bytes = bytes?;
                 let preview = tokio::task::spawn_blocking(move || jev::preview_image(&bytes))

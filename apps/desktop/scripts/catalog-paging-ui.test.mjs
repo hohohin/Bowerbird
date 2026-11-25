@@ -73,7 +73,9 @@ try {
   // Full-result selection, even though only a viewport of cards exists.
   const searchButton = page.getByRole('button',{name:'搜索素材',exact:true});
   const search = page.getByRole('searchbox',{name:'搜索素材',exact:true});
-  await searchButton.click(); await search.fill('small'); await ready();
+  const waitForQuery = query => page.waitForFunction(value => window.requests.some(r =>
+    r.command === 'catalog_overview' && r.args.filter.query === value), query);
+  await searchButton.click(); await search.fill('small'); await waitForQuery('small'); await ready();
   await page.locator('[data-asset-id="asset-0"]').click({modifiers:['Control']});
   await scroller().evaluate(el=>{el.scrollTop=el.scrollHeight;}); await ready();
   await page.locator('[data-asset-id="asset-179"]').click({modifiers:['Shift']});
@@ -84,6 +86,75 @@ try {
   await page.getByText('180 项',{exact:true}).waitFor();
   await page.getByRole('button',{name:'添加到新项目',exact:true}).click();
   await page.waitForFunction(()=>window.created?.length===180);
+  // Batch tags reuse the full selection and can resume after a committed first chunk.
+  await page.evaluate(() => {
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    window.tagBatches = [];
+    window.taggedIds = new Set();
+    window.tagSaves = [];
+    const labels = [{ id: 'batch-tag', name: '示例标签' }];
+    window.failTagBatch = true;
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === 'local_classification_labels') return structuredClone(labels);
+      if (command === 'local_classification_save_label') {
+        window.tagSaves.push(args);
+        const id = 'created-batch-tag';
+        labels.push({ id, name: args.name });
+        return id;
+      }
+      if (command !== 'local_classification_example') return invoke(command, args);
+      window.tagBatches.push(args);
+      if (window.failTagBatch && args.assetIds.includes('asset-100')) throw Error('模拟标签写入失败');
+      for (const id of args.assetIds) {
+        if (args.positive) window.taggedIds.add(id);
+        else window.taggedIds.delete(id);
+      }
+      window.emitFixtureEvent('library://assets-changed', { assetTagIds: args.assetIds });
+    };
+  });
+  await searchButton.click(); await search.fill('batch'); await waitForQuery('batch'); await ready();
+  await cards().first().click({modifiers:['Control']});
+  await page.getByRole('button',{name:'全选',exact:true}).click();
+  await page.getByText('200 项',{exact:true}).waitFor();
+  const tagButton = page.getByRole('button',{name:'标签',exact:true});
+  await tagButton.click();
+  const tags = page.getByRole('dialog',{name:'编辑标签',exact:true});
+  await tags.getByRole('radio',{name:'示例标签',exact:true}).check();
+  await tags.getByRole('button',{name:'添加标签',exact:true}).click();
+  await tags.getByRole('alert').waitFor();
+  await tags.getByText(/已处理 100 \/ 200 项/).waitFor();
+  await page.evaluate(() => { window.failTagBatch = false; });
+  await tags.getByRole('button',{name:'添加标签',exact:true}).click();
+  await tags.getByText('添加标签「示例标签」完成 · 已处理 200 项',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(() => window.taggedIds.size), 200);
+  await tags.getByRole('button',{name:'移除标签',exact:true}).click();
+  await tags.getByText('移除标签「示例标签」完成 · 已处理 200 项',{exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.tagBatches.map(batch => [batch.tagId, batch.assetIds[0], batch.assetIds.length, batch.positive, batch.assignedOnly])), [
+    ['batch-tag', 'asset-0', 100, true, undefined], ['batch-tag', 'asset-100', 100, true, undefined],
+    ['batch-tag', 'asset-100', 100, true, undefined], ['batch-tag', 'asset-0', 100, false, true],
+    ['batch-tag', 'asset-100', 100, false, true],
+  ]);
+  assert.equal(await page.evaluate(() => window.taggedIds.size), 0);
+  const tagSearch = tags.getByRole('textbox',{name:'搜索标签',exact:true});
+  await tags.getByRole('button',{name:'新建标签',exact:true}).click();
+  assert.equal(await tags.getByRole('radio',{name:'示例标签',exact:true}).isChecked(),false);
+  assert.equal(await tagSearch.evaluate(input => input === document.activeElement),true);
+  await tagSearch.fill(' #新标签 ');
+  const createTag = tags.getByRole('button',{name:'新建并添加',exact:true});
+  await page.evaluate(() => { window.failTagBatch = true; });
+  await createTag.evaluate(button => { button.click(); button.click(); });
+  await tags.getByRole('alert').waitFor();
+  await tags.getByText('添加标签 · 已处理 100 / 200 项',{exact:true}).waitFor();
+  await page.evaluate(() => { window.failTagBatch = false; });
+  await tags.getByRole('button',{name:'添加标签',exact:true}).click();
+  await tags.getByText('添加标签「新标签」完成 · 已处理 200 项',{exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.tagSaves), [{ id: null, name: '新标签', description: '', enabled: true }]);
+  assert.deepEqual(await page.evaluate(() => window.tagBatches.slice(5).map(batch => [batch.tagId, batch.assetIds[0], batch.assetIds.length])), [
+    ['created-batch-tag', 'asset-0', 100], ['created-batch-tag', 'asset-100', 100], ['created-batch-tag', 'asset-100', 100],
+  ]);
+  await tags.getByRole('button',{name:'关闭',exact:true}).click();
+  assert.equal(await tagButton.evaluate(el => el === document.activeElement), true);
+  await page.getByRole('button',{name:'取消选择',exact:true}).click();
   // A failed page is retryable and does not poison later requests.
   await scroller().evaluate(el=>{el.scrollTop=0;}); await ready();
   await page.evaluate(()=>{window.failOffset=0;window.refresh();});
@@ -98,10 +169,16 @@ try {
   await page.getByRole('button',{name:'颜色筛选',exact:true}).click();
   // Late summaries must not revive a previous query.
   await searchButton.click(); await search.fill('slow');
-  await page.waitForTimeout(25); await search.fill('empty');
+  await waitForQuery('slow'); await search.fill('empty');
   await page.getByText('没有匹配的素材。',{exact:true}).waitFor();
   await page.waitForTimeout(450); assert.equal(await cards().count(),0);
-  await search.fill(''); await search.press('Escape'); await ready();
+  await page.getByRole('button', { name: '清空搜索', exact: true }).click();
+  await search.fill('discarded');
+  await page.evaluate(() => window.mode.getState().setQuery(''));
+  assert.equal(await search.inputValue(), '');
+  await page.waitForTimeout(260);
+  assert.equal(await page.evaluate(() => window.requests.some(r => r.args.filter?.query === 'discarded')), false);
+  await search.press('Escape'); await ready();
   await page.evaluate(()=>window.changeKind('tags')); await ready();
   await page.locator('.catalog-tag-list').getByRole('button',{name:/Z 末尾/}).first().click();
   await page.locator('[data-tag-section="last"] [data-asset-id="asset-299940"]').waitFor();
