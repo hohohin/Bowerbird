@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-import { enableCanvasToolbarPro, selectCanvasTool } from './fixtures/canvas-reference/place-card.mjs';
+import { selectCanvasTool } from './fixtures/canvas-reference/place-card.mjs';
 
 const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } },
   cacheDir: '.tmp/canvas-workflow-access/vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] },
   server: { host: '127.0.0.1', port: 1741, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
-const denial = '工作流卡片的创建、编辑和运行需要 Pro；已有结果仍可查看和导出';
+const denial = '运行工作流卡片需要 Pro。已有结果仍可查看和导出';
 try {
   const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
   const errors = [];
@@ -39,12 +39,6 @@ try {
     };
   }, denial);
   await selectCanvasTool(page, '本地 H3 视频');
-  const upgrade = page.getByRole('dialog', { name: '解锁 Pro' });
-  await upgrade.waitFor();
-  await upgrade.getByRole('button', { name: '暂不升级' }).click();
-  assert.deepEqual(await page.evaluate(() => window.accessCalls), []);
-  await enableCanvasToolbarPro(page);
-  await selectCanvasTool(page, '本地 H3 视频');
   await page.mouse.click(890, 180);
   const card = page.locator('.workflow-card.is-comfy-video');
   const prompt = card.locator('.comfy-video-prompt');
@@ -59,16 +53,17 @@ try {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const controller = canvasWorkflowController('p');
     await controller.flush();
-    window.store.setState(state => ({ cloudEntitlement: { ...state.cloudEntitlement, offline_state: 'expired' } }));
+    window.store.setState({ cloudAuth: { logged_in: true, user_id: 'tester', cloud_available: true },
+      cloudEntitlement: { user_id: 'tester', tier: 'pro', offline_state: 'expired' } });
     window.accessCalls = [];
     const h3 = controller.document.nodes.find(node => node.kind === 'comfy-video');
-    const editError = await controller.edit([{ ...h3, prompt: '过期后未获授权的修改' }]).then(() => '', String);
+    const editError = await controller.edit([{ ...h3, prompt: '过期后仍可保存的修改' }]).then(() => '', String);
     return { editError, prompt: controller.document.nodes[0].prompt, run: controller.document.run };
   });
-  assert.deepEqual(expired, { editError: denial, prompt: '已保存的原始镜头', run: null });
+  assert.deepEqual(expired, { editError: '', prompt: '过期后仍可保存的修改', run: null });
   await card.getByRole('button', { name: '运行', exact: true }).click();
   await page.getByRole('alert', { name: '工作流问题' }).locator('p').filter({ hasText: denial }).waitFor();
-  assert.deepEqual(await page.evaluate(() => window.accessCalls), ['canvas_workflow_authorize', 'canvas_workflow_authorize']);
+  assert.deepEqual(await page.evaluate(() => window.accessCalls), ['canvas_workflow_authorize']);
 
   await page.evaluate(() => window.store.setState({ cloudAuth: { logged_in: true, user_id: 'tester', cloud_available: true },
     cloudEntitlement: { user_id: 'tester', tier: 'pro', offline_state: 'fresh', balances: { daily: 0, sub: 0, topup: 0 },

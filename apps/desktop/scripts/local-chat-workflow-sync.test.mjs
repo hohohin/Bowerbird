@@ -120,24 +120,7 @@ function fixture(initial = doc([node('original')]), options = {}) {
     hold: () => { let release; gate = new Promise(resolve => { release = resolve; }); return () => { gate = undefined; release(); }; } };
 }
 
-const deniedCanvasPro = async () => { throw new Error('工作流卡片的创建、编辑和运行需要 Pro；已有结果仍可查看和导出'); };
-
-test('Canvas Pro denial rolls back queued drafts, leaving valid cleanup and free edits usable', async () => {
-  const agent = { ...node('agent', '旧配置'), kind: 'agent' };
-  const draw = { ...node('draw', '旧提示'), inputs: { image: [{ nodeId: agent.id, portId: 'image', slot: 1 }] } };
-  const f = fixture(doc([agent, draw]), { authorize: deniedCanvasPro });
-  const c = f.controller;
-  await c.load();
-  const bad = c.edit(c.document.nodes.map(card => card.id === agent.id ? { ...card, prompt: '未授权配置' } : card));
-  const queued = c.edit(c.document.nodes.map(card => card.id === draw.id ? { ...card, prompt: '带有未授权配置的下一份快照' } : card));
-  await Promise.all([assert.rejects(bad, /需要 Pro/), assert.rejects(queued, /需要 Pro/)]);
-  assert.equal(c.error, '');
-  assert.equal(c.document.nodes.find(card => card.id === agent.id).prompt, agent.prompt);
-  await c.edit(c.document.nodes.map(card => card.id === draw.id ? { ...card, prompt: '独立生成', inputs: {} } : { ...card, x: 60 }));
-  assert.deepEqual(f.saved().document.nodes.map(card => [card.x, card.prompt]), [[60, '旧配置'], [0, '独立生成']]);
-  await c.edit(c.document.nodes.filter(card => card.id !== agent.id));
-  assert.deepEqual(f.saved().document.nodes.map(card => card.id), ['draw']);
-});
+const deniedCanvasPro = async () => { throw new Error('运行工作流卡片需要 Pro。已有结果仍可查看和导出'); };
 
 test('Canvas Pro denial of the first native checkpoint never publishes a new run', async () => {
   const entered = Promise.withResolvers(), release = Promise.withResolvers();
@@ -158,19 +141,6 @@ test('Canvas Pro denial of the first native checkpoint never publishes a new run
   assert.equal(f.sends.length, 0);
 });
 
-test('Canvas Pro applies only to changed paid bindings on a free generation card', () => {
-  const f = fixture();
-  const { workflowDefinitionRequiresPro } = f.load(resolve(lib, 'workflowEntitlement.ts'));
-  const agent = { ...node('agent'), kind: 'agent' };
-  const paidWire = { nodeId: agent.id, portId: 'image', slot: 1 };
-  const draw = { ...node('draw'), inputs: { image: [paidWire] } };
-  const before = [agent, draw];
-  assert.equal(workflowDefinitionRequiresPro(before, [agent, { ...draw, inputs: { image: [{ assetId: 'new', slot: 1 }, { ...paidWire, slot: 2 }] } }]), false);
-  assert.equal(workflowDefinitionRequiresPro(before, [agent, { ...draw, inputs: { image: [{ ...paidWire, portId: 'mask' }] } }]), true);
-  assert.equal(workflowDefinitionRequiresPro(before, [agent, { ...draw, savedComfyAudio: [paidWire] }]), true);
-  assert.equal(workflowDefinitionRequiresPro(before, [agent, { ...draw, savedComfyR2V: { 'reference-image': [paidWire] } }]), true);
-});
-
 test('Canvas Pro permits generation creation and edits on a mixed board', async () => {
   const agent = { ...node('agent', '旧指令'), kind: 'agent' };
   const f = fixture(doc([agent]), { authorize: deniedCanvasPro });
@@ -179,8 +149,8 @@ test('Canvas Pro permits generation creation and edits on a mixed board', async 
   await f.controller.edit([...f.controller.document.nodes, draw]);
   await f.controller.edit(f.controller.document.nodes.map(card => card.id === draw.id ? { ...card, prompt: '一只蓝色小鸟' } : card));
   assert.equal(f.saved().document.nodes.find(card => card.id === draw.id).prompt, '一只蓝色小鸟');
-  await assert.rejects(() => f.controller.edit(f.controller.document.nodes.map(card => card.id === agent.id ? { ...card, prompt: '改写付费卡片' } : card)), /需要 Pro/);
-  assert.equal(f.saved().document.nodes.find(card => card.id === agent.id).prompt, agent.prompt);
+  await f.controller.edit(f.controller.document.nodes.map(card => card.id === agent.id ? { ...card, prompt: '修改 Agent 指令' } : card));
+  assert.equal(f.saved().document.nodes.find(card => card.id === agent.id).prompt, '修改 Agent 指令');
 });
 
 test('Canvas Pro allows an ordinary generation run that only reads a paid card’s cached output', async () => {
