@@ -1,14 +1,14 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
-## 逐镜分析单账号试价候选
+## 逐镜分析单账号试价
 
-在既有关闭态 0103 上，先应用 `0104_library_shot_pilot.sql`，再把 `_shared/library-shot-edge.ts` 定向合入现役 `understand-proxy`。迁移本身不分配账号。原件、Worker、其他 Edge 和 Secrets 沿用现役配置。上线前核对登记的测试账号与可用 Bcoin、Cloud 当日成本额度和真实模型配置。生产账号标识只用于受限配置，不写入仓库。
+2026-11-25 北京时间 11:13:33，生产已启用单账号私价。定向迁移 `0104_library_shot_pilot.sql` 并发布 `understand-proxy` v58 后，才在同一事务登记试用账号并启价。两档分别为每镜 ≤15 秒 0.054 Bcoin、>15 至 60 秒 0.134 Bcoin。官网与 Edge 直连的匿名报价均返回 HTTP 401。真单及扣费由用户本人在 Windows 验收版确认。[生产部署回执](../../project_logs/2026-11-25-library-shot-deployment.md)
 
 运营启用时原子设置该服务行 `active=true`、`pricing_ready=true`、`pilot_only=true` 和唯一 `pilot_user_id`，同时保留已核准的两档价格与定价版本。数据库对报价和建单共用已鉴权主体判断，试价行对匿名及普通登录账号的表查询均不可见。注册测试账号可以多次使用，每镜沿用既有余额、速率和成本保护。关闭新试单仅将该行设为 inactive 且 `pricing_ready=false`，保留私有标记、旧任务及其原价恢复。进入将来的公开报价需独立确认，清除私有配置后再开启公开门控。
 
-## 素材库分镜复刻已关闭态部署
+## 素材库分镜复刻基础服务的关闭态部署
 
-2026-11-25 北京时间 10:43:47，生产理解 Worker 已切换。数据库为 `0103_library_video_shots`，`entitlement` v51、`understand-proxy` v57、`understand-worker` v35 的生产包已逐文件读回。逐镜服务目录 `active=false`、`pricing_ready=false`。核验结果和回退位置见[生产部署回执](../../project_logs/2026-11-25-library-shot-deployment.md)。
+2026-11-25 北京时间 10:43:47，生产理解 Worker 完成首次切换。当时数据库为 `0103_library_video_shots`，`entitlement` v51、`understand-proxy` v57、`understand-worker` v35 的生产包均已逐文件读回，逐镜服务目录 `active=false`、`pricing_ready=false`。[生产部署回执](../../project_logs/2026-11-25-library-shot-deployment.md)
 
 逐镜视觉理解使用 `library_video_shot_analysis`。2026-11-24 用户已确认上游账单。按已实测模型 `doubao-seed-2-1-lite-260915` 的 1.6 倍口径，单镜不超过 15 秒为 0.054 Bcoin，超过 15 秒至 60 秒为 0.134 Bcoin。每镜使用 1 fps 无声视频并一次返回三项结果。批量确认使用各待分析区间的合计，停止后仅已受理的镜头具有预留。整币消费者继续使用原有的整币分配及签名字段。本服务的余额和交易可通过 `entitlement.balances_milli` 和 `recent_transactions[].amount_milli` 核对，每千单位为一个 Bcoin。
 
