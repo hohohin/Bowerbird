@@ -85,6 +85,10 @@ Deno.test("public chat capability, private skill admission and temporary pending
   let paidBegins = 0, paidQuotes = 0;
   const paidQuote = { available:true,model:"deepseek-flash",pricing_version:1,max_credits:71,max_output_tokens:16384,
     rates_nano:{cache_hit:1280,cache_miss:64000,output:256000} };
+  let paidOriginalStatus: string | undefined;
+  let paidOriginalHash: string;
+  let paidUploads = 0;
+  let paidResumedUploads = 0;
   let caller = account, validToken = true, resumedUploads = 0;
   const h3Run = "33333333-3333-4333-8333-333333333333";
   let originPublished = false, originContinued = false, originStatus = "succeeded";
@@ -108,6 +112,11 @@ Deno.test("public chat capability, private skill admission and temporary pending
           return Response.json(originContinued && caller === account && url.searchParams.get("status") === "eq.succeeded" ? [{id:"previous"}] : []);
         }
         if (url.searchParams.has("idempotency_key")) {
+          if (url.searchParams.get("idempotency_key") === "eq.paid-key") {
+            return Response.json(paidOriginalStatus && caller === account ? [{ ...job(), id:account, status:paidOriginalStatus,
+              request_object_key:"paid-fixture", input_hash:paidOriginalHash, estimated_credits:paidQuote.max_credits,
+              pricing_version:paidQuote.pricing_version, paid_billing:{model:paidQuote.model,max_output_tokens:paidQuote.max_output_tokens} }] : []);
+          }
           const hashes: Record<string,string> = {
             "eq.old-key":"42eff990c9089edf91cf55d2fad82bb12443bc63597ba33efd073253736a505b",
             "eq.v1-upload":"db3c18cf2315b22e40e4b15ce76459739704ca29f40f7563af6d911f0f04f1e0",
@@ -128,9 +137,20 @@ Deno.test("public chat capability, private skill admission and temporary pending
         assertEquals(url.searchParams.get("display_payload"), 'cs.{"dshContinuation":true}');
         return Response.json(originPublished ? [{seq:90}] : []);
       case "/storage/v1/object/generation-temp/fixture": return Response.json({Key:"fixture"});
-      case "/rest/v1/rpc/enqueue_chat_completion":
-        assertEquals(JSON.parse(String(init?.body)),{p_id:"job",p_hash:"db3c18cf2315b22e40e4b15ce76459739704ca29f40f7563af6d911f0f04f1e0",p_success:true});
+      case "/storage/v1/object/generation-temp/paid-fixture":
+        paidUploads++;
+        return Response.json({Key:"paid-fixture"});
+      case "/rest/v1/rpc/enqueue_chat_completion": {
+        const enqueued = JSON.parse(String(init?.body));
+        if (enqueued.p_id === account) {
+          assertEquals(enqueued,{p_id:account,p_hash:paidOriginalHash,p_success:true});
+          paidOriginalStatus = "queued";
+          paidResumedUploads++;
+          return Response.json({...job(),id:account,status:paidOriginalStatus,estimated_credits:paidQuote.max_credits});
+        }
+        assertEquals(enqueued,{p_id:"job",p_hash:"db3c18cf2315b22e40e4b15ce76459739704ca29f40f7563af6d911f0f04f1e0",p_success:true});
         resumedUploads++; return Response.json({...job(),status:"queued"});
+      }
       case "/rest/v1/rpc/cancel_chat_dsh":
         assertEquals(JSON.parse(String(init?.body)),{p_user:account,p_id:"job",p_key:null});
         return Response.json({...job(),status:"failed",error_code:"chat_cancelled"});
@@ -147,6 +167,7 @@ Deno.test("public chat capability, private skill admission and temporary pending
         const body=JSON.parse(String(init?.body));
         assertEquals([body.p_model,body.p_pricing_version,body.p_max_credits,body.p_max_output_tokens,body.p_user_id], ["deepseek-flash",1,71,16384,account]);
         if (beginError) return Response.json({ code: "P0001", message: "fixture", details: beginError }, { status: 400 });
+        paidOriginalHash = body.p_hash;
         return Response.json({...job(),estimated_credits:71});
       }
       case "/rest/v1/rpc/get_chat_paid_receipt": {
@@ -270,7 +291,38 @@ Deno.test("public chat capability, private skill admission and temporary pending
     beginError = "insufficient_credits";
     assertEquals((await run(paid)).status,402);
     beginError = undefined;
+    const beforeReplay = [paidBegins, paidQuotes, credits];
+    const pausedModes = [["false","false","true",503],["true","true","true",403],["true","false","false",503]] as const;
+    for (const [billing, testOnly, v2, newStatus] of pausedModes) {
+      Deno.env.set("CHAT_DSH_TOKEN_BILLING_ENABLED",billing);
+      Deno.env.set("CHAT_DSH_VPS_V2_TEST_ONLY",testOnly);
+      Deno.env.set("CHAT_DSH_VPS_V2_ENABLED",v2);
+      marked = false;
+      paidOriginalStatus = "uploading";
+      assertEquals((await run(quoteRequest)).body.available,false);
+      assertEquals((await run({...paid,idempotency_key:"brand-new-paid-key"})).status,newStatus);
+      assertEquals((await run({...paid,idempotency_key:"existing-v2"})).status,newStatus);
+      caller="22222222-2222-4222-8222-222222222222";
+      assertEquals((await run(paid)).status,newStatus);
+      caller=account;
+      for (const changed of [{max_credits:72},{pricing_version:2},{max_output_tokens:32768},
+        {messages:[{role:"user",content:"不同内容"}]},{dsh_options:{model:"deepseek-v4-pro",reasoningEffort:"off"}}]) {
+        assertEquals((await run({...paid,...changed})).body.error.code,"quote_changed");
+      }
+      assertEquals((await run(paid)).body.status,"queued");
+      assertEquals((await run(paid)).body.status,"queued");
+      paidOriginalStatus = "succeeded";
+      assertEquals((await run(paid)).body.status,"succeeded");
+      assertEquals((await run({action:"get",idempotency_key:"paid-key"})).body.job_id,account);
+      assertEquals((await run({action:"get_paid_receipt",job_id:account})).body.receipt.fee_nano,"140800000");
+      assertEquals([paidBegins, paidQuotes, credits],beforeReplay);
+    }
+    assertEquals([paidUploads, paidResumedUploads],[pausedModes.length,pausedModes.length]);
     Deno.env.set("CHAT_DSH_TOKEN_BILLING_ENABLED","false");
+    Deno.env.set("CHAT_DSH_VPS_V2_TEST_ONLY","false");
+    Deno.env.set("CHAT_DSH_VPS_V2_ENABLED","true");
+    assertEquals((await run({action:"quote"})).body.available,true);
+    assertEquals((await run(session)).status,202);
     assertEquals((await run({action:"get_paid_receipt",job_id:account})).body.receipt.fee_nano,"140800000");
     caller="22222222-2222-4222-8222-222222222222";
     assertEquals((await run({action:"get_paid_receipt",job_id:account})).body.receipt,null);

@@ -4,7 +4,7 @@ import { WorkflowTriggerScheduler } from "./workflowTriggerScheduler";
 import { migrateWorkflowDocument } from "./workflowMigrations";
 import { assignCanvasCardNames } from "./canvasCardNames";
 import { canvasNodePayload } from "./canvasNodePayload";
-import { cloudChatEndedMessage, cloudTextRunError } from "./userError";
+import { cloudChatEndedMessage, cloudChatPaymentRejection, cloudTextRunError } from "./userError";
 import { activeTriggerSchedule, advanceTriggerSchedule, triggerScheduleOccurrence, workflowTriggerMode } from "./workflowTriggerSchedule";
 import { normalizeWorkflowLocalVideo, workflowNodeRequiresPro, workflowTitle, workflowCardWidth, workflowCompletionTriggers, h3CardDraft, h3DraftForResult, h3OriginalPrompt, h3PromptPatch, isH3ImageCard } from "./canvasWorkflow";
 import { isWorkflowProDenied } from "./workflowEntitlement";
@@ -23,7 +23,7 @@ import { workflowGenerationProvider, workflowProviderIssue } from "./workflowPro
 import { selectedChatOptions, chatProviderAccessIssue } from "./chatCapabilities";
 import { generationProviderIssue } from "./generationAvailability";
 import { autoRatioFromReferences } from "../components/creation/ratios";
-import { workflowLoopScope, workflowLoopRows, workflowLoopOutputs, workflowLoopItems, validateLoopStart } from "./workflowLoop";
+import { WORKFLOW_LOOP_MAX_ITEMS, workflowLoopScope, workflowLoopRows, workflowLoopOutputs, workflowLoopItems, validateLoopStart } from "./workflowLoop";
 import { WorkflowPlannerRuntime } from "./workflowPlannerRuntime";
 import { emit } from "@tauri-apps/api/event";
 import { getWorkflowHost, type WorkflowHostAdapter } from "./workflowHost";
@@ -33,7 +33,8 @@ import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationC
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasContentInput, contentInputAxisIndex } from "./canvasContentInput";
 import { agentResultValue } from "./workflowAgentResult";
-import { agentChatOptions, localChat, localChatRunning, type ChatConversation, type ChatProvider } from "./localChat";
+import { agentChatOptions, DSH_MODELS, localChat, localChatRunning, type ChatCodexOptions, type ChatConversation, type ChatProvider } from "./localChat";
+import { ChatPaymentCancelled, chatPaymentAuthorization, confirmWorkflowChatPayment } from "./localChatPaid";
 import { ensureLocalChatEvents, useLocalChatStore } from "./localChatStore";
 import { createdChatTurnCards, terminalDshTurnFailure, workflowAgentMessage, workflowAgentProvider, workflowChatOutputs } from "./workflowAgentChat";
 import { contentTableRows } from "./contentTable";
@@ -55,6 +56,11 @@ const r2vPorts = Object.values(H3_R2V_INPUT_PORTS);
 
 const scheduleSessionStartedAt = Date.now();
 const workflowPollTimeout = 30 * 60_000;
+const manualChatPaymentRequired = "云端 DSH 对话已启用 Bcoin 计费，请手动运行并确认费用。";
+const automaticChatPaymentRequired = "定时或完成触发无法授权云端 DSH 对话费用，请手动运行并确认 Bcoin 费用。";
+class WorkflowChatPaymentRejected extends WorkflowNodeError {}
+
+type PrepareAgentConversation = (options: ChatCodexOptions | undefined) => Promise<void>;
 let activeCanvasProject: string | null | undefined;
 export function canvasWorkflowController(projectId: string) {
   let controller = controllers.get(projectId);
@@ -176,7 +182,9 @@ export class CanvasWorkflowController {
     const origin = this.host.getState();
     const cancellation = new AbortController();
     let unsubscribe = this.host.subscribe?.(state => {
-      if (origin.cloudAuth?.user_id !== state.cloudAuth?.user_id) cancellation.abort();
+      if (origin.cloudAuth?.user_id !== state.cloudAuth?.user_id || !background && (
+        origin.activeProjectId !== state.activeProjectId || origin.projectRouteRevision !== state.projectRouteRevision || state.projectRoutePending
+      )) cancellation.abort();
     });
     const start: CardStart = { kind, signal: cancellation.signal, cancel: () => cancellation.abort(), current: () => {
       const now = this.host.getState();
@@ -876,11 +884,11 @@ export class CanvasWorkflowController {
     } });
   }
 
-  async start(startId: string, single = false, background = false, optimizeOnce?: boolean) {
+  async start(startId: string, single = false, background = false, optimizeOnce?: boolean, prepareAgentConversation?: PrepareAgentConversation) {
     if (this.startingCards.has(startId)) return;
     this.issue = null;
     const start = this.beginStart(startId, "run", background);
-    try { await this.startRun(startId, single, undefined, background, undefined, start, optimizeOnce); }
+    try { await this.startRun(startId, single, undefined, background, undefined, start, optimizeOnce, prepareAgentConversation); }
     catch (error) {
       if (error === start.signal.reason && start.signal.aborted) return;
       const node = this.document.nodes.find(node => node.id === startId);
@@ -888,6 +896,51 @@ export class CanvasWorkflowController {
       throw error;
     }
     finally { start.release(); }
+  }
+  private agentChatSelection(node: WorkflowNode) {
+    const { summaries, drafts } = useLocalChatStore.getState();
+    const existing = node.chatConversationId ? summaries[node.chatConversationId]
+      : Object.values(summaries).find(chat => chat.projectId === this.projectId && chat.nodeId === node.id);
+    const provider = existing?.provider ?? workflowAgentProvider(node);
+    const options = (existing && (drafts[existing.id]?.codexOptions ?? existing.codexOptions)) ?? node.chatCodexOptions;
+    return { provider, conversationId: existing?.id ?? node.chatConversationId,
+      options: selectedChatOptions(provider, agentChatOptions(provider, options)) };
+  }
+  private async prepareChatPayments(nodes: WorkflowNode[], order: string[], loop: WorkflowRun["loop"], start: CardStart) {
+    const agents = nodes.filter(node => node.kind === "agent" && order.includes(node.id));
+    if (!agents.length) return {};
+    await useLocalChatStore.getState().loadProject(this.projectId);
+    if (!start.current()) return {};
+    const endIndex = loop ? (loop.items?.length ?? WORKFLOW_LOOP_MAX_ITEMS) : undefined;
+    const paid = agents.flatMap(node => {
+      const { provider, options } = this.agentChatSelection(node);
+      if (provider !== "dsh-cloud") return [];
+      const model = options?.model ?? DSH_MODELS[0].model;
+      const lastLoopIndex = loop?.bodyIds.includes(node.id) && endIndex !== undefined ? endIndex - 1 : undefined;
+      const turns = loop && lastLoopIndex !== undefined ? lastLoopIndex - loop.index + 1 : 1;
+      return [{ node, options: { ...options, model }, turns, lastLoopIndex }];
+    });
+    if (!paid.length || (await localChat.quote()).paid_available !== true || !start.current()) return {};
+    const account = this.host.getState().cloudAuth?.user_id;
+    if (!account) throw new Error("请重新登录 Bowerbird 账号后确认云端对话费用。");
+    const turns = new Map<string, number>();
+    for (const { options: { model }, turns: count } of paid) turns.set(model, (turns.get(model) ?? 0) + count);
+    const models = await Promise.all([...turns].map(async ([model, count]) => {
+      const quote = await localChat.quotePaid(model);
+      if (!quote.available || quote.model !== model || quote.account_id !== account) throw new Error("所选模型的云端对话报价暂不可用，请重新获取。");
+      return { quote, turns: count };
+    }));
+    if (!start.current() || !await confirmWorkflowChatPayment({ cardCount: paid.length, models }, start.signal) || !start.current()) return null;
+    const byModel = new Map(models.map(({ quote }) => [quote.model, chatPaymentAuthorization(quote)]));
+    const payments: NonNullable<WorkflowRun["chatPayments"]> = Object.fromEntries(paid.map(({ node, options, lastLoopIndex }) =>
+      [node.id, { authorization: byModel.get(options.model)!, options, lastLoopIndex }]));
+    return payments;
+  }
+  private async checkAutomaticChatPayment(node: WorkflowNode) {
+    let paid;
+    try { paid = (await localChat.quote()).paid_available === true; }
+    catch { throw new WorkflowChatPaymentRejected("暂时无法核对云端 DSH 对话费用，请稍后手动运行。", node); }
+    if (paid) throw new WorkflowChatPaymentRejected(automaticChatPaymentRequired, node);
   }
   private async checkNewSubmission(node: WorkflowNode, chatProvider?: ChatProvider) {
     if (node.kind === "agent" && !chatProvider) {
@@ -1048,10 +1101,11 @@ export class CanvasWorkflowController {
     const freezeInputs = (node: WorkflowNode): WorkflowNode["inputs"] => Object.fromEntries(Object.entries(node.inputs).map(([port, bindings]) => [port, bindings.map(input => input.groupId && groupAssets.has(input.groupId) ? { ...input, assetIds: groupAssets.get(input.groupId)![input.autoConnect || port === H3_VIDEO_AUDIO_PORT || r2vPorts.some(id => id === port) ? "media" : "image"] } : input)]));
     return { cellTexts, cellValues, freezeInputs };
   }
-  private async startRun(startId: string, single = false, completionSessionId?: string, background = false, scheduleId?: string, start?: CardStart, optimizeOnce?: boolean) {
+  private async startRun(startId: string, single = false, completionSessionId?: string, background = false, scheduleId?: string, start?: CardStart, optimizeOnce?: boolean, prepareAgentConversation?: PrepareAgentConversation) {
     if (this.discarded) return;
     const { cloudAuth, settings } = this.host.getState();
     const accountId = cloudAuth?.user_id ?? null;
+    const automatic = background || !!(completionSessionId || scheduleId);
     const optimizeOnManualRun = !background && (optimizeOnce ?? settings?.h3_auto_optimize_prompt === true);
     if (start && !start.current()) return;
     if (this.encapsulating) throw new Error("正在封装卡片，请稍后再运行");
@@ -1131,6 +1185,15 @@ export class CanvasWorkflowController {
     }
     const { cellTexts, cellValues, freezeInputs } = await waitForCardStart(this.preparePhase(order, executionNodes, writeNodeIds, loop, readCanvas, inputs), start);
     if (start && !start.current()) return;
+    const chatPayments = start && !automatic ? await waitForCardStart(this.prepareChatPayments(executionNodes, order, loop, start), start) : {};
+    if (!chatPayments || start && !start.current()) return;
+    if (Object.keys(chatPayments).length && JSON.stringify(workflowOrder(forDispatch(this.document.nodes), startId, single)) !== JSON.stringify(order)) {
+      throw new Error("工作流连接已改变，请重新运行并确认费用。");
+    }
+    if (prepareAgentConversation) {
+      await waitForCardStart(prepareAgentConversation(chatPayments[startId]?.options ?? this.agentChatSelection(startNode).options), start);
+      if (start && !start.current()) return;
+    }
     await waitForCardStart(api.projectThreadCreate({ id: threadId, projectId: this.projectId, title: "工作流", origin: "direct" }), start);
     if (start && !start.current()) return;
     if (startNode.kind === "trigger") {
@@ -1148,7 +1211,9 @@ export class CanvasWorkflowController {
       completionSeen: [...(node.completionSeen ?? []), completionSessionId] } : node)
       .map(node => node.id === startId && scheduleId ? { ...node, triggerSchedule: advanceTriggerSchedule(node.triggerSchedule!) } : node);
     await this.saveRun({ id: runId, startId, threadId, order, lockedNodeIds, writeNodeIds, cellTexts, cellValues, status: "running",
-      ...(single && !background && startNode.kind === "agent" ? { manualCardRun: true as const } : {}),
+      ...(single && !automatic && startNode.kind === "agent" ? { manualCardRun: true as const } : {}),
+      ...(automatic ? { automatic: true as const } : {}),
+      ...(Object.keys(chatPayments).length ? { chatPayments } : {}),
       ...(scheduleId ? { scheduleId } : {}),
       ...(loop ? { loop } : {}),
       accountId,
@@ -1292,6 +1357,7 @@ export class CanvasWorkflowController {
     await this.waitForWrites();
     const run = this.run(runId), loop = run?.loop;
     if (!loop || run.status !== "stopped" || this.stopping.has(runId) || this.executing.has(runId)) return;
+    if (this.startingCards.has(run.startId)) return;
     if (loop.items && (loop.startIndex ?? 0) + loop.completed.length === loop.items.length) return;
     const nodes = workflowExecutionNodes(this.document.nodes, run.startId);
     const order = workflowOrder(this.document.nodes, run.startId);
@@ -1301,21 +1367,38 @@ export class CanvasWorkflowController {
     }
     await api.canvasWorkflowAuthorize();
     for (const id of loop.bodyIds) await this.checkNewSubmission(this.document.nodes.find(node => node.id === id)!);
-    if (this.run(runId) !== run || this.stopping.has(runId) || this.executing.has(runId)) return;
+    if (this.run(runId) !== run || this.stopping.has(runId) || this.executing.has(runId) || this.startingCards.has(run.startId)) return;
     const access = workflowDependencies(nodes, order), writes = workflowWriteNodes(nodes, order);
     if (workflowRuns(this.document).filter(workflowRunActive).some(other => workflowAccessConflict(this.document.nodes, access, writes,
       other.lockedNodeIds ?? workflowDependencies(this.document.nodes, other.order), other.writeNodeIds ?? workflowWriteNodes(this.document.nodes, other.order)))
       || [...this.reservations.values()].some(other => workflowAccessConflict(this.document.nodes, access, writes, other.access, other.writes))) {
       throw new Error("此运行会修改其他工作流正在使用的卡片，请等待对应流程完成");
     }
-    // Explicitly restart the interrupted item, keeping frozen input and completed items.
-    const steps = { ...run.steps };
-    for (const id of loop.bodyIds) steps[id] = { status: "pending" };
-    if (!loop.items) steps[loop.nodeId] = { status: "pending" };
-    this.stopped.delete(runId);
-    await this.saveRun({ ...run, status: "waiting", steps, lockedNodeIds: access, writeNodeIds: writes }, this.document.nodes.map(node =>
-      loop.bodyIds.includes(node.id) ? { ...node, outputs: {}, ...(node.kind === "generation" ? { activeSessionNodeId: null } : {}) }
-        : node.id === loop.nodeId && loop.items ? { ...node, outputs: workflowLoopOutputs(loop.items[loop.index], loop.index) } : node));
+    const start = this.beginStart(run.startId, "run");
+    this.reservations.set(runId, { access, writes });
+    try {
+      const remaining = order.filter(id => loop.bodyIds.includes(id) || run.steps[id].status === "pending" && !run.steps[id].chatInput);
+      const chatPayments = await waitForCardStart(this.prepareChatPayments(nodes, remaining, loop, start), start);
+      if (!chatPayments || !start.current() || this.run(runId) !== run) return;
+      if (Object.keys(chatPayments).length && JSON.stringify(workflowOrder(this.document.nodes, run.startId)) !== JSON.stringify(order)) {
+        throw new Error("工作流连接已改变，请重新运行并确认费用。");
+      }
+      // Explicitly restart the interrupted item, keeping frozen input and completed items.
+      const steps = { ...run.steps };
+      for (const id of loop.bodyIds) steps[id] = { status: "pending" };
+      if (!loop.items) steps[loop.nodeId] = { status: "pending" };
+      this.stopped.delete(runId);
+      await this.saveRun({ ...run, status: "waiting", automatic: undefined, chatPayments, steps, lockedNodeIds: access, writeNodeIds: writes }, this.document.nodes.map(node =>
+        loop.bodyIds.includes(node.id) ? { ...node, outputs: {}, ...(node.kind === "generation" ? { activeSessionNodeId: null } : {}) }
+          : node.id === loop.nodeId && loop.items ? { ...node, outputs: workflowLoopOutputs(loop.items[loop.index], loop.index) } : node));
+      if (!start.current()) { await this.stopBeforeDispatch(runId); return; }
+    } catch (error) {
+      if (error === start.signal.reason && start.signal.aborted) return;
+      throw error;
+    } finally {
+      this.reservations.delete(runId);
+      start.release();
+    }
     await this.continue(runId);
   }
   private async step(runId: string, id: string, patch: Partial<WorkflowStep>) {
@@ -1526,37 +1609,61 @@ export class CanvasWorkflowController {
 
   private async chatResult(runId: string, node: WorkflowNode, step: WorkflowStep, assets: Asset[], halted: () => boolean): Promise<Record<string, WorkflowValue> | null> {
     const store = useLocalChatStore.getState();
+    const run = this.run(runId), payment = run.chatPayments?.[node.id];
+    const authorization = step.chatPaidAuthorization ?? (!step.chatInput ? payment?.authorization : undefined);
     let input = step.chatInput;
     if (!input) {
       if (step.status !== "pending") throw new Error("原 Agent 提交状态未知，请先核对原任务，不能重新提交");
       await store.loadProject(this.projectId);
-      const summaries = useLocalChatStore.getState().summaries;
-      const existing = node.chatConversationId ? summaries[node.chatConversationId]
-        : Object.values(summaries).find(chat => chat.projectId === this.projectId && chat.nodeId === node.id);
-      const provider = existing?.provider ?? workflowAgentProvider(node);
+      if (halted()) return null;
+      const { provider, conversationId, options } = this.agentChatSelection(node);
+      if (payment && (provider !== "dsh-cloud" || options?.model !== payment.authorization.model)) {
+        throw new WorkflowChatPaymentRejected("Agent 卡片的对话模型已改变，请重新运行并确认费用。", node);
+      }
+      if (payment?.lastLoopIndex !== undefined && (!run.loop || run.loop.index > payment.lastLoopIndex)) {
+        throw new WorkflowChatPaymentRejected("本次循环超出已确认的云端对话轮数，请重新运行并确认费用。", node);
+      }
       const issue = chatProviderAccessIssue(provider, this.host.getState());
       if (issue) throw new WorkflowNodeError(issue.message, node);
-      const run = this.run(runId), snapshot = run.steps[node.id].agentInput!;
+      const snapshot = this.run(runId).steps[node.id].agentInput!;
       input = { requestId: crypto.randomUUID(), projectId: this.projectId, agentNodeId: node.id,
         ...(run.manualCardRun && run.startId === node.id ? { manualCardRun: true } : {}),
-        conversationId: existing?.id ?? node.chatConversationId, provider,
-        codexOptions: selectedChatOptions(provider, agentChatOptions(provider, existing ? useLocalChatStore.getState().drafts[existing.id]?.codexOptions ?? existing.codexOptions ?? node.chatCodexOptions : node.chatCodexOptions)),
+        conversationId, provider, codexOptions: payment?.options ?? options,
         text: workflowAgentMessage(cloudAgentProfilePrompt(snapshot.prompt, snapshot.visualProfile), snapshot.source, provider, assets.map(asset => isVideoPath(asset.store_path!) ? "视频" : "图片")),
         referenceAssetIds: snapshot.assetIds,
         cardDefaults: { provider: this.host.getState().defaultProvider, videoChannel: "jimeng", videoOptions: { ...DEFAULT_VIDEO_OPTIONS } },
         placement: { x: node.x, y: node.y, width: workflowCardWidth(node), height: node.layoutSize?.height ?? 330, zIndex: Date.now() % 1000000 } };
-      await this.step(runId, node.id, { status: "running", chatInput: input, detail: "正在发送" });
+      await this.step(runId, node.id, { status: "running", chatInput: input, ...(authorization ? { chatPaidAuthorization: authorization } : {}), detail: "正在发送" });
     }
     let chat: ChatConversation | null;
+    let sending = false;
     try {
       chat = await localChat.getByRequest(input.requestId);
       if (!chat && halted()) return null;
       // Only a recorded turn identifies a prior submission. Older retry snapshots also
       // stored the conversation ID before their new request was ever sent.
       if (!chat && step.chatTurnId) throw new Error("原 Agent 轮次记录已不存在，无法取回");
-      if (!chat) chat = await store.send(input, false, () => !halted()); // The persisted native request key makes an uncertain IPC replay safe.
+      if (!chat) {
+        if (authorization && (authorization.account_id !== this.host.getState().cloudAuth?.user_id || input.provider !== "dsh-cloud"
+          || input.codexOptions?.model !== authorization.model)) {
+          throw new WorkflowChatPaymentRejected("工作流的账号或模型与 Bcoin 授权不一致，请重新运行并确认费用。", node);
+        }
+        if (input.provider === "dsh-cloud" && run.automatic && !authorization) await this.checkAutomaticChatPayment(node);
+        if (halted()) return null;
+        sending = true;
+        // The persisted native request key makes an uncertain IPC replay safe.
+        chat = await store.send(input, authorization ?? false, () => !halted());
+      }
     } catch (error) {
-      if (!halted()) await this.step(runId, node.id, { status: "waiting", error: String(error), detail: "等待核对原回复" });
+      if (halted()) return null;
+      if (error instanceof WorkflowChatPaymentRejected) throw error;
+      if (sending && input.provider === "dsh-cloud") {
+        const rejection = error instanceof ChatPaymentCancelled ? "已取消云端对话费用授权，请重新运行。"
+          : authorization && /账号已切换|本轮 Bcoin 授权仅适用于云端 DSH 对话/.test(String(error))
+            ? "工作流的账号或模型与 Bcoin 授权不一致，请重新运行并确认费用。" : cloudChatPaymentRejection(error);
+        if (rejection) throw new WorkflowChatPaymentRejected(run.automatic && rejection === manualChatPaymentRequired ? automaticChatPaymentRequired : rejection, node);
+      }
+      await this.step(runId, node.id, { status: "waiting", error: String(error), detail: "等待核对原回复" });
       return null;
     }
     if (chat.projectId !== this.projectId || chat.nodeId !== node.id || !chat.submittedTurnId || (input.conversationId && chat.id !== input.conversationId)
@@ -1581,6 +1688,10 @@ export class CanvasWorkflowController {
     }
     const messages = chat.messages.filter(message => message.turnId === turnId && message.role === "assistant");
     if (messages.some(message => ["failed", "interrupted", "stopped"].includes(message.status))) {
+      if (chat.provider === "dsh-cloud" && chat.messages[chat.messages.length - 1]?.turnId === turnId) {
+        const rejection = cloudChatPaymentRejection(chat.error);
+        if (rejection) throw new WorkflowChatPaymentRejected(run.automatic && rejection === manualChatPaymentRequired ? automaticChatPaymentRequired : rejection, node);
+      }
       if (chat.messages[chat.messages.length - 1]?.turnId === turnId && cloudChatEndedMessage(chat.error)) throw new Error(chat.error!);
       // A host-confirmed failure is terminal: waiting and re-querying the same turn would keep
       // showing "take back the original reply" for a reply that can never exist.
@@ -2303,7 +2414,7 @@ export class CanvasWorkflowController {
             if (!currentTrigger || this.run(runId).triggerQueue?.[0] !== triggerId || workflowTriggerMode(currentTrigger) !== "completion"
               || !(currentTrigger.triggerCount! > 0)) continue;
             // One save commits the event, decremented budget and fresh task steps before submission.
-            await this.saveRun({ ...this.run(runId), startId: triggerId, order, loop, triggerQueue: this.run(runId).triggerQueue?.slice(1), lockedNodeIds, writeNodeIds, cellTexts, cellValues,
+            await this.saveRun({ ...this.run(runId), automatic: true, chatPayments: undefined, startId: triggerId, order, loop, triggerQueue: this.run(runId).triggerQueue?.slice(1), lockedNodeIds, writeNodeIds, cellTexts, cellValues,
               steps: { ...completed.steps, ...Object.fromEntries(order.map(id => [id, { status: "pending" as const }])) } },
               this.document.nodes.map(node => ({ ...node,
                 ...(node.id === triggerId ? { triggerCount: Math.max(0, (node.triggerCount ?? 0) - 1) } : {}),
@@ -2344,7 +2455,8 @@ export class CanvasWorkflowController {
         }
         this.stopped.add(runId);
         const deliveryFailure = failures.size > 0 && [...failures.keys()].every(id => this.document.nodes.some(node => node.id === id && node.textTarget));
-        await this.saveRun({ ...run, status: run.loop || deliveryFailure ? "waiting" : "failed", triggerQueue: run.loop || deliveryFailure ? run.triggerQueue : [], steps }).catch(() => {});
+        const resumable = ![...failures.values()].some(reason => reason instanceof WorkflowChatPaymentRejected) && (!!run.loop || deliveryFailure);
+        await this.saveRun({ ...run, status: resumable ? "waiting" : "failed", triggerQueue: resumable ? run.triggerQueue : [], steps }).catch(() => {});
       }
     } finally {
       await Promise.all(active.values());

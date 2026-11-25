@@ -1,6 +1,6 @@
 import { userErrorMessage } from "../lib/userError";
 import { useProjectChatSummaries, useLocalChatStore } from "../lib/localChatStore";
-import { agentChatOptions, localChat, localChatRunning, type ChatCardDefaults, type ChatProvider } from "../lib/localChat";
+import { agentChatOptions, localChat, localChatRunning, type ChatCardDefaults, type ChatCodexOptions, type ChatProvider } from "../lib/localChat";
 import { createdChatTurnCards, terminalDshTurnFailure, workflowAgentProvider } from "../lib/workflowAgentChat";
 import { chatDshStatus, chatQuote } from "../lib/chatCapabilities";
 import { profileExtractionIssue, profileInputKey, workflowProviderIssue } from "../lib/workflowProviderIssue";
@@ -505,16 +505,14 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
             }
           }
         }
-        if (conversationId && (store.summaries[conversationId]?.turnCount ?? 0) > 0) {
-          await controller.flush();
-          const options = store.drafts[conversationId]?.codexOptions ?? store.summaries[conversationId]?.codexOptions ?? node.chatCodexOptions;
-          const chat = await localChat.newOnCard(projectId, node.id, conversationId, agentChatOptions(workflowAgentProvider(node), options));
+        const prepareConversation = conversationId && (store.summaries[conversationId]?.turnCount ?? 0) > 0 ? async (options: ChatCodexOptions | undefined) => {
+          const chat = await localChat.newOnCard(projectId, node.id, conversationId, options);
           store.applyConversation(chat);
           await controller.refreshExternalCards();
           if (chat.id !== conversationId) onNewAgentChat?.(conversationId);
-        }
+        } : undefined;
         // start registers its own lock synchronously. The card action lock covers preparation only.
-        return controller.start(node.id, true);
+        return controller.start(node.id, true, false, undefined, prepareConversation);
       }
       const provider = action === "new" ? undefined : action;
       if (conversationId) {

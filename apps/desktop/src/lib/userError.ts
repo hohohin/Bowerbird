@@ -44,6 +44,20 @@ function errorText(error: unknown, depth = 0): string {
   return [code, errorText(value.safe_message ?? value.message ?? value.error, depth + 1)].filter(Boolean).join(": ");
 }
 
+/** A rejection that occurred before Cloud admitted the turn. A transport error is not a rejection. */
+export function cloudChatPaymentRejection(error: unknown): string | null {
+  const text = errorText(error);
+  if (/insufficient_credits|当前 Bcoin 余额低于本轮授权上限/.test(text)) return "当前 Bcoin 余额低于本轮授权上限，请补充后重新运行。";
+  if (/quote_changed|云端对话报价已变化|本轮报价已变化/.test(text)) return "云端对话报价已变化，请重新运行并核对当前报价。";
+  if (/daily_cost_limit|cost_limit_reached|云端对话今日(?:服务)?额度已用完/.test(text)) return "云端对话已达到平台今日额度，请稍后重新运行。";
+  if (/云端 DSH 付费对话(?:尚未开放|暂不可用)|云端对话报价暂不可用/.test(text)) return "云端对话报价暂不可用，请稍后重新运行。";
+  if (/authorization_required|请先查看并确认本轮云端对话的费用上限|请在对话中确认本轮 Bcoin 授权/.test(text)) return "云端 DSH 对话已启用 Bcoin 计费，请手动运行并确认费用。";
+  if (/查看云端对话报价后再发送|(?:^|\bHTTP\s+)426\b/.test(text) || (typeof error === "object" && error !== null && "status" in error && error.status === 426)) {
+    return "请更新 Bowerbird 桌面端，再手动运行并确认云端对话费用。";
+  }
+  return null;
+}
+
 /** A terminal chat completion has no saved reply, even if upstream billing is unresolved. */
 export function cloudChatEndedMessage(error: unknown): string | null {
   const raw = errorText(error).trim().replace(/^Error:\s*/i, "");

@@ -71,6 +71,8 @@ pub(super) struct Pending {
     pub(super) account: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) paid: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paid_upload: Option<Value>,
     #[serde(default)]
     cancel_requested: bool,
     receipt: Option<Receipt>,
@@ -91,6 +93,7 @@ impl Pending {
             job: None,
             account,
             paid: false,
+            paid_upload: None,
             cancel_requested: false,
             receipt: None,
         }
@@ -103,6 +106,11 @@ impl Pending {
         let pending: Self = serde_json::from_value(value)?;
         if !matches!(pending.engine.as_str(), "dsh-vps-v1" | ENGINE) || pending.key != format!("chat-dsh-{turn}") {
             return Err(error("原云端 DSH 任务记录无效"));
+        }
+        if pending.paid_upload.as_ref().is_some_and(|body| !pending.paid || pending.engine != ENGINE
+            || body["action"] != "create_paid" || body["engine"] != ENGINE
+            || body["idempotency_key"] != pending.key.as_str()) {
+            return Err(error("原云端 DSH 上传记录无效"));
         }
         Ok(Some(pending))
     }
@@ -224,9 +232,13 @@ async fn drive<Fut: Future<Output = AppResult<Value>> + Send>(
     };
     // Wait for admission before cancelling so a slow create cannot outrun its own cancel.
     let recovering = create.is_none();
+    let mut retried_upload = false;
     let mut next = if let Some(body) = create {
         if *cancel.borrow() {
             return Ok("stopped");
+        }
+        if pending.paid {
+            pending.paid_upload = Some(body.clone());
         }
         pending.save(db, turn)?;
         body
@@ -251,15 +263,21 @@ async fn drive<Fut: Future<Output = AppResult<Value>> + Send>(
             .as_str()
             .filter(|s| !s.is_empty() && s.len() <= 200)
             .ok_or_else(|| error("云端 DSH 未返回原任务编号，可以取回原请求"))?;
-        match &pending.job {
+        let mut checkpoint_changed = match &pending.job {
             Some(expected) if expected != job => {
                 return Err(error("云端返回了其他任务，已停止处理"))
             }
             None => {
                 pending.job = Some(job.into());
-                pending.save(db, turn)?;
+                true
             }
-            _ => {}
+            _ => false,
+        };
+        if value["status"] != "uploading" && pending.paid_upload.take().is_some() {
+            checkpoint_changed = true;
+        }
+        if checkpoint_changed {
+            pending.save(db, turn)?;
         }
         if value["error"]["code"] == "chat_cancelled" || value["status"] == "cancelled" {
             return Ok("stopped");
@@ -284,6 +302,17 @@ async fn drive<Fut: Future<Output = AppResult<Value>> + Send>(
         if *cancel.borrow() {
             next = pending.query("cancel");
             continue;
+        }
+        if value["status"] == "uploading" {
+            if let Some(body) = &pending.paid_upload {
+                if retried_upload {
+                    return Err(error("原云端 DSH 输入尚未上传完成，可以稍后取回"));
+                }
+                // Only replay after the Cloud recognizes the original order. Keep its frozen quote.
+                retried_upload = true;
+                next = body.clone();
+                continue;
+            }
         }
         if let Some(tool) = value.get("pending_tool").filter(|t| !t.is_null()) {
             let call = tool["id"]

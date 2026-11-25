@@ -35,14 +35,17 @@ type Job = {
   content_expires_at: string;
   lease_expires_at: string | null;
   pending_tool?: Record<string, unknown> | null;
+  paid_billing?: { model: string; max_output_tokens: number } | null;
 };
 const BUCKET = "generation-temp";
+const REPLAY_COLUMNS = "id,status,input_hash,request_object_key,actual_credits,estimated_credits,pricing_version,hold_id,error_code,content_expires_at,lease_expires_at,result_json,dsh_tools_enabled";
 const enabled = () => Deno.env.get("CHAT_ENABLED") === "true";
 const dshEnabled = () => Deno.env.get("CHAT_DSH_VPS_ENABLED") === "true";
 const dshV2Enabled = () => dshEnabled() && Deno.env.get("CHAT_DSH_VPS_V2_ENABLED") === "true";
 const paidEnabled = () => Deno.env.get("CHAT_DSH_TOKEN_BILLING_ENABLED") === "true";
 const dshV2TrialAvailable = (user: { app_metadata?: unknown }) =>
   Deno.env.get("CHAT_DSH_VPS_V2_TEST_ONLY")?.trim().toLowerCase() !== "true" || accountTestMarker(user.app_metadata);
+const quoteChanged = () => new ApiError("quote_changed", "本轮报价已变化或与原请求不一致，请先核对原请求及当前报价");
 async function skillsAvailable(admin: SupabaseClient, user: { id: string; app_metadata?: unknown }) {
   if (!dshEnabled() || !accountTestMarker(user.app_metadata) ||
       Deno.env.get("AGENT_DSH_RUNTIME_SELECTION_ENABLED")?.trim().toLowerCase() !== "true" ||
@@ -152,24 +155,32 @@ async function create(
     !positiveInteger(raw.max_credits) || !positiveInteger(raw.max_output_tokens) || raw.max_output_tokens > 393216)) {
     throw new ApiError("invalid_request", "请先查看并确认本轮云端对话的费用上限");
   }
-  if (paid && !paidEnabled()) throw new ApiError("not_configured", "云端 DSH 付费对话尚未开放");
   const body = JSON.stringify(input), digest = await hash(body);
-  if (!paid && (input.engine !== DSH_CHAT_ENGINE_V2 || paidEnabled())) {
-    // Old clients can finish an interrupted upload or retrieve their exact original order.
-    const existing = await admin.from("chat_completion_jobs").select(
-      "id,status,input_hash,request_object_key,actual_credits,estimated_credits,pricing_version,hold_id,error_code,content_expires_at,lease_expires_at,result_json,dsh_tools_enabled",
-    ).eq("user_id", userId).eq("idempotency_key", raw.idempotency_key).maybeSingle();
-    if (existing.error) throw new ApiError("internal_error", "云端对话暂时无法读取", true);
-    if (!existing.data || (input.engine === DSH_CHAT_ENGINE_V2 && existing.data.estimated_credits !== 0)) {
+  const billingEnabled = paidEnabled();
+  if (!paid && (input.engine !== DSH_CHAT_ENGINE_V2 || billingEnabled)) {
+    const existing = await findOriginalJob(admin, userId, raw.idempotency_key, false);
+    if (!existing || (input.engine === DSH_CHAT_ENGINE_V2 && existing.estimated_credits !== 0)) {
       throw new ApiError("invalid_request", "请更新 Bowerbird 桌面端，查看云端对话报价后再发送。", false, 426);
     }
-    if (existing.data.input_hash !== digest) {
+    if (existing.input_hash !== digest) {
       throw new ApiError("invalid_request", "此请求已用于其他对话内容", false, 409);
     }
-    return enqueueIfUploading(admin, existing.data as Job, body, digest, cors);
+    return enqueueIfUploading(admin, existing, body, digest, cors);
   }
-  if (!dshV2Enabled()) throw new ApiError("not_configured", "云端 DSH 尚未开放");
-  if (!dshV2TrialAvailable(user)) throw new ApiError("invalid_request", "云端 DSH 目前仅向获准的测试账号开放。", false, 403);
+  const v2Enabled = dshV2Enabled(), eligible = dshV2TrialAvailable(user);
+  if (paid && (!billingEnabled || !v2Enabled || !eligible)) {
+    // A paused admission path may use the original hold and upload, without calling begin.
+    const existing = await findOriginalJob(admin, userId, raw.idempotency_key, true);
+    if (existing?.paid_billing) {
+      if (existing.input_hash !== digest || existing.paid_billing.model !== input.dsh_options?.model ||
+          existing.pricing_version !== raw.pricing_version || existing.estimated_credits !== raw.max_credits ||
+          existing.paid_billing.max_output_tokens !== raw.max_output_tokens) throw quoteChanged();
+      return enqueueIfUploading(admin, existing, body, digest, cors);
+    }
+    if (!billingEnabled) throw new ApiError("not_configured", "云端 DSH 付费对话尚未开放");
+  }
+  if (!v2Enabled) throw new ApiError("not_configured", "云端 DSH 尚未开放");
+  if (!eligible) throw new ApiError("invalid_request", "云端 DSH 目前仅向获准的测试账号开放。", false, 403);
   if (input.conversation_id?.startsWith("o-")) {
     await verifyOptimizationConversation(admin, userId, input.conversation_id, raw.idempotency_key);
   }
@@ -202,7 +213,7 @@ async function create(
         throw new ApiError("not_configured", "云端 DSH 付费对话暂不可用");
       }
       if (begun.error.details === "chat_paid_price_mismatch") {
-        throw new ApiError("quote_changed", "本轮报价已变化或与原请求不一致，请先核对原请求及当前报价");
+        throw quoteChanged();
       }
       if (begun.error.details === "insufficient_credits") {
         throw new ApiError("insufficient_credits", "当前 Bcoin 余额低于本轮授权上限");
@@ -241,6 +252,13 @@ async function create(
 
 function positiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 2_147_483_647;
+}
+
+async function findOriginalJob(admin: SupabaseClient, userId: string, key: string, paid: boolean): Promise<Job | null> {
+  const existing = await admin.from("chat_completion_jobs").select(paid ? `${REPLAY_COLUMNS},paid_billing` : REPLAY_COLUMNS)
+    .eq("user_id", userId).eq("idempotency_key", key).maybeSingle();
+  if (existing.error) throw new ApiError("internal_error", "云端对话暂时无法读取", true);
+  return existing.data as Job | null;
 }
 
 async function enqueueIfUploading(admin: SupabaseClient, job: Job, body: string, digest: string, cors: HeadersInit) {

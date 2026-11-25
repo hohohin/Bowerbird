@@ -252,6 +252,10 @@ export async function verifyChatPaidBilling(q, db, rival) {
   await setAliases([proAlias,nextAlias],"chat_paid_pro_v1");
   assert.deepEqual(await proQuote(),{available:false,model:"deepseek-v4-pro"});
   for (const role of ["anon","authenticated"]) {
+    const [grants] = await q(`select
+      has_function_privilege($1,'quote_chat_paid_turn(text)','execute') as quote,
+      has_function_privilege($1,'begin_chat_paid_turn(uuid,text,text,text,bigint,integer,boolean,text,text,integer,integer,integer)','execute') as admission`,[role]);
+    assert.deepEqual(grants,{quote:false,admission:false});
     await q("begin");
     try {
       await q(`set local role ${role}`);
@@ -264,4 +268,134 @@ export async function verifyChatPaidBilling(q, db, rival) {
     has_function_privilege('service_role','get_chat_paid_receipt(uuid,uuid)','execute') as service_read`);
   assert.deepEqual(access,{direct_read:false,user_rpc:false,service_read:true});
   console.log("paid chat: approved caps, legacy isolation, late 0095 usage, no wallet top-up, parallel carry, refunds, cancellation, upload, TTL and private alias rotation passed");
+
+  const output = 16_384, flashHold = 71, proHold = 312, dailyCap = 500_000_000;
+  const ordinary = randomUUID(), pro = randomUUID(), lowBalance = randomUUID();
+  await q("insert into auth.users(id) values($1),($2),($3)",[ordinary,pro,lowBalance]);
+  await q("update subscriptions set tier='pro',current_period_end=now()+interval '1 month' where user_id=$1",[pro]);
+  await q("select grant_subscription_credits($1,'paid-rollout-fixture',800,now()+interval '30 days')",[pro]);
+  await q("update service_costs set parameters=jsonb_set(parameters,'{free_turns_per_day}','5') where service='chat_deepseek'");
+  await setAliases([proAlias],"chat_paid_pro_v1");
+  await q(`update service_costs set unit_cost=320,parameters=jsonb_set(parameters,'{max_output_tokens}','32768')
+    where service='chat_paid_pro_v1'`);
+  assert.deepEqual(await proQuote(),{available:false,model:"deepseek-v4-pro"});
+  await q("update service_costs set unit_cost=321 where service='chat_paid_pro_v1'");
+  assert.equal((await proQuote()).max_credits,321);
+  await q(`update service_costs set unit_cost=case service when 'chat_paid_flash_v1' then $1::int else $2::int end,
+    parameters=jsonb_set(parameters,'{max_output_tokens}',to_jsonb($3::int))
+    where service in ('chat_paid_flash_v1','chat_paid_pro_v1')`,[flashHold,proHold,output]);
+  await setAliases(priorAliases);
+
+  const startFree = async (user, key) => (await q("select * from begin_chat_session_turn($1,$2,$3,'chat/free',$4,30,false,$2)",
+    [user,key,shape,dailyCap]))[0];
+  const startPaid = async (user, paidModel, hold, key, conversation, dayCap = dailyCap, connection = db) => (await q(
+    "select * from begin_chat_paid_turn($1,$2,$3,'chat/paid',$4,30,false,$5,$6,$7,$8,$9)",
+    [user,key,shape,dayCap,conversation,paidModel,price,hold,output],connection))[0];
+  const balance = async user => (await q("select daily_balance+sub_balance+topup_balance as amount from user_credits where user_id=$1",[user]))[0].amount;
+  const day = async () => (await q(`select request_count::int as requests,cost_micros::int as micros from system_chat_usage_daily
+    where business_date=(now() at time zone 'Asia/Shanghai')::date`))[0];
+  const userDay = async user => (await q(`select request_count,chat_request_count,cost_micros::int as micros from usage_daily
+    where user_id=$1 and business_date=(now() at time zone 'Asia/Shanghai')::date`,[user]))[0];
+
+  for (const {user, paidModel, hold, usage, fee} of [
+    {user:ordinary, paidModel:model, hold:flashHold, usage:{...known,input_tokens:4,cache_hit_tokens:1}, fee:600_001_280},
+    {user:pro, paidModel:"deepseek-v4-pro", hold:proHold,
+      usage:{...known,input_tokens:4,cache_hit_tokens:1,output_tokens:694,provider_model:proAlias}, fee:600_489_600},
+  ]) {
+    for (let i=0;i<5;i++) {
+      const legacy = await startFree(user,`legacy-${i}`);
+      assert.equal((await cancel(legacy,user)).actual_credits,0);
+      assert.equal(await receipt(legacy,user),null);
+    }
+    await assert.rejects(startFree(user,"legacy-sixth"),error => error.detail === "chat_daily_turn_limit");
+    const before = await day();
+    const userBefore = await userDay(user);
+    const initialBalance = await balance(user);
+    const reservedMicros = Math.ceil(hold*1_000_000/32);
+    let previous = null;
+    for (let i=0;i<6;i++) {
+      const key = `rollout-${i}`;
+      const job = await startPaid(user,paidModel,hold,key,"rollout-conversation");
+      assert.equal(job.dsh_previous_job_id,previous);
+      assert.equal(await balance(user),initialBalance-Math.floor(i*fee/1_000_000_000)-hold);
+      assert.equal((await startPaid(user,paidModel,hold,key,"rollout-conversation")).id,job.id);
+      await enqueue(job);
+      const lease = await claim();
+      assert.equal(lease.id,job.id);
+      const allow = (call,max) => q("select authorize_chat_paid_model($1,$2,$3,$4,$5) as allowed",
+        [job.id,lease.lease_id,call,paidModel,max]).then(([row]) => row.allowed);
+      const record = call => q("select record_chat_model_call($1,$2,$3,$4,$5)",[job.id,lease.lease_id,call,paidModel,usage]);
+      assert.equal(await allow(first,output),true);
+      await record(first);
+      if (user === pro && i === 5) {
+        // Pro's 312-Bcoin ceiling covers one full envelope and only 0.572928 Bcoin of prior use.
+        await assert.rejects(allow(second,output),error => error.detail === "chat_paid_budget_exhausted");
+        await assert.rejects(allow(second,16_337),error => error.detail === "chat_paid_budget_exhausted");
+        assert.equal(await allow(second,16_336),true);
+        await record(second);
+      }
+      const cumulative = (i+1+(user === pro && i === 5 ? 1 : 0))*fee;
+      const totalDebit = Math.floor(cumulative/1_000_000_000);
+      const roundDebit = totalDebit-Math.floor(i*fee/1_000_000_000);
+      const [ended] = await q("select * from finish_chat_paid_turn($1,$2,'succeeded',$3,null)",
+        [job.id,lease.lease_id,{...result,model:paidModel}]);
+      assert.equal(ended.actual_credits,roundDebit);
+      const bill = await receipt(job,user);
+      assert.equal(bill.fee_nano,String(cumulative-i*fee));
+      assert.equal(bill.debited_credits,roundDebit);
+      assert.equal(bill.carry_nano,String(cumulative%1_000_000_000));
+      assert.deepEqual(await paidHold(job),{status:"confirmed",estimated_amount:hold,actual_amount:roundDebit});
+      assert.equal(await balance(user),initialBalance-totalDebit);
+      previous = job.id;
+    }
+    assert.deepEqual(await userDay(user),{request_count:userBefore.request_count+6,chat_request_count:5,micros:userBefore.micros+6*reservedMicros});
+    assert.deepEqual(await day(),{requests:before.requests+6,micros:before.micros+6*reservedMicros});
+  }
+
+  const beforeRejection = await day();
+  const lowBalanceBefore = await balance(lowBalance);
+  assert.ok(lowBalanceBefore<proHold);
+  await assert.rejects(startPaid(lowBalance,"deepseek-v4-pro",proHold,"too-poor","low-balance"),
+    error => error.detail === "insufficient_credits");
+  assert.equal(await balance(lowBalance),lowBalanceBefore);
+  assert.equal(await userDay(lowBalance),undefined);
+  assert.deepEqual(await q("select id from credit_holds where user_id=$1",[lowBalance]),[]);
+  assert.deepEqual(await q("select id from chat_completion_jobs where user_id=$1",[lowBalance]),[]);
+  assert.deepEqual(await day(),beforeRejection);
+
+  const dayCap = beforeRejection.micros+2_218_750;
+  const attempts = await Promise.allSettled([
+    startPaid(ordinary,model,flashHold,"last-slot","last-slot",dayCap),
+    startPaid(pro,model,flashHold,"last-slot","last-slot",dayCap,rival),
+  ]);
+  const winner = attempts.find(attempt => attempt.status === "fulfilled");
+  assert.ok(winner);
+  assert.equal(attempts.find(attempt => attempt.status === "rejected")?.reason.detail,"daily_cost_limit");
+  const accepted = winner.value;
+  await q("update service_costs set active=false where service in ('chat_paid_flash_v1','chat_paid_pro_v1')");
+  assert.deepEqual(await quote(),disabledQuote);
+  assert.deepEqual(await proQuote(),{available:false,model:"deepseek-v4-pro"});
+  await assert.rejects(startPaid(accepted.user_id,model,flashHold,"new-while-paused","paused"),
+    error => error.detail === "chat_paid_unavailable");
+  assert.equal((await startPaid(accepted.user_id,model,flashHold,"last-slot","last-slot",dayCap)).id,accepted.id);
+  await enqueue(accepted);
+  const leased = await claim();
+  assert.equal(leased.id,accepted.id);
+  assert.equal(await authorize(leased,first,db,output),true);
+  await observe(leased,first,known);
+  assert.equal((await finish(leased)).status,"succeeded");
+  assert.equal((await receipt(accepted,accepted.user_id)).fee_nano,"600000000");
+  assert.deepEqual(await day(),{requests:beforeRejection.requests+1,micros:dayCap});
+  const [lastSlot] = await q("select count(*)::int as count from credit_holds where idempotency_key='chat:last-slot'");
+  assert.equal(lastSlot.count,1);
+  assert.deepEqual(await q(`select j.id from chat_completion_jobs j join credit_holds h on h.id=j.hold_id
+    left join chat_paid_receipts r on r.job_id=j.id where j.paid_billing is not null and
+    (j.status in ('uploading','queued','running') or r.job_id is null or h.status in ('held','pending_settlement')
+      or j.actual_credits is distinct from r.debited_credits)`),[]);
+  assert.deepEqual(await q(`select a.user_id from chat_paid_accounts a join chat_paid_receipts r on r.user_id=a.user_id
+    group by a.user_id,a.carry_nano
+    having a.carry_nano <> mod(coalesce(sum(r.fee_nano) filter (where r.refund_reference is null),0),1000000000)
+      or sum(r.debited_credits)-sum(coalesce(r.refunded_credits,0)) <>
+        floor(coalesce(sum(r.fee_nano) filter (where r.refund_reference is null),0)/1000000000)`),[]);
+  console.log("paid chat rollout: six Flash/Pro rounds after free quota, actual wallet/carry, Pro caps, insufficient funds, concurrent daily cap and original-order settlement after catalog closure passed");
 }
