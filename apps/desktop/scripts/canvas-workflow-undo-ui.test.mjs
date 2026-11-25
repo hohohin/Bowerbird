@@ -59,8 +59,19 @@ try {
     const c = canvasWorkflowController('p');
     const run = { id: 'newer', startId: 'consumer', threadId: 'thread', status: 'done', order: ['consumer'], steps: { consumer: { status: 'done', detail: '较新的执行结果' } } };
     await c.save({ ...c.document, runs: [run], run });
+    const { api } = await import('/src/lib/api.ts');
+    const save = api.canvasWorkflowSave;
+    api.canvasWorkflowSave = async (...args) => {
+      api.canvasWorkflowSave = save;
+      await new Promise(resolve => { window.resumeUndoSave = resolve; });
+      return save(...args);
+    };
   });
   await undo(); await card('producer').waitFor();
+  await page.waitForFunction(() => typeof window.resumeUndoSave === 'function');
+  await undo();
+  assert.equal((await state()).nodes.find(node => node.id === 'producer').x, moved.x, 'second undo cannot race the pending restore');
+  await page.evaluate(() => window.resumeUndoSave());
   const restored = await persisted();
   assert.equal(restored.nodes.find(node => node.id === 'producer').x, moved.x, 'undo deletion before undo movement');
   assert.deepEqual(restored.nodes.find(node => node.id === 'consumer').inputs, original.nodes.find(node => node.id === 'consumer').inputs);
@@ -102,8 +113,7 @@ try {
   await page.waitForFunction(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); return canvasWorkflowController('p').document.nodes.length === 4; });
   await undo(); assert.equal((await persisted()).nodes.length, 3);
   await page.reload(); await card('producer').waitFor();
-  assert.deepEqual((await state()).runs, restored.runs.map(run => ({ ...run,
-    steps: Object.fromEntries(Object.entries(run.steps).map(([id, step]) => [id, { ...step, comfyStopping: false, comfyProgress: undefined }])) })));
+  assert.deepEqual((await state()).runs, restored.runs);
   assert.deepEqual(errors, []);
   console.log('PASS workflow deletion/writer/wire/history recovery, sequential movement undo, focused-button shortcut, copy/create/parameter undo, active-run protection, form protection and persisted reload.');
 } finally { await browser.close(); await server.close(); }

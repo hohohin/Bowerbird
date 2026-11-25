@@ -11,7 +11,7 @@ pub(super) mod placement;
 use chrono::Utc;
 use std::path::Path;
 
-use rusqlite::{params, OptionalExtension, Row, Transaction};
+use rusqlite::{params, OptionalExtension, Row, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 use crate::core::creative_session_contract::{
@@ -665,8 +665,11 @@ const THREAD_COLUMNS: &str = "id,project_id,title,origin,archived_at,created_at,
 pub(super) fn restore_canvas_conversations(conn: &rusqlite::Connection, project_id: &str, nodes: &mut [CanvasNode]) -> AppResult<()> {
     for node in nodes.iter_mut() {
         let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
-        if payload["generation_gallery_key"].as_str().is_some_and(|key| key.starts_with("manual:")) {
-            for key in ["generation_gallery_key", "workflow_generation_group", "generation_group_dissolved", "manual_gallery_node"] { payload.as_object_mut().unwrap().remove(key); }
+        let Some(fields) = payload.as_object_mut() else { continue; };
+        if fields.get("generation_gallery_key").and_then(serde_json::Value::as_str).is_some_and(|key| key.starts_with("manual:")) {
+            for key in ["generation_gallery_key", "workflow_generation_group", "generation_group_dissolved", "manual_gallery_node"] {
+                fields.remove(key);
+            }
             node.payload_json = serde_json::to_string(&payload)?;
         }
     }
@@ -676,7 +679,8 @@ pub(super) fn restore_canvas_conversations(conn: &rusqlite::Connection, project_
     for node in nodes.iter_mut() {
         if let Some(group) = workflow_groups.get(&node.id) {
             let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
-            payload["workflow_generation_group"] = group.clone().into();
+            let Some(fields) = payload.as_object_mut() else { continue; };
+            fields.insert("workflow_generation_group".into(), group.clone().into());
             node.payload_json = serde_json::to_string(&payload)?;
         }
     }
@@ -697,9 +701,10 @@ pub(super) fn restore_canvas_conversations(conn: &rusqlite::Connection, project_
     }
     for node in nodes.iter_mut().filter(|node| node.kind == CreativeNodeKind::Prompt) {
         let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
-        if payload["conversation_id"].as_str().is_some() { continue; }
-        if let Some(conversation) = payload["job_id"].as_str().and_then(|job| conversations.get(job)) {
-            payload["conversation_id"] = conversation.clone().into();
+        let Some(fields) = payload.as_object_mut() else { continue; };
+        if fields.get("conversation_id").and_then(serde_json::Value::as_str).is_some() { continue; }
+        if let Some(conversation) = fields.get("job_id").and_then(serde_json::Value::as_str).and_then(|job| conversations.get(job)) {
+            fields.insert("conversation_id".into(), conversation.clone().into());
             node.payload_json = serde_json::to_string(&payload)?;
         }
     }
@@ -720,15 +725,15 @@ pub(super) fn restore_canvas_conversations(conn: &rusqlite::Connection, project_
                 payload["conversation_id"].as_str().or(payload["job_id"].as_str()).map(|id| format!("generation:{id}")))
                 .map(|key| merged.get(&key).cloned().unwrap_or(key))).flatten()
         });
-        if let Some(key) = key {
+        if let (Some(key), Some(fields)) = (key, payload.as_object_mut()) {
             if dissolved.contains(&key) {
-                payload["generation_group_dissolved"] = true.into();
-                payload["generation_gallery_key"] = key.into();
+                fields.insert("generation_group_dissolved".into(), true.into());
+                fields.insert("generation_gallery_key".into(), key.into());
             } else if key.starts_with("manual:") {
-                payload["workflow_generation_group"] = key.clone().into();
-                payload["generation_gallery_key"] = key.into();
-                if selected_group.is_some() { payload["manual_gallery_node"] = true.into(); }
-                payload.as_object_mut().unwrap().remove("generation_group_dissolved");
+                fields.insert("workflow_generation_group".into(), key.clone().into());
+                fields.insert("generation_gallery_key".into(), key.into());
+                if selected_group.is_some() { fields.insert("manual_gallery_node".into(), true.into()); }
+                fields.remove("generation_group_dissolved");
             }
             node.payload_json = serde_json::to_string(&payload)?;
         }
@@ -1497,7 +1502,7 @@ fn project_canvas_snapshot_tx(
 
 impl Database {
     pub fn get_project_canvas(&self, project_id: &str) -> AppResult<Option<ProjectCanvas>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         Ok(conn
             .query_row(
                 "SELECT project_id,draft_json,created_at,updated_at FROM project_canvases WHERE project_id=?1",
@@ -1510,8 +1515,8 @@ impl Database {
     pub fn ensure_project_canvas(&self, project_id: &str) -> AppResult<ProjectCanvas> {
         required(project_id, "project id")?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_project_canvas_tx(&tx, project_id, now)?;
         let canvas = tx.query_row(
             "SELECT project_id,draft_json,created_at,updated_at FROM project_canvases WHERE project_id=?1",
@@ -1525,8 +1530,8 @@ impl Database {
     pub fn open_project_canvas_scope(&self, project_id: &str) -> AppResult<()> {
         required(project_id, "project id")?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_project_canvas_tx(&tx, project_id, now)?;
         touch_project_opened_tx(&tx, project_id, now)?;
         tx.commit()?;
@@ -1562,8 +1567,8 @@ impl Database {
             return Err(invalid("initial view belongs to another project"));
         }
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
             "INSERT OR IGNORE INTO projects (id,name,workspace_path,workspace_key,created_at,kind,title_source,updated_at,last_opened_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?5,?5)",
             params![value.project_id, value.name.trim(), value.workspace_path, value.workspace_key, now, value.kind, title_source_sql(value.title_source)],
@@ -1626,7 +1631,7 @@ impl Database {
     pub fn rename_canvas_project(&self, project_id: &str, title: &str) -> AppResult<bool> {
         required(title, "project title")?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let changed = conn.execute(
             "UPDATE projects SET name=?2,title_source='manual',updated_at=?3 WHERE id=?1",
             params![project_id, title.trim(), now],
@@ -1641,7 +1646,7 @@ impl Database {
     ) -> AppResult<bool> {
         required(title, "project title")?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let changed = conn.execute(
             "UPDATE projects SET name=?2,title_source='first_prompt',updated_at=?3 WHERE id=?1 AND title_source='default'",
             params![project_id, title.trim(), now],
@@ -1656,7 +1661,7 @@ impl Database {
     ) -> AppResult<bool> {
         validate_draft_json(draft_json)?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let changed = conn.execute(
             "UPDATE project_canvases SET draft_json=?2,updated_at=?3 WHERE project_id=?1",
             params![project_id, draft_json, now],
@@ -1666,8 +1671,8 @@ impl Database {
 
     pub fn touch_project_canvas(&self, project_id: &str) -> AppResult<bool> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = touch_project_opened_tx(&tx, project_id, now)?;
         tx.commit()?;
         Ok(changed)
@@ -1678,8 +1683,8 @@ impl Database {
         required(&value.project_id, "project id")?;
         required(&value.title, "thread title")?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         touch_canvas_tx(&tx, &value.project_id, now)?;
         if let Some(existing) = tx
             .query_row(
@@ -1715,7 +1720,7 @@ impl Database {
     }
 
     pub fn get_creative_thread(&self, thread_id: &str) -> AppResult<Option<CreativeThread>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         Ok(conn
             .query_row(
                 &format!("SELECT {THREAD_COLUMNS} FROM creative_threads WHERE id=?1"),
@@ -1730,7 +1735,7 @@ impl Database {
         project_id: &str,
         include_archived: bool,
     ) -> AppResult<Vec<CreativeThread>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let sql = format!(
             "SELECT {THREAD_COLUMNS} FROM creative_threads WHERE project_id=?1 {} ORDER BY created_at,id",
             if include_archived { "" } else { "AND archived_at IS NULL" }
@@ -1742,8 +1747,8 @@ impl Database {
 
     pub fn archive_creative_thread(&self, thread_id: &str) -> AppResult<bool> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let project_id = tx
             .query_row(
                 "SELECT project_id FROM creative_threads WHERE id=?1",
@@ -1767,8 +1772,8 @@ impl Database {
 
     pub fn restore_creative_thread(&self, thread_id: &str) -> AppResult<bool> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let project_id = tx
             .query_row(
                 "SELECT project_id FROM creative_threads WHERE id=?1",
@@ -1792,8 +1797,8 @@ impl Database {
 
     pub fn place_collected_image(&self, project_id: &str, asset: &Asset) -> AppResult<()> {
         self.ensure_project_canvas(project_id)?;
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let visible: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM canvas_nodes WHERE project_id=?1 AND asset_id=?2 AND hidden_at IS NULL)",
             params![project_id, asset.id], |row| row.get(0),
@@ -1825,8 +1830,8 @@ impl Database {
 
     pub fn create_canvas_node(&self, value: &NewCanvasNode) -> AppResult<CanvasNode> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         touch_canvas_tx(&tx, &value.project_id, now)?;
         let node = insert_node_tx(&tx, value, now)?;
         tx.commit()?;
@@ -1834,14 +1839,14 @@ impl Database {
     }
 
     pub fn get_canvas_node(&self, node_id: &str) -> AppResult<Option<CanvasNode>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let sql = format!("SELECT {NODE_COLUMNS} FROM canvas_nodes WHERE id=?1");
         Ok(conn.query_row(&sql, [node_id], node_from_row).optional()?)
     }
 
     /// Read the addressed canvas instances without rebuilding gallery or conversation projections.
     pub fn visible_canvas_nodes(&self, project_id: &str, node_ids: &[String]) -> AppResult<Vec<CanvasNode>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let sql = format!("SELECT {NODE_COLUMNS} FROM canvas_nodes WHERE id=?1 AND project_id=?2 AND hidden_at IS NULL");
         let mut stmt = conn.prepare(&sql)?;
         let mut seen = std::collections::HashSet::new();
@@ -1857,7 +1862,7 @@ impl Database {
     }
 
     pub fn list_canvas_nodes(&self, project_id: &str) -> AppResult<Vec<CanvasNode>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let sql = format!(
             "SELECT {NODE_COLUMNS} FROM canvas_nodes WHERE project_id=?1 ORDER BY z_index,created_at,id"
         );
@@ -1874,8 +1879,8 @@ impl Database {
         parse_node_payload(CreativeNodeKind::Note, payload_json)
             .map_err(|error| invalid(error.to_string()))?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let existing = get_node_tx(&tx, node_id)?.ok_or_else(|| invalid("note not found"))?;
         if node_is_execution_owned(&existing) || serde_json::from_str::<serde_json::Value>(payload_json)?["note_type"] == "chat" {
             return Err(invalid("chat cards are maintained by the chat runtime"));
@@ -1901,8 +1906,8 @@ impl Database {
     ) -> AppResult<Option<CanvasNode>> {
         validate_geometry(value.x, value.y, value.width, value.height)?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let Some(existing) = get_node_tx(&tx, node_id)? else {
             return Ok(None);
         };
@@ -1927,8 +1932,8 @@ impl Database {
         node_id: &str,
     ) -> AppResult<Option<CanvasNode>> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let Some(node) = get_node_tx(&tx, node_id)? else {
             return Ok(None);
         };
@@ -1947,8 +1952,8 @@ impl Database {
 
     pub fn remove_canvas_node(&self, node_id: &str) -> AppResult<Option<CanvasNodeRemoval>> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let Some(node) = get_node_tx(&tx, node_id)? else {
             return Ok(None);
         };
@@ -1982,8 +1987,8 @@ impl Database {
         required(&value.name, "group name")?;
         validate_geometry(value.x, value.y, value.width, value.height)?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         touch_canvas_tx(&tx, &value.project_id, now)?;
         tx.execute(
             "INSERT INTO canvas_groups (id,project_id,name,role,x,y,width,height,z_index,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
@@ -2005,8 +2010,8 @@ impl Database {
         node_ids: &[String],
     ) -> AppResult<Vec<CanvasGroupItem>> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let project_id = tx
             .query_row(
                 "SELECT project_id FROM canvas_groups WHERE id=?1",
@@ -2022,7 +2027,7 @@ impl Database {
     }
 
     pub fn list_canvas_groups(&self, project_id: &str) -> AppResult<Vec<CanvasGroup>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut statement = conn.prepare(&format!(
             "SELECT {GROUP_COLUMNS} FROM canvas_groups WHERE project_id=?1 ORDER BY z_index,created_at,id"
         ))?;
@@ -2034,7 +2039,7 @@ impl Database {
     }
 
     pub fn list_canvas_group_items(&self, project_id: &str) -> AppResult<Vec<CanvasGroupItem>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut statement = conn.prepare(
             "SELECT project_id,group_id,node_id,ordinal FROM canvas_group_items WHERE project_id=?1 ORDER BY group_id,ordinal,node_id",
         )?;
@@ -2056,8 +2061,8 @@ impl Database {
         validate_geometry(value.x, value.y, value.width, value.height)?;
         required(&value.name, "group name")?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = tx.execute(
             "UPDATE canvas_groups SET name=?3,role=?4,x=?5,y=?6,width=?7,height=?8,z_index=?9,updated_at=?10 WHERE id=?1 AND project_id=?2",
             params![value.id, value.project_id, value.name.trim(), value.role.map(group_role_sql), value.x, value.y, value.width, value.height, value.z_index, now],
@@ -2071,8 +2076,8 @@ impl Database {
 
     pub fn delete_canvas_group(&self, group_id: &str) -> AppResult<bool> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let project_id = tx
             .query_row(
                 "SELECT project_id FROM canvas_groups WHERE id=?1",
@@ -2096,8 +2101,8 @@ impl Database {
             return Err(invalid("invalid edge ordinal or endpoints"));
         }
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         touch_canvas_tx(&tx, &value.project_id, now)?;
         let from = get_node_tx(&tx, &value.from_node_id)?
             .ok_or_else(|| AppError::NotFound(format!("canvas node {}", value.from_node_id)))?;
@@ -2150,7 +2155,7 @@ impl Database {
     }
 
     pub fn list_canvas_edges(&self, project_id: &str) -> AppResult<Vec<CanvasEdge>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut statement = conn.prepare(&format!(
             "SELECT {EDGE_COLUMNS} FROM canvas_edges WHERE project_id=?1 ORDER BY created_at,ordinal,id"
         ))?;
@@ -2163,8 +2168,8 @@ impl Database {
 
     pub fn delete_canvas_edge(&self, edge_id: &str) -> AppResult<bool> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let project_id = tx
             .query_row(
                 "SELECT project_id FROM canvas_edges WHERE id=?1",
@@ -2182,8 +2187,8 @@ impl Database {
 
     pub fn upsert_canvas_view(&self, value: &CanvasViewInput) -> AppResult<CanvasView> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         touch_canvas_tx(&tx, &value.project_id, now)?;
         let view = upsert_view_tx(&tx, value, now)?;
         tx.commit()?;
@@ -2191,7 +2196,7 @@ impl Database {
     }
 
     pub fn get_canvas_view(&self, project_id: &str) -> AppResult<Option<CanvasView>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         Ok(conn
             .query_row(
                 "SELECT project_id,pan_x,pan_y,zoom,source_panel_width,active_node_id,focused_thread_id,view_mode,timeline_scope,updated_at FROM canvas_views WHERE project_id=?1",
@@ -2202,8 +2207,8 @@ impl Database {
     }
 
     pub fn project_canvas_snapshot(&self, project_id: &str) -> AppResult<ProjectCanvasSnapshot> {
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
         let snapshot = project_canvas_snapshot_tx(&tx, project_id)?;
         tx.commit()?;
         Ok(snapshot)
@@ -2225,8 +2230,8 @@ impl Database {
         required(&value.turn_key, "turn key")?;
         required(&value.prompt, "prompt")?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         verify_project_thread_tx(&tx, &value.project_id, &value.thread_id)?;
         touch_canvas_tx(&tx, &value.project_id, now)?;
 
@@ -2603,8 +2608,8 @@ impl Database {
     ) -> AppResult<bool> {
         let node_id = projection_id("gen-prompt", job_id, turn_key, "0");
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = tx.execute(
             "UPDATE canvas_nodes SET payload_json=json_set(payload_json,'$.status',?2,'$.provider_session_id',COALESCE(?3,json_extract(payload_json,'$.provider_session_id'))),updated_at=?4 WHERE id=?1 AND project_id=?5 AND thread_id=?6 AND kind='prompt'",
             params![node_id, status, provider_session_id, now, project_id, thread_id],
@@ -2631,8 +2636,8 @@ impl Database {
     ) -> AppResult<Vec<String>> {
         let prompt_node_id = projection_id("gen-prompt", job_id, turn_key, "0");
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         verify_project_thread_tx(&tx, project_id, thread_id)?;
         let prompt = tx
             .query_row(
@@ -2758,8 +2763,8 @@ impl Database {
         required(&value.launch_id, "agent launch id")?;
         required(&value.prompt, "agent prompt")?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         verify_project_thread_tx(&tx, &value.project_id, &value.thread_id)?;
         touch_canvas_tx(&tx, &value.project_id, now)?;
         let (max_right, max_z): (f64, i64) = tx.query_row(
@@ -3008,7 +3013,7 @@ impl Database {
     ) -> AppResult<bool> {
         let node_id = projection_id("agent-prompt", launch_id, "0", "0");
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let project_id = conn
             .query_row(
                 "SELECT project_id FROM creative_threads WHERE id=?1",
@@ -3032,8 +3037,8 @@ impl Database {
         payload: &AgentGroupNodePayloadV1,
     ) -> AppResult<String> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         verify_project_thread_tx(&tx, project_id, thread_id)?;
         let prompt_node_id = projection_id("agent-prompt", launch_id, "0", "0");
         let (prompt_x, prompt_y, prompt_z) = tx
@@ -3116,8 +3121,8 @@ impl Database {
         asset: &Asset,
     ) -> AppResult<String> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (thread_id, project_id): (String, String) = tx
             .query_row(
                 "SELECT l.thread_id,t.project_id FROM thread_agent_links l JOIN creative_threads t ON t.id=l.thread_id WHERE l.run_id=?1",
@@ -3252,7 +3257,7 @@ impl Database {
         required(thread_id, "thread id")?;
         required(key, key_column)?;
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let select = format!("SELECT thread_id FROM {table} WHERE {key_column}=?1");
         if let Some(existing) = conn
             .query_row(&select, [key], |row| row.get::<_, String>(0))
@@ -3278,7 +3283,7 @@ impl Database {
         key_column: &'static str,
         key: &str,
     ) -> AppResult<Option<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let sql = format!("SELECT thread_id FROM {table} WHERE {key_column}=?1");
         Ok(conn.query_row(&sql, [key], |row| row.get(0)).optional()?)
     }
@@ -3288,7 +3293,7 @@ impl Database {
         asset_id: &str,
     ) -> AppResult<Option<(String, String, Option<String>)>> {
         required(asset_id, "asset id")?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut statement = conn.prepare(
             "SELECT project_id,id,thread_id FROM canvas_nodes WHERE asset_id=?1 AND hidden_at IS NULL ORDER BY updated_at DESC,id DESC LIMIT 2",
         )?;
@@ -3314,7 +3319,7 @@ impl Database {
         required(project_id, "project id")?;
         required(thread_id, "thread id")?;
         required(node_id, "node id")?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let (actual_project_id, actual_node_id, actual_thread_id, hidden_at) = conn
             .query_row(
                 "SELECT project_id,id,thread_id,hidden_at FROM canvas_nodes WHERE id=?1",
@@ -3473,6 +3478,66 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0], db.get_canvas_node("visible").unwrap().unwrap());
         assert!(db.visible_canvas_nodes("p", &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn snapshot_preserves_non_object_payloads_during_gallery_projection() {
+        let db = db();
+        materialize(&db, "p");
+        db.create_canvas_node(&note("p", "legacy")).unwrap();
+        db.create_canvas_node(&note("p", "regular")).unwrap();
+        db.lock_conn().unwrap().execute_batch(
+            "UPDATE canvas_nodes SET payload_json='[42]' WHERE id='legacy';
+             INSERT INTO generation_gallery_merges(source_key,group_key)
+             VALUES('node:legacy','manual:test'),('node:regular','manual:test');",
+        ).unwrap();
+
+        let nodes = db.project_canvas_snapshot("p").unwrap().nodes;
+        assert_eq!(nodes.iter().find(|node| node.id == "legacy").unwrap().payload_json, "[42]");
+        let regular = nodes.iter().find(|node| node.id == "regular").unwrap();
+        let projected: serde_json::Value = serde_json::from_str(&regular.payload_json).unwrap();
+        assert_eq!(projected["generation_gallery_key"], "manual:test");
+        assert!(db.remove_canvas_node("legacy").unwrap().is_some());
+        assert!(db.get_canvas_node("regular").unwrap().is_some());
+    }
+
+    #[test]
+    fn canvas_write_waits_for_another_writer_while_wal_reads_continue() {
+        use std::{sync::mpsc, thread, time::Duration};
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("canvas.db");
+        let db = Database::open(&path).unwrap();
+        db.migrate().unwrap();
+        materialize(&db, "p");
+        db.create_canvas_node(&note("p", "first")).unwrap();
+        db.create_canvas_node(&note("p", "second")).unwrap();
+        let writer = Database::open(&path).unwrap();
+        let reader = Database::open_read_only(&path).unwrap();
+        let mut conn = db.lock_conn().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).unwrap();
+        tx.execute("UPDATE canvas_nodes SET x=75 WHERE id='first'", []).unwrap();
+
+        let (started, start) = mpsc::channel();
+        let (finished, finish) = mpsc::channel();
+        let write = thread::spawn(move || {
+            let layout = CanvasNodeLayoutUpdate {
+                x: 150.0, y: 30.0, width: 200.0, height: 100.0, z_index: 5, position_locked: false,
+            };
+            started.send(()).unwrap();
+            finished.send(writer.update_canvas_node_layout("second", &layout)).unwrap();
+        });
+        start.recv_timeout(Duration::from_secs(2)).unwrap();
+        let while_locked = finish.recv_timeout(Duration::from_millis(100));
+        let snapshot = reader.project_canvas_snapshot("p").unwrap();
+        assert_ne!(snapshot.nodes.iter().find(|node| node.id == "first").unwrap().x, 75.0);
+        tx.commit().unwrap();
+
+        assert!(matches!(while_locked, Err(mpsc::RecvTimeoutError::Timeout)));
+        let moved = finish.recv_timeout(Duration::from_secs(3)).unwrap().unwrap().unwrap();
+        assert_eq!(moved.x, 150.0);
+        assert_eq!(reader.get_canvas_node("first").unwrap().unwrap().x, 75.0);
+        write.join().unwrap();
     }
 
     #[test]

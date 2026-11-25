@@ -112,7 +112,8 @@ export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnec
   function follow(event: globalThis.PointerEvent, rect: DOMRect) {
     if (disabled || active || event.buttons || event.pointerType === "touch" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) { move(); return; }
     // The pointer and hit rect are in screen pixels; translate the glyph in canvas units.
-    const unitsPerPixel = button.current!.offsetWidth / rect.width;
+    if (!button.current || rect.width <= 0) return;
+    const unitsPerPixel = button.current.offsetWidth / rect.width;
     const x = (event.clientX - rect.left - rect.width / 2) * unitsPerPixel;
     const y = (event.clientY - rect.top - rect.height / 2) * unitsPerPixel;
     const distance = Math.hypot(x, y);

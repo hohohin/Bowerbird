@@ -28,7 +28,7 @@ function findCardPorts(card: HTMLElement, wanted: CardTargets["ports"]): CardPor
     // Older whole-card bindings keep their identity while sharing the new socket.
     if (kind === "output" && !["*", "*text", "*latest", "*latest-image", "*auto"].includes(port)) continue;
     if (kind === "input" && !["", "*auto"].includes(port)) continue;
-    const handle = card.querySelector<HTMLElement>(`[data-canvas-connect-side="${kind}"]`);
+    const handle = card.querySelector<HTMLElement>(`[data-canvas-connect-side="${kind}"]:not(.canvas-cell-connection)`);
     if (handle) ports.set(key, handle);
   }
   for (const port of ports.values()) observed.add(port);
@@ -77,6 +77,7 @@ function observeGeometry(plane: HTMLElement, getZoom: () => number, geometry: Ma
   const changedPorts = new Set<string>();
   let targets = new Map<string, CardTargets>();
   let frame = 0;
+  let pausedForZoom = false;
 
   function schedule(id: string, refreshPorts = false) {
     if (!targets.has(id)) return;
@@ -112,7 +113,8 @@ function observeGeometry(plane: HTMLElement, getZoom: () => number, geometry: Ma
   function flush() {
     frame = 0;
     const zoom = getZoom();
-    if (!Number.isFinite(zoom) || zoom <= 0) return;
+    pausedForZoom = !Number.isFinite(zoom) || zoom <= 0;
+    if (pausedForZoom) return;
     const deadline = performance.now() + 5;
     let changed = false;
     let count = 0;
@@ -207,6 +209,8 @@ function observeGeometry(plane: HTMLElement, getZoom: () => number, geometry: Ma
         }
       }
       if (removed) redraw();
+      // A measurement skipped during an invalid camera scale stays queued.
+      if (pausedForZoom && dirty.size && !frame) frame = requestAnimationFrame(flush);
     },
     dispose() {
       resize.disconnect();

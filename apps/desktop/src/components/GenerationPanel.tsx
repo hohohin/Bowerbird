@@ -1220,6 +1220,7 @@ function GenEditComposer({
   } = useCreationEditor({
     draftKey: null,
     initialEmpty: isRevise,
+    generationJobId: job.id,
     // 维度环点扇区插进本坞（与创作板互斥挂载，任意时刻只有一个实例消费）。
     consumePendingKeyword: true,
   });

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { api } from "../lib/api";
 import type { Asset } from "../lib/types";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
@@ -47,6 +47,14 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
   const [resizingCard, setResizingCard] = useState(false);
   const resizeDrag = useRef<{ axis: "row" | "column"; boundary: number; start: number; base: number; original: number[]; latest: number[]; pointerId: number } | null>(null);
   const grid = useRef<HTMLDivElement>(null);
+  const focusFrame = useRef(0);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const copyRequest = useRef(0);
+  useEffect(() => () => {
+    cancelAnimationFrame(focusFrame.current);
+    clearTimeout(copyTimer.current);
+    copyRequest.current += 1;
+  }, []);
   const [referenceAssets, setReferenceAssets] = useState<Asset[]>([]);
   const imageClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelImageClick = () => { if (imageClickTimer.current !== null) clearTimeout(imageClickTimer.current); imageClickTimer.current = null; };
@@ -70,6 +78,18 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
   const images = cell.content_type === "image";
   const rows = value.cells.length;
   const columns = value.cells[0]?.length ?? 1;
+  const previousRowKeys = useRef(new Map<string, string>());
+  const { rowKeys, keysByCell } = useMemo(() => {
+    const keysByCell = new Map<string, string>();
+    const rowKeys = value.cells.map((line, index) => {
+      // A surviving cell retains the row's identity even if the first column is removed.
+      const key = line.map(item => previousRowKeys.current.get(item.id ?? "")).find(Boolean) ?? line[0].id ?? String(index);
+      for (const { id } of line) if (id) keysByCell.set(id, key);
+      return key;
+    });
+    return { rowKeys, keysByCell };
+  }, [value.cells]);
+  useLayoutEffect(() => { previousRowKeys.current = keysByCell; }, [keysByCell]);
   const columnWeights = canvasGridWeights(resizing?.axis === "column" ? resizing.weights : value.column_widths, columns);
   const rowWeights = canvasGridWeights(resizing?.axis === "row" ? resizing.weights : value.row_heights, rows);
   const mediaCells = JSON.stringify(value.cells.map(line => line.map(item =>
@@ -158,9 +178,12 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
       ...(axis === "row" ? { row_heights: weights } : { column_widths: weights }),
     });
   }
-  function focusCell(position: [number, number], columns: number) {
+  function focusCell(position: [number, number], cellId: string | undefined) {
     setActive(position);
-    window.requestAnimationFrame(() => grid.current?.querySelectorAll("textarea")[position[0] * columns + position[1]]?.focus());
+    cancelAnimationFrame(focusFrame.current);
+    if (cellId) focusFrame.current = requestAnimationFrame(() => {
+      grid.current?.querySelector<HTMLTextAreaElement>(`[data-canvas-cell="${CSS.escape(cellId)}"] textarea`)?.focus();
+    });
   }
   function remove(axis: "row" | "column", index: number) {
     if (inputLocked) return;
@@ -183,7 +206,7 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
       text: cells.map(line => line.map(item => item.text).join("\t")).join("\n"),
       ...(axis === "row" ? { row_heights: weights } : { column_widths: weights }),
     });
-    focusCell(next, cells[0].length);
+    focusCell(next, cells[next[0]]?.[next[1]]?.id);
   }
   function beginGridResize(event: PointerEvent<HTMLButtonElement>, axis: "row" | "column", boundary: number) {
     if (event.button !== 0) return;
@@ -235,16 +258,31 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
       onChange({ ...value, ...(drag.axis === "column" ? { column_widths: drag.latest } : { row_heights: drag.latest }) });
     }
   }
-  function cancelGridResize() {
+  function cancelGridResize(handle: HTMLButtonElement) {
+    const drag = resizeDrag.current;
     resizeDrag.current = null;
     setResizing(null);
+    if (drag && handle.hasPointerCapture(drag.pointerId)) handle.releasePointerCapture(drag.pointerId);
   }
-  async function copyCsv() {
+  async function copyText(text: string, key: string) {
+    const request = ++copyRequest.current;
+    clearTimeout(copyTimer.current);
     try {
-      await navigator.clipboard.writeText(canvasTextCsv(value.cells));
-      setCopied("csv");
-      window.setTimeout(() => setCopied(current => current === "csv" ? null : current), 1200);
-    } catch (error) { notifyError(error, "复制失败"); }
+      await navigator.clipboard.writeText(text);
+      if (copyRequest.current !== request) return;
+      setCopied(key);
+      copyTimer.current = setTimeout(() => setCopied(null), 1200);
+    } catch (error) {
+      if (copyRequest.current !== request) return;
+      setCopied(null);
+      notifyError(error, "复制失败");
+    }
+  }
+  function undoRemoval() {
+    if (!removed) return;
+    onChange(removed.value);
+    focusCell(removed.active, removed.value.cells[removed.active[0]]?.[removed.active[1]]?.id);
+    setRemoved(null);
   }
   return <>
     {!bubble && <div className="canvas-tactical-card-shell" aria-hidden="true" />}
@@ -256,11 +294,7 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
       <span />
       {([["left", "左对齐", AlignLeft], ["center", "居中对齐", AlignCenter], ["right", "右对齐", AlignRight]] as const).map(([align, label, Icon]) =>
         <button key={align} title={label} aria-label={label} aria-pressed={cell.align === align} onClick={() => updateCell(...active, { align })}><Icon size={16} /></button>)}
-      {removed && <><span /><button title="撤销删除" aria-label="撤销删除行列" onClick={() => {
-        onChange(removed.value);
-        focusCell(removed.active, removed.value.cells[0].length);
-        setRemoved(null);
-      }}><Undo2 size={16} /></button></>}
+      {removed && <><span /><button title="撤销删除" aria-label="撤销删除行列" onClick={undoRemoval}><Undo2 size={16} /></button></>}
     </div>}
     <div className="canvas-text-handle" title={bubble ? "拖动气泡便签" : "拖动内容卡片"}><GripHorizontal size={15} />{bubble ? <MessageCircle size={14} aria-hidden="true" /> : <Table2 size={14} aria-hidden="true" />}<span className="canvas-tactical-note-title">{value.title || (bubble ? "气泡便签" : "内容卡片")}</span></div>
     {onConnectCell && <CanvasConnectionHandle side="output" data-workflow-cell="*auto"
@@ -270,12 +304,12 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
       onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); onInput(undefined, false, "auto", { x: event.clientX, y: event.clientY }); }}
       onClick={event => { if (event.detail === 0) { const rect = event.currentTarget.getBoundingClientRect(); onInput(undefined, false, "auto", { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }, true); } }}
       onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(undefined, true, "auto", { x: event.clientX, y: event.clientY }); }} />}
-    {images && removed && selected && <div className="canvas-text-spacing"><button aria-label="撤销删除行列" onClick={() => { onChange(removed.value); setActive(removed.active); setRemoved(null); }}><Undo2 size={14} /></button></div>}
+    {images && removed && selected && <div className="canvas-text-spacing"><button aria-label="撤销删除行列" onClick={undoRemoval}><Undo2 size={14} /></button></div>}
     {!images && <div className="canvas-text-spacing" role="group" aria-label="文本工具"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }} onKeyDown={event => event.stopPropagation()}>
       <button aria-label="减小行距" title="减小行距" disabled={lineHeight <= 100} onClick={() => changeLineHeight(-10)}><ChevronsDownUp size={14} /></button>
       <button aria-label="增大行距" title="增大行距" disabled={lineHeight >= 300} onClick={() => changeLineHeight(10)}><ChevronsUpDown size={14} /></button>
-      {!bubble && <button aria-label="复制表格为 CSV" title="复制表格为 CSV" onClick={copyCsv}>{copied === "csv" ? <Check size={13} /> : <Copy size={13} />}</button>}
+      {!bubble && <button aria-label="复制表格为 CSV" title="复制表格为 CSV" onClick={() => copyText(canvasTextCsv(value.cells), "csv")}>{copied === "csv" ? <Check size={13} /> : <Copy size={13} />}</button>}
     </div>}
     <div ref={grid} className="canvas-text-grid" role={bubble ? "group" : "table"} aria-label={bubble ? "气泡便签" : "内容卡片"} onPointerDown={event => { event.stopPropagation(); onSelect(); }} onKeyDown={event => {
       if (event.key !== "Escape" && !((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z")) event.stopPropagation();
@@ -296,8 +330,8 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
             onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(id, true, type, { x: event.clientX, y: event.clientY }); }} />;
         }));
       })}
-      {value.cells.map((line, row) => <div role={bubble ? undefined : "row"} className="canvas-text-row" key={row} style={{ flexGrow: rowWeights[row] }}>
-        {line.map((item, column) => { const images = item.content_type === "image"; const generation = images && item.generation_ref ? renderGeneration?.(item) : null; return <div role={bubble ? undefined : "cell"} data-canvas-cell={bubble ? undefined : item.id} className={`canvas-text-cell ${images ? "is-image-cell" : ""} ${canvasCellValue(item).imageRefs.length ? "has-image-refs" : ""} ${removing && (removing.axis === "row" ? removing.index === row : removing.index === column) ? "is-removing" : ""}`} key={column} style={{ flexGrow: columnWeights[column] }} onPointerDown={() => setActive([row, column])}>
+      {value.cells.map((line, row) => <div role={bubble ? undefined : "row"} className="canvas-text-row" key={rowKeys[row]} style={{ flexGrow: rowWeights[row] }}>
+        {line.map((item, column) => { const images = item.content_type === "image"; const generation = images && item.generation_ref ? renderGeneration?.(item) : null; const copyKey = `cell:${item.id}`; return <div role={bubble ? undefined : "cell"} data-canvas-cell={bubble ? undefined : item.id} className={`canvas-text-cell ${images ? "is-image-cell" : ""} ${canvasCellValue(item).imageRefs.length ? "has-image-refs" : ""} ${removing && (removing.axis === "row" ? removing.index === row : removing.index === column) ? "is-removing" : ""}`} key={item.id} style={{ flexGrow: columnWeights[column] }} onPointerDown={() => setActive([row, column])}>
           {!bubble && (["input", "output"] as const).map(side => (side === "input" ? onInput : onConnectCell) && <CanvasConnectionHandle key={side} side={side}
             className="canvas-cell-connection" disabled={inputLocked}
             aria-label={`${side === "input" ? "添加上游到" : "引用"}第 ${row + 1} 行第 ${column + 1} 列`}
@@ -390,14 +424,7 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
           })}</div>}
           {images && (!!item.image_refs?.length || !!item.generation_ref) && <button className="canvas-cell-copy" title="清空图片" aria-label={`清空第 ${row + 1} 行第 ${column + 1} 列图片`} disabled={inputLocked} onClick={() => updateCell(row, column, { content_type: "text", text: "", image_refs: [] })}><Minus size={13} /></button>}
           {!images && <button className="canvas-cell-copy" title="复制文本" aria-label={`复制第 ${row + 1} 行第 ${column + 1} 列`}
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(item.text);
-                const key = `${row}:${column}`;
-                setCopied(key);
-                window.setTimeout(() => setCopied(current => current === key ? null : current), 1200);
-              } catch (error) { notifyError(error, "复制失败"); }
-            }}>{copied === `${row}:${column}` ? <Check size={13} /> : <Copy size={13} />}</button>}
+            onClick={() => copyText(item.text, copyKey)}>{copied === copyKey ? <Check size={13} /> : <Copy size={13} />}</button>}
         </div>; })}
       </div>)}
       {!bubble && Array.from({ length: columns - 1 }, (_, index) => index + 1).map(boundary => <button key={`resize-column-${boundary}`}
@@ -406,14 +433,14 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
         onPointerDown={event => beginGridResize(event, "column", boundary)}
         onPointerMove={moveGridResize} onPointerUp={event => endGridResize(event)} onPointerCancel={event => endGridResize(event, true)}
         onLostPointerCapture={event => endGridResize(event, true)}
-        onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); cancelGridResize(); } }} />)}
+        onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); cancelGridResize(event.currentTarget); } }} />)}
       {!bubble && Array.from({ length: rows - 1 }, (_, index) => index + 1).map(boundary => <button key={`resize-row-${boundary}`}
         className="canvas-text-resize is-row" role="separator" aria-orientation="horizontal"
         aria-label={`调整第 ${boundary} 行高度`} title={`调整第 ${boundary} 行高度`} style={{ top: `${boundaryFraction(rowWeights, boundary) * 100}%` }}
         onPointerDown={event => beginGridResize(event, "row", boundary)}
         onPointerMove={moveGridResize} onPointerUp={event => endGridResize(event)} onPointerCancel={event => endGridResize(event, true)}
         onLostPointerCapture={event => endGridResize(event, true)}
-        onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); cancelGridResize(); } }} />)}
+        onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); cancelGridResize(event.currentTarget); } }} />)}
       {!bubble && (["row", "column"] as const).flatMap(axis => {
         const count = axis === "row" ? rows : columns;
         const weights = axis === "row" ? rowWeights : columnWeights;

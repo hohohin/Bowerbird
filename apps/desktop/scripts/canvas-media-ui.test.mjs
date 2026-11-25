@@ -72,6 +72,13 @@ try {
   for (const theme of ["light", "dark"]) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
     await page.mouse.move(5, 5);
+    await page.evaluate(async () => {
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const cards = document.querySelectorAll('[data-canvas-node-id="clip"], [data-canvas-node-id="wide"]');
+      await Promise.all([...cards].flatMap(card => card.getAnimations())
+        .filter(animation => animation.effect?.getComputedTiming().endTime < Infinity)
+        .map(animation => animation.finished.catch(() => {})));
+    });
     const appearance = locator => locator.evaluate(el => { const style = getComputedStyle(el); return [style.borderRadius, style.borderWidth, style.backgroundColor, style.boxShadow]; });
     assert.deepEqual(await appearance(node('clip')), await appearance(node('wide')), `${theme}: video and image share the card frame`);
     await node("clip").screenshot({ path: `.tmp/canvas-video-film/asset-${theme}.png` });
@@ -79,9 +86,10 @@ try {
   // Explicitly opening the card still loads the original video with playback controls.
   await node("clip").focus();
   await page.keyboard.press("Enter");
-  const videoPreview = page.getByRole("dialog", { name: /媒体预览/ });
+  const videoPreview = page.getByRole("dialog", { name: "视频与生成记录预览" });
   await videoPreview.waitFor();
-  assert.equal(await videoPreview.locator("video").getAttribute("src"), "demo-clip.mp4");
+  const videoSource = await videoPreview.locator("video").getAttribute("src");
+  assert.equal(new URL(videoSource, "http://fixture/").pathname, "/demo-clip.mp4");
   assert.equal(await videoPreview.getByRole("slider", { name: "视频时间轴" }).count(), 1);
   assert.equal(await videoPreview.getByRole("button", { name: "播放", exact: true }).count(), 1);
   await page.keyboard.press("Escape");

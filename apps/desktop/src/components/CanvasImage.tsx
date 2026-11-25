@@ -49,6 +49,7 @@ export const CanvasImage = memo(function CanvasImage({ path, thumbPath, sourceWi
   const version = thumbPath ?? "";
   const [loaded, setLoaded] = useState<Preview>();
   const [failed, setFailed] = useState<string>();
+  useLayoutEffect(() => setFailed(undefined), [path, thumbPath]);
   useEffect(() => {
     if (!visible || !path || size === null || width <= 0 || height <= 0) return;
     let current = true;

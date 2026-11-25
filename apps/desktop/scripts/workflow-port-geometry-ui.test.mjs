@@ -42,6 +42,7 @@ try {
       return React.createElement(React.Fragment, {},
         React.createElement('div', { 'data-canvas-cell': 'first', style: { height: 40 } }),
         React.createElement('div', { 'data-canvas-cell': 'second', style: { position: 'relative', width: '100%', height: 60 } },
+          React.createElement('button', { className: 'canvas-cell-connection', 'data-canvas-connect-side': 'input' }),
           React.createElement('button', { key: revision, 'data-workflow-cell': 'cell', style: { position: 'absolute', left: 200 + revision * 10, top: 10, padding: 0, border: 0, width: 10, height: 10 } }),
           React.createElement('button', { 'data-workflow-text-input': 'cell', 'data-content-input-type': 'image', style: { position: 'absolute', left: 0, top: 20, padding: 0, border: 0, width: 10, height: 10 } })));
     }
@@ -59,10 +60,11 @@ try {
       const node = { id: 'table', x, y, width, height, payloadJson };
       const targets = connected ? [{ node, kind: 'output', port: 'cell' }, { node, kind: 'output', port: 'cell' },
         { node, kind: 'cell', port: 'second' }, { node: late, kind: 'cell', port: 'result' },
+        { node, kind: 'input', port: '' },
         ...(second ? [{ node, kind: 'input', port: 'cell', image: true }] : [])] : [];
       const rect = useWorkflowPortGeometry(svg, targets, getZoom);
       window.geometry = { output: rect(node, 'output', 'cell'), embedded: rect(node, 'cell', 'second'),
-        input: rect(node, 'input', 'cell', true), late: rect(late, 'cell', 'result') };
+        input: rect(node, 'input', 'cell', true), wholeInput: rect(node, 'input', ''), late: rect(late, 'cell', 'result') };
       return React.createElement('div', { className: 'canvas-plane', style: { position: 'relative', transform: `scale(${getZoom()})`, transformOrigin: '0 0' } },
         React.createElement('svg', { ref: svg, style: { position: 'absolute', width: 1, height: 1, overflow: 'visible' } }),
         React.createElement('div', { 'data-canvas-node-id': 'table', style: { position: 'absolute', left: x, top: y, width, height } },
@@ -77,6 +79,7 @@ try {
   await page.waitForTimeout(100);
   assert.deepEqual(await page.evaluate(() => window.geometry.output), { x: 220, y: 80, width: 10, height: 10 });
   assert.deepEqual(await page.evaluate(() => window.geometry.embedded), { x: 20, y: 70, width: 300, height: 60 });
+  assert.equal(await page.evaluate(() => window.geometry.wholeInput), undefined, 'a cell control cannot stand in for a whole-card socket');
 
   // Repeated pointer frames change card coordinates, not its socket layout.
   await page.evaluate(() => { window.reads = 0; for (let i = 0; i < 20; i++) window.renderGeometry({ x: 100 + i, y: 200 + i }); });
@@ -100,6 +103,18 @@ try {
   await page.waitForFunction(() => window.geometry.output?.x === 329);
   assert.equal(await page.locator('[data-workflow-cell="cell"]').count(), 1,
     'child-local replacement refreshes cached elements without a parent prop change');
+  await page.evaluate(() => {
+    window.geometryZoom = 0;
+    window.renderGeometry({ x: 119, y: 219, width: 360.5, second: true, payloadJson: 'resized' });
+    window.replacePort();
+  });
+  await page.waitForTimeout(100);
+  assert.equal(await page.evaluate(() => window.geometry.output.x), 329, 'invalid scale freezes the last measured socket');
+  await page.evaluate(() => {
+    window.geometryZoom = 1.75;
+    window.renderGeometry({ x: 119, y: 219, width: 360.5, second: true, payloadJson: 'resized' });
+  });
+  await page.waitForFunction(() => window.geometry.output?.x === 339);
   await page.waitForTimeout(100);
   await page.evaluate(() => { window.tableReads = 0; window.mountLateCard(); });
   await page.waitForFunction(() => window.geometry.late?.width === 100);

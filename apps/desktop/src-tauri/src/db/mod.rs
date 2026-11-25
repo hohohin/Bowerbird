@@ -57,6 +57,12 @@ impl Database {
         Ok(conn)
     }
 
+    pub(crate) fn lock_conn(&self) -> AppResult<MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|_| AppError::Other("SQLite connection lock poisoned".into()))
+    }
+
     pub(crate) fn browser_connection(&self) -> MutexGuard<'_, Connection> {
         self.browser.as_ref().unwrap_or(&self.conn).lock().unwrap()
     }

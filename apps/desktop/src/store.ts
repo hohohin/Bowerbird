@@ -147,6 +147,9 @@ type Mode = "browse" | "manage";
 
 /** 生成会话底部编辑坞的两种入口：「重新编辑」（新版本分支）与底部对话框（会话内续轮）。 */
 export type GenEditingMode = "edit" | "revise";
+export type BoardAssetRequest =
+  ({ kind: "pick"; assetId: string } | { kind: "inject"; asset: PromptedAsset })
+  & { routeRevision: number; generationJobId: string | null };
 
 export interface CreativeGenerationContext {
   projectId: string;
@@ -502,11 +505,10 @@ interface State {
     generation?: GenerationSettings,
     referenceNodeIds?: Array<string | null>,
   ) => void;
-  // 「标注插入创作板」：注入临时素材（不入库）到当前编辑器。生成面板编辑坞打开 → 原地插入
-  // 不动面板；否则保开创作板 + 延一帧 dispatch board-asset-injected（挂载时序同上）。
+  // 素材请求等到目标编辑器挂载后消费。生成面板编辑坞打开时，标注图插入当前编辑坞。
+  pendingBoardAssets: BoardAssetRequest[];
   insertAnnotatedToBoard: (asset: PromptedAsset) => void;
-  // 「详情页 → 添加到对话框」：关详情回主界面，滚动定位 + 蓝框闪烁（focusAsset 既有机制），
-  // 延一帧插参考图 chip（对话框随详情关闭才挂载，同 reusePromptToBoard 的帧等待）；
+  // 「详情页 → 添加到对话框」：关详情、滚动定位素材，等待对话框挂载后插入参考图；
   // 该图有维度数据则同时呼出维度环（环点扇区继续挑维度）。
   addAssetToBoardFromDetail: (assetId: string) => void;
   // —— 图片标注面板（右键菜单唤起，全局单实例）——
@@ -2557,30 +2559,21 @@ export const useStore = create<State>((set, get) => {
       activePresetId: null,
     });
   },
-  insertAnnotatedToBoard: (asset) => {
-    // 生成面板编辑坞打开 → 原地插入不动面板（编辑坞的 useCreationEditor 也监听 injected）；
-    // 否则收起详情页让瀑布流+对话框可见（对话框与详情页互斥，见 App 挂载条件）。
-    if (!get().genPanelOpen) {
-      set({ detailAssetId: null });
-    }
-    setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent("bowerbird://board-asset-injected", { detail: asset }),
-      );
-    }, 0);
-  },
+  pendingBoardAssets: [],
+  insertAnnotatedToBoard: (asset) => set(state => ({
+    ...(!state.genPanelOpen && { detailAssetId: null }),
+    pendingBoardAssets: [...state.pendingBoardAssets, { kind: "inject", asset, routeRevision: state.projectRouteRevision,
+      generationJobId: state.genPanelOpen && state.genEditing ? state.activeJobId : null }],
+  })),
   addAssetToBoardFromDetail: (assetId) => {
-    // 关详情回主界面：瀑布流 + 对话框（互斥）随 detailAssetId 清空而挂载。
-    set({ detailAssetId: null });
+    // The composer can consume the request after remounting when the detail closes.
+    set(state => ({
+      detailAssetId: null,
+      pendingBoardAssets: [...state.pendingBoardAssets, { kind: "pick", assetId, routeRevision: state.projectRouteRevision,
+        generationJobId: state.genPanelOpen && state.genEditing ? state.activeJobId : null }],
+    }));
     // 滚动定位到该图 + 蓝框闪烁（MasonryGrid 既有 focusAsset 消费）。
     get().focusAsset(assetId);
-    // 延一帧插 chip：对话框刚挂载，需等其 useCreationEditor 注册 pick listener；
-    // 插入后编辑器聚焦 → onFocus 激活创作模式（同点编辑框）。
-    setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent("bowerbird://board-asset-picked", { detail: assetId }),
-      );
-    }, 0);
     // 有维度数据（反推 sections）则呼出维度环；环锚点回退链：瀑布流卡片 → 编辑框 chip。
     const hasSections = get().promptedAssets.some(
       (a) => a.id === assetId && a.sections && a.sections.length > 0,
@@ -2618,4 +2611,15 @@ useStore.subscribe((state, previous) => {
   if (view === previousView) return;
   try { localStorage.setItem(LIBRARY_HOME_VIEW_KEY, view); }
   catch { /* Keep navigation usable when preference storage is unavailable. */ }
+});
+
+useStore.subscribe((state, previous) => {
+  if (!state.pendingBoardAssets.length) return;
+  if (state.projectRouteRevision !== previous.projectRouteRevision || state.activeProjectId !== previous.activeProjectId) {
+    useStore.setState({ pendingBoardAssets: [] });
+  } else if (state.genEditing !== previous.genEditing || state.activeJobId !== previous.activeJobId
+    || state.genPanelOpen !== previous.genPanelOpen) {
+    const pendingBoardAssets = state.pendingBoardAssets.filter(request => request.generationJobId === null);
+    if (pendingBoardAssets.length !== state.pendingBoardAssets.length) useStore.setState({ pendingBoardAssets });
+  }
 });

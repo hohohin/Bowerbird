@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { dreaminaCliVersion } from "../src/lib/genProviders.ts";
 import {
   awaitGenerationComposerIntent,
   captureGenerationSubmissionAuthority,
@@ -88,7 +89,7 @@ function startupHarness() {
   const waiters = new Map();
   const bindings = {
     get: () => state, set: (update) => Object.assign(state, update(state)),
-    normalizeGenerationProvider: (value) => value, generationGateError: () => null,
+    normalizeGenerationProvider: (value) => value, generationGateError: () => null, dreaminaCliVersion,
     normalizeAnnotationPrompt: (value) => value, autoRatioFromReferences: () => null,
     nextGenTurnId: () => 1, crypto: { randomUUID: () => "job-start" },
     generationStartupWaiters: waiters, api: { codexCreateImage: () => provider },

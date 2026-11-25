@@ -13,8 +13,8 @@ const clone = value => structuredClone(value);
 const plain = value => JSON.parse(JSON.stringify(value));
 const node = (id, prompt = '') => ({ id, kind: 'generation', x: 0, y: 0, action: 'describe', skill: 'image-edit', prompt, ratio: null, provider: 'codex', inputs: {}, outputs: {}, outputPorts: [], trigger: false });
 const doc = nodes => ({ schema_version: 1, nodes, run: null });
-function fixture(initial = doc([node('original')])) {
-  let saved = { revision: 1, document: clone(initial) }, fail = false, gate, readGate, failRead = false;
+function fixture(initial = doc([node('original')]), options = {}) {
+  let saved = { revision: 1, document: clone(initial) }, fail = false, failNext = false, gate, readGate, failRead = false;
   const interleavedChanges = [];
   const writes = [];
   const modules = new Map();
@@ -48,14 +48,14 @@ function fixture(initial = doc([node('original')])) {
     getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.png` })),
     canvasWorkflowSave: async (_id, revision, document) => {
       if (gate) await gate;
-      if (fail) throw new Error('synthetic disk write failed');
+      if (fail || failNext) { failNext = false; throw new Error('synthetic disk write failed'); }
       const change = interleavedChanges.shift();
       if (change) saved = { revision: saved.revision + 1, document: change(clone(saved.document)) };
       if (revision !== saved.revision) throw new Error('工作流已被其他窗口修改，请重新打开项目');
       saved = { revision: revision + 1, document: clone(document) }; writes.push(saved.document); return saved.revision;
     },
   };
-  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, TextEncoder, setTimeout, clearTimeout });
+  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, TextEncoder, AbortController, setTimeout: options.setTimeout ?? setTimeout, clearTimeout });
   function load(path) {
     if (modules.has(path)) return modules.get(path).exports;
     const module = { exports: {} }; modules.set(path, module);
@@ -78,12 +78,13 @@ function fixture(initial = doc([node('original')])) {
       if (specifier === '@tauri-apps/api/event') return { emit: async () => {} };
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
+      if (specifier === '@tauri-apps/api/core' && options.invoke) return { invoke: options.invoke };
       if (specifier === './workflowLoop') return load(resolve(lib, 'workflowLoop.ts'));
       if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined, agentOutputTargets: () => [] };
       if (specifier === './canvasSessionOutputs') return { completedCanvasSessions: () => [], reconcileCanvasWorkflowReferences: nodes => nodes,
         canvasSessionCompletionLookup: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompletionLookup(...args),
         workflowGenerationActivity: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).workflowGenerationActivity(...args) };
-      if (['./comfyVideo', './comfyVideo.ts', './genProviders', './genProviders.ts', './canvasNodePayload.ts', './projectNodeIds'].includes(specifier)) {
+      if (['./comfyVideo', './comfyVideo.ts', './genProviders', './genProviders.ts', './canvasNodePayload', './canvasNodePayload.ts', './projectNodeIds'].includes(specifier)) {
         return load(resolve(lib, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       }
       if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts'].includes(specifier)) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
@@ -96,7 +97,7 @@ function fixture(initial = doc([node('original')])) {
   const { mergeWorkflowChanges } = load(resolve(lib, 'workflowExternalChanges.ts'));
   return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), writes, requests, sends, stops, chatStore, chatApi, chatListeners, checkpoints, reads, load, genJobs, generationRequests,
     external: document => { saved = { revision: saved.revision + 1, document: clone(document) }; },
-    fail: value => { fail = value; }, failRead: value => { failRead = value; },
+    fail: value => { fail = value; }, failNext: () => { failNext = true; }, failRead: value => { failRead = value; },
     interleave: (...changes) => { interleavedChanges.push(...changes); },
     holdRead: () => {
       let entered, release;
@@ -243,6 +244,82 @@ test('retry after a failed write retains the unsaved edit', async () => {
   await assert.rejects(c.save(doc([node('original', 'unsaved')])), /synthetic disk/);
   f.fail(false); await c.retrySave();
   assert.equal(f.saved().document.nodes[0].prompt, 'unsaved'); assert.equal(c.error, '');
+});
+
+test('the next checkpoint commits a failed edit and preserves newer remote changes', async () => {
+  const f = await activeFixture(), c = f.controller;
+  const hold = f.hold();
+  f.failNext();
+  const failed = c.save({ ...c.document, nodes: c.document.nodes.map(n => n.id === 'a' ? { ...n, x: 12 } : n) }, true);
+  const result = assert.rejects(failed, /synthetic disk/);
+  const checkpoint = c.step('run-b', 'b', { detail: 'queued behind a failed edit' });
+  hold(); await result; await checkpoint;
+  assert.equal(f.saved().document.nodes[0].x, 12);
+  assert.equal(f.saved().document.runs[1].steps.b.detail, 'queued behind a failed edit');
+  assert.equal(c.error, '');
+
+  f.fail(true);
+  await assert.rejects(c.save({ ...c.document, nodes: c.document.nodes.map(n => n.id === 'a' ? { ...n, x: 20 } : n) }), /synthetic disk/);
+  f.fail(false);
+  const disk = f.saved().document;
+  f.external({ ...disk, nodes: disk.nodes.map(n => n.id === 'b' ? { ...n, y: 40 } : n) });
+  await c.refreshExternalCards();
+  assert.equal(c.document.nodes[0].x, 20);
+  assert.equal(c.document.nodes[1].y, 40);
+  assert.match(c.error, /synthetic disk/);
+  await c.save({ ...c.document, nodes: c.document.nodes.map(n => n.id === 'b' ? { ...n, y: 60 } : n) });
+  assert.deepEqual(f.saved().document.nodes.map(n => [n.x, n.y]), [[20, 0], [0, 60]]);
+  assert.equal(c.error, '');
+});
+
+test('an old video executor cannot release the new execution lock after stop times out', { timeout: 5000 }, async () => {
+  const h3 = { ...node('h3'), kind: 'comfy-video' };
+  const run = { ...running(h3.id), status: 'waiting', accountId: null, steps: { [h3.id]: { status: 'waiting', jobId: 'original-video' } } };
+  const deadline = Promise.withResolvers(), cancel = Promise.withResolvers();
+  const old = Promise.withResolvers(), resumed = Promise.withResolvers();
+  const calls = [];
+  const f = fixture({ ...doc([h3]), run, runs: [run] }, {
+    setTimeout(callback, delay) {
+      if (delay !== 20_000) return setTimeout(callback, delay);
+      deadline.resolve(callback);
+      return setTimeout(() => {}, delay);
+    },
+    invoke(command, args) {
+      assert.equal(command, 'comfy_video');
+      assert.equal(args.requestId, 'original-video');
+      assert.notEqual(args.action, 'start');
+      calls.push(args.action);
+      if (args.action === 'cancel') return cancel.promise;
+      return calls.length === 1 ? old.promise : resumed.promise;
+    },
+  });
+  const waitForCall = async count => {
+    while (calls.length < count) await new Promise(setImmediate);
+  };
+  const c = f.controller;
+  await c.load();
+  const oldExecution = c.continue();
+  await waitForCall(1);
+  const before = c.document;
+  const stopping = assert.rejects(c.stop(), /超时/);
+  await waitForCall(2);
+  assert.equal(before.run.steps[h3.id].comfyStopping, undefined);
+  assert.equal(c.document.run.steps[h3.id].comfyStopping, true);
+  (await deadline.promise)();
+  await stopping;
+  const newExecution = c.continue();
+  await waitForCall(3);
+  const activeStep = c.document.run.steps[h3.id];
+  old.resolve({ status: 'done', message: '迟到的原结果', asset: { id: 'stale' } });
+  await oldExecution;
+  assert.equal(c.document.run.steps[h3.id], activeStep);
+  assert.ok(c.executing.has(run.id), 'the resumed execution still owns the lock');
+  await c.continue();
+  assert.deepEqual(calls, ['status', 'cancel', 'status']);
+  resumed.resolve({ status: 'unknown', message: '查询原任务' });
+  cancel.resolve({ status: 'cancelled', message: '迟到的停止回执' });
+  await newExecution;
+  assert.equal(c.document.run.steps[h3.id].jobId, 'original-video');
 });
 
 test('refresh and subsequent save retain remote card names without starting a run', async () => {

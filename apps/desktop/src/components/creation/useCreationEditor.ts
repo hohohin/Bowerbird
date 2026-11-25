@@ -3,7 +3,7 @@ import { EditorState } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { Slice, Fragment } from "prosemirror-model";
 import type { Node as PmNode, ResolvedPos } from "prosemirror-model";
-import { useStore } from "../../store";
+import { useStore, type BoardAssetRequest } from "../../store";
 import { api } from "../../lib/api";
 import type { CreativePromptLoad } from "../../lib/creativeLaunch";
 import type { CaptionSection, PromptedAsset } from "../../lib/types";
@@ -16,9 +16,6 @@ export type BoardAssetPick = string | { assetId: string; canvasNodeId?: string |
 export const BOARD_ASSET_PICK_EVENT = "bowerbird://board-asset-picked";
 export const BOARD_PROMPT_LOADED_EVENT = "bowerbird://board-prompt-loaded";
 const LOAD_EVENT = "bowerbird://board-load-prompt";
-// 图片标注「插入创作板（不入库）」：detail = 完整 PromptedAsset（临时文件 + 「标注」维度），
-// 走 extraAssets 旁路（不在 s.assets / promptedAssets 里），随草稿 refs 持久化。
-const INJECT_EVENT = "bowerbird://board-asset-injected";
 // Agent Z（dev-only）回传：detail = string，追加到编辑器末尾（每行一段，不覆盖既有草稿）。
 // 由 App.tsx 监听 Tauri 事件 agent-z://output 后派发。
 export const APPEND_TEXT_EVENT = "bowerbird://board-append-text";
@@ -106,6 +103,7 @@ export function useCreationEditor(opts?: {
   initialEmpty?: boolean;
   enterInsertsParagraph?: boolean;
   consumePendingKeyword?: boolean;
+  generationJobId?: string;
   initialDraft?: CreationEditorDraft | null;
   onDraftChange?: (draft: CreationEditorDraft) => void;
 }) {
@@ -122,6 +120,8 @@ export function useCreationEditor(opts?: {
   const loadPromptRef = useRef<(request: CreativePromptLoad) => boolean>(() => false);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const consumeAsset = useRef<(request: BoardAssetRequest) => void>();
+  const pendingBoardAssets = useStore((s) => s.pendingBoardAssets);
   const flushDraftRef = useRef<() => void>(() => {});
   const [tick, setTick] = useState(0);
 
@@ -276,8 +276,7 @@ export function useCreationEditor(opts?: {
         .catch(console.error);
     }
 
-    function onPick(e: Event) {
-      const detail = (e as CustomEvent<BoardAssetPick>).detail;
+    function pickAsset(detail: BoardAssetPick) {
       const assetId = typeof detail === "string" ? detail : detail?.assetId;
       const canvasNodeId = typeof detail === "string" ? null : detail?.canvasNodeId ?? null;
       const shouldFocus = typeof detail === "string" || detail?.focus !== false;
@@ -294,7 +293,7 @@ export function useCreationEditor(opts?: {
           .getPromptedAsset(assetId)
           .then((fetched) => {
             const view = viewRef.current;
-            if (!fetched || !view) return;
+            if (!fetched || view !== v) return;
             setExtraAssets((prev) => [...prev.filter((a) => a.id !== assetId), { ...fetched }]);
             view.dispatch(
               view.state.tr
@@ -313,11 +312,10 @@ export function useCreationEditor(opts?: {
       if (shouldFocus) v.focus();
     }
 
-    function onInject(e: Event) {
+    function injectAsset(asset: PromptedAsset) {
       // 标注图注入（不入库）：upsert 进 extraAssets（同 id 覆盖，防草稿 refs 膨胀），
       // 插 image chip 后紧跟「标注」keyword——用户无需再从维度环手动引用，
       // serialize 自动展开为 `@图名 的【标注】：<bbox>/<point> 坐标`。
-      const asset = (e as CustomEvent<PromptedAsset>).detail;
       if (!asset || typeof asset.id !== "string") return;
       setExtraAssets((prev) => [...prev.filter((a) => a.id !== asset.id), { ...asset }]);
       const v = viewRef.current;
@@ -395,16 +393,17 @@ export function useCreationEditor(opts?: {
 
     // 生成成功关闭创作板 / 手动收起 / 切项目 → 卸载。卸载即把当前 doc 落盘
     // （比 400ms 去抖更可靠——刚编辑完就关板时去抖计时器还挂着），重开创作板恢复。
+    const onPick = (e: Event) => pickAsset((e as CustomEvent<BoardAssetPick>).detail);
+    consumeAsset.current = request => request.kind === "pick" ? pickAsset(request.assetId) : injectAsset(request.asset);
     window.addEventListener(BOARD_ASSET_PICK_EVENT, onPick);
     window.addEventListener(LOAD_EVENT, onLoad);
-    window.addEventListener(INJECT_EVENT, onInject);
     window.addEventListener(APPEND_TEXT_EVENT, onAppendText);
     return () => {
       cancelled = true;
       window.removeEventListener(BOARD_ASSET_PICK_EVENT, onPick);
       window.removeEventListener(LOAD_EVENT, onLoad);
-      window.removeEventListener(INJECT_EVENT, onInject);
       window.removeEventListener(APPEND_TEXT_EVENT, onAppendText);
+      consumeAsset.current = undefined;
       if (saveTimer) clearTimeout(saveTimer);
       if (draftKey) saveDraft(draftKey, view.state.doc.toJSON(), extraAssetsRef.current);
       if (draftDirty) opts?.onDraftChange?.({ doc: view.state.doc.toJSON(), refs: extraAssetsRef.current });
@@ -415,6 +414,26 @@ export function useCreationEditor(opts?: {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const generationJobId = opts?.generationJobId ?? null;
+  useEffect(() => {
+    if (!pendingBoardAssets.length) return;
+    let mounted = true;
+    // Keep the request queued through StrictMode's setup/cleanup replay.
+    queueMicrotask(() => {
+      const consume = consumeAsset.current;
+      if (!mounted || !consume) return;
+      const state = useStore.getState();
+      const activeJobId = state.genPanelOpen && state.genEditing ? state.activeJobId : null;
+      if (state.projectRoutePending || generationJobId !== activeJobId) return;
+      const current = state.pendingBoardAssets.filter(request => request.routeRevision === state.projectRouteRevision);
+      const pending = current.filter(request => request.generationJobId !== generationJobId);
+      if (pending.length === state.pendingBoardAssets.length) return;
+      useStore.setState({ pendingBoardAssets: pending });
+      for (const request of current) if (request.generationJobId === generationJobId) consume(request);
+    });
+    return () => { mounted = false; };
+  }, [pendingBoardAssets, generationJobId]);
 
   const serialized = useMemo(() => {
     const doc = viewRef.current?.state.doc;

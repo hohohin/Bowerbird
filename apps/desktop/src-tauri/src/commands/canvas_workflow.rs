@@ -1,6 +1,6 @@
 //! Versioned, local workflow definitions. Provider jobs keep their existing authority.
-use std::{collections::{HashMap, HashSet}, sync::Arc};
-use rusqlite::{params, OptionalExtension};
+use std::{collections::{HashMap, HashSet}, future::Future, sync::Arc};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::State;
@@ -447,10 +447,17 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
     Ok(assets)
 }
 
+fn ensure_workflow_revision(current: i64, expected: i64) -> AppResult<()> {
+    if current != expected {
+        return Err(AppError::Other("工作流已被其他窗口修改，请重新打开项目".into()));
+    }
+    Ok(())
+}
+
 impl Database {
     fn workflow_get(&self, project_id: &str) -> AppResult<WorkflowSnapshot> {
         let value: Option<(i64, String)> = {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.lock_conn()?;
             conn.query_row("SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?
         };
         match value {
@@ -473,10 +480,10 @@ impl Database {
                 return Err(invalid());
             }
         }
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current: i64 = tx.query_row("SELECT revision FROM canvas_workflows WHERE project_id=?1", [project_id], |r| r.get(0)).optional()?.unwrap_or(0);
-        if current != revision { return Err(AppError::Other("工作流已被其他窗口修改，请重新打开项目".into())); }
+        ensure_workflow_revision(current, revision)?;
         let previous: Option<String> = tx.query_row("SELECT document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |row| row.get(0)).optional()?;
         let previous = previous.map(|json| serde_json::from_str::<Value>(&json)).transpose()?.unwrap_or(Value::Null);
         validate_schedule_claims(&previous, &document)?;
@@ -521,11 +528,31 @@ pub async fn canvas_workflow_get(paths: State<'_, Arc<LibraryPaths>>, project_id
 }
 #[tauri::command]
 pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value, created_content: Option<NewCanvasNode>) -> AppResult<i64> {
-    let before = db.workflow_get(&project_id)?.document;
-    if created_content.is_some() || definition_changed(&before, &document) || (has_new_run(&before,&document) && !paid_definition(&document).is_empty()) {
-        require_pro(&auth, &entitlement).await?;
+    save_workflow_with_authorization(&db, &project_id, revision, document, created_content.as_ref(), || {
+        require_pro(&auth, &entitlement)
+    }).await
+}
+
+async fn save_workflow_with_authorization<F>(
+    db: &Database,
+    project_id: &str,
+    revision: i64,
+    document: Value,
+    created_content: Option<&NewCanvasNode>,
+    authorize: impl FnOnce() -> F,
+) -> AppResult<i64>
+where
+    F: Future<Output = AppResult<()>>,
+{
+    let before = db.workflow_get(project_id)?;
+    ensure_workflow_revision(before.revision, revision)?;
+    if created_content.is_some()
+        || definition_changed(&before.document, &document)
+        || (has_new_run(&before.document, &document) && !paid_definition(&document).is_empty())
+    {
+        authorize().await?;
     }
-    db.workflow_save_with_content(&project_id, revision, document, created_content.as_ref())
+    db.workflow_save_with_content(project_id, revision, document, created_content)
 }
 
 #[cfg(test)]
@@ -544,6 +571,37 @@ mod tests {
         assert!(paid_definition(&json!({"nodes":[{"id":"text","kind":"text"}]})).is_empty());
     }
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    #[tokio::test]
+    async fn workflow_save_checks_revision_before_and_after_authorization() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.lock_conn().unwrap().execute(
+            "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", [],
+        ).unwrap();
+        let empty = json!({"schema_version":1,"nodes":[],"run":null});
+        assert_eq!(db.workflow_save("p", 0, empty.clone()).unwrap(), 1);
+        let paid = json!({"schema_version":1,"nodes":[node("paid",json!({}))],"run":null});
+
+        let calls = std::cell::Cell::new(0);
+        let stale = save_workflow_with_authorization(&db, "p", 0, paid.clone(), None, || async {
+            calls.set(calls.get() + 1);
+            Ok(())
+        }).await.unwrap_err();
+        assert!(stale.to_string().contains("工作流已被其他窗口修改"));
+        assert_eq!(calls.get(), 0);
+
+        let raced = save_workflow_with_authorization(&db, "p", 1, paid, None, || async {
+            calls.set(calls.get() + 1);
+            assert_eq!(db.workflow_save("p", 1, empty.clone()).unwrap(), 2);
+            Ok(())
+        }).await.unwrap_err();
+        assert!(raced.to_string().contains("工作流已被其他窗口修改"));
+        assert_eq!(calls.get(), 1);
+        let saved = db.workflow_get("p").unwrap();
+        assert_eq!(saved.revision, 2);
+        assert_eq!(saved.document, empty);
+    }
+
     #[test]
     fn dimension_wire_roundtrips_and_accepts_another_input() {
         let db = Database::open_in_memory().unwrap();

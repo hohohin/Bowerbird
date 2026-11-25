@@ -1,10 +1,11 @@
 interface FrameProps {
   x: number; y: number; width: number; height: number; index: number; total: number;
+  owner: string;
 }
 
-export function WorkflowLoopFrame({ x, y, width, height, index, total }: FrameProps) {
+export function WorkflowLoopFrame({ x, y, width, height, index, total, owner }: FrameProps) {
   const corner = "M0 22V9l9-9h45";
-  return <div aria-hidden="true" className="workflow-loop-frame" style={{ left: x, top: y, width, height }}>
+  return <div aria-hidden="true" className="workflow-loop-frame" data-workflow-loop-owner={owner} style={{ left: x, top: y, width, height }}>
     <svg width="100%" height="100%" fill="none" stroke="#74a6ce">
       <path d={corner} />
       <path transform={`translate(${width} ${height}) rotate(180)`} d={corner} />
