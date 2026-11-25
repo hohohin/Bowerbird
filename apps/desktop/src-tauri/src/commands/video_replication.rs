@@ -197,6 +197,9 @@ fn import_reference(
     source: PathBuf,
     asset_id: Option<String>,
 ) -> AppResult<Value> {
+    import_reference_with_limit(root,project,source,asset_id,false)
+}
+fn import_reference_with_limit(root:&Path,project:&str,source:PathBuf,asset_id:Option<String>,allow_long:bool)->AppResult<Value> {
     if !source.is_file() || fs::metadata(&source)?.len() > 200 * 1024 * 1024 {
         return Err(error("参考视频最大 200 MiB"));
     }
@@ -206,9 +209,10 @@ fn import_reference(
         || meta.height == 0
         || !meta.duration.is_finite()
         || meta.duration <= 0.0
-        || meta.duration > 120.0
+        || (!allow_long && meta.duration > 120.0)
+
     {
-        return Err(error("请选择包含有效视频轨、时长不超过 120 秒的视频"));
+        return Err(error("请选择包含有效视频轨的视频"));
     }
     let id = uuid::Uuid::new_v4().simple().to_string();
     let dir = folder(root, &id)?;
@@ -434,7 +438,7 @@ pub async fn video_replication(
             patch(&root,case_id,json!({"enhancedId":prepared["id"]}))?;
             Ok(prepared)
         },
-        "enhanced-get" | "enhanced-save" | "enhanced-analyze" | "enhanced-plan" | "enhanced-finish" => enhanced::handle(&app, root, project_id, &action, data),
+        "enhanced-read" | "enhanced-get" | "enhanced-save" | "enhanced-analyze" | "enhanced-plan" | "enhanced-finish" => enhanced::handle(&app, root, project_id, &action, data),
         "case-list" => cases::list(&root, &project_id),
         "case-save" => cases::update(&root, &project_id, &data),
         "reference-poster" => poster::load(root, field(&data, "id").to_owned(), project_id).await,

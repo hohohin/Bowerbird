@@ -13,9 +13,13 @@ import type { SaveVideoTrim } from "../lib/videoTrim";
 import { captureVideoFrame, invalidateVideoStrip, loadVideoStrip, seekVideoLastFrame, videoTime, type VideoFrame } from "../lib/videoFrame";
 import "./VideoPlayer.css";
 
-export function VideoPlayer({ path, sourceKey, seekRequest, onAddFrame, onAddFrameToCanvas, onReferenceFrame, onSaveTrim, embedded = false, fitContainer = false, showTrim = !embedded, frameTarget = "canvas" }: { path: string; sourceKey?: string; seekRequest?: { time: number; revision: number }; onAddFrame?: (frame: VideoFrame) => Promise<void>; onAddFrameToCanvas?: (frame: VideoFrame) => Promise<void>; onReferenceFrame?: (frame: VideoFrame) => Promise<void>; onSaveTrim?: SaveVideoTrim; embedded?: boolean; fitContainer?: boolean; showTrim?: boolean; frameTarget?: "canvas" | "reference" | "library" }) {
+export function VideoPlayer({ path, sourceKey, seekRequest, onMediaElement, onAddFrame, onAddFrameToCanvas, onReferenceFrame, onSaveTrim, embedded = false, fitContainer = false, showTrim = !embedded, frameTarget = "canvas" }: { path: string; sourceKey?: string; onMediaElement?: (element: HTMLVideoElement | null) => void; seekRequest?: { time: number; revision: number }; onAddFrame?: (frame: VideoFrame) => Promise<void>; onAddFrameToCanvas?: (frame: VideoFrame) => Promise<void>; onReferenceFrame?: (frame: VideoFrame) => Promise<void>; onSaveTrim?: SaveVideoTrim; embedded?: boolean; fitContainer?: boolean; showTrim?: boolean; frameTarget?: "canvas" | "reference" | "library" }) {
   const playerRef = useRef<HTMLElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const attachVideo = useCallback((element: HTMLVideoElement | null) => {
+    videoRef.current = element;
+    onMediaElement?.(element);
+  }, [onMediaElement]);
   const controlsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const video = videoRef.current;
@@ -288,7 +292,7 @@ export function VideoPlayer({ path, sourceKey, seekRequest, onAddFrame, onAddFra
       "--video-controls-height": `${controlsHeight}px` } as CSSProperties}
     onPointerDown={event => event.stopPropagation()} tabIndex={0}>
     <div className="video-player-screen">
-      <video ref={videoRef} crossOrigin="anonymous" src={src} preload="auto" playsInline muted={muted}
+      <video ref={attachVideo} crossOrigin="anonymous" src={src} preload="auto" playsInline muted={muted}
         aria-label="视频画面" onClick={() => void togglePlay()}
         onLoadedMetadata={event => {
           const video = event.currentTarget;

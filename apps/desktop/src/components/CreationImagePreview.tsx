@@ -26,12 +26,13 @@ import { useStore } from "../store";
 import "./CreationImagePreview.css";
 
 export function CreationImagePreview({ asset: originalAsset, projectId, job: providedJob, onClose, video, audio, navigation,
-  workflowOrigin, parentNodeId, onCreateWorkflowFromAsset, openTranscript }: {
+  workflowOrigin, parentNodeId, onCreateWorkflowFromAsset, openTranscript, openReplication }: {
   asset: Asset;
   projectId: string | null;
   job?: GenJob;
   onClose: () => void;
   openTranscript?: boolean;
+  openReplication?: boolean;
   video?: Pick<ComponentProps<typeof VideoPlayer>, "path" | "sourceKey" | "frameTarget" | "onAddFrame" | "onAddFrameToCanvas" | "onSaveTrim">;
   audio?: { path: string; sourceKey?: string; onSaveTrim: (request: VideoTrimRequest) => Promise<Asset> };
   navigation?: { index: number; count: number; assetIds?: readonly string[]; onIndexChange: (index: number) => void };
@@ -65,6 +66,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   const [conversationKey, setConversationKey] = useState<string | null>(null);
   const [videoAnalysis, setVideoAnalysis] = useState<{ key: string; view: VideoAnalysisView | "replication" | null }>();
   const [videoSeek, setVideoSeek] = useState<{ key: string; time: number; revision: number }>();
+  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   const [mediaReplacement, setMediaReplacement] = useState<{ key: string; revision: number; duration?: number | null }>();
   const [measuredAudio, setMeasuredAudio] = useState<{ key: string; duration: number }>();
   const [followLatest, setFollowLatest] = useState(false);
@@ -237,7 +239,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
   const videoKey = `${requestKey}:${media?.path}:${media?.sourceKey ?? ""}`;
   const replacement = mediaReplacement?.key === videoKey ? mediaReplacement : undefined;
   const transcriptKey = `${videoKey}:${replacement?.revision ?? 0}`;
-  const selectedVideoView = videoAnalysis?.key === videoKey ? videoAnalysis.view : openTranscript ? "transcript" : null;
+  const selectedVideoView = videoAnalysis?.key === videoKey ? videoAnalysis.view : openReplication && video ? "replication" : openTranscript ? "transcript" : null;
   const workspaceView = media ? selectedVideoView : null;
   const workspaceOpen = !!workspaceView;
   const cloudAuth = useStore(state => state.cloudAuth);
@@ -462,7 +464,7 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
             ? { "--image-scale": 1 }
             : { ...zoom.style, cursor: zoom.dragging ? "grabbing" : "grab", "--image-scale": zoom.scale }) as CSSProperties & { "--image-scale": number }}>
             <div className="creation-image-preview-image-depth" aria-hidden="true"><i/><i/></div>
-            {video ? <VideoPlayer key={`${video.path}:${video.sourceKey ?? ""}`} {...video}
+            {video ? <VideoPlayer key={`${video.path}:${video.sourceKey ?? ""}`} {...video} onMediaElement={setVideoElement}
               onSaveTrim={video.onSaveTrim ? saveMediaTrim : undefined} seekRequest={videoSeek?.key === transcriptKey ? videoSeek : undefined}
               embedded fitContainer showTrim /> : audio ? (contentMounted && <AudioDetailPlayer key={videoKey} asset={asset}
                 path={audio.path} sourceKey={transcriptKey} onSaveTrim={saveMediaTrim}
@@ -495,7 +497,9 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
           } : undefined}
           onSeek={time => setVideoSeek(previous => ({ key: transcriptKey, time, revision: (previous?.revision ?? 0) + 1 }))}/>
           : <div className="video-transcript-panel" key={`${transcriptKey}:${workspaceView}`}>
-            {workspaceView === "replication" ? <LibraryVideoReplication onBack={() => selectAnalysisView("analysis")}/> : <>
+            {workspaceView === "replication" ? <LibraryVideoReplication key={transcriptKey} assetId={asset.id} currentProjectId={projectId} video={videoElement}
+              onBack={() => selectAnalysisView("analysis")} onTranscript={() => selectAnalysisView("transcript")} onOpenBoard={close}
+              onSeek={time => setVideoSeek(previous => ({ key: transcriptKey, time, revision: (previous?.revision ?? 0) + 1 }))}/> : <>
               <VideoVisualAnalysis key={visualAnalysis.owner} assetId={asset.id} state={visualAnalysis}/>
               <button type="button" className="app-button-primary mt-4" onClick={() => selectAnalysisView("replication")}>复刻</button>
             </>}

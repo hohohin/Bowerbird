@@ -228,6 +228,11 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 - 可移植 Markdown 和 Agent 文本调用 `serializeReadableMarkdown`。编辑器日常保存通过 [documentSerialization.ts](../../apps/desktop/src/lib/documentSerialization.ts) 的 `serializeMarkdownInWorker` 使用同一完整 Markdown 编解码。`parseMarkdownWithState` 供编辑入口识别有效尾注与正文冲突，`parseMarkdown` 继续提供以最新正文为准的文档值。外部富文本粘贴通过 `documentPasteData` 处理统一的网页默认字体，内部 Slate 复制沿原有剪贴板格式传递。
 - 工作流读取文档时，`canvasSessionOutputs.ts` 的 `canvasWorkflowInputState` 检查端口，`canvasInputAssetIds` 返回有序素材 ID，`canvasInputValue` 提供实际执行需要的完整文本与引用。画板文档编辑沿用 `TextDocumentAutosave`，`stage` 暂存最新编辑，`capture` 和 `flush` 分别用于同步读取和等待保存。
 
+## 素材库分镜与画板交付
+
+- `LibraryVideoReplication` 在共用视频预览中联动 `VideoPlayer`。切点与勾选通过 `commands/video_shots` 的带修订写入保存。镜头台词使用 `alignShotSpeech` 读取第一层文稿，画板首帧通过 `video_shots_frame_asset` 生成。
+- `ShotBoardDelivery` 使用现有 `replicationAnalysisNote`、工作流生成卡、控制器持久化与项目导航。引用同一批镜头再次发送会定位原卡。抖音采集与新入口共用 `VideoCollectionDialog` 和项目素材入库流程。
+
 ## 视频采集与复刻原件添加画板
 
 - CanvasWorkspace 的 addCollectedVideo 复用画板快照、避让落点、串行写入及失败恢复；独立采集事件与复刻 onAddVideo 共用。属于画板宿主内部实现，不跨模块直接导入。复刻先经 media 校验原件，再用 api.importFiles 的 collect 模式转存，避免画板仅依赖复刻任务副本。

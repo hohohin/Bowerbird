@@ -1,56 +1,69 @@
+import { useEffect, useState } from "react";
+import { ArrowLeft } from "lucide-react";
+import type { Asset } from "../lib/types";
+import { replicationAnalysisParts, replicationRewriteParts, type ReplicationCase } from "../lib/videoReplication";
 import { userErrorMessage } from "../lib/userError";
-import { useEffect, useRef, useState } from "react";
-import { Film, Plus } from "lucide-react";
+import { useStore } from "../store";
+import { replicationCall } from "./replicationTaskState";
 import { ModalShell } from "./ModalShell";
-import { ReplicationPoster } from "./ReplicationPoster";
-import { ReplicationTaskPanel } from "./ReplicationTaskPanel";
-import { REPLICATION_PERSONA, REPLICATION_RULES, type ReplicationCase } from "../lib/videoReplication";
-import { replicationCall, replicationSteps, replicationSourceKey, type ReplicationDialogProps } from "./replicationTaskState";
+import { VideoCollectionDialog } from "./VideoCollectionDialog";
+import { VideoPlayer } from "./VideoPlayer";
 import "./VideoReplication.css";
 
-export function VideoReplicationDialog(props: ReplicationDialogProps) {
-  const [cases, setCases] = useState<ReplicationCase[]>([]), [selected, setSelected] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true), [error, setError] = useState("");
-  const [creating, setCreating] = useState(false), guard = useRef(false), alive = useRef(true);
-  const [defaults, setDefaults] = useState({ persona: REPLICATION_PERSONA, rules: REPLICATION_RULES });
+interface Props {
+  projectId: string; ensureProject: () => Promise<void>; onClose: () => void;
+  onOpenReplication: (asset: Asset) => void; onAddVideo: (asset: Asset, operationId: string) => Promise<void>;
+}
+type Enhanced = {
+  slices?: {index:number; start:number; end:number}[];
+  analysis?: {index:number; analysis?: {analysisText?:string}}[];
+  speech?: {text?:string}; prompts?: {index:number; prompt:string}[]; frozenPrompts?: {index:number; prompt:string}[];
+  outputPath?:string;
+};
+export function VideoReplicationDialog({projectId,onClose,ensureProject,onOpenReplication,onAddVideo}: Props) {
+  const projectName = useStore(s => s.projects.find(p => p.id === projectId)?.name ?? "当前项目");
+  const [history,setHistory] = useState(false);
+  if (history) return <ReplicationHistory projectId={projectId} onBack={() => setHistory(false)} onClose={onClose}/>;
+  return <VideoCollectionDialog projectId={projectId} ensureProject={ensureProject} onClose={onClose}
+    toolbox={{projectName,onHistory:() => setHistory(true),onOpenReplication}}
+    onCollected={async (asset,_owner,add) => { if (add) await onAddVideo(asset,"douyin-" + asset.id); }}/>;
+}
+function ReplicationHistory({ projectId,onBack,onClose }: { projectId:string; onBack:()=>void; onClose:()=>void }) {
+  const [records,setRecords] = useState<ReplicationCase[]>();
+  const [item,setItem] = useState<ReplicationCase>();
+  const [enhanced,setEnhanced] = useState<Enhanced>();
+  const [error,setError] = useState("");
+  const [retry,setRetry] = useState(0);
   useEffect(() => {
-    alive.current = true; let disposed = false, timer: ReturnType<typeof setTimeout>;
-    async function read() {
-      try { const result = await replicationCall<ReplicationCase[]>(props.projectId, "case-list"); if (!disposed) { setCases(result); setError(""); } }
-      catch (e) { if (!disposed) setError(String(e)); }
-      finally { if (!disposed) { setLoading(false); timer = setTimeout(read, 2500); } }
-    }
-    void replicationCall<{ persona?: string; rules?: string }>(props.projectId, "preferences").then(p => { if (!disposed) setDefaults({ persona: p.persona || REPLICATION_PERSONA, rules: p.rules || REPLICATION_RULES }); }).catch(e => !disposed && setError(String(e)));
-    void read();
-    return () => { alive.current = false; disposed = true; clearTimeout(timer); };
-  }, [props.projectId]);
-  function put(value: ReplicationCase) { setCases(items => [value, ...items.filter(item => item.id !== value.id)]); }
-  async function create() {
-    if (guard.current) return;
-    guard.current = true; setCreating(true); setError("");
-    try {
-      await props.ensureProject();
-      const source = localStorage.getItem(replicationSourceKey);
-      const value: ReplicationCase = { id: crypto.randomUUID().replaceAll("-", ""), projectId: props.projectId, title: "未命名复刻任务", createdAt: new Date().toISOString(), step: 1,
-        sourceMethod: source === "local" || source === "library" ? source : "douyin", shareText: "", ...defaults };
-      await replicationCall(props.projectId, "case-save", value);
-      if (alive.current) { put(value); setSelected(value.id); }
-    } catch (e) { if (alive.current) setError(String(e)); }
-    finally { guard.current = false; if (alive.current) setCreating(false); }
-  }
-  const current = cases.find(item => item.id === selected);
-  if (current) return <ReplicationTaskPanel key={current.id} {...props} initial={current} defaults={defaults} onUpdate={put} onBack={() => setSelected(null)} />;
-  return <ModalShell title="复刻任务" eyebrow="工具箱" width="lg" className="video-replication vr-manager" onClose={props.onClose} preventClose={creating}
-    headerActions={<div className="vr-actions"><button className="is-primary" disabled={creating || loading} onClick={() => void create()}><Plus size={16} />新建任务</button></div>}>
-    <div className="vr-manager-body">
-      {error && <p className="vr-message is-error" role="alert">{userErrorMessage(error, "视频复刻任务未能加载，请稍后重试。")}</p>}
-      {loading ? <p role="status">正在读取复刻任务…</p> : !cases.length ? <div className="vr-empty-tasks"><Film size={32} /><p>从一个参考视频开始</p><span>新建任务，获取视频后继续分析与改写。</span></div> : <div className="vr-task-grid">
-        {cases.map(item => <button className="vr-task-tile" key={item.id} onClick={() => setSelected(item.id)}>
-          <div className="vr-task-cover">{item.referenceId ? <ReplicationPoster projectId={props.projectId} referenceId={item.referenceId} alt={item.title || "参考视频"} /> : <><Film size={30} /><span>待获取视频</span></>}</div>
-          <strong>{item.reference?.name || item.title || "未命名复刻任务"}</strong><span>{replicationSteps[(item.step || 1) - 1]}</span>
-          <small>{item.shareText || (item.sourceMethod === "local" ? "本地视频" : item.sourceMethod === "library" ? "素材库视频" : "等待参考链接")}</small>
-        </button>)}
-      </div>}
-    </div>
+    let live = true;
+    setError("");
+    const load = item?.enhancedId
+      ? replicationCall<Enhanced>(projectId,"enhanced-read",{id:item.enhancedId}).then(r => {if (live) setEnhanced(r);})
+      : !item ? replicationCall<ReplicationCase[]>(projectId,"case-list").then(r => {if (live) setRecords(r);}) : Promise.resolve();
+    void load.catch(e => {if (live) setError(userErrorMessage(e,"历史复刻记录未能读取，请重试。"));});
+    return () => {live=false;};
+  },[projectId,item,retry]);
+  const oldAnalysis = item?.analysisJob && replicationAnalysisParts(item.analysisJob);
+  const oldRewrite = item?.rewriteJob && replicationRewriteParts(item.rewriteJob.rewrittenText || "");
+  const fields = item && [
+    ["画面描述",item.analysisText || oldAnalysis?.analysisText],["转录文稿",item.transcript || oldAnalysis?.transcript || enhanced?.speech?.text],
+    ["改写方向",item.rewriteDirection],["改写分镜",item.rewrittenText || oldRewrite?.text],
+    ["首帧提示词",item.firstFramePrompt || item.rewriteJob?.firstFramePrompt || oldRewrite?.firstFramePrompt],
+  ];
+  return <ModalShell title={item?.title || "历史复刻记录"} width="md" className="video-replication" onClose={onClose}
+    headerActions={<button type="button" className="asset-detail-back" onClick={() => item ? setItem(undefined) : onBack()}><ArrowLeft size={15}/>返回</button>}>
+    {error && <p role="alert">{error} <button type="button" className="app-button-secondary" onClick={() => setRetry(n => n + 1)}>重试</button></p>}
+    {item ? <section aria-label="只读记录" className="vr-manager-body">
+      <p className="vr-hint">历史记录 · 只读</p>
+      {item.mediaPath && <VideoPlayer path={item.mediaPath} embedded/>}
+      {fields?.map(([label,value]) => value && <div key={label}><h4>{label}</h4><p className="whitespace-pre-wrap">{value}</p></div>)}
+      {enhanced?.slices?.map(s => <div key={s.index}><h4>镜头 {s.index + 1} · {s.start.toFixed(2)}–{s.end.toFixed(2)} 秒</h4>
+        <p className="whitespace-pre-wrap">{enhanced.analysis?.find(a => a.index === s.index)?.analysis?.analysisText}</p>
+        <p className="whitespace-pre-wrap">{(enhanced.frozenPrompts || enhanced.prompts)?.find(p => p.index === s.index)?.prompt}</p></div>)}
+      {enhanced?.outputPath && <VideoPlayer path={enhanced.outputPath} embedded/>}
+    </section> : !records ? <p role="status">{error ? "" : "正在读取历史记录…"}</p> : records.length ?
+      <div className="vr-task-grid">{records.map(record => <button type="button" className="vr-task-tile" key={record.id}
+        onClick={() => {setEnhanced(undefined);setItem(record);}}><strong>{record.title || record.reference?.name || "复刻任务"}</strong>
+        <span>{record.reference?.name}</span></button>)}</div> : <p>暂无历史复刻记录</p>}
   </ModalShell>;
 }

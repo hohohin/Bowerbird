@@ -41,6 +41,8 @@ export interface WorkflowInput { dimension?: { id?: string | null; title: string
 }
 export interface WorkflowPromptReference { slot?: number; id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string; direction?: "output" }
 export interface WorkflowNode {
+  /** Duration of the library shot before rounding to a supported generation length. */
+  sourceShotDurationMs?: number;
   directorDocument?: unknown;
   directorVideoId?: string;
   directorVideoRenderKey?: string;

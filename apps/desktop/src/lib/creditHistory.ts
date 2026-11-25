@@ -1,16 +1,27 @@
-import type { CreditTransaction } from "./types";
+import type { CreditTransaction, EntitlementSnapshot } from "./types";
+
+export function displayCreditBalances(snapshot: EntitlementSnapshot | null | undefined) {
+  if (!snapshot) return null;
+  const { balances, balances_milli: milli } = snapshot;
+  if (milli && [milli.daily, milli.sub, milli.topup].every(v => Number.isSafeInteger(v) && v >= 0)) {
+    return { daily: milli.daily / 1000, sub: milli.sub / 1000, topup: milli.topup / 1000,
+      total: (milli.daily + milli.sub + milli.topup) / 1000 };
+  }
+  return { ...balances, total: balances.daily + balances.sub + balances.topup };
+}
 
 const SERVICES: Record<string, string> = {
   image_hd: "图片生成 · 高清", image_fast: "图片生成 · 快速", image_lite: "图片生成 · 轻量", image_sd: "图片生成 · 标准",
   classification: "素材自动分类", understand: "图片理解", reverse: "图片反推", rename: "素材命名",
   video_replication_analyze: "参考视频分析", video_replication_rewrite: "视频文案改写",
   replication_video_analysis: "参考视频分析", replication_text_rewrite: "视频文案改写", replication_text_rewrite_short: "短文案改写",
-  chat_deepseek: "AI 对话",
+  chat_deepseek: "AI 对话", library_video_shot_analysis: "镜头分析",
 };
 
 export function creditTransactionView(tx: CreditTransaction) {
-  if (tx.amount === 0) return null;
-  const amount = Number.isFinite(tx.amount) ? tx.amount : null;
+  const value = tx.amount_milli != null && Number.isSafeInteger(tx.amount_milli) ? tx.amount_milli / 1000 : tx.amount;
+  if (value === 0) return null;
+  const amount = Number.isFinite(value) ? value : null;
   const service = tx.service ?? "";
   const usage = tx.meta?.entity_type === "agent_run" ? "智能创作" : SERVICES[service]
     ?? (/layer.*edit/.test(service) ? "图层修改" : /layer/.test(service) ? "图片分层" : /^image/.test(service) ? "图片生成"

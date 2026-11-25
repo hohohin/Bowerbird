@@ -55,7 +55,8 @@ function App() {
   const [opened, setOpened] = useState(false);
   return <div style={{ height: "100vh", background: "var(--bb-bg)", color: "var(--bb-ink)", padding: 32 }}><h1>项目画板</h1>
     <div className="canvas-drawing-tools"><CanvasToolbox onOpenReplication={() => setOpened(true)} onOpenLocalVideo={() => { window.dispatchEvent(new Event("local-video-placement")); }} /><hr /><div className="canvas-assist-tools" role="group" aria-label="辅助"><span>辅助</span><button aria-label="吸附对齐">⊔</button></div></div>
-    {opened && <VideoReplicationDialog projectId="p" ensureProject={async () => {}} onClose={() => setOpened(false)} />}
+    {opened && <VideoReplicationDialog projectId="p" ensureProject={async () => {}} onClose={() => setOpened(false)}
+       onOpenReplication={() => setOpened(false)} onAddVideo={async () => {}} />}
   </div>;
 }
 document.documentElement.dataset.theme = "light";

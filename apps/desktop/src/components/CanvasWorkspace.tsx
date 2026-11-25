@@ -1,5 +1,5 @@
 import { DimensionBadge } from "./DimensionBadge";
-import { replicationAnalysisNote } from "../lib/replicationAnalysisNote";
+
 import { optimizeComposerLocalVideo } from "../lib/composerLocalVideo";
 import { generationProgressLabel } from "../lib/generationProgress";
 import { originalDeletionEpoch, originalDeletionFor, subscribeOriginalDeletionCommits, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
@@ -42,7 +42,7 @@ import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "..
 import { restoreCanvasNoteEdit } from "../lib/canvasNoteUndo";
 import { removeWorkflowNodes } from "../lib/workflowRemoval";
 import { WORKFLOW_CARD_DRAG_TYPE, workflowCardWidth, workflowNodeRun, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
-import { replicationWorkflow } from "../lib/replicationWorkflow";
+
 import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasLibraryResize } from "./CanvasLibraryResize";
@@ -481,6 +481,7 @@ export function CanvasWorkspace({
   projectId,
   exploring = false,
   focusThreadId = null,
+  focusProjectNode = false,
   focusNodeId = null,
   focusRequestId = null,
   onFocusConsumed,
@@ -491,6 +492,7 @@ export function CanvasWorkspace({
   projectId: string | null;
   exploring?: boolean;
   focusThreadId?: string | null;
+  focusProjectNode?: boolean;
   focusNodeId?: string | null;
   focusRequestId?: string | null;
   onFocusConsumed?: (requestId: string) => void;
@@ -673,8 +675,9 @@ export function CanvasWorkspace({
   const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
   const [pendingProductGroup, setPendingProductGroup] = useState<{ projectId: string; id: string } | null>(null);
+  const [replicationPreview,setReplicationPreview] = useState<Asset|null>(null);
   const [replicationProjectId, setReplicationProjectId] = useState<string | null>(null);
-  useEffect(() => { setReplicationProjectId(null); }, [projectId]);
+  useEffect(() => { setReplicationPreview(null); setReplicationProjectId(null); }, [projectId]);
   const expandedFolderIdsRef = useRef(expandedFolderIds);
   const [externalDragOver, setExternalDragOver] = useState(false);
   const [spacePanReady, setSpacePanReady] = useState(false);
@@ -2046,6 +2049,7 @@ export function CanvasWorkspace({
     let unlisten: UnlistenFn | undefined;
     let unlistenAssets: UnlistenFn | undefined;
     let unlistenImport: UnlistenFn | undefined;
+    let unlistenNodes: UnlistenFn | undefined;
     let unlistenChat: UnlistenFn | undefined;
     let unlistenChatCards: UnlistenFn | undefined;
     let restoreImportedView = false;
@@ -2139,6 +2143,12 @@ export function CanvasWorkspace({
       else cleanup();
     });
 
+    listen<string>("project-canvas://nodes-changed", ({ payload: changedProject }) => {
+      if (!alive || changedProject !== projectId) return;
+      scheduleRefresh(changedProject, 0);
+      workflowCardsChanged.current();
+    }).then(cleanup => { if (alive) unlistenNodes = cleanup; else cleanup(); });
+
     listen<ChatConversation>(LOCAL_CHAT_UPDATED_EVENT, ({ payload: chat }) => {
       if (chat.projectId !== projectId) return;
       if (!graphNodesRef.current.some(node => node.id === chat.nodeId && node.hiddenAt == null)) scheduleRefresh(chat.projectId, 40);
@@ -2189,6 +2199,7 @@ export function CanvasWorkspace({
       unlistenDeletions();
       unlistenAssets?.();
       unlistenImport?.();
+      unlistenNodes?.();
       unlistenChat?.();
       unlistenChatCards?.();
       if (timer) clearTimeout(timer);
@@ -2212,7 +2223,10 @@ export function CanvasWorkspace({
     );
     const workflow = projectId ? canvasWorkflowController(projectId) : null;
     if (resolution.state === "pending" && workflow?.ready) {
-      const workflowResolution = resolveWorkflowTaskFocus(workflow.document, focusNodeId ?? null, focusThreadId ?? null, threadResolution === "ready");
+      // A board delivery targets an editable project card before that card has a task or thread.
+      const delivered = focusProjectNode && !focusThreadId ? workflow.document.nodes.find(node => node.id === focusNodeId) : null;
+      const workflowResolution = delivered ? { state: "ready", node: delivered } as const
+        : resolveWorkflowTaskFocus(workflow.document, focusNodeId ?? null, focusThreadId ?? null, threadResolution === "ready");
       if (workflowResolution.state === "ready" && stageRef.current) {
         const node = workflowResolution.node;
         const representative = collapsedGenerationAnchors.get(node.id);
@@ -2248,6 +2262,11 @@ export function CanvasWorkspace({
       zoomRef.current = 1;
       setPan(nextPan);
       setZoom(1);
+      if (focusProjectNode) {
+        setSelectedCanvasNodeIds(new Set([target.id]));
+        viewModeRef.current = "canvas";
+        setViewMode("canvas");
+      }
       focusGraphNode(target.id);
     } else if (resolution.state === "thread-only" && threadResolution === "ready" && focusThreadId) {
       setFocusedThreadId(focusThreadId);
@@ -2257,7 +2276,7 @@ export function CanvasWorkspace({
     }
     appliedFocusRequestRef.current = requestKey;
     onFocusConsumed?.(focusRequestId);
-  }, [focusNodeId, focusRequestId, focusThreadId, graphNodes, graphEdges, loadFailed, opening, onFocusConsumed, projectId, threads, workflowRevision, workflowInteractive, collapsedGenerationAnchors]);
+  }, [focusNodeId, focusRequestId, focusThreadId, focusProjectNode, graphNodes, graphEdges, loadFailed, opening, onFocusConsumed, projectId, threads, workflowRevision, workflowInteractive, collapsedGenerationAnchors]);
 
   useEffect(() => { setCanvasLibraryOpen(false); }, [projectId, setCanvasLibraryOpen]);
 
@@ -7038,74 +7057,12 @@ export function CanvasWorkspace({
               { projectId: origin.projectId, threadId: thread.threadId, referenceNodeIds: references.map((asset, index) => index < 2 ? null : origin.composition.images.find(image => image.asset.id === asset.id)?.nodeId ?? null) }, true);
             if (!result.accepted) throw new Error(result.error || "合成提交失败");
           }} />}
+        {replicationPreview?.store_path && <CreationImagePreview asset={replicationPreview} projectId={projectId} openReplication video={{path:replicationPreview.store_path,sourceKey:videoSourceKey(replicationPreview),onAddFrame:addVideoFrame,onSaveTrim:saveVideoTrim}} onClose={()=>setReplicationPreview(null)}/>}
         {replicationProjectId === projectId && replicationProjectId && <VideoReplicationDialog key={`replication-${replicationProjectId}`} projectId={replicationProjectId}
-          onAddFrame={addVideoFrame}
-          onAddAnalysis={async output => {
-            const project = activeCanvasRef.current, stage = stageRef.current;
-            const check = () => { if (activeCanvasRef.current.id !== project.id || project.id !== replicationProjectId || useStore.getState().projectRoutePending) throw new Error("项目已切换，请返回原画板重试"); };
-            check(); if (!stage) throw new Error("画板尚未准备完成");
-            await ensureMaterialized(project); await flushCanvasWrites(false); check();
-            const nodeId = `replication-analysis-${output.id}`;
-            const existing = await api.projectCanvasGet(project.id); check();
-            if (!existing.nodes.some(node => node.id === nodeId)) {
-              const rows = [];
-              for (const row of output.rows) {
-                check();
-                const asset = await api.importImageBytes({ dataUrl: row.dataUrl, projectId: project.id, source: "video-frame", fileName: `镜头-${row.index + 1}.jpg` });
-                check(); rows.push({ ...row, assetId: asset.id });
-              }
-              const bounds = stage.getBoundingClientRect();
-              const center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
-              const payload = replicationAnalysisNote(rows);
-              const rect = placeCanvasCardNearSource({ x: center.x - 320, y: center.y - 160, width: 640, height: Math.max(300, rows.length * 180 + 46) }, selectionAnchors().map(item => item.rect));
-              check();
-              await api.projectCanvasNodeCreate({ id: nodeId, projectId: project.id, threadId: null, kind: "note", assetId: null, role: null,
-                payloadJson: JSON.stringify(payload), ...rect, width: 640, height: Math.max(300, rows.length * 180 + 46), zIndex: Math.max(0, ...selectionAnchors().map(anchor => anchor.order)) + 1, positionLocked: false });
-              check(); pushCanvasUndo({ kind: "paste", projectId: project.id, nodeIds: [nodeId], groupIds: [], workflowIds: [] });
-            }
-            check(); const snapshot = await api.projectCanvasGet(project.id); check();
-            graphNodesRef.current = snapshot.nodes; setGraphNodes(snapshot.nodes); setSelectedCanvasNodeIds(new Set([nodeId]));
-          }}
-          onAddVideo={async (path, operationId) => {
-            const project = activeCanvasRef.current;
-            if (project.id !== replicationProjectId || useStore.getState().projectRoutePending) throw new Error("项目已切换，请重新打开工具");
-            await ensureMaterialized(project);
-            const [asset] = await api.importFiles([path], project.id, true);
-            if (!asset) throw new Error("视频未能加入素材库，请重试");
-            if (activeCanvasRef.current.id !== project.id || useStore.getState().projectRoutePending) throw new Error("视频已保存到素材库，项目已切换，请返回原画板重试");
-            await addCollectedVideo({ asset, projectId: project.id, operationId });
-          }}
-          onCreateWorkflow={async request => {
-            const draft = activeCanvasRef.current, stage = stageRef.current;
-            if (!draft || draft.id !== replicationProjectId || !stage) throw new Error("项目已切换，请重新打开工具");
-            await ensureMaterialized(draft); await flushCanvasWrites(false);
-            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，请重新打开工具");
-            const controller = canvasWorkflowController(draft.id);
-            await controller.load();
-            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，请重新打开工具");
-            if (!controller.ready || controller.error) throw new Error(controller.error || "画板正在载入");
-            const bounds = stage.getBoundingClientRect();
-            const center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
-            const position = placeCanvasCardNearSource({ x: center.x - 180, y: center.y - 160, width: 1460, height: 680 }, selectionAnchors().map(item => item.rect));
-            const current = useStore.getState();
-            const built = replicationWorkflow(request, draft.id, current.activeGenProvider || current.defaultProvider, position.x, position.y);
-            const existing = await api.projectCanvasGet(draft.id);
-            for (const note of built.notes) {
-              if (existing.nodes.some(item => item.id === note.id)) continue;
-              const { hiddenAt: _hidden, createdAt: _created, updatedAt: _updated, ...input } = note;
-              await api.projectCanvasNodeCreate(input);
-            }
-            await controller.edit([...controller.document.nodes, ...built.nodes.filter(node => !controller.document.nodes.some(item => item.id === node.id))]);
-            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，工作流已保存在原项目，尚未运行");
-            pushCanvasUndo({ kind: "paste", projectId: draft.id, nodeIds: built.notes.filter(node => !existing.nodes.some(item => item.id === node.id)).map(node => node.id), groupIds: [], workflowIds: built.nodes.map(node => node.id) });
-            const snapshot = await api.projectCanvasGet(draft.id);
-            if (activeCanvasRef.current?.id !== draft.id) return;
-            graphNodesRef.current = snapshot.nodes; setGraphNodes(snapshot.nodes);
-            setSelectedCanvasNodeIds(new Set([built.selectedId]));
-            const first = controller.document.nodes.find(node => node.id === built.selectedId)!;
-            const rect = { ...built.rect, x: first.x, y: first.y };
-            const view = canvasViewForNewCard(rect, { x: 80, y: 60, width: Math.max(200, bounds.width - 120), height: Math.max(200, bounds.height - 270) }, panRef.current, zoomRef.current, true);
-            if (view) { panRef.current = view.pan; zoomRef.current = view.zoom; setPan(view.pan); setZoom(view.zoom); markViewDirty(); }
+          onOpenReplication={asset => {setReplicationProjectId(null);setReplicationPreview(asset);}}
+          onAddVideo={async (asset,operationId) => {
+            if(activeCanvasRef.current.id !== replicationProjectId || useStore.getState().projectRoutePending) throw new Error("项目已切换，请返回原画板重试");
+            await addCollectedVideo({asset,projectId:replicationProjectId,operationId});
           }}
           onClose={() => setReplicationProjectId(null)} ensureProject={async () => {
             const draft = activeCanvasRef.current;

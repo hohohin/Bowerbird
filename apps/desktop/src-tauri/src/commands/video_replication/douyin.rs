@@ -87,7 +87,7 @@ pub(super) fn share_url(text: &str) -> AppResult<Url> {
     }
     Url::parse(&urls[0]).map_err(|_| error("分享链接无效"))
 }
-fn selected(value: Value, expected: &str) -> AppResult<Value> {
+fn selected(value: Value, expected: &str, allow_long: bool) -> AppResult<Value> {
     if field(&value, "videoId") != expected {
         return Err(error("未取得目标作品的视频"));
     }
@@ -98,9 +98,9 @@ fn selected(value: Value, expected: &str) -> AppResult<Value> {
     }
     if value["duration"]
         .as_f64()
-        .is_some_and(|v| !v.is_finite() || v > 120.0)
+        .is_some_and(|v| !v.is_finite() || v < 0.0 || (!allow_long && v > 120.0))
     {
-        return Err(error("参考视频最多 120 秒，请截取后上传"));
+        return Err(error("视频时长无效"));
     }
     let urls = value["urls"]
         .as_array()
@@ -224,7 +224,8 @@ async fn acquire(
         .unwrap()
         .clone()
         .ok_or_else(|| error("无法确认目标作品编号"))?;
-    let value = selected(value, &expected)?;
+    let allow_long = task["autoSave"] == true;
+    let value = selected(value, &expected, allow_long)?;
     let canonical = format!("https://www.douyin.com/video/{expected}");
     // Another share URL may resolve to the same work. Reuse a verified local result.
     for entry in fs::read_dir(root)? {
@@ -266,7 +267,7 @@ async fn acquire(
                 let p = field(task, "projectId").to_owned();
                 let file = temporary.clone();
                 let imported =
-                    tokio::task::spawn_blocking(move || import_reference(&r, &p, file, None))
+                    tokio::task::spawn_blocking(move || import_reference_with_limit(&r, &p, file, None, allow_long))
                         .await
                         .map_err(|_| error("校验下载视频失败"))?;
                 match imported {
@@ -374,7 +375,7 @@ pub(super) async fn handle(
         }
         let source = share_url(field(&data, "text"))?;
         let id = uuid::Uuid::new_v4().simple().to_string();
-        let task = json!({"id":id,"kind":"douyin","projectId":project,"caseId":data["caseId"],"sourceUrl":source.as_str(),"shareText":data["text"],"state":"starting","createdAt":now()});
+        let task = json!({"id":id,"kind":"douyin","projectId":project,"caseId":data["caseId"],"autoSave":data["autoSave"]==true,"sourceUrl":source.as_str(),"shareText":data["text"],"state":"starting","createdAt":now()});
         save(root, &task)?;
         return launch(app, root, task, false);
     }
@@ -462,10 +463,10 @@ mod tests {
             assert!(!public_ip(ip.parse().unwrap()));
         }
         let good = json!({"videoId":"1234567890123456","duration":5,"urls":["https://v1.douyinvod.com/video"]});
-        assert!(selected(good.clone(), "1234567890123456").is_ok());
+        assert!(selected(good.clone(), "1234567890123456",false).is_ok());
         let mixed = json!({"videoId":"1234567890123456","duration":5,"urls":["https://unsupported.example/video","https://v1.douyinvod.com/video"]});
-        assert!(selected(mixed, "1234567890123456").is_ok());
-        assert!(selected(good.clone(), "9999999999999999").is_err());
+        assert!(selected(mixed, "1234567890123456",false).is_ok());
+        assert!(selected(good.clone(), "9999999999999999",false).is_err());
         for patch in [
             json!({"blocked":"image"}),
             json!({"blocked":"protected"}),
@@ -475,7 +476,8 @@ mod tests {
             for (k, v) in patch.as_object().unwrap() {
                 value[k] = v.clone();
             }
-            assert!(selected(value, "1234567890123456").is_err());
+            if patch.get("duration").is_some() {assert!(selected(value.clone(), "1234567890123456",true).is_ok());}
+            assert!(selected(value, "1234567890123456",false).is_err());
         }
     }
 }

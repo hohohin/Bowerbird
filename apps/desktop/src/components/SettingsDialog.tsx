@@ -18,6 +18,7 @@ import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 import { CreditDetails } from "./CreditDetails";
 import { AccountBilling } from "./AccountBilling";
 import { accountEntitlement, canUseByo, understandEngineUsable } from "../lib/entitlement";
+import { displayCreditBalances } from "../lib/creditHistory";
 import { DshSubscriptionCard } from "./DshSubscriptionCard";
 import { userErrorMessage } from "../lib/userError";
 
@@ -481,7 +482,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 </div>
                 <div>
                   <h3>可用余额</h3>
-                  <strong>{current ? (current.balances.sub + current.balances.daily + current.balances.topup).toLocaleString("zh-CN") : "—"} <small>Bcoin</small></strong>
+                  <strong>{displayCreditBalances(current)?.total.toLocaleString("zh-CN") ?? "—"} <small>Bcoin</small></strong>
                   <button type="button" className="app-modal-button" onClick={() => selectSection("credits")}>查看积分明细</button>
                 </div>
               </section>}

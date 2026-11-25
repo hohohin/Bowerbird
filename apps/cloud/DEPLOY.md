@@ -1,5 +1,20 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 素材库分镜复刻关闭态候选
+
+逐镜视觉理解使用 `library_video_shot_analysis`。2026-11-24 用户已确认上游账单。按已实测模型 `doubao-seed-2-1-lite-260915` 的 1.6 倍口径，单镜不超过 15 秒为 0.054 Bcoin，超过 15 秒至 60 秒为 0.134 Bcoin。每镜使用 1 fps 无声视频并一次返回三项结果。批量确认使用各待分析区间的合计，停止后仅已受理的镜头具有预留。整币消费者继续使用原有的整币分配及签名字段。本服务的余额和交易可通过 `entitlement.balances_milli` 和 `recent_transactions[].amount_milli` 核对，每千单位为一个 Bcoin。
+
+1. 取得部署范围确认后定向应用 `0103_library_video_shots.sql`。保留当前数据库迁移历史，核对并行版本号。它增加镜头任务表、原积分批次千分余量、持有金额字段、只读精确余额视图和受限受理／租约 RPC。默认服务目录 `active=false`、`pricing_ready=false`。新任务、退款和未知状态按原积分批次记账并继承到期时间。
+2. 定向部署 `entitlement`、`understand-proxy`、`understand-worker` 以及 VPS 理解消费者。保留已有 Worker/Edge 配置，新增 Worker 模型配置 `ARK_LIBRARY_SHOT_MODEL`。真实消费者要求 `BOWERBIRD_CLOUD_MOCK=false`。确认现有私有 `generation-temp` 桶允许至少 32,000,000 字节的 MP4；与整段描述共用已验证的签名对象路径。部署时保留 `LIBRARY_SHOT_ENABLED` 关闭。
+3. 线上只读核对目录关闭状态、表/RPC 的 service-role 权限、未登录请求拒绝、登录账户合法镜头的报价返回不可用、现有钱包和异步任务照常读取。待单独决定准入范围和启价，再同时开启目录、`pricing_ready` 和 Edge 准入。该候选由全局准入控制，指定账号灰度需要独立账户门控。
+4. 回退先关闭新单准入，保留查询、合法旧任务续传和旧 Worker 结算。未知结果按原任务核对供应商账本。确认无法交付后由服务端操作员通过 `control_library_shot('refund-unknown', …, p_safe_message => 审计原因)` 办理退款。保留新结构、回执和交易历史。24 小时后清理暂存文件、代理清单和输出正文，未知任务保留预留待核对。回退权益接口时旧客户端仍可读取整币字段。
+
+部署前读取生产迁移履历、三个 Edge 当前修订及其来源、VPS 理解消费者当前镜像摘要与挂载源码哈希，分别比对现役文件与候选的共同基线。现役包含并行或更高修订时，在现役源码上定向合入本节差异并重新回归。未能对应现役源码时暂停替换。核对原积分批次字段、预留金额约束、钱包结算／退款函数签名；若已有其他 0103 或金额约束发生演进，先基于现役结构调整迁移并在其隔离副本验证。保存各组件当前部署版本以便定向回退。
+
+分镜迁移独立于整段画面描述 0100、0101 以及分层生图 0102。部署工具应定向执行分镜迁移并核实实际履历，避免一并推送或登记未执行的并行迁移。Worker 先领取原理解任务，空闲且消费者声明对应能力时才尝试独立视觉队列。缺少可选队列 RPC 或表时保留原领取和清理响应。缺少精确余额视图的旧库继续返回原权益字段。三层入口仍需 0103 和全部新组件就绪后才准入。
+
+隔离验证入口为 `apps/cloud/scripts/text-job-upload-db.test.mjs <PG-bin> <pg-driver> --library-shots`、Deno 的 `library-shot-edge_test.ts` 与 `understand-worker/library-migration-compat_test.ts`、理解 Worker 的 `library-visual.test.ts`。此节记录待部署范围。
+
 ## 素材库画面分析关闭态候选
 
 本候选包含 `0100_library_visual_catalog.sql`、`0101_library_visual_jobs.sql`、`understand-proxy`、`understand-worker` 和 VPS 理解 Worker。按顺序先应用迁移，再部署两个 Edge 入口，最后切换 Worker。生产配置保持 `LIBRARY_VISUAL_ENABLED` 未设置，`library_video_analysis` 目录条目保持 inactive 且 `pricing_ready=false`。只有另行获准启价时才设置经过账单核验的每小时 Bcoin 和报价版本，并配置 `ARK_LIBRARY_VISUAL_MODEL`。现有私有暂存桶必须允许 MP4、对象上限至少为 32,000,000 字节。校验匿名拒绝、已登录用户不可报价，以及原转录、复刻和图片理解兼容。

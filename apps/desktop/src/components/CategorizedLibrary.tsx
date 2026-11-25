@@ -325,7 +325,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       if (!asset.store_path) throw new Error("素材原文件不可用");
       const audio = isAudioAsset(asset);
       const path = audio ? asset.store_path : await externalFiles.media(asset.store_path);
-      const targetProject = audio && projectScope ? (projectOverview ? location?.section : browseProjectId) ?? projectId : projectId;
+      const targetProject = projectScope ? (projectOverview ? location?.section : browseProjectId) ?? projectId : projectId;
       if (isCurrent()) setPreview({ asset, path, sourceKey: videoSourceKey(asset)!, projectId: targetProject });
     } catch (error) { if (isCurrent()) notifyError(error, "无法预览素材"); }
   }

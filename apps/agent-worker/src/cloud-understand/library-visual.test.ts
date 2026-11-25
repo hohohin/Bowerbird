@@ -97,7 +97,9 @@ test("native FFprobe accepts silent H.264 and rejects the same container with au
   await assert.rejects(() => probeSilentH264Mp4(nativeSample(true)), /invalid_silent_video_media/);
 });
 
-test("running Worker verifies the staged video and fences submission before provider POST", async () => {
+for (const shot of [false,true]) test(`running ${shot ? "shot" : "visual"} Worker verifies staged video and fences provider POST`, async () => {
+  const fields = {description:"蓝色球场",first_frame_prompt:"网球场侧景",motion_prompt:"保持固定机位"};
+  const output = shot ? JSON.stringify(fields) : "蓝色画面";
   const bytes = nativeSample(false);
   const jobId = "00000000-0000-0000-0000-000000000001";
   const leaseId = "00000000-0000-0000-0000-000000000002";
@@ -112,8 +114,14 @@ test("running Worker verifies the staged video and fences submission before prov
     if (url === mediaUrl) { events.push("download"); return response(bytes); }
     if (url === "https://ark.example/chat/completions") {
       events.push("provider");
-      return jsonResponse({ id: "provider-1", usage: { prompt_tokens: 11 },
-        choices: [{ finish_reason: "stop", message: { content: "蓝色画面" } }] }, 200, "provider-request");
+      if (shot) {
+        const body = JSON.parse(String(request?.body));
+        assert.equal(body.messages[0].content[0].video_url.fps,1);
+        assert.equal(body.response_format.type,"json_object");
+        assert.equal(body.max_tokens,800);
+      }
+      return jsonResponse({ id: "provider-1", service_tier:"default", usage: { prompt_tokens: 11,completion_tokens:9 },
+        choices: [{ finish_reason: "stop", message: { content: output } }] }, 200, "provider-request");
     }
     assert.equal(url, controlUrl);
     const body = JSON.parse(String(request?.body));
@@ -122,23 +130,24 @@ test("running Worker verifies the staged video and fences submission before prov
     if (body.action === "claim") {
       assert.equal(body.libraryVisualCapable, true);
       return jsonResponse({ job: { id: jobId, inputManifestHash: sha(JSON.stringify(manifest)) },
-        lease: { leaseId, leaseSeconds: 90 }, libraryVisual: { videoUrl: mediaUrl, video: manifest } }, 200, "claim");
+        lease: { leaseId, leaseSeconds: 90 }, libraryVisual: { videoUrl: mediaUrl, video: manifest, shot } }, 200, "claim");
     }
     if (body.action === "finish") {
       stop.requested = true;
-      assert.equal(body.resultText, "蓝色画面");
+      assert.equal(body.resultText, output);
+      if (shot) assert.equal(body.providerReceipt.serviceTier,"default");
       assert.equal(body.providerReceipt.requestId, "provider-request");
       assert.equal(body.providerReceipt.usage.prompt_tokens, 11);
       assert.equal(body.providerReceipt.sourceSegmentMs, 1000);
     }
-    assert.equal(body.libraryVisual, true);
+    assert.equal(shot ? body.libraryShot : body.libraryVisual, true);
     assert.equal(body.leaseId, leaseId);
     return jsonResponse({ status: "ok", leaseExpiresAt: new Date(Date.now() + 90000).toISOString() }, 200, "control");
   };
   await runUnderstandWorker(configFromEnv({
     UNDERSTAND_CONTROL_URL: controlUrl, UNDERSTAND_WORKER_TOKEN: "test-only", ARK_API_KEY: "test-only",
     ARK_VISION_MODEL: "image", ARK_LIBRARY_VISUAL_MODEL: "visual", ARK_BASE_URL: "https://ark.example",
-    UNDERSTAND_HEARTBEAT_INTERVAL_MS: "100",
+    UNDERSTAND_HEARTBEAT_INTERVAL_MS: "100", ARK_LIBRARY_SHOT_MODEL: shot ? "shot-model" : undefined,
   }), fetch, stop);
   assert.deepEqual(events.filter(action => action !== "heartbeat"), ["claim", "download", "submitted", "provider", "finish"]);
 });

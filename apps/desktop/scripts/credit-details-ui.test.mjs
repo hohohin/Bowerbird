@@ -66,6 +66,19 @@ try {
   await details.screenshot({ animations: 'disabled', path: '.tmp/credit-details/narrow.png' });
 
   await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.free,
+    balances: { daily: 29, sub: 800, topup: 400 },
+    balances_milli: { daily: 29946, sub: 800000, topup: 400000 },
+    recent_transactions: [
+      { kind: 'hold', amount: -1, amount_milli: -54, service: 'library_video_shot_analysis', created_at: '2026-11-24T02:00:00Z' },
+      { kind: 'rollback', amount: 0, amount_milli: 134, service: 'library_video_shot_analysis', created_at: '2026-11-24T01:00:00Z' },
+    ],
+  } }));
+  await records.getByText('−0.054 Bcoin', {exact:true}).waitFor();
+  await records.getByText('+0.134 Bcoin', {exact:true}).waitFor();
+  assert.match(await details.innerText(), /可用余额\s*1,229\.946\s*Bcoin/);
+  assert.match(await records.innerText(), /镜头分析/);
+
+  await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.free,
     recent_transactions: [{ kind: 'confirm', amount: 0, service: 'image_hd', created_at: '2026-11-02T02:00:00Z' }],
   } }));
   await details.getByText('暂无积分收支', { exact: true }).waitFor();

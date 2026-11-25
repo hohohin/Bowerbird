@@ -19,7 +19,7 @@ fn overwrite_rebinds_the_original_and_retires_only_video_results() {
     db.migrate().unwrap();
     db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,ext,store_path,duration) VALUES('v','video','mp4',?1,2)",
         [source.to_string_lossy().as_ref()]).unwrap();
-    for kind in ["video_transcript", "video_analysis", "description"] {
+    for kind in ["video_transcript", "video_analysis", "video_shots", "description"] {
         db.conn.lock().unwrap().execute("INSERT INTO analyses(id,asset_id,kind,payload) VALUES(?1,'v',?1,'{\"current\":true}')", [kind]).unwrap();
     }
     let asset = db.get_asset("v").unwrap().unwrap();

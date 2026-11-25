@@ -21,7 +21,7 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, State};
 
-mod transport;
+pub(crate) mod transport;
 use transport::{Manifest, Service};
 
 const SEGMENT_MS: u64 = 7_200_000;
@@ -41,7 +41,7 @@ fn invalid(message: &str) -> AppError {
     AppError::Other(message.into())
 }
 
-pub(super) fn source_version(path: &Path) -> AppResult<String> {
+pub(crate) fn source_version(path: &Path) -> AppResult<String> {
     let key = preview_key(&registered_path_spelling(path), &std::fs::metadata(path)?)?;
     Ok(format!("v1:{:x}", Sha256::digest(key.as_bytes())))
 }

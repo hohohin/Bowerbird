@@ -84,6 +84,7 @@ mod media_trim;
 pub mod video_trim;
 pub mod video_audio;
 pub mod video_analysis;
+pub mod video_shots;
 mod video_asset_revision;
 pub mod video_transcript;
 pub mod comfy_video;

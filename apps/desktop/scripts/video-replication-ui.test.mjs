@@ -56,7 +56,7 @@ try {
     window.store.setState({cloudAuth:{logged_in:true,user_id:'tester'},cloudEntitlement:{user_id:'tester',tier:'free',offline_state:'fresh',is_test_account:true}});
   });
   await articleTool().waitFor();
-  assert.deepEqual(await page.getByRole('menuitem').allTextContents(),['视频复刻工具分析参考 · 改写分镜 · 生成视频','视频转图文功能开发中','本地 H3 视频首尾帧 · 提示词 · 生成视频']);
+  assert.deepEqual(await page.getByRole('menuitem').allTextContents(),['抖音视频采集解析链接 · 下载入库','视频转图文功能开发中','本地 H3 视频首尾帧 · 提示词 · 生成视频']);
   await page.keyboard.press('ArrowDown');
   assert.equal(await articleTool().evaluate(el=>el===document.activeElement),true);
   await page.keyboard.press('Enter');

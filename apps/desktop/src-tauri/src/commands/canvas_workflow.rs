@@ -7,6 +7,7 @@ use tauri::State;
 use crate::{db::Database, error::{AppError, AppResult}};
 use crate::cloud::{AuthClient, EntitlementService};
 use crate::core::paths::LibraryPaths;
+pub mod shot_delivery;
 use crate::core::project_canvas::{NewCanvasNode, insert_node_tx, touch_canvas_tx};
 
 pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<()> {

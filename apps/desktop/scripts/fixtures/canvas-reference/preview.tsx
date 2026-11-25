@@ -518,12 +518,16 @@ function Fixture() {
   w.openSettings = () => setSettingsOpen(true);
   const projectId = useStore(state => state.activeProjectId)!;
   const reuse = useStore(state => state.pendingCreativeReuse);
+  const focus = useStore(state => state.creativeNavigation);
   const [exploring, setExploring] = React.useState(explorer);
   const [toolbarCanvasMode, setToolbarCanvasMode] = React.useState(true);
   w.setToolbarCanvasMode = setToolbarCanvasMode;
   w.setExploring = setExploring;
   const canvas = <React.Profiler id="canvas" onRender={() => { w.canvasCommits = (w.canvasCommits || 0) + 1; }}>
     <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring}
+      focusNodeId={focus?.projectId === projectId ? focus.nodeId : null} focusProjectNode={focus?.projectNode}
+      focusRequestId={focus?.projectNode ? focus.nodeId : null}
+      onFocusConsumed={id => { w.consumedFocus = id; useStore.getState().clearCreativeNavigation(); }}
       launchRequest={reuse?.targetProjectId === projectId ? { id: reuse.id, projectId, assetIds: [], promptLoad: reuse.promptLoad } : null}
       onLaunchConsumed={id => useStore.getState().ackPendingCreativeReuse(id)} />
   </React.Profiler>;

@@ -1,14 +1,14 @@
 import type { EntitlementSnapshot } from "../lib/types";
-import { creditTransactionView } from "../lib/creditHistory";
+import { creditTransactionView, displayCreditBalances } from "../lib/creditHistory";
 
 export function CreditDetails({ entitlement }: { entitlement: EntitlementSnapshot | null }) {
-  const balances = entitlement?.balances;
+  const balances = displayCreditBalances(entitlement);
   const transactions = entitlement?.recent_transactions ?? [];
   const rows = transactions.slice(0, 50).map(creditTransactionView).filter(view => view !== null);
   return <section aria-label="积分明细">
     <div className="flex flex-wrap items-baseline justify-between gap-2">
       <h3 className="text-ink">积分明细</h3>
-      <span className="text-xs text-muted">可用余额 <strong className="text-ink">{balances ? (balances.daily + balances.sub + balances.topup).toLocaleString("zh-CN") : "—"}</strong> Bcoin</span>
+      <span className="text-xs text-muted">可用余额 <strong className="text-ink">{balances?.total.toLocaleString("zh-CN") ?? "—"}</strong> Bcoin</span>
     </div>
     <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
       {([['赠送积分', balances ? balances.daily + balances.sub : null], ['充值积分', balances?.topup]] as const).map(([label, amount]) => <div key={label} className="rounded-lg border border-edge bg-canvas/70 p-2">

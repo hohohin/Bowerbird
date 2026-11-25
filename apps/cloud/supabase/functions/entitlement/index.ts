@@ -30,19 +30,22 @@ Deno.serve(async (request) => {
     const [
       { data: subscription, error: subError },
       { data: credits, error: creditError },
+      { data: milliBalances, error: milliError },
       { data: transactions, error: txError },
       { data: imageServices, error: svcError },
       { data: promptConfigs, error: promptError },
     ] = await Promise.all([
       admin.from("subscriptions").select("tier,status,current_period_end,trial_started_at,entitlement_version").eq("user_id", user.id).maybeSingle(),
       admin.from("user_credits").select("daily_balance,sub_balance,topup_balance").eq("user_id", user.id).maybeSingle(),
+      admin.from("wallet_balances_milli").select("daily,sub,topup").eq("user_id",user.id).maybeSingle(),
       admin.from("credit_transactions").select("kind,amount,service,meta,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
       // 桌面端动态生图档位：active 且带 label 的 image_* 服务（label/sort 由 0018 起存 parameters）。
       admin.from("service_costs").select("service,unit_cost,parameters").eq("active", true).like("service", "image%"),
       // 远程 prompt 配置（0020）：enabled 行随权益快照下发，桌面 agent 指令云端热改无需发版。
       admin.from("prompt_configs").select("key,value,version").eq("enabled", true),
     ]);
-    if (subError || creditError || txError || svcError || promptError) {
+    const missingMilliView = ["PGRST205", "42P01"].includes(milliError?.code ?? "");
+    if (subError || creditError || (milliError && !missingMilliView) || txError || svcError || promptError) {
       throw new ApiError("internal_error", "权益状态读取失败", true);
     }
 
@@ -99,6 +102,7 @@ Deno.serve(async (request) => {
       policy: policyForUser(tier, user),
       generation_services: generationServices,
       prompt_configs: promptConfigRows,
+      ...(missingMilliView ? {} : { balances_milli: milliBalances ?? { daily: 0, sub: 0, topup: 0 } }),
       recent_transactions: (transactions ?? []).map((tx) => {
         const meta = tx.meta?.entity_type === "agent_run"
           ? {
@@ -112,6 +116,7 @@ Deno.serve(async (request) => {
         return {
           kind: tx.kind,
           amount: tx.amount,
+          amount_milli: tx.meta?.amount_milli ?? tx.amount * 1000,
           service: tx.service,
           meta,
           created_at: tx.created_at,

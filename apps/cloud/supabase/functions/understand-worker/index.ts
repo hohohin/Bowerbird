@@ -129,18 +129,20 @@ async function actionClaim(admin: SupabaseClient, workerId: string, fileSpeechCa
   });
 }
 
-async function claimLibraryVisual(admin: SupabaseClient): Promise<Response | null> {
-  const claim = await admin.rpc("control_library_visual_segment", { p_action: "claim" });
+async function claimLibraryVisual(admin: SupabaseClient, shot = false): Promise<Response | null> {
+  const claim = await admin.rpc(shot ? "control_library_shot" : "control_library_visual_segment", { p_action: "claim" });
+  // Independent optional migrations may be absent while the original queues remain live.
+  if (["PGRST202", "42883"].includes(claim.error?.code ?? "")) return null;
   if (claim.error) throw new ApiError("internal_error", "画面分析任务认领失败", true);
   const job = claim.data;
   if (!job?.id) return null;
-  const video = parseLibraryVisualVideo(job.video);
+  const video = parseLibraryVisualVideo(job.video, shot);
   const signed = await admin.storage.from(BUCKET).createSignedUrl(libraryVisualVideoKey(job.id), SIGNED_URL_SECONDS);
   if (signed.error || !signed.data?.signedUrl) throw new ApiError("internal_error", "画面代理读取地址签发失败", true);
   return jsonResponse({
     job: { id: job.id, inputManifestHash: job.input_manifest_hash, attempt: 1 },
     lease: { leaseId: job.lease_id, leaseSeconds: LEASE_SECONDS },
-    libraryVisual: { videoUrl: signed.data.signedUrl, video },
+    libraryVisual: { videoUrl: signed.data.signedUrl, video, ...(shot ? { shot: true } : {}) },
   });
 }
 
@@ -149,7 +151,7 @@ async function controlLibraryVisual(admin: SupabaseClient, action: string, body:
       typeof body.jobId !== "string" || typeof body.leaseId !== "string") {
     throw new ApiError("invalid_request", "画面分析操作或租约无效");
   }
-  const { data, error } = await admin.rpc("control_library_visual_segment", {
+  const { data, error } = await admin.rpc(body.libraryShot === true ? "control_library_shot" : "control_library_visual_segment", {
     p_action: action === "outcome_unknown" ? "unknown" : action, p_segment_id: body.jobId, p_lease_id: body.leaseId,
     p_result_text: typeof body.resultText === "string" && action === "finish" ? body.resultText : null,
     p_receipt: body.providerReceipt ?? null,
@@ -163,23 +165,27 @@ async function controlLibraryVisual(admin: SupabaseClient, action: string, body:
   return jsonResponse({ jobId: body.jobId, status: data.segment.status, leaseExpiresAt: data.segment.lease_expires_at });
 }
 
-async function cleanupLibraryVisual(admin: SupabaseClient) {
+async function cleanupLibraryVisual(admin: SupabaseClient, shot = false) {
+  const table = shot ? "library_shot_jobs" : "library_visual_segments";
+  const control = shot ? "control_library_shot" : "control_library_visual_segment";
   const now = new Date().toISOString();
-  const expired = await admin.from("library_visual_segments").select("id,parent:library_visual_jobs!inner(expires_at)")
-    .lt("parent.expires_at", now).is("cleaned_at", null).order("start_ms", { ascending: false }).limit(50);
-  const stalled = await admin.from("library_visual_segments").select("id")
+  const expired = shot ? await admin.from(table).select("id").lt("expires_at",now).is("cleaned_at",null).order("expires_at").limit(50)
+    : await admin.from(table).select("id,parent:library_visual_jobs!inner(expires_at)")
+      .lt("parent.expires_at", now).is("cleaned_at", null).order("start_ms", { ascending: false }).limit(50);
+  if (["PGRST205", "42P01"].includes(expired.error?.code ?? "")) return;
+  const stalled = await admin.from(table).select("id")
     .eq("status", "running").lt("lease_expires_at", now).limit(50);
   if (expired.error || stalled.error) throw new ApiError("internal_error", "读取待清理画面分析任务失败", true);
   for (const job of stalled.data ?? []) {
-    const result = await admin.rpc("control_library_visual_segment", { p_action: "expire", p_segment_id: job.id });
+    const result = await admin.rpc(control, { p_action: "expire", p_segment_id: job.id });
     if (result.error) throw new ApiError("internal_error", "回收画面分析租约失败", true);
   }
   for (const job of expired.data ?? []) {
-    const result = await admin.rpc("control_library_visual_segment", { p_action: "expire", p_segment_id: job.id });
+    const result = await admin.rpc(control, { p_action: "expire", p_segment_id: job.id });
     if (result.error) throw new ApiError("internal_error", "结清过期画面分析任务失败", true);
     const removed = await admin.storage.from(BUCKET).remove([libraryVisualVideoKey(job.id)]);
     if (removed.error) throw new ApiError("internal_error", "清除过期画面代理失败", true);
-    const cleaned = await admin.from("library_visual_segments").update({ cleaned_at: now, video: null, result_text: null }).eq("id", job.id);
+    const cleaned = await admin.from(table).update({ cleaned_at: now, video: null, result_text: null }).eq("id", job.id);
     if (cleaned.error) throw new ApiError("internal_error", "画面分析清理登记失败", true);
   }
 }
@@ -277,20 +283,24 @@ Deno.serve(async (request) => {
     let response: Response;
     if (action === "cleanup_expired") {
       response = await actionCleanupExpired(admin);
-      if (body.libraryVisualCleanup === true) {
-        try { await cleanupLibraryVisual(admin); }
+      for (const [enabled, shot] of [[body.libraryShotCleanup, true], [body.libraryVisualCleanup, false]] as const) {
+        if (enabled !== true) continue;
+        try { await cleanupLibraryVisual(admin, shot); }
         catch (error) {
-          safeLog({ requestId: id, service: "understand-worker:library-visual-cleanup", status: error instanceof ApiError ? error.code : "error" });
+          safeLog({ requestId: id, service: shot ? "understand-worker:library-shot-cleanup" : "understand-worker:library-visual-cleanup", status: error instanceof ApiError ? error.code : "error" });
         }
       }
     }
     else if (action === "claim") {
       response = await actionClaim(admin, workerId, body.fileSpeechCapable === true);
+      if (body.libraryShotCapable === true && !(await response.clone().json()).job) {
+        response = await claimLibraryVisual(admin,true) ?? response;
+      }
       if (body.libraryVisualCapable === true && !(await response.clone().json()).job) {
         response = await claimLibraryVisual(admin) ?? response;
       }
     }
-    else if (body.libraryVisual === true) response = await controlLibraryVisual(admin, action, body);
+    else if (body.libraryVisual === true || body.libraryShot === true) response = await controlLibraryVisual(admin, action, body);
     else if (action === "heartbeat") response = await actionHeartbeat(admin, body);
     else if (action === "submitted") response = await actionSubmitted(admin, body);
     else if (action === "defer_file_speech") response = await actionDeferFileSpeech(admin, body);

@@ -100,22 +100,28 @@ export async function commitLibraryVisual(admin: SupabaseClient, userId: string,
   if (!segment) throw new ApiError("invalid_request", "未找到原画面分析任务", false, 404);
   if (segment.status !== "uploading" || Date.parse(segment.parent.expires_at) <= Date.now()) return response(segment, segment.parent, cors);
   const expected = parseLibraryVisualVideo(segment.video);
-  const key = libraryVisualVideoKey(jobId);
-  const bucket = admin.storage.from(BUCKET);
-  const stored = await bucket.list(key.slice(0, key.lastIndexOf("/")), { search: LIBRARY_VISUAL_VIDEO_NAME, limit: 10 });
-  if (stored.error) throw new ApiError("internal_error", "画面代理上传状态未确认", true);
-  const uploaded = stored.data?.find(object => object.name === LIBRARY_VISUAL_VIDEO_NAME);
-  if (!uploaded) return response(segment, segment.parent, cors);
-  let matches = Number(uploaded.metadata?.size) === expected.bytes && uploaded.metadata?.mimetype === expected.mime;
-  if (matches) {
-    const body = await bucket.download(key);
-    if (body.error || !body.data) throw new ApiError("internal_error", "画面代理校验暂不可用，请按原任务恢复", true);
-    matches = body.data.size === expected.bytes && await sha256(new Uint8Array(await body.data.arrayBuffer())) === expected.sha256;
-  }
+  const matches = await uploadedVisualMatches(admin, jobId, expected);
+  if (matches === null) return response(segment, segment.parent, cors);
   const { data, error } = await admin.rpc("control_library_visual_segment", {
     p_action: matches ? "commit" : "reject-upload", p_user_id: userId, p_segment_id: jobId,
   });
   if (error || !data) throw new ApiError("internal_error", "画面分析入队失败，请按原任务恢复", true);
   const accepted = data as { segment: Segment; parent: Parent };
   return response(accepted.segment, accepted.parent, cors);
+}
+
+export async function uploadedVisualMatches(admin: SupabaseClient, jobId: string, expected: ReturnType<typeof parseLibraryVisualVideo>) {
+  const key = libraryVisualVideoKey(jobId);
+  const bucket = admin.storage.from(BUCKET);
+  const stored = await bucket.list(key.slice(0, key.lastIndexOf("/")), { search: LIBRARY_VISUAL_VIDEO_NAME, limit: 10 });
+  if (stored.error) throw new ApiError("internal_error", "画面代理上传状态未确认", true);
+  const uploaded = stored.data?.find(object => object.name === LIBRARY_VISUAL_VIDEO_NAME);
+  if (!uploaded) return null;
+  let matches = Number(uploaded.metadata?.size) === expected.bytes && uploaded.metadata?.mimetype === expected.mime;
+  if (matches) {
+    const body = await bucket.download(key);
+    if (body.error || !body.data) throw new ApiError("internal_error", "画面代理校验暂不可用，请按原任务恢复", true);
+    matches = body.data.size === expected.bytes && await sha256(new Uint8Array(await body.data.arrayBuffer())) === expected.sha256;
+  }
+  return matches;
 }

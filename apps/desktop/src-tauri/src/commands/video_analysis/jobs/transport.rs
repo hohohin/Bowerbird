@@ -32,7 +32,7 @@ impl Capabilities {
 }
 
 #[derive(Deserialize, Serialize)]
-pub(super) struct Manifest {
+pub(crate) struct Manifest {
     mime: String,
     bytes: u64,
     sha256: String,
@@ -43,9 +43,9 @@ pub(super) struct Manifest {
 }
 
 #[derive(Deserialize)]
-pub(super) struct Job {
-    pub(super) job_id: String,
-    pub(super) status: String,
+pub(crate) struct Job {
+    pub(crate) job_id: String,
+    pub(crate) status: String,
     pub(super) text: Option<String>,
     upload_url: Option<String>,
 }
@@ -64,14 +64,14 @@ pub(super) enum Preparation {
     },
 }
 
-pub(super) struct Service<'a> {
-    pub(super) cloud: &'a CloudClient,
-    pub(super) auth: &'a AuthClient,
-    pub(super) owner: &'a str,
+pub(crate) struct Service<'a> {
+    pub(crate) cloud: &'a CloudClient,
+    pub(crate) auth: &'a AuthClient,
+    pub(crate) owner: &'a str,
 }
 
 impl Service<'_> {
-    async fn request(&self, body: Value) -> AppResult<(StatusCode, Value)> {
+    pub(crate) async fn request(&self, body: Value) -> AppResult<(StatusCode, Value)> {
         let endpoint = self
             .cloud
             .config()
@@ -167,7 +167,7 @@ impl Service<'_> {
         parse_response(status, value, None).map(Preparation::Accepted)
     }
 
-    pub(super) async fn upload(
+    pub(crate) async fn upload(
         &self,
         job: &Job,
         manifest: &Manifest,
@@ -253,7 +253,7 @@ fn response_error(value: &Value) -> crate::error::AppError {
     )
 }
 
-fn parse_response(status: StatusCode, value: Value, id: Option<&str>) -> AppResult<Job> {
+pub(crate) fn parse_response(status: StatusCode, value: Value, id: Option<&str>) -> AppResult<Job> {
     if !status.is_success() {
         return Err(response_error(&value));
     }
@@ -321,7 +321,15 @@ mod tests {
             manifest.duration_ms,
             duration(&output, false).await.unwrap()
         );
-        assert_eq!(manifest.bytes, std::fs::metadata(output).unwrap().len());
+        assert_eq!(manifest.bytes, std::fs::metadata(&output).unwrap().len());
+        let short_shot = prepare_shot_proxy(&source, &output, 360, 520, ms)
+            .await
+            .unwrap();
+        assert_eq!((short_shot.start_ms, short_shot.end_ms), (360, 520));
+        assert_eq!(
+            short_shot.duration_ms,
+            duration(&output, false).await.unwrap()
+        );
     }
 }
 
@@ -397,17 +405,38 @@ pub(super) async fn prepare_proxy(
     end_ms: u64,
     source_duration_ms: u64,
 ) -> AppResult<Manifest> {
+    prepare_proxy_at_rate(path, output, start_ms, end_ms, source_duration_ms, 2).await
+}
+
+pub(crate) async fn prepare_shot_proxy(
+    path: &Path,
+    output: &Path,
+    start_ms: u64,
+    end_ms: u64,
+    source_duration_ms: u64,
+) -> AppResult<Manifest> {
+    prepare_proxy_at_rate(path, output, start_ms, end_ms, source_duration_ms, 1).await
+}
+
+async fn prepare_proxy_at_rate(
+    path: &Path,
+    output: &Path,
+    start_ms: u64,
+    end_ms: u64,
+    source_duration_ms: u64,
+    fps: u8,
+) -> AppResult<Manifest> {
     let parent = output.parent().ok_or_else(|| invalid("画面代理路径无效"))?;
     tokio::fs::create_dir_all(parent).await?;
     let requested_ms = end_ms - start_ms;
     let manifest = async {
-        encode_proxy(path, output, start_ms, end_ms, false).await?;
+        encode_proxy(path, output, start_ms, end_ms, false, fps).await?;
         let duration_ms = match duration(output, false).await {
             Ok(duration_ms) => duration_ms,
             // The requested tail can end between decoded frames. Reuse the last
             // sampled frame immediately before it while retaining exact billing bounds.
-            Err(_) if requested_ms < 500 => {
-                encode_proxy(path, output, start_ms, end_ms, true).await?;
+            Err(_) if requested_ms < 500 && fps == 2 => {
+                encode_proxy(path, output, start_ms, end_ms, true, fps).await?;
                 duration(output, false).await?
             }
             Err(error) => return Err(error),
@@ -440,6 +469,7 @@ async fn encode_proxy(
     start_ms: u64,
     end_ms: u64,
     last_frame: bool,
+    fps: u8,
 ) -> AppResult<()> {
     let input_start_ms = if last_frame {
         start_ms.saturating_sub(1000)
@@ -451,16 +481,20 @@ async fn encode_proxy(
     const SCALE: &str = "scale=480:480:force_original_aspect_ratio=decrease:force_divisible_by=2";
     let mut command = media_command(Tool::Ffmpeg)?;
     command.args(["-v", "error", "-nostdin", "-y", "-ss", &start]);
-    if last_frame {
+    let short_shot = fps == 1 && end_ms - start_ms < 1000;
+    if last_frame || short_shot {
         command.args(["-t", &length]);
     }
     command.arg("-i").arg(path);
     let filter = if last_frame {
         command.args(["-frames:v", "1"]);
         format!("fps=4:round=up,{SCALE},reverse,fps=2:round=up")
+    } else if short_shot {
+        command.args(["-frames:v", "1", "-r", "1"]);
+        SCALE.to_owned()
     } else {
         command.args(["-t", &length]);
-        format!("fps=2:round=up,{SCALE}")
+        format!("fps={fps}:round=up,{SCALE}")
     };
     let status = tokio::time::timeout(
         Duration::from_secs(1800),

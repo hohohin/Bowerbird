@@ -35,6 +35,7 @@ export interface UnderstandWorkerConfig {
   arkVisionModel: string;
   arkReplicationVideoModel?: string;
   arkLibraryVisualModel?: string;
+  arkLibraryShotModel?: string;
   arkReplicationTextModel?: string;
   doubaoSpeechApiKey?: string;
   doubaoFileSpeechApiKey?: string;
@@ -52,7 +53,7 @@ interface ClaimedJob {
   lease?: { leaseId: string; leaseSeconds: number };
   inputUrl?: string;
   fileSpeech?: FileSpeechClaim;
-  libraryVisual?: { videoUrl: string; video: LibraryVisualVideo };
+  libraryVisual?: { videoUrl: string; video: LibraryVisualVideo; shot?: boolean };
 }
 
 interface UnderstandInput {
@@ -119,6 +120,7 @@ export function configFromEnv(env: Record<string, string | undefined>): Understa
     arkVisionModel: required(env, "ARK_VISION_MODEL"),
     arkReplicationVideoModel: env.ARK_REPLICATION_VIDEO_MODEL?.trim(),
     arkLibraryVisualModel: env.ARK_LIBRARY_VISUAL_MODEL?.trim(),
+    arkLibraryShotModel: env.ARK_LIBRARY_SHOT_MODEL?.trim(),
     arkReplicationTextModel: env.ARK_REPLICATION_TEXT_MODEL?.trim(),
     doubaoSpeechApiKey: env.DOUBAO_SPEECH_API_KEY?.trim(),
     doubaoFileSpeechApiKey: env.DOUBAO_FILE_SPEECH_API_KEY?.trim() || env.DOUBAO_SPEECH_API_KEY?.trim(),
@@ -296,12 +298,12 @@ async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: str
   return parseInput(parseJson(text));
 }
 
-async function heartbeatLoop(control: ControlClient, jobId: string, leaseId: string, intervalMs: number, state: { stopped: boolean }, libraryVisual: boolean): Promise<void> {
+async function heartbeatLoop(control: ControlClient, jobId: string, leaseId: string, intervalMs: number, state: { stopped: boolean }, visualControl: { libraryVisual?: boolean; libraryShot?: boolean }): Promise<void> {
   while (!state.stopped && control.remainingMs(leaseId) > 1) {
     await sleep(control.nextHeartbeatMs(leaseId, intervalMs));
     if (state.stopped) return;
     try {
-      await control.post({ action: "heartbeat", jobId, leaseId, ...(libraryVisual ? { libraryVisual: true } : {}) });
+      await control.post({ action: "heartbeat", jobId, leaseId, ...visualControl });
     } catch (error) {
       console.error(JSON.stringify({ event: "understand_heartbeat_failed", job_id: jobId, error: safeErrorKind(error) }));
     }
@@ -321,29 +323,32 @@ async function executeClaim(
   const { id: jobId, inputManifestHash } = claimed.job;
   const leaseId = claimed.lease.leaseId;
   const heartbeatState = { stopped: false };
-  const visualControl = claimed.libraryVisual ? { libraryVisual: true } : {};
-  void heartbeatLoop(control, jobId, leaseId, config.heartbeatIntervalMs, heartbeatState, !!claimed.libraryVisual);
+  const shot = claimed.libraryVisual?.shot === true;
+  const visualControl = shot ? {libraryShot:true} : claimed.libraryVisual ? { libraryVisual: true } : {};
+  void heartbeatLoop(control, jobId, leaseId, config.heartbeatIntervalMs, heartbeatState, visualControl);
   let submitted = false;
   try {
     if (claimed.libraryVisual) {
-      if (!config.arkLibraryVisualModel && !config.mock) {
+      const model = shot ? config.arkLibraryShotModel : config.arkLibraryVisualModel;
+      if ((shot && config.mock) || (!model && (!config.mock || shot))) {
         throw new KnownProviderError("not_configured", "豆包素材库画面模型尚未配置");
       }
-      const video = parseLibraryVisualVideo(claimed.libraryVisual.video);
+      const video = parseLibraryVisualVideo(claimed.libraryVisual.video, shot);
       if (createHash("sha256").update(JSON.stringify(video)).digest("hex") !== inputManifestHash) {
         throw new Error("library_visual_manifest_mismatch");
       }
-      const media = config.mock ? null : await loadLibraryVisualMedia(fetchImpl, claimed.libraryVisual.videoUrl, jobId, video);
+      const media = config.mock && !shot ? null : await loadLibraryVisualMedia(fetchImpl, claimed.libraryVisual.videoUrl, jobId, video);
       await control.post({ action: "submitted", jobId, leaseId, ...visualControl });
       submitted = true;
       if (control.remainingMs(leaseId) <= 1) return;
       const result = media ? await describeLibraryVisual(fetchImpl, {
-        baseUrl: config.arkBaseUrl, apiKey: config.arkApiKey, model: config.arkLibraryVisualModel!,
+        baseUrl: config.arkBaseUrl, apiKey: config.arkApiKey, model: model!, shot,
       }, media) : { text: "离线示例画面描述", usage: {}, model: null, requestId: null, providerId: null };
       const { text, ...receipt } = result;
       await control.post({
         action: "finish", jobId, leaseId, ...visualControl, resultText: text,
-        providerReceipt: { ...receipt, bytes: video.bytes, durationMs: video.duration_ms, sourceSegmentMs: video.end_ms - video.start_ms },
+        providerReceipt: { ...receipt, bytes: video.bytes, durationMs: video.duration_ms, sourceSegmentMs: video.end_ms - video.start_ms,
+          ...(shot ? {requestModel:model,requestedTier:"default",sampleFps:1,maxOutputTokens:800} : {}) },
       });
       return;
     }
@@ -414,13 +419,14 @@ export async function runUnderstandWorker(
     if (Date.now() >= nextCleanupAt) {
       nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
       try {
-        await control.post({ action: "cleanup_expired", libraryVisualCleanup: true });
+        await control.post({ action: "cleanup_expired", libraryVisualCleanup: true, libraryShotCleanup:true });
       } catch (error) {
         console.error(JSON.stringify({ event: "understand_cleanup_failed", error: safeErrorKind(error) }));
       }
     }
     try {
-      const claimed = await control.post({ action: "claim", fileSpeechCapable: true, ...libraryVisualCapable }) as unknown as ClaimedJob;
+      const claimed = await control.post({ action: "claim", fileSpeechCapable: true, ...libraryVisualCapable,
+        ...(config.arkLibraryShotModel && !config.mock ? { libraryShotCapable:true } : {}) }) as unknown as ClaimedJob;
       if (claimed.job) {
         idleBackoff.reset();
         await executeClaim(config, control, ark, fetchImpl, claimed);

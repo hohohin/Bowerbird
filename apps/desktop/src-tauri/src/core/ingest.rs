@@ -54,6 +54,10 @@ pub fn ingest_new_file(paths: &LibraryPaths, db: &Database, source: &Path) -> Ap
     ingest_file_with_dedup(paths, db, source, Deduplication::Exact, true)
 }
 
+pub(crate) fn ingest_video_shot_frame(paths: &LibraryPaths, db: &Database, source: &Path) -> AppResult<Asset> {
+    ingest_file_with_dedup(paths, db, source, Deduplication::Exact, false)
+}
+
 fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<Asset>> {
     use std::io::Read;
     let candidates = {
