@@ -1,5 +1,5 @@
 //! Versioned, local workflow definitions. Provider jobs keep their existing authority.
-use std::{collections::HashSet, future::Future, sync::Arc};
+use std::{collections::{HashMap, HashSet}, future::Future, sync::Arc};
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -25,7 +25,7 @@ pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementServ
 
 // Existing accepted runs can finish after expiry. Results do not change the paid definition.
 fn paid_definition(document: &Value) -> Vec<Value> {
-    document["nodes"].as_array().into_iter().flatten().filter(|n| n["kind"] != "text")
+    document["nodes"].as_array().into_iter().flatten().filter(|node| workflow_card_requires_pro(node))
         .map(|node| {
             let mut node = node.clone();
             if let Some(fields) = node.as_object_mut() {
@@ -42,12 +42,131 @@ fn paid_definition(document: &Value) -> Vec<Value> {
         }).collect()
 }
 
-fn has_new_run(before: &Value, after: &Value) -> bool {
-    let ids = |doc: &Value| -> HashSet<String> {
-        doc["runs"].as_array().into_iter().flatten().chain(std::iter::once(&doc["run"]))
-            .filter_map(|r| r["id"].as_str().map(str::to_owned)).collect()
-    };
-    !ids(after).is_subset(&ids(before))
+fn workflow_card_requires_pro(node: &Value) -> bool {
+    match node["kind"].as_str() {
+        Some("text") => false,
+        Some("generation") => node["generation"]["media"] == "video"
+            && !matches!(node["generation"]["localVideo"], Value::Null | Value::Bool(false)),
+        _ => true,
+    }
+}
+
+fn effective_workflow_runs(document: &Value) -> &[Value] {
+    match document.get("runs") {
+        Some(runs) => runs.as_array().map(Vec::as_slice).unwrap_or_default(),
+        None => document.get("run").filter(|run| !run.is_null())
+            .map(std::slice::from_ref).unwrap_or_default(),
+    }
+}
+
+fn workflow_run_active(run: &Value) -> bool {
+    matches!(run["status"].as_str(), Some("running" | "waiting"))
+}
+
+fn workflow_ids(value: &Value) -> impl Iterator<Item = &str> {
+    value.as_array().into_iter().flatten().filter_map(Value::as_str)
+}
+
+fn workflow_write_ids(run: &Value) -> impl Iterator<Item = &str> {
+    workflow_ids(run.get("writeNodeIds").unwrap_or(&run["order"]))
+}
+
+fn same_run_identity(before: &Value, after: &Value) -> bool {
+    before["threadId"] == after["threadId"] && before["accountId"] == after["accountId"]
+}
+
+fn same_video_recovery(before: &Value, after: &Value, nodes: &[Value]) -> bool {
+    let Some(node_id) = after["startId"].as_str() else { return false; };
+    if after["completionRecoveryOnly"] != true
+        || !same_run_identity(before, after)
+        || !workflow_ids(&after["order"]).eq([node_id])
+        || !workflow_write_ids(after).eq([node_id])
+        || workflow_ids(&after["triggerQueue"]).next().is_some()
+        || !after["loop"].is_null()
+        || !nodes.iter().any(|node| node["id"] == node_id && node["kind"] == "comfy-video")
+    {
+        return false;
+    }
+    let original = &before["steps"][node_id];
+    let resumed = &after["steps"][node_id];
+    original["comfyCancelled"] != true
+        && after["steps"].as_object().is_some_and(|steps| steps.keys().all(|id|
+            id == node_id || before["steps"].get(id) == steps.get(id)))
+        && ["jobId", "turnKey"].into_iter().all(|key|
+            original[key].as_str().is_some_and(|id| !id.is_empty()) && original[key] == resumed[key])
+}
+
+fn completed_paid_step(run: &Value, paid: &HashSet<&str>) -> bool {
+    run["steps"].as_object().is_some_and(|steps| steps.iter().any(|(id, step)|
+        paid.contains(id.as_str()) && step["status"] == "done"))
+}
+
+fn consumes_accepted_completion(before: &Value, after: &Value, paid: &HashSet<&str>) -> bool {
+    let queue = before["triggerQueue"].as_array().and_then(|queue| queue.split_first());
+    queue.is_some_and(|(head, remaining)| {
+        head == &after["startId"]
+            && workflow_ids(&after["order"]).next().is_some()
+            && after["triggerQueue"].as_array().is_some_and(|queue| queue == remaining)
+            && workflow_ids(&before["order"]).all(|id| before["steps"][id]["status"] == "done")
+            && completed_paid_step(before, paid)
+    })
+}
+
+fn paid_step_ids<'a>(run: &'a Value, paid: &'a HashSet<&'a str>) -> impl Iterator<Item = &'a str> {
+    run["steps"].as_object().into_iter().flat_map(|steps| steps.keys())
+        .map(String::as_str).filter(move |id| paid.contains(id))
+}
+
+fn accepted_run_checkpoint(
+    before: &Value, after: &Value, nodes: &[Value], paid: &HashSet<&str>, invokes_paid: bool,
+) -> bool {
+    if before["status"] == "stopped" || workflow_run_active(before) && before["completionRecoveryOnly"] == true {
+        return same_video_recovery(before, after, nodes);
+    }
+    if !workflow_run_active(before) || !same_run_identity(before, after) {
+        return false;
+    }
+    if invokes_paid && consumes_accepted_completion(before, after, paid) {
+        return true;
+    }
+    // A free phase cannot add a paid step and later present it as an accepted completion.
+    if paid_step_ids(after, paid).any(|id| before["steps"].get(id).is_none()) {
+        return false;
+    }
+    if !invokes_paid {
+        return true;
+    }
+
+    let waiting_for_queue_head = after["status"] == "waiting"
+        && after["order"].as_array().is_some_and(Vec::is_empty)
+        && workflow_write_ids(after).next().is_none()
+        && after["triggerQueue"] == before["triggerQueue"]
+        && workflow_ids(&after["triggerQueue"]).next() == after["startId"].as_str();
+    if waiting_for_queue_head {
+        return true;
+    }
+    let previous_writes: HashSet<_> = workflow_write_ids(before).collect();
+    before["startId"] == after["startId"] && before["order"] == after["order"]
+        && workflow_write_ids(after).all(|id| !paid.contains(id) || previous_writes.contains(id))
+}
+
+fn requires_run_pro(before: &Value, after: &Value) -> bool {
+    let Some(nodes) = after["nodes"].as_array() else { return false; };
+    let paid: HashSet<_> = nodes.iter().filter(|node| workflow_card_requires_pro(node))
+        .filter_map(|node| node["id"].as_str()).collect();
+    if paid.is_empty() { return false; }
+
+    let earlier: HashMap<_, _> = effective_workflow_runs(before).iter()
+        .filter_map(|run| Some((run["id"].as_str()?, run))).collect();
+    effective_workflow_runs(after).iter().filter(|run| workflow_run_active(run)).any(|run| {
+        let invokes_paid = run["startId"].as_str().into_iter()
+            .chain(workflow_ids(&run["order"]))
+            .chain(workflow_write_ids(run))
+            .any(|node| paid.contains(node));
+        let previous = run["id"].as_str().and_then(|id| earlier.get(id).copied());
+        (invokes_paid || paid_step_ids(run, &paid).next().is_some())
+            && !previous.is_some_and(|old| accepted_run_checkpoint(old, run, nodes, &paid, invokes_paid))
+    })
 }
 
 fn definition_changed(before: &Value, after: &Value) -> bool {
@@ -118,9 +237,7 @@ fn saved_workflow_assets(document: &Value) -> HashSet<&str> {
             }
         }
     }
-    let runs = document["runs"].as_array().map(Vec::as_slice)
-        .unwrap_or_else(|| std::slice::from_ref(&document["run"]));
-    for run in runs {
+    for run in effective_workflow_runs(document) {
         for item in run["loop"]["items"].as_array().into_iter().flatten() {
             assets.extend(item["assetIds"].as_array().into_iter().flatten().filter_map(Value::as_str));
         }
@@ -246,7 +363,7 @@ where
     ensure_workflow_revision(before.revision, revision)?;
     if created_content.is_some()
         || definition_changed(&before.document, &document)
-        || (has_new_run(&before.document, &document) && !paid_definition(&document).is_empty())
+        || requires_run_pro(&before.document, &document)
     {
         authorize().await?;
     }
@@ -260,17 +377,182 @@ mod tests {
     use super::*;
     #[test]
     fn paid_edits_and_new_runs_are_distinct_from_accepted_results() {
-        let before=json!({"nodes":[node("paid",json!({}))],"runs":[{"id":"accepted"}],"run":null});
+        let before=json!({"nodes":[paid_card()],"runs":[gate_run("accepted", "instruction", "running")],"run":null});
         let mut result=before.clone(); result["nodes"][0]["outputs"]=json!({"image":{"type":"image","assetIds":["result"]}});
         assert_eq!(paid_definition(&before),paid_definition(&result));
-        assert!(!has_new_run(&before,&result));
+        assert!(!requires_run_pro(&before,&result));
         result["nodes"][0]["layoutSize"]=json!({"width":320,"height":156});
         assert_eq!(paid_definition(&before),paid_definition(&result));
         result["nodes"][0]["prompt"]=json!("changed"); assert_ne!(paid_definition(&before),paid_definition(&result));
-        result["runs"]=json!([{"id":"accepted"},{"id":"new"}]); assert!(has_new_run(&before,&result));
+        result["runs"]=json!([gate_run("accepted", "instruction", "done"), gate_run("new", "instruction", "running")]); assert!(requires_run_pro(&before,&result));
         assert!(paid_definition(&json!({"nodes":[{"id":"text","kind":"text"}]})).is_empty());
     }
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    fn workflow_gate_database() -> Arc<Database> {
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        db.lock_conn().unwrap().execute(
+            "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)",
+            [],
+        ).unwrap();
+        db
+    }
+
+    fn paid_card() -> Value {
+        let mut card = node("instruction", json!({}));
+        card["kind"] = json!("instruction");
+        card
+    }
+
+    fn gate_run(id: &str, card_id: &str, status: &str) -> Value {
+        json!({"id":id, "startId":card_id, "threadId":"thread", "order":[card_id],
+            "status":status, "steps":{(card_id):{"status":"pending"}}})
+    }
+
+    async fn save_as_free(db: &Arc<Database>, revision: i64, document: Value) -> AppResult<i64> {
+        save_workflow_with_authorization(db, "p".into(), revision, document, None, || async {
+            Err(AppError::Other("需要 Pro".into()))
+        }).await
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_free_generation_creation_edit_and_mixed_board_run() {
+        let db = workflow_gate_database();
+        let mut doc = json!({"schema_version":1,"nodes":[node("draw",json!({}))],"run":null});
+        assert_eq!(save_as_free(&db, 0, doc.clone()).await.unwrap(), 1);
+        doc["nodes"][0]["prompt"] = json!("changed");
+        assert_eq!(save_as_free(&db, 1, doc.clone()).await.unwrap(), 2);
+
+        doc["nodes"].as_array_mut().unwrap().push(paid_card());
+        assert_eq!(db.workflow_save("p", 2, doc.clone()).unwrap(), 3);
+        let mut run = gate_run("free", "draw", "running");
+        run["lockedNodeIds"] = json!(["draw", "instruction"]);
+        run["writeNodeIds"] = json!(["draw"]);
+        doc["runs"] = json!([run]);
+        doc["run"] = doc["runs"][0].clone();
+        assert_eq!(save_as_free(&db, 3, doc.clone()).await.unwrap(), 4);
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_paid_run_lifecycle_preserves_accepted_checkpoints() {
+        let db = workflow_gate_database();
+        let mut doc = json!({"schema_version":1,"nodes":[paid_card()],"run":null});
+        assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+        doc["run"] = gate_run("paid-history", "instruction", "running");
+        assert_eq!(save_as_free(&db, 1, doc.clone()).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 1);
+
+        assert_eq!(db.workflow_save("p", 1, doc.clone()).unwrap(), 2);
+        doc["run"]["status"] = json!("waiting");
+        assert_eq!(save_as_free(&db, 2, doc.clone()).await.unwrap(), 3);
+        doc["run"]["status"] = json!("done");
+        assert_eq!(save_as_free(&db, 3, doc.clone()).await.unwrap(), 4);
+
+        doc["run"]["status"] = json!("running");
+        assert_eq!(save_as_free(&db, 4, doc.clone()).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 4);
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_ignores_shadow_run_but_protects_new_write_scope() {
+        let db = workflow_gate_database();
+        let mut document = json!({"schema_version":1,"nodes":[node("draw",json!({})),paid_card()],"runs":[]});
+        document["run"] = gate_run("shadow", "instruction", "running");
+        assert_eq!(db.workflow_save("p", 0, document.clone()).unwrap(), 1);
+        document["runs"] = json!([document["run"].clone()]);
+        assert_eq!(save_as_free(&db, 1, document.clone()).await.unwrap_err().to_string(), "需要 Pro");
+
+        let mut run = gate_run("free", "draw", "running");
+        run["lockedNodeIds"] = json!(["draw", "instruction"]);
+        run["writeNodeIds"] = json!(["draw"]);
+        document["runs"] = json!([run]);
+        assert_eq!(save_as_free(&db, 1, document.clone()).await.unwrap(), 2);
+        let mut paid_edit = document.clone();
+        paid_edit["nodes"][1]["prompt"] = json!("new instruction");
+        assert_eq!(save_as_free(&db, 2, paid_edit).await.unwrap_err().to_string(), "需要 Pro");
+        document["runs"][0]["writeNodeIds"] = json!(["draw", "instruction"]);
+        assert_eq!(save_as_free(&db, 2, document).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 2);
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_paid_completions_use_only_accepted_queue_checkpoints() {
+        for previous_paid in [false, true] {
+            let db = workflow_gate_database();
+            let mut trigger = node("trigger", json!({}));
+            trigger["kind"] = json!("trigger");
+            let start = if previous_paid { "instruction" } else { "draw" };
+            let mut run = gate_run("two-phases", start, "running");
+            run["steps"][start]["status"] = json!("done");
+            let mut doc = json!({"schema_version":1,"nodes":[node("draw",json!({})),paid_card(),trigger],"run":run});
+            assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+
+            if !previous_paid {
+                let mut extra_paid_step = doc.clone();
+                extra_paid_step["run"]["steps"]["instruction"] = json!({"status":"done"});
+                assert_eq!(save_as_free(&db, 1, extra_paid_step).await.unwrap_err().to_string(), "需要 Pro");
+            }
+
+            doc["run"]["triggerQueue"] = json!(["trigger"]);
+            assert_eq!(save_as_free(&db, 1, doc.clone()).await.unwrap(), 2);
+            // The completion event stays pending while the target is busy.
+            doc["run"]["status"] = json!("waiting");
+            doc["run"]["startId"] = json!("trigger");
+            doc["run"]["order"] = json!([]);
+            assert_eq!(save_as_free(&db, 2, doc.clone()).await.unwrap(), 3);
+            doc["run"]["status"] = json!("running");
+            doc["run"]["triggerQueue"] = json!([]);
+            doc["run"]["order"] = json!(["trigger","draw"]);
+            doc["run"]["steps"]["trigger"] = json!({"status":"pending"});
+            doc["run"]["steps"]["draw"] = json!({"status":"pending"});
+            let launch = save_as_free(&db, 3, doc).await;
+            if previous_paid {
+                assert_eq!(launch.unwrap(), 4);
+            } else {
+                assert_eq!(launch.unwrap_err().to_string(), "需要 Pro");
+                assert_eq!(db.workflow_get("p").unwrap().revision, 3);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_stopped_video_recovers_only_the_original_request() {
+        let db = workflow_gate_database();
+        let mut video = node("video", json!({}));
+        video["kind"] = json!("comfy-video");
+        let mut old = gate_run("video-run", "video", "stopped");
+        old["steps"]["video"] = json!({"status":"waiting", "jobId":"video-job", "turnKey":"original-turn"});
+        let mut doc = json!({"schema_version":1,"nodes":[video],"run":old});
+        assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+
+        doc["run"]["status"] = json!("waiting");
+        doc["run"]["completionRecoveryOnly"] = json!(true);
+        let mut changed = doc.clone();
+        changed["run"]["steps"]["video"]["turnKey"] = json!("different-turn");
+        assert_eq!(save_as_free(&db, 1, changed).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(save_as_free(&db, 1, doc.clone()).await.unwrap(), 2);
+
+        doc["run"]["status"] = json!("running");
+        assert_eq!(save_as_free(&db, 2, doc.clone()).await.unwrap(), 3);
+        doc["run"]["completionRecoveryOnly"] = json!(false);
+        assert_eq!(save_as_free(&db, 3, doc).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 3);
+    }
+
+    #[tokio::test]
+    async fn workflow_gate_keeps_legacy_local_video_paid() {
+        let db = workflow_gate_database();
+        let mut video = node("video", json!({}));
+        video["generation"] = json!({"media":"video","localVideo":{"endpoint":"http://127.0.0.1:8188"}});
+        let mut doc = json!({"schema_version":1,"nodes":[video],"run":null});
+        assert_eq!(save_as_free(&db, 0, doc.clone()).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+        doc["run"] = gate_run("legacy-local", "video", "running");
+        assert_eq!(save_as_free(&db, 1, doc).await.unwrap_err().to_string(), "需要 Pro");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 1);
+    }
+
     #[tokio::test]
     async fn workflow_save_checks_revision_before_and_after_authorization() {
         let db = Arc::new(Database::open_in_memory().unwrap());
@@ -280,7 +562,7 @@ mod tests {
         ).unwrap();
         let empty = json!({"schema_version":1,"nodes":[],"run":null});
         assert_eq!(db.workflow_save("p", 0, empty.clone()).unwrap(), 1);
-        let paid = json!({"schema_version":1,"nodes":[node("paid",json!({}))],"run":null});
+        let paid = json!({"schema_version":1,"nodes":[paid_card()],"run":null});
 
         let calls = std::cell::Cell::new(0);
         let stale = save_workflow_with_authorization(&db, "p".into(), 0, paid.clone(), None, || async {

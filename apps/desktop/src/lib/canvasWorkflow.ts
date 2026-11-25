@@ -18,6 +18,12 @@ export class WorkflowInputError extends WorkflowNodeError {
 
 /** Editable workflow wiring is independent from immutable generation history edges. */
 export type WorkflowKind = "director3d" | "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
+
+export function workflowNodeRequiresPro(node: WorkflowNode): boolean {
+  if (node.kind === "generation") return node.generation?.media === "video" && !!node.generation.localVideo;
+  return node.kind !== "text";
+}
+
 export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
 export const H3_VIDEO_AUDIO_PORT = "reference-audio";
 export const H3_R2V_INPUT_PORTS = { image: "reference-image", video: "reference-video", audio: "r2v-audio" } as const;

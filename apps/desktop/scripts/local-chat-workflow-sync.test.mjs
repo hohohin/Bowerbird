@@ -46,7 +46,7 @@ function fixture(initial = doc([node('original')]), options = {}) {
       if (readGate) { readGate.entered(); await readGate.promise; }
       if (failRead) throw new Error('synthetic read failed');
       return snapshot;
-    }, projectCanvasGet: options.projectCanvasGet ?? (async () => ({ nodes: [] })), canvasWorkflowAuthorize: async () => {}, projectThreadCreate: async () => {},
+    }, projectCanvasGet: options.projectCanvasGet ?? (async () => ({ nodes: [] })), canvasWorkflowAuthorize: options.authorize ?? (async () => {}), projectThreadCreate: async () => {},
     getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.png` })),
     canvasWorkflowSave: async (_id, revision, document) => {
       if (gate) await gate;
@@ -77,7 +77,7 @@ function fixture(initial = doc([node('original')]), options = {}) {
         selectChatCodexModel: (...args) => load(resolve(lib, 'localChat.ts')).selectChatCodexModel(...args) };
       if (specifier === './localChatStore') return { ensureLocalChatEvents: async () => {},
         useLocalChatStore: { getState: () => chatStore, subscribe: listener => { chatListeners.add(listener); return () => chatListeners.delete(listener); } } };
-      if (specifier === './workflowProviderIssue') return { workflowProviderIssue: () => null, workflowGenerationProvider: node => node.provider };
+      if (specifier === './workflowProviderIssue') return { workflowProviderIssue: options.providerIssue ?? (() => null), workflowGenerationProvider: node => node.provider };
       if (specifier === 'zustand') return { createStore };
       if (specifier === './chatCapabilities') return { chatProviderAccessIssue: () => null,
         selectedChatOptions: (...args) => load(resolve(lib, 'chatCapabilities.ts')).selectedChatOptions(...args) };
@@ -88,14 +88,14 @@ function fixture(initial = doc([node('original')]), options = {}) {
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
       if (specifier === '@tauri-apps/api/core' && options.invoke) return { invoke: options.invoke };
       if (specifier === './workflowLoop') return load(resolve(lib, 'workflowLoop.ts'));
-      if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined, agentOutputTargets: () => [] };
+      if (specifier === './workflowAgentOutputs') return load(resolve(lib, 'workflowAgentOutputs.ts'));
       if (specifier === './canvasSessionOutputs') return { completedCanvasSessions: () => [], reconcileCanvasWorkflowReferences: nodes => nodes,
         canvasSessionCompletionLookup: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompletionLookup(...args),
         canvasSessionCompleted: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompleted(...args),
         canvasSessionCompletionStatus: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).canvasSessionCompletionStatus(...args),
         submittedTurnState: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).submittedTurnState(...args),
         workflowGenerationActivity: (...args) => load(resolve(lib, 'canvasSessionOutputs.ts')).workflowGenerationActivity(...args) };
-      if (['./comfyVideo', './comfyVideo.ts', './genProviders', './genProviders.ts', './canvasNodePayload', './canvasNodePayload.ts', './projectNodeIds', './canvasConversationCards'].includes(specifier)) {
+      if (['./comfyVideo', './comfyVideo.ts', './genProviders', './genProviders.ts', './canvasNodePayload', './canvasNodePayload.ts', './projectNodeIds', './canvasConversationCards', './videoGeneration', './audioMedia.ts', './textMedia.ts'].includes(specifier)) {
         return load(resolve(lib, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       }
       if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts', './workflowMigrations', './workflowTriggerScheduler', './workflowPersistenceQueue'].includes(specifier)) return load(resolve(base, specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
@@ -118,6 +118,120 @@ function fixture(initial = doc([node('original')]), options = {}) {
     },
     hold: () => { let release; gate = new Promise(resolve => { release = resolve; }); return () => { gate = undefined; release(); }; } };
 }
+
+const deniedCanvasPro = async () => { throw new Error('工作流卡片需要 Pro'); };
+
+test('Canvas Pro permits generation creation and edits on a mixed board', async () => {
+  const agent = { ...node('agent', '旧指令'), kind: 'agent' };
+  const f = fixture(doc([agent]), { authorize: deniedCanvasPro });
+  await f.controller.load();
+  const draw = node('draw', '一只红色小鸟');
+  await f.controller.edit([...f.controller.document.nodes, draw]);
+  await f.controller.edit(f.controller.document.nodes.map(card => card.id === draw.id ? { ...card, prompt: '一只蓝色小鸟' } : card));
+  assert.equal(f.saved().document.nodes.find(card => card.id === draw.id).prompt, '一只蓝色小鸟');
+  await assert.rejects(() => f.controller.edit(f.controller.document.nodes.map(card => card.id === agent.id ? { ...card, prompt: '改写付费卡片' } : card)), /需要 Pro/);
+  assert.equal(f.saved().document.nodes.find(card => card.id === agent.id).prompt, agent.prompt);
+});
+
+test('Canvas Pro allows an ordinary generation run that only reads a paid card’s cached output', async () => {
+  const source = { ...node('cached', '旧指令'), kind: 'agent', outputs: { image: { type: 'image', assetIds: ['reference'] } } };
+  const draw = { ...node('draw', '一只小鸟'), inputs: { image: [{ nodeId: source.id, portId: 'image' }] } };
+  const f = fixture(doc([source, draw]), { authorize: deniedCanvasPro });
+  await f.controller.load();
+  await f.controller.start(draw.id);
+  assert.deepEqual(f.saved().document.run.order, [draw.id]);
+  assert.ok(f.saved().document.run.lockedNodeIds.includes(source.id));
+  assert.equal(f.saved().document.run.status, 'done', f.saved().document.run.steps[draw.id].error);
+  assert.equal(f.generationRequests.length, 1);
+});
+
+test('Canvas Pro leaves the generation provider rejection in control', async () => {
+  const draw = node('draw', '一只小鸟');
+  const f = fixture(doc([draw]), { authorize: deniedCanvasPro, providerIssue: () => ({ message: 'Bcoin 余额不足' }) });
+  await f.controller.load();
+  await assert.rejects(() => f.controller.start(draw.id, true), /Bcoin 余额不足/);
+  assert.equal(f.saved().document.run, null);
+  assert.equal(f.generationRequests.length, 0);
+});
+
+test('Canvas Pro keeps consecutive free generation drafts coalesced', async () => {
+  const draw = node('draw', '原始指令');
+  const f = fixture(doc([draw]), { authorize: deniedCanvasPro });
+  await f.controller.load();
+  const draft = prompt => f.controller.edit([{ ...draw, prompt }], undefined, draw.id);
+  const edits = [draft('一'), draft('一只'), draft('一只小鸟')];
+  assert.equal(f.controller.document.nodes[0].prompt, '一只小鸟');
+  await Promise.all(edits);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.saved().document.nodes[0].prompt, '一只小鸟');
+});
+
+test('Canvas Pro protects a paid card in the planned write scope', async () => {
+  const draw = { ...node('draw', '生成'), resultNodeIds: ['shared-note'] };
+  const agent = { ...node('agent', '已有指令'), kind: 'agent', resultNodeIds: ['shared-note'] };
+  const f = fixture(doc([draw, agent]), { authorize: deniedCanvasPro });
+  await f.controller.load();
+  await assert.rejects(() => f.controller.start(draw.id, true), /需要 Pro/);
+  assert.equal(f.saved().document.run, null);
+  assert.equal(f.generationRequests.length, 0);
+});
+
+test('Canvas Pro protects a reachable paid execution but leaves an accepted phase resumable', async () => {
+  const draw = node('draw', '一只小鸟');
+  const agent = { ...node('agent', '读取图片'), kind: 'agent', inputs: { image: [{ nodeId: draw.id, portId: 'image' }] } };
+  const f = fixture(doc([draw, agent]), { authorize: deniedCanvasPro });
+  await f.controller.load();
+  await assert.rejects(() => f.controller.start(draw.id), /需要 Pro/);
+  assert.equal(f.generationRequests.length, 0);
+
+  const run = { id: 'paused', startId: agent.id, order: [agent.id], status: 'waiting', steps: { [agent.id]: { status: 'pending' } } };
+  const paused = fixture({ ...doc([{ ...agent, inputs: {} }]), run }, { authorize: deniedCanvasPro });
+  await paused.controller.load();
+  await paused.controller.continue(run.id);
+  assert.equal(paused.saved().document.run.status, 'done', paused.saved().document.run.steps[agent.id].error);
+  assert.equal(paused.sends.length, 1);
+});
+
+test('Canvas Pro preserves queued completion from an accepted paid phase and gates entry from a free phase', async () => {
+  const source = node('source', '已经完成');
+  const trigger = { ...node('receiver'), kind: 'trigger', triggerMode: 'completion', triggerCount: 2,
+    inputs: { completion: [{ nodeId: source.id, portId: 'signal' }] } };
+  const draw = { ...node('draw', '生成'), inputs: { signal: [{ nodeId: trigger.id, portId: 'signal' }] } };
+  for (const kind of ['generation', 'agent']) {
+    const run = { id: 'queued', startId: source.id, order: [source.id], status: 'waiting',
+      steps: { [source.id]: { status: 'done' } }, triggerQueue: [trigger.id] };
+    let attempts = 0;
+    const f = fixture({ ...doc([{ ...source, kind }, trigger, draw]), run }, { authorize: async () => { attempts++; await deniedCanvasPro(); } });
+    await f.controller.load();
+    await f.controller.continue(run.id);
+    assert.equal(f.saved().document.run.status, kind === 'generation' ? 'waiting' : 'done', JSON.stringify(f.saved().document.run.steps));
+    assert.deepEqual(f.saved().document.run.triggerQueue, kind === 'generation' ? [trigger.id] : []);
+    assert.equal(f.saved().document.nodes.find(card => card.id === trigger.id).triggerCount, kind === 'generation' ? 2 : 1);
+    assert.equal(f.generationRequests.length, kind === 'generation' ? 0 : 1);
+    assert.equal(attempts, kind === 'generation' ? 1 : 0);
+  }
+});
+
+test('Canvas Pro gates explicit retries only when the reset loop step is paid', async () => {
+  const owner = { ...node('loop'), kind: 'loop', loopMode: 'count' };
+  for (const kind of ['generation', 'agent']) {
+    const card = { ...node('body', '再次提交'), kind };
+    const run = { id: 'loop-run', startId: owner.id, order: [owner.id, card.id], status: 'waiting',
+      steps: { [owner.id]: { status: 'done' }, [card.id]: { status: 'failed', retrySafe: true } },
+      loop: { nodeId: owner.id, bodyIds: [card.id], index: 0, items: [{ text: '', assetIds: [] }], completed: [] } };
+    const f = fixture({ ...doc([owner, card]), run }, { authorize: deniedCanvasPro });
+    await f.controller.load();
+    if (kind === 'agent') {
+      await assert.rejects(() => f.controller.retryLoop(run.id), /需要 Pro/);
+      assert.equal(f.saved().document.run.steps[card.id].status, 'failed');
+      assert.equal(f.sends.length, 0);
+    } else {
+      await f.controller.retryLoop(run.id);
+      assert.equal(f.saved().document.run.status, 'done', f.saved().document.run.steps[card.id].error);
+      assert.equal(f.generationRequests.length, 1);
+    }
+  }
+});
 
 test('portable Agent templates retain provider/model settings and discard conversation identity', () => {
   const f = fixture();
@@ -290,6 +404,7 @@ test('an old video executor cannot release the new execution lock after stop tim
   const old = Promise.withResolvers(), resumed = Promise.withResolvers();
   const calls = [];
   const f = fixture({ ...doc([h3]), run, runs: [run] }, {
+    authorize: deniedCanvasPro,
     setTimeout(callback, delay) {
       if (delay !== 20_000) return setTimeout(callback, delay);
       deadline.resolve(callback);

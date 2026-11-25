@@ -23,7 +23,7 @@ export class WorkflowPersistenceQueue {
   private persistedDocument = emptyWorkflow();
   private queuedDocument = this.persistedDocument;
   private queuedWriteVersion = 0;
-  private queuedDraft?: { draft: { nodeId: string; document: CanvasWorkflow }; result: Promise<void>; release: () => void; debounce?: () => void };
+  private queuedDraft?: { draft: { nodeId: string; document: CanvasWorkflow; authorizeEdit: boolean }; result: Promise<void>; release: () => void; debounce?: () => void };
   private failedWrite?: { base: CanvasWorkflow; authorizeEdit: boolean; saveError: string };
 
   constructor(private readonly host: WorkflowPersistenceHost) {}
@@ -54,8 +54,9 @@ export class WorkflowPersistenceQueue {
     const base = this.queuedDocument;
     this.queuedDocument = initial;
     const queuedDraft = this.queuedDraft;
-    if (authorizeEdit && draftNodeId && queuedDraft?.draft.nodeId === draftNodeId && !!queuedDraft.debounce === editorOnly) {
+    if (draftNodeId && queuedDraft?.draft.nodeId === draftNodeId && !!queuedDraft.debounce === editorOnly) {
       queuedDraft.draft.document = initial;
+      queuedDraft.draft.authorizeEdit ||= authorizeEdit;
       queuedDraft.debounce?.();
       this.host.changed(promptEditor);
       return queuedDraft.result;
@@ -63,7 +64,7 @@ export class WorkflowPersistenceQueue {
     // Only successive prompt edits to the same card may share a pending write.
     // An in-flight save, a structural edit or a run checkpoint is a boundary.
     queuedDraft?.release();
-    const draft = authorizeEdit && draftNodeId ? { nodeId: draftNodeId, document: initial } : undefined;
+    const draft = draftNodeId ? { nodeId: draftNodeId, document: initial, authorizeEdit } : undefined;
     let release = () => {}, debounce: (() => void) | undefined;
     const delay = draft && editorOnly ? new Promise<void>(resolve => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -77,7 +78,7 @@ export class WorkflowPersistenceQueue {
       const snapshot = draft?.document ?? initial;
       if (this.host.discarded) return;
       let writeBase = this.failedWrite?.base ?? base;
-      const needsAuthorization = authorizeEdit || !!this.failedWrite?.authorizeEdit;
+      const needsAuthorization = (draft?.authorizeEdit ?? authorizeEdit) || !!this.failedWrite?.authorizeEdit;
       let refreshBoard = !!this.host.error;
       try {
         if (needsAuthorization) await api.canvasWorkflowAuthorize();
