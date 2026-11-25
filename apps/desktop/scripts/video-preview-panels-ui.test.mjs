@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { verifyShotPanel, verifyShotBoardDelivery } from './video-shots-ui.fixture.mjs';
 import { mkdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -185,12 +186,7 @@ try {
   await page.waitForFunction(() => !document.fullscreenElement && !document.querySelector('.video-export-popup'));
   await detail.getByRole('region', { name: '视频分析', exact: true }).getByRole('button', { name: '分析', exact: true }).click();
   assert.equal(await workspace.getByRole('button', { name: /转录 ·/ }).count(), 0);
-  const replicationButton = workspace.getByRole('button', { name: '复刻', exact: true });
-  await replicationButton.click();
-  const replication = workspace.getByRole('region', { name: '强化复刻', exact: true });
-  const back = replication.getByRole('button', { name: '返回分析', exact: true });
-  await back.locator('svg.lucide-arrow-left').waitFor();
-  await back.click();
+  await verifyShotPanel(page,workspace);
   const visualDescription = workspace.getByRole('region', { name: '画面描述', exact: true });
   await visualDescription.getByText('窗边近景，暖色光线。', { exact: true }).waitFor();
   assert.ok(await page.evaluate(() => window.calls.some(call => call.command === 'video_analysis_get' && call.args.assetId === 'plain')));
@@ -517,6 +513,14 @@ try {
   await page.locator('.asset-detail:not(.asset-detail-panel-only)').getByText('反推', { exact: true }).first().waitFor();
   assert.equal(await analysisEntry.count(), 0);
 
+  await page.evaluate(()=> {
+    window.entitlementReads=0;
+    window.store.setState({ cloudAuth:{logged_in:true,user_id:"balance-owner"},syncCloudEntitlement:async()=>{window.entitlementReads++;} });
+    window.emitFixtureEvent("cloud://shot-balance-changed","other-account");
+    window.emitFixtureEvent("cloud://shot-balance-changed","balance-owner");
+  });
+  assert.equal(await page.evaluate(()=>window.entitlementReads),1);
+  await verifyShotBoardDelivery(page,server.resolvedUrls.local[0] + entry + '?source-library');
   assert.deepEqual(errors, []);
   console.log('PASS: distinct workspace entry modes, two videos at the same account quote, account guards, repair, exact seek and responsive layout');
 } finally {

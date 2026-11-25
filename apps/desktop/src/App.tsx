@@ -114,6 +114,7 @@ function App() {
   const [creativeLaunch, setCreativeLaunch] = useState<CreativeLaunchRequest | null>(null);
   const [creativeTarget, setCreativeTarget] = useState<{
     projectId: string;
+    projectNode?: boolean;
     threadId: string | null;
     nodeId: string | null;
     requestId: string;
@@ -335,6 +336,7 @@ function App() {
   useEffect(() => {
     let unlistenChanged: UnlistenFn | undefined;
     let unlistenError: UnlistenFn | undefined;
+    let unlistenBalance: UnlistenFn | undefined;
     let alive = true;
     listen<AuthSnapshot>("cloud://auth-changed", (e) => {
       setCloudAuth(e.payload);
@@ -344,10 +346,15 @@ function App() {
     listen<string>("cloud://auth-error", (e) => setCloudError(e.payload)).then((u) =>
       alive ? (unlistenError = u) : u()
     );
+    listen<string>("cloud://shot-balance-changed", ({ payload: owner }) => {
+      const state = useStore.getState();
+      if (alive && state.cloudAuth?.logged_in && state.cloudAuth.user_id === owner) void state.syncCloudEntitlement();
+    }).then(u => alive ? (unlistenBalance = u) : u());
     return () => {
       alive = false;
       unlistenChanged?.();
       unlistenError?.();
+      unlistenBalance?.();
     };
   }, [setCloudAuth, setCloudError]);
 
@@ -1035,6 +1042,7 @@ function App() {
                 projectId={workspaceProjectId}
                 exploring={sourceBrowserOpen}
                 focusThreadId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.threadId : null}
+                focusProjectNode={creativeTarget?.projectId === workspaceProjectId && creativeTarget.projectNode}
                 focusNodeId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.nodeId : null}
                 focusRequestId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.requestId : null}
                 onFocusConsumed={acknowledgeCreativeTarget}

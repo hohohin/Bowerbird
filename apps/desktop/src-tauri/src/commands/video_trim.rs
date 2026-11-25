@@ -123,7 +123,7 @@ fn replace(db: &Database, original: &Asset, output: &Path, thumbnail: &Path, met
         ON CONFLICT(asset_id) DO UPDATE SET sha256=excluded.sha256,asset_size=excluded.asset_size,asset_mtime=excluded.asset_mtime",
         params![original.id,fingerprint,meta.size as i64,modified])?;
     tx.execute("UPDATE analyses SET payload=json_set(payload,'$.current',json('false')) WHERE asset_id=?1
-        AND kind IN ('video_transcript','video_analysis') AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.current')=1 END",
+        AND kind IN ('video_transcript','video_analysis','video_shots') AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.current')=1 END",
         [&original.id])?;
     // Same volume rename replaces atomically; encoding never writes into the source file.
     fs::rename(output, original.store_path.as_deref().unwrap())?;

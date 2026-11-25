@@ -82,7 +82,7 @@ const currentFiles = (entries: any[]) => entries.flatMap(entry => fileChanges.ha
 w.snapshot = () => structuredClone(snapshot);
 w.save = () => {
   sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
-  sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation" || asset.source === "external" || asset.source === "video-frame" || asset.ext === "mp4")));
+  sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation" || asset.source === "external" || asset.source === "video-frame" || asset.source === "video-audio" || asset.ext === "mp4")));
 };
 w.emitFixtureEvent = (name: string, payload: unknown) => {
   for (const [handler, event] of listeners) if (event === name) callbacks.get(handler)?.({ event, id: handler, payload });
@@ -343,6 +343,16 @@ w.__TAURI_INTERNALS__ = {
       snapshot.view = { ...args.value }; return snapshot.view;
     }
     if (command === "get_assets_by_ids") return assets.filter(a => args.assetIds.includes(a.id));
+    if (command === "extract_video_audio") {
+      const video = assets.find(asset => asset.store_path === args.sourcePath);
+      if (!video) throw "视频原件不存在";
+      const id = `audio-${video.id}`;
+      const existing = assets.find(asset => asset.id === id);
+      if (existing) return existing;
+      const audio = { id, name: `${video.name} 音轨`, ext: "wav", duration: video.duration, store_path: `/fixture/${id}.wav`, source: "video-audio" };
+      assets.push(audio);
+      return audio;
+    }
     if (command === "set_canvas_asset_library_visibility") {
       if (w.failLibraryVisibility) throw "模拟归属修改失败";
       const asset = assets.find(asset => asset.id === args.assetId);
@@ -523,12 +533,16 @@ function Fixture() {
   w.openSettings = () => setSettingsOpen(true);
   const projectId = useStore(state => state.activeProjectId)!;
   const reuse = useStore(state => state.pendingCreativeReuse);
+  const focus = useStore(state => state.creativeNavigation);
   const [exploring, setExploring] = React.useState(explorer);
   const [toolbarCanvasMode, setToolbarCanvasMode] = React.useState(true);
   w.setToolbarCanvasMode = setToolbarCanvasMode;
   w.setExploring = setExploring;
   const canvas = <React.Profiler id="canvas" onRender={() => { w.canvasCommits = (w.canvasCommits || 0) + 1; }}>
     <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring}
+      focusNodeId={focus?.projectId === projectId ? focus.nodeId : null} focusProjectNode={focus?.projectNode}
+      focusRequestId={focus?.projectNode ? focus.nodeId : null}
+      onFocusConsumed={id => { w.consumedFocus = id; useStore.getState().clearCreativeNavigation(); }}
       launchRequest={reuse?.targetProjectId === projectId ? { id: reuse.id, projectId, assetIds: [], promptLoad: reuse.promptLoad } : null}
       onLaunchConsumed={id => useStore.getState().ackPendingCreativeReuse(id)} />
   </React.Profiler>;

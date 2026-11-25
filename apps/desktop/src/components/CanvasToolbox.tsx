@@ -58,7 +58,7 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo, onOpenVoice
         <AudioLines size={19} aria-hidden="true" /><span><strong>角色声音</strong><small>声音克隆 · 角色配音</small></span>
       </button>}
       <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenReplication(); }}>
-        <Clapperboard size={19} aria-hidden="true" /><span><strong>视频复刻工具</strong><small>分析参考 · 改写分镜 · 生成视频</small></span>
+        <Clapperboard size={19} aria-hidden="true" /><span><strong>抖音视频采集</strong><small>解析链接 · 下载入库</small></span>
       </button>
       {isTestAccount && <button type="button" role="menuitem" onClick={() => { setOpen(false); button.current?.focus(); notify("功能开发中"); }}>
         <Images size={19} aria-hidden="true" /><span><strong>视频转图文</strong><small>功能开发中</small></span>

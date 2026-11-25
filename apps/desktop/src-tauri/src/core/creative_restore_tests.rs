@@ -49,6 +49,7 @@ fn portable_roundtrip_restores_metadata_once_without_copying_or_executing_jobs()
         INSERT INTO analyses(id,asset_id,kind,payload) VALUES('generation','a','generation_meta','{"prompt":"海边"}');
         INSERT INTO analyses(id,asset_id,kind,payload) VALUES('workspace','a','layer_workspace','{"status":"running"}');
         INSERT INTO analyses(id,asset_id,kind,payload) VALUES('transcript','a','video_transcript','{"status":"running","owner":"local-account"}');
+        INSERT INTO analyses(id,asset_id,kind,payload) VALUES('shots','a','video_shots','{"current":true,"revision":1}');
         INSERT INTO tags(id,name,color) VALUES('t','自然','#112233');
         INSERT INTO asset_tags(asset_id,tag_id) VALUES('a','t');
         INSERT INTO prompts(id,body) VALUES('p','画海边');
@@ -57,7 +58,7 @@ fn portable_roundtrip_restores_metadata_once_without_copying_or_executing_jobs()
     f.export(); let bytes = fs::read(&original).unwrap();
     f.edit("a", |value| {
         let analyses = value["analyses"].as_array_mut().unwrap();
-        assert!(!analyses.iter().any(|entry| entry["kind"] == "video_transcript"));
+        assert!(!analyses.iter().any(|entry| entry["kind"] == "video_transcript" || entry["kind"] == "video_shots"));
         analyses.push(json!({
             "id": "foreign-transcript",
             "kind": "video_transcript",

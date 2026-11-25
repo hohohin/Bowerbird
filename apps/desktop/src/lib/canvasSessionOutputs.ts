@@ -5,7 +5,7 @@ import { canvasDocumentTextValue, canvasNoteValue, readCanvasNote, type CanvasNo
 import { contentInputAxisIndex } from "./canvasContentInput";
 import { documentMediaReferences, type DocumentMediaReference } from "./documentProjection";
 import { generationPromptNodeId } from "./projectNodeIds";
-import { activePromptReferences, isWorkflowGenerationResult, workflowActiveSession, workflowBindingKey, workflowInputProducers,
+import { activePromptReferences, isWorkflowGenerationResult, workflowActiveSession, workflowBindingKey, workflowInputAssetId, workflowInputProducers,
   workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowInput, type WorkflowNode, type WorkflowRun } from "./canvasWorkflow";
 
 /** Result of the exact submitted turn, independent of other turns in its gallery. */
@@ -339,10 +339,11 @@ export function workflowGenerationPreviewIds(source: WorkflowNode, canvas: reado
 }
 
 export function workflowBindingAssetIds(input: WorkflowInput, source: WorkflowNode | undefined, card: CanvasNode | undefined, canvas: readonly CanvasNode[]) {
-  if (input.nodeId && input.videoFrame) return [];
+  if (input.nodeId && (input.videoFrame || input.videoAudio)) return [];
   if (input.groupId) return input.assetIds ?? [];
   if (input.dimension) return [];
-  if (input.assetId) return [input.videoFrame?.assetId ?? input.assetId];
+  const assetId = workflowInputAssetId(input);
+  if (assetId) return [assetId];
   if (input.canvasNodeId) return card && card.hiddenAt == null ? canvasInputAssetIds(card, input.cellId ?? "", canvas) : [];
   if (source && isWorkflowGenerationResult(input, source)) return workflowGenerationPreviewIds(source, canvas);
   return source?.outputs[input.portId ?? ""]?.assetIds ?? [];

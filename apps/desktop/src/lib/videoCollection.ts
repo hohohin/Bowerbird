@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Asset } from "./types";
 
 export interface VideoCollectionTask {
+  autoSave?: boolean;
   id: string;
   projectId: string;
   kind: "direct" | "douyin";

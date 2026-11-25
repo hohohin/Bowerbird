@@ -18,11 +18,11 @@ type LoopMode = keyof typeof modes;
 type OpenAgent = (id: string, conversationId?: string, entryKey?: string) => void;
 
 interface HistoryProps {
-  runs: WorkflowRun[]; assets: Asset[]; nodes: Map<string, WorkflowNode>; onOpenAgent: OpenAgent;
+  runs: WorkflowRun[]; assetById: ReadonlyMap<string, Asset>; nodes: Map<string, WorkflowNode>; onOpenAgent: OpenAgent;
   graphById: Map<string, CanvasNode>; onOpenGeneration: (node: CanvasNode) => void;
 }
 
-function LoopHistory({ runs, assets, nodes, onOpenAgent, graphById, onOpenGeneration }: HistoryProps) {
+function LoopHistory({ runs, assetById, nodes, onOpenAgent, graphById, onOpenGeneration }: HistoryProps) {
   const [open, setOpen] = useState(false);
   const [selectedId, select] = useState("");
   const selected = runs.find(run => run.id === selectedId) ?? runs[runs.length - 1];
@@ -40,7 +40,7 @@ function LoopHistory({ runs, assets, nodes, onOpenAgent, graphById, onOpenGenera
         const index = (loop.startIndex ?? 0) + offset;
         const input = loop.items?.[index];
         return <details key={`${selected.id}:${index}`}>
-          <summary><ChevronRight size={12} />第 {index + 1} 项{input && <small>{loopItemDescription(input, assets)}</small>}</summary>
+          <summary><ChevronRight size={12} />第 {index + 1} 项{input && <small>{loopItemDescription(input, assetById)}</small>}</summary>
           {Object.entries(item.outputs).map(([id, outputs]) => {
             const source = nodes.get(id);
             if (!source) return null;
@@ -58,7 +58,7 @@ function LoopHistory({ runs, assets, nodes, onOpenAgent, graphById, onOpenGenera
                     : <small key={sessionId}>生成会话已移除</small>;
                 })}
                 {value.assetIds?.map((assetId, j) => {
-                  const asset = assets.find(asset => asset.id === assetId);
+                  const asset = assetById.get(assetId);
                   return asset?.thumb_path || asset?.store_path ? <CanvasImage key={j} alt={asset.name} path={asset.store_path} thumbPath={asset.thumb_path} sourceWidth={asset.width} sourceHeight={asset.height} /> : <span key={j}>图片不可用</span>;
                 })}{value.summary && <p>{value.summary}</p>}</div>)}
             </div>;
@@ -95,13 +95,13 @@ export function WorkflowLoopCard({ node, items, notice, busy, run, bindings, onM
         const n = event.target.valueAsNumber;
         if (Number.isInteger(n) && n >= 1 && n <= 100) onCount(n);
       }} onBlur={() => setCountDraft(null)} /> 次</label>}
-    <WorkflowLoopStartSelect id={node.id} items={items ?? []} assets={history.assets} value={start} rounds={mode === "count"} disabled={busy} notice={empty && mode !== "count" ? modes[mode].empty : notice} onChange={onStartItem} />
+    <WorkflowLoopStartSelect id={node.id} items={items ?? []} assetById={history.assetById} value={start} rounds={mode === "count"} disabled={busy} notice={empty && mode !== "count" ? modes[mode].empty : notice} onChange={onStartItem} />
     {!!items && start > items.length && <p className="loop-note">原起始项已超出输入范围，请重新选择。</p>}
     {changed && <p className="loop-note">输入已更新为 {items.length} 项。本次记录保留启动时的 {loop.items!.length} 项。</p>}
     {loop && run && <div className="loop-progress" role="status">
       <div><strong>{pending ? "有步骤待重试" : run.status === "done" ? "上次循环" : statuses[run.status]}</strong>{loop.items && <span>已完成 <b>{loop.completed.length}</b> / {total} 项</span>}</div>
       {total > 0 && <progress aria-label="本次循环进度" value={loop.completed.length} max={total} />}
-      {!loop.items ? <small>等待上游准备输入</small> : current && loop.completed.length < total && <small>当前第 {loop.index + 1} 项 · {loopItemDescription(current, history.assets)}</small>}
+      {!loop.items ? <small>等待上游准备输入</small> : current && loop.completed.length < total && <small>当前第 {loop.index + 1} 项 · {loopItemDescription(current, history.assetById)}</small>}
     </div>}
     <LoopHistory {...history} />
   </section>;

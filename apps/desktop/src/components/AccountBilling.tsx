@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
 import { Check, Coins, Sparkles } from "lucide-react";
 import type { EntitlementSnapshot } from "../lib/types";
+import { displayCreditBalances } from "../lib/creditHistory";
 import { useStore } from "../store";
 import { useCheckout } from "./useCheckout";
 import { CheckoutDialog } from "./CheckoutDialog";
@@ -35,7 +36,7 @@ export function AccountBilling({ loggedIn, entitlement }: {
   const current = loggedIn && !needsRefresh ? entitlement : null;
   const tierName = current ? { free: "Free", pro: "Pro", studio: "Studio" }[current.tier] : null;
   const status = !loggedIn ? "登录后查看方案" : needsRefresh ? "权益需刷新" : tierName ? `当前方案 · ${tierName}` : "权益暂不可用";
-  const balance = current ? current.balances.daily + current.balances.sub + current.balances.topup : null;
+  const balance = displayCreditBalances(current)?.total ?? null;
   const selectedPlan = PLANS.find((item) => item.id === plan)!;
   const customAmount = Number(custom.trim());
   const validCustom = /^\d+$/.test(custom.trim()) && customAmount > 0 && customAmount <= checkout.maxAmount

@@ -14,7 +14,7 @@ import { useComfyEnvironment } from "../lib/comfyEnvironmentState";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError } from "../lib/notify";
 import type { Asset } from "../lib/types";
-import { H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowBindingKey, workflowFrameLabel, type WorkflowInput, type WorkflowNode } from "../lib/canvasWorkflow";
+import { H3_R2V_INPUT_PORTS, H3_VIDEO_AUDIO_PORT, workflowBindingKey, workflowFrameLabel, workflowVideoAudioLabel, type WorkflowInput, type WorkflowNode } from "../lib/canvasWorkflow";
 import { workflowAssetMedia } from "../lib/workflowCanvasCapabilities";
 import { isVideoAsset, isVideoPath } from "../lib/videoGeneration";
 import "./ComfyVideoCard.css";
@@ -174,11 +174,12 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   </>;
 }
 
-export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, disabled, assets, inputImages, referencePending, readCurrentPrompt, onChange, optimizationActions }: {
+export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, disabled, assetById, inputImages, referencePending, videoAudioSourceName, readCurrentPrompt, onChange, optimizationActions }: {
   prompt: string; onPromptChange: (prompt: string) => void;
-  optimizationActions?: React.ReactNode; modelControl: React.ReactNode; node: WorkflowNode; disabled: boolean; assets: Asset[];
+  optimizationActions?: React.ReactNode; modelControl: React.ReactNode; node: WorkflowNode; disabled: boolean; assetById: ReadonlyMap<string, Asset>;
   inputImages: (input: WorkflowInput, media?: keyof typeof H3_R2V_INPUT_PORTS) => string[];
   referencePending: (input: WorkflowInput) => boolean;
+  videoAudioSourceName: (input: WorkflowInput) => string;
   onChange: (patch: Partial<WorkflowNode>) => void;
   readCurrentPrompt: () => string;
 }) {
@@ -188,7 +189,7 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
   const ports = mode === "frames" ? ["first-frame", "last-frame"] : mode === "reference" ? ["first-frame"] : [];
   const audioBindings = node.inputs[H3_VIDEO_AUDIO_PORT] ?? [];
   const audioIds = audioBindings.flatMap(input => inputImages(input));
-  const audio = assets.find(asset => audioIds.includes(asset.id) && isAudioAsset(asset));
+  const audio = audioIds.map(id => assetById.get(id)).find(asset => asset && isAudioAsset(asset));
   const latestCard = useRef({ node, disabled, onChange });
   const audioDrop = useRef(0);
   latestCard.current = { node, disabled, onChange };
@@ -201,7 +202,7 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
     const current = () => drop === audioDrop.current && !latestCard.current.disabled && comfyVideoMode(latestCard.current.node.comfyVideo) !== "r2v"
       && latestCard.current.node.inputs[H3_VIDEO_AUDIO_PORT] === previous;
     try {
-      const asset = assets.find(item => item.id === ids[0]) ?? (await api.getAssetsByIds(ids))[0];
+      const asset = assetById.get(ids[0]) ?? (await api.getAssetsByIds(ids))[0];
       if (!current()) return;
       if (!asset || !isAudioAsset(asset)) { notifyError(null, "请拖入一段音频"); return; }
       latestCard.current.onChange({ inputs: { ...latestCard.current.node.inputs, [H3_VIDEO_AUDIO_PORT]: [{ assetId: asset.id }] } });
@@ -256,7 +257,7 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
       const label = mode === "reference" ? "参考图" : index ? "尾帧" : "首帧";
       const bindings = node.inputs[port] ?? [];
       const ids = bindings.flatMap(input => inputImages(input));
-      const asset = assets.find(asset => asset.id === ids[0]);
+      const asset = assetById.get(ids[0]);
       const { path, originalImage } = frameImagePaths(asset);
       const video = isVideoAsset(asset);
       const frameLabel = bindings[0]?.videoFrame && workflowFrameLabel(bindings[0].videoFrame);
@@ -309,8 +310,8 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
           <div className="comfy-audio-row"><Icon size={14} aria-hidden="true" /><span>{label}</span>
             <span className="comfy-audio-source">{bindings.length ? `${count} / ${H3_R2V_LIMITS[media]}` : `拖入或连接 · 最多 ${H3_R2V_LIMITS[media]} 个`}</span></div>
           {!!items.length && <div className={media === "image" ? "comfy-r2v-pictures" : "comfy-r2v-list"}>{items.map(({ binding, id, pending, number, hasSiblings }, index) => {
-            const asset = assets.find(item => item.id === id);
-            const name = asset?.name || (id ? "素材" : pending ? "等待上游素材" : "无匹配素材");
+            const asset = id ? assetById.get(id) : undefined;
+            const name = binding.videoAudio ? `${workflowVideoAudioLabel()} · ${videoAudioSourceName(binding)}` : asset?.name || (id ? "素材" : pending ? "等待上游素材" : "无匹配素材");
             const frame = binding.videoFrame && workflowFrameLabel(binding.videoFrame);
             const key = `${workflowBindingKey(binding)}:${id ?? ""}`;
             const disconnect = <button type="button" aria-label={`断开${label}来源 ${index + 1}`} title={`断开 ${name}`}
@@ -362,7 +363,7 @@ export function ComfyVideoCard({ node, prompt, onPromptChange, modelControl, dis
         <AudioLines size={14} aria-hidden="true" />
         <span>{audioLabel}</span>
         <span className="comfy-audio-source" title={audio?.name}>
-          {audio?.name ?? (audioBindings.length ? "等待读取音频" : "拖入或连接录音（可选）")}
+          {audioBindings[0]?.videoAudio ? `${workflowVideoAudioLabel()} · ${videoAudioSourceName(audioBindings[0])}` : audio?.name ?? (audioBindings.length ? "等待读取音频" : "拖入或连接录音（可选）")}
         </span>
         {audioBindings.length > 0 && <button type="button" aria-label={`断开${audioLabel}`} title={`断开${audioLabel}`}
           disabled={disabled} onPointerDown={event => event.stopPropagation()}

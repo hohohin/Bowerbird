@@ -20,6 +20,10 @@ pub(super) struct FileStamp {
 }
 
 impl FileStamp {
+    pub(super) fn parts(&self) -> (u64, &str) {
+        (self.size, &self.modified_nanos)
+    }
+
     pub(super) fn read(path: &Path) -> AppResult<Self> {
         let metadata = fs::metadata(path)?;
         let modified = metadata
@@ -61,7 +65,7 @@ pub(super) fn registration(db: &Database, asset_id: &str) -> AppResult<Registrat
     read_registration(&db.conn.lock().unwrap(), asset_id)
 }
 
-fn read_registration(conn: &rusqlite::Connection, asset_id: &str) -> AppResult<Registration> {
+pub(super) fn read_registration(conn: &rusqlite::Connection, asset_id: &str) -> AppResult<Registration> {
     conn.query_row(
         "SELECT a.size,a.file_mtime,COALESCE(e.fingerprint,f.sha256) FROM assets a \
          LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id \

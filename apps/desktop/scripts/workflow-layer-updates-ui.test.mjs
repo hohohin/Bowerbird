@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 const cache = '.tmp/workflow-layer-updates-vite';
-const server = await createServer({ configFile: false, cacheDir: cache, optimizeDeps: { include: ['react', 'react-dom/client', 'react-dom', 'zustand/shallow'] },
+const server = await createServer({ configFile: false, cacheDir: cache, resolve: { alias: { '@': resolve('src') } },
+  optimizeDeps: { include: ['react', 'react-dom/client', 'react-dom', 'zustand/shallow'] },
   server: { host: '127.0.0.1', port: 17937, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 let browser;
@@ -22,6 +24,7 @@ try {
       import('/src/components/CanvasWorkflowLayer.tsx'), import('/src/lib/canvasWorkflowRuntime.ts'), import('/src/lib/canvasWorkflow.ts'), import('/src/store.ts'),
     ]);
     const controller = canvasWorkflowController('updates');
+    await controller.load(true);
     const node = newWorkflowNode('trigger', 400, 50, '');
     controller.document = { ...controller.document, nodes: [node] };
     window.workflowNodeId = node.id;
@@ -32,12 +35,34 @@ try {
     const root = createRoot(document.getElementById('root'));
     flushSync(() => root.render(React.createElement(React.Profiler, { id: 'workflow', onRender: () => window.layerCommits++ },
       React.createElement('div', { className: 'canvas-plane', style: { position: 'relative', width: 1000, height: 600 } },
-        React.createElement(CanvasWorkflowLayer, { ref, projectId: 'updates', provisional: true, materials, graphNodes: [], selectedIds: new Set(), panReady: false,
+        React.createElement(CanvasWorkflowLayer, { ref, projectId: 'updates', provisional: true, materials, graphNodes: [], entryCardIds: null,
+          activeGenerationIds: new Set(), generationActivities: new Map(), selectedIds: new Set(), panReady: false,
           onSelect: noop, onNodesChanged: noop, onEdited: noop, onOpenGeneration: noop, onOpenAgent: noop, onDragStart: noop, onDragMove: noop,
           onDragEnd: noop, onNodeMenu: noop, onRemove: noop, ensureMaterialized: async () => {}, toBoardPoint: (x, y) => ({ x, y }), onPlaced: noop })))));
     window.changeUnrelated = () => { for (let i = 0; i < 30; i++) useStore.setState({ searchQuery: `unrelated-${i}` }); };
     window.moveCursor = (x, y, buttons = 0) => document.body.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', buttons, clientX: x, clientY: y }));
     window.unmountLayer = () => flushSync(() => root.render(null));
+    window.renderOpeningBatches = () => {
+      const next = newWorkflowNode('trigger', 700, 50, '');
+      controller.document = { ...controller.document, nodes: [node, next] };
+      const preparations = new Map();
+      const cardFailure = controller.cardFailure.bind(controller);
+      controller.cardFailure = (id, ...args) => {
+        preparations.set(id, (preparations.get(id) ?? 0) + 1);
+        return cardFailure(id, ...args);
+      };
+      const props = { ref, projectId: 'updates', provisional: true, materials, graphNodes: [],
+        activeGenerationIds: new Set(), generationActivities: new Map(), selectedIds: new Set(), panReady: false,
+        onSelect: noop, onNodesChanged: noop, onEdited: noop, onOpenGeneration: noop, onOpenAgent: noop, onDragStart: noop, onDragMove: noop,
+        onDragEnd: noop, onNodeMenu: noop, onRemove: noop, ensureMaterialized: async () => {}, toBoardPoint: (x, y) => ({ x, y }), onPlaced: noop };
+      const render = (ids, opening) => {
+        flushSync(() => root.render(React.createElement(CanvasWorkflowLayer, { ...props, entryCardIds: new Set(ids), opening })));
+        return [...document.querySelectorAll('[data-workflow-card]')].map(card => card.dataset.workflowCard);
+      };
+      const first = render([node.id], true);
+      const second = render([node.id, next.id], false);
+      return { firstBatchCount: first.length, secondBatchCount: second.length, preparations: [preparations.get(node.id), preparations.get(next.id)] };
+    };
   }, cache);
   await page.locator('[data-workflow-material="source"]').waitFor();
   await page.waitForTimeout(150);
@@ -70,5 +95,9 @@ try {
   await page.evaluate(() => { window.layer.current.arm(20, 20); window.moveCursor(30, 30); window.unmountLayer(); });
   await page.waitForTimeout(80);
   assert.deepEqual(errors, []);
+  assert.deepEqual(await page.evaluate(() => window.renderOpeningBatches()), {
+    firstBatchCount: 1, secondBatchCount: 2, preparations: [1, 1],
+  }, 'the readiness batch prepares only newly mounted workflow cards');
+  await page.evaluate(() => window.unmountLayer());
   console.log('PASS: unrelated store changes, draft cursor bursts, winding-key cursor bursts and equivalent node positions cause zero workflow commits; cancellation and unmount clean up');
 } finally { await browser?.close(); await server.close(); }

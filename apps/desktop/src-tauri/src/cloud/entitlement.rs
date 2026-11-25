@@ -17,9 +17,18 @@ pub struct CreditBalance {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MilliCreditBalance {
+    pub daily: i64,
+    pub sub: i64,
+    pub topup: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreditTransaction {
     pub kind: String,
     pub amount: i32,
+    #[serde(default)]
+    pub amount_milli: Option<i64>,
     pub service: Option<String>,
     #[serde(default)]
     pub meta: Option<CreditTransactionMeta>,
@@ -84,6 +93,9 @@ pub struct EntitlementSnapshot {
     pub membership_ends_at: Option<DateTime<Utc>>,
     pub trial_available: Option<bool>,
     pub balances: CreditBalance,
+    /// Online display only; the v1 signature continues to cover integer balances.
+    #[serde(default)]
+    pub balances_milli: Option<MilliCreditBalance>,
     pub policy: FeaturePolicy,
     #[serde(default)]
     pub recent_transactions: Vec<CreditTransaction>,
@@ -137,6 +149,12 @@ impl EntitlementService {
             .ok()
             .and_then(|json| serde_json::from_str::<EntitlementSnapshot>(&json).ok())
             .map(|mut value| {
+                value.balances_milli = None;
+                // Shot entries use fractional amounts; the whole-unit column is only a ledger projection.
+                value.recent_transactions.retain(|tx| tx.service.as_deref() != Some("library_video_shot_analysis"));
+                for tx in &mut value.recent_transactions {
+                    tx.amount_milli = None;
+                }
                 value.signature_valid = Self::verify_signature(&value);
                 if value.signature_version >= 1 && !value.signature_valid {
                     tracing::warn!(
@@ -421,6 +439,7 @@ impl EntitlementService {
         EntitlementSnapshot {
             user_id: String::new(),
             tier: "free".into(),
+            balances_milli: None,
             balances: CreditBalance::default(),
             policy: FeaturePolicy::free(),
             recent_transactions: vec![],
@@ -503,6 +522,11 @@ mod tests {
                 socket.read(&mut request).await.unwrap();
                 let mut response = signed(Utc::now());
                 response.user_id = if scenario == "wrong-subject" { "other-user" } else { "test-user" }.into();
+                response.balances_milli = Some(super::MilliCreditBalance { daily: 946, sub: 0, topup: 0 });
+                response.recent_transactions.push(super::CreditTransaction {
+                    kind: "hold".into(), amount: -1, amount_milli: Some(-54), service: Some("library_video_shot_analysis".into()),
+                    created_at: Utc::now(), meta: None,
+                });
                 response.signature_version = 0;
                 response.signature = None;
                 if scenario == "switched" { auth.set_test_user("other-user"); }
@@ -513,7 +537,14 @@ mod tests {
             };
             let (result, _) = tokio::join!(service.sync(&auth), server);
             if scenario == "normal" {
-                assert_eq!(result.unwrap().user_id, "test-user");
+                let online = result.unwrap();
+                assert_eq!(online.user_id, "test-user");
+                assert_eq!(online.balances_milli.unwrap().daily, 946);
+                assert_eq!(online.recent_transactions[0].amount_milli, Some(-54));
+                let reopened = EntitlementService::new(service.cloud.clone(), cache.clone());
+                let reopened = reopened.snapshot.read().unwrap();
+                assert!(reopened.as_ref().unwrap().balances_milli.is_none());
+                assert!(reopened.as_ref().unwrap().recent_transactions.is_empty());
                 assert!(cache.exists());
                 auth.set_test_user("other-user");
                 drop(listener);
@@ -531,6 +562,7 @@ mod tests {
         EntitlementSnapshot {
             user_id: "user".into(),
             tier: "pro".into(),
+            balances_milli: None,
             balances: CreditBalance::default(),
             policy: FeaturePolicy::for_tier("pro"),
             recent_transactions: vec![],
@@ -726,6 +758,7 @@ mod tests {
         EntitlementSnapshot {
             user_id: "11111111-2222-3333-4444-555555555555".into(),
             tier: "pro".into(),
+            balances_milli: None,
             balances: CreditBalance {
                 daily: 12,
                 sub: 340,

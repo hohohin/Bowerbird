@@ -340,7 +340,14 @@ try {
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     const imageOnly = { ...newWorkflowNode('instruction', 650, 70, 'codex'), id: 'image-only', action: 'describe' };
     const video = { ...newWorkflowNode('generation', 650, 440, 'codex'), id: 'video-generator', prompt: '继续这个镜头', generation: { media: 'video', videoOptions: { kind: 'multimodal2video', model_version: 'seedance2.5', duration: 5, video_resolution: '720p' } } };
-    sessionStorage.setItem('workflow-p', JSON.stringify({ revision: 0, document: { schema_version: 1, nodes: [imageOnly, video], run: null } }));
+    const voice = { ...newWorkflowNode('voice', 1030, 135, 'codex'), id: 'voice-receiver' };
+    const frames = { ...video, id: 'frames-receiver', x: 1030, generation: { ...video.generation,
+      videoOptions: { ...video.generation.videoOptions, kind: 'frames2video' } } };
+    const agent = { ...newWorkflowNode('agent', 55, 485, 'codex'), id: 'agent-receiver', agentTransport: 'codex-cli' };
+    const hyperframes = { ...agent, x: 355, id: 'hyperframes-receiver', skill: 'hyperframes' };
+    sessionStorage.setItem('workflow-p', JSON.stringify({ revision: 0, document: {
+      schema_version: 1, nodes: [imageOnly, video, voice, frames, agent, hyperframes], run: null,
+    } }));
   });
   await page.reload();
   await card('movie-card').waitFor();
@@ -360,6 +367,7 @@ try {
   assert.ok(await videoMenu.getByRole('menuitem', { name: '引用完整视频', exact: true }).isDisabled());
   assert.ok(await videoMenu.getByRole('menuitem', { name: '引用首帧画面', exact: true }).isEnabled());
   assert.ok(await videoMenu.getByRole('menuitem', { name: '引用尾帧画面', exact: true }).isEnabled());
+  assert.ok(await videoMenu.getByRole('menuitem', { name: '引用视频音频', exact: true }).isDisabled());
   await page.keyboard.press('Escape');
   await videoMenu.waitFor({ state: 'hidden' });
   assert.ok(await handle('movie-card', 'output').evaluate(button => document.activeElement === button));
@@ -372,6 +380,19 @@ try {
   assert.equal(videoInput.assetId, 'movie');
   assert.ok(videoInput.autoConnect);
   assert.ok(videoInput.mediaFilter.includes('video'));
+  await dragHandleToCard('movie-card', 'output', 'voice-receiver');
+  assert.ok(await videoMenu.getByRole('menuitem', { name: '引用完整视频', exact: true }).isDisabled());
+  assert.ok(await videoMenu.getByRole('menuitem', { name: '引用首帧画面', exact: true }).isDisabled());
+  assert.ok(await videoMenu.getByRole('menuitem', { name: '引用视频音频', exact: true }).isEnabled());
+  await page.keyboard.press('Escape');
+  await dragHandleToCard('movie-card', 'output', 'frames-receiver');
+  assert.ok(await videoMenu.getByRole('menuitem', { name: '引用视频音频', exact: true }).isDisabled());
+  await page.keyboard.press('Escape');
+  for (const [receiver, supported] of [['agent-receiver', false], ['hyperframes-receiver', true]]) {
+    await dragHandleToCard('movie-card', 'output', receiver);
+    assert.equal(await videoMenu.getByRole('menuitem', { name: '引用视频音频', exact: true }).isEnabled(), supported);
+    await page.keyboard.press('Escape');
+  }
   assert.equal(await page.evaluate(() => window.calls.filter(call => /frame|generate|start_run/.test(call.command)).length), 0);
 
   // The shared feedback prevents invalid edges before any graph mutation.

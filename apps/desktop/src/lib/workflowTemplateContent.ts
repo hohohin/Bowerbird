@@ -3,7 +3,7 @@ import { canvasInputValue } from "./canvasSessionOutputs";
 import { emptyCanvasCell, type CanvasTextCell } from "./canvasNotes";
 import { contentTableText, parseTextTable } from "./contentTable";
 import type { CanvasNode } from "./types";
-import type { WorkflowInput, WorkflowNode, WorkflowValue } from "./canvasWorkflow";
+import { workflowInputAssetId, type WorkflowInput, type WorkflowNode, type WorkflowValue } from "./canvasWorkflow";
 import { parseWorkflowTemplate, type TemplateContent, type WorkflowTemplate } from "./workflowTemplates";
 
 /** Freeze input values, never upstream execution/session identities. */
@@ -12,9 +12,10 @@ export function templateInputValue(binding: WorkflowInput, type: "text" | "image
     const source = canvas.find(node => node.id === binding.canvasNodeId && node.hiddenAt == null);
     return source && canvasInputValue(source, binding.cellId ?? "", canvas);
   }
-  if (binding.nodeId) return nodes.find(node => node.id === binding.nodeId)?.outputs[binding.portId ?? type];
+  if (binding.nodeId) return binding.videoAudio ? undefined : nodes.find(node => node.id === binding.nodeId)?.outputs[binding.portId ?? type];
   if (binding.dimension && type === "text") return { type, text: binding.dimension.body };
-  if (binding.assetId) return { type: "image", assetIds: [binding.videoFrame?.assetId ?? binding.assetId] };
+  const assetId = workflowInputAssetId(binding);
+  if (assetId) return { type: "image", assetIds: [assetId] };
   if (binding.groupId) return { type: "image", assetIds: binding.assetIds ?? [] };
 }
 

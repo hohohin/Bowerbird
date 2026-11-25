@@ -7,6 +7,7 @@ use tauri::State;
 use crate::{db::Database, error::{AppError, AppResult}};
 use crate::cloud::{AuthClient, EntitlementService};
 use crate::core::paths::LibraryPaths;
+pub mod shot_delivery;
 use crate::core::project_canvas::{NewCanvasNode, insert_node_tx, touch_canvas_tx};
 
 pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<()> {
@@ -15,12 +16,27 @@ pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementServ
     if !login.logged_in || snapshot.user_id.is_empty() || login.user_id.as_deref() != Some(snapshot.user_id.as_str())
         || !matches!(snapshot.tier.as_str(), "pro" | "studio")
         || !matches!(snapshot.offline_state, Some(crate::cloud::entitlement::OfflineState::Fresh | crate::cloud::entitlement::OfflineState::Grace)) {
-        return Err(AppError::Other("运行工作流卡片需要 Pro。已有结果仍可查看和导出".into()));
+        return Err(AppError::Other("工作流卡片的创建、编辑和运行需要 Pro；已有结果仍可查看和导出".into()));
     }
     Ok(())
 }
 
-// Accepted active runs can finish after expiry. Undo can restore terminal history.
+// Existing accepted runs can finish after expiry. Results do not change the paid definition.
+fn paid_definition(document: &Value) -> Vec<Value> {
+    document["nodes"].as_array().into_iter().flatten().filter(|n| n["kind"] != "text")
+        .map(|node| {
+            let mut node = node.clone();
+            if let Some(fields) = node.as_object_mut() {
+                for key in ["x","y","layoutSize","outputs","outputPorts","sessionNodeIds","activeSessionNodeId","resultNodeIds","resultGroupId","completionSeen","describeCache","profileCache"] { fields.remove(key); }
+                if let Some(schedule) = fields.get_mut("triggerSchedule").and_then(Value::as_object_mut) {
+                    schedule.remove("status");
+                    if schedule.get("dailyAt").is_some_and(Value::is_string) { schedule.remove("at"); }
+                }
+            }
+            node
+        }).collect()
+}
+
 fn has_new_run(before: &Value, after: &Value) -> bool {
     let ids = |doc: &Value| -> HashSet<String> {
         doc["runs"].as_array().into_iter().flatten().chain(std::iter::once(&doc["run"]))
@@ -30,8 +46,78 @@ fn has_new_run(before: &Value, after: &Value) -> bool {
     !ids(after).is_subset(&ids(before))
 }
 
-fn requires_run_pro(before: &Value, after: &Value) -> bool {
-    has_new_run(before, after) && after["nodes"].as_array().into_iter().flatten().any(|node| node["kind"] != "text")
+/// A detach can close gaps in numbered inputs. Binding identity and order stay fixed.
+fn binding_subsequence(before: Option<&Value>, after: Option<&Value>, renumber: bool) -> bool {
+    let Some(after) = after else { return true; };
+    let Some(after) = after.as_array() else { return false; };
+    let mut previous = before.and_then(Value::as_array).into_iter().flatten();
+    after.iter().enumerate().all(|(index, binding)| previous.any(|old| {
+        if old == binding { return true; }
+        if !renumber || binding["slot"].as_u64() != Some(index as u64 + 1) { return false; }
+        let mut old = old.clone();
+        let Some(fields) = old.as_object_mut() else { return false; };
+        fields.insert("slot".into(), binding["slot"].clone());
+        old == *binding
+    }))
+}
+
+fn removes_only_inputs(before: Option<&Value>, after: Option<&Value>, renumber: bool) -> bool {
+    let Some(after) = after else { return true; };
+    let Some(after) = after.as_object() else { return false; };
+    after.iter().all(|(port, bindings)| binding_subsequence(before.and_then(|old| old.get(port)), Some(bindings),
+        renumber && matches!(port.as_str(), "image" | "text")))
+}
+
+fn consumed_queued_trigger(before: &Value, after: &Value, id: &Value) -> bool {
+    before["runs"].as_array().into_iter().flatten().chain(std::iter::once(&before["run"]))
+        .filter(|run| run["id"].is_string() && run["triggerQueue"][0] == *id)
+        .any(|old| after["runs"].as_array().into_iter().flatten().chain(std::iter::once(&after["run"]))
+            .any(|new| new["id"] == old["id"] && new["startId"] == *id
+                && new["triggerQueue"].as_array().zip(old["triggerQueue"].as_array())
+                    .is_some_and(|(next, previous)| previous.split_first().is_some_and(|(_, rest)| next.as_slice() == rest))))
+}
+
+fn definition_changed(before: &Value, after: &Value) -> bool {
+    let previous = paid_definition(before);
+    let paid_ids: HashSet<_> = previous.iter().filter_map(|node| node["id"].as_str()).collect();
+    // Native content writers stay free for ordinary content. A new output
+    // connection from a workflow card still edits the paid graph.
+    for node in after["nodes"].as_array().into_iter().flatten().filter(|node| node["kind"] == "text") {
+        if node["id"].as_str().is_some_and(|id| paid_ids.contains(id)) { return true; }
+        let uses_workflow = node["inputs"].as_object().into_iter().flatten().flat_map(|(_, bindings)| bindings.as_array().into_iter().flatten())
+            .any(|binding| binding["nodeId"].as_str().is_some_and(|id| paid_ids.contains(id)));
+        if uses_workflow {
+            let old = before["nodes"].as_array().into_iter().flatten().find(|old| old["id"] == node["id"]);
+            if !old.is_some_and(|old| old["textTarget"] == node["textTarget"]
+                && removes_only_inputs(old.get("inputs"), node.get("inputs"), false)) { return true; }
+        }
+    }
+    let mut previous = previous.into_iter();
+    !paid_definition(after).into_iter().all(|mut node| {
+        let Some(mut old) = previous.find(|old| old["id"] == node["id"]) else { return false; };
+        // Existing accepted runs can consume one already-queued trigger.
+        // Changing the configured count from the card still requires Pro.
+        if node["kind"] == "trigger" && old["kind"] == "trigger"
+            && node["triggerCount"].as_u64().zip(old["triggerCount"].as_u64())
+                .is_some_and(|(next, count)| next.checked_add(1) == Some(count))
+            && consumed_queued_trigger(before, after, &node["id"]) {
+            old["triggerCount"] = node["triggerCount"].clone();
+        }
+        let renumber = matches!(node["kind"].as_str(), Some("generation" | "agent" | "planner"));
+        let (Some(old_fields), Some(fields)) = (old.as_object_mut(), node.as_object_mut()) else { return false; };
+        removes_only_inputs(old_fields.remove("inputs").as_ref(), fields.remove("inputs").as_ref(), renumber)
+            && removes_only_inputs(old_fields.remove("savedComfyR2V").as_ref(), fields.remove("savedComfyR2V").as_ref(), false)
+            && binding_subsequence(old_fields.remove("savedComfyAudio").as_ref(), fields.remove("savedComfyAudio").as_ref(), false)
+            && old == node
+    })
+}
+
+fn workflow_save_requires_pro(before: &Value, after: &Value, creates_content: bool) -> bool {
+    creates_content || definition_changed(before, after) || (has_new_run(before, after) && !paid_definition(after).is_empty())
+}
+
+fn workflow_revision_conflict() -> AppError {
+    AppError::Other("工作流已被其他窗口修改，请重新打开项目".into())
 }
 
 // The schedule and the new run are claimed in the same SQLite transaction.
@@ -99,6 +185,63 @@ fn h3_r2v_port(port: &str) -> Option<(&'static str, usize)> {
         "r2v-audio" => Some(("audio", 3)),
         _ => None,
     }
+}
+
+fn workflow_produces_video(node: &Value) -> bool {
+    matches!(node["kind"].as_str(), Some("comfy-video" | "director3d"))
+        || node["kind"] == "generation" && node["generation"]["media"] == "video"
+        || node["kind"] == "agent" && node["skill"] == "hyperframes"
+}
+
+fn video_audio_receiver(node: &Value, port: &str, parked: bool) -> bool {
+    if parked {
+        return node["kind"] == "generation" && node["generation"]["media"] == "video"
+            && matches!(port, "reference-audio" | "r2v-audio");
+    }
+    if node["kind"] == "comfy-video" {
+        // Inactive H3 sockets survive mode changes.
+        return matches!(port, "reference-audio" | "r2v-audio");
+    }
+    if port != "image" {
+        return false;
+    }
+    let options = &node["generation"]["videoOptions"];
+    node["kind"] == "voice"
+        || node["kind"] == "agent" && node["skill"] == "hyperframes" && node["agentTransport"] == "codex-cli"
+        || node["kind"] == "generation" && node["generation"]["media"] == "video" && options["kind"] != "frames2video"
+            && options["model_version"].as_str().is_none_or(|model| model.is_empty() || model.starts_with("seedance2"))
+}
+
+fn validate_video_audio_binding(
+    binding: &Value,
+    audio: &Value,
+    accepts_audio: bool,
+    nodes: &[Value],
+    assets: &mut HashSet<String>,
+) -> AppResult<()> {
+    if !accepts_audio
+        || ["videoFrame", "groupId", "assetIds", "canvasNodeId", "cellId", "dimension"]
+            .iter().any(|key| binding.get(*key).is_some())
+        || binding["mediaFilter"].as_array().is_some_and(|types| !types.iter().any(|kind| kind == "audio"))
+    {
+        return Err(invalid());
+    }
+    let audio = audio.as_object().filter(|audio| audio.keys().all(|key| key == "assetId")).ok_or_else(invalid)?;
+    if let Some(source) = binding.get("nodeId") {
+        let producer = nodes.iter().find(|card| card["id"] == *source).ok_or_else(invalid)?;
+        if !workflow_produces_video(producer) || binding["portId"] != "image"
+            || !audio.is_empty() || binding.get("assetId").is_some() || binding.get("assetNodeId").is_some()
+        {
+            return Err(invalid());
+        }
+    } else {
+        let asset = audio.get("assetId").and_then(Value::as_str).filter(|id| !id.is_empty()).ok_or_else(invalid)?;
+        if binding.get("portId").is_some() || binding["assetId"].as_str().is_none_or(|id| id.is_empty() || id == asset) {
+            return Err(invalid());
+        }
+        assets.insert(asset.to_owned());
+    }
+    Ok(())
 }
 
 fn validate_image_output(value: &Value, assets: &mut HashSet<String>) -> AppResult<()> {
@@ -250,6 +393,13 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
             parked.as_object().filter(|inputs| inputs.keys().all(|port| h3_r2v_port(port).is_some())).ok_or_else(invalid)
         }).transpose()?;
         let mut deps = Vec::new();
+        for binding in node["savedComfyAudio"].as_array().into_iter().flatten() {
+            if let Some(audio) = binding.get("videoAudio") {
+                validate_binding_metadata(binding)?;
+                validate_video_audio_binding(binding, audio, video_audio_receiver(node, "reference-audio", true), nodes, &mut assets)?;
+                if let Some(original) = binding["assetId"].as_str() { assets.insert(original.to_owned()); }
+            }
+        }
         for (port, bindings, parked) in inputs.iter().map(|(port, value)| (port, value, false))
             .chain(parked_r2v.into_iter().flatten().map(|(port, value)| (port, value, true))) {
             if port == "completion" {
@@ -294,6 +444,9 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                     continue;
                 }
                 if binding["portId"] == "signal" { return Err(invalid()); }
+                if let Some(audio) = binding.get("videoAudio") {
+                    validate_video_audio_binding(binding, audio, video_audio_receiver(node, port, parked), nodes, &mut assets)?;
+                }
                 if let Some(frame) = binding.get("videoFrame") {
                     if !image_port || !matches!(frame["position"].as_str(), Some("first" | "last"))
                         || ["groupId", "assetIds", "canvasNodeId", "cellId", "dimension"].iter().any(|key| binding.get(*key).is_some())
@@ -301,14 +454,11 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                     if let Some(source) = binding.get("nodeId") {
                         // Generated videos use the legacy "image" output socket, even before a file exists.
                         let producer = nodes.iter().find(|card| card["id"] == *source).ok_or_else(invalid)?;
-                        let video = matches!(producer["kind"].as_str(), Some("comfy-video" | "director3d"))
-                            || producer["kind"] == "generation" && producer["generation"]["media"] == "video"
-                            || producer["kind"] == "agent" && producer["skill"] == "hyperframes";
                         // The generic image transport can also carry audio. Only persist a frame for an image receiver.
                         let accepts_frame = legacy_frames || matches!(r2v_port, Some(("image", _)))
                             || port == "image" && !local_video && node["kind"] != "voice" && !node["textSource"].is_string()
                                 && (node["kind"] != "text" || node["textTarget"]["image"] == true);
-                        if !video || !accepts_frame || binding["portId"] != "image"
+                        if !workflow_produces_video(producer) || !accepts_frame || binding["portId"] != "image"
                             || frame.get("assetId").is_some() || binding.get("assetId").is_some() || binding.get("assetNodeId").is_some()
                             || binding["mediaFilter"].as_array().is_some_and(|types| !types.iter().any(|kind| kind == "image"))
                         { return Err(invalid()); }
@@ -456,7 +606,7 @@ impl Database {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let current: i64 = tx.query_row("SELECT revision FROM canvas_workflows WHERE project_id=?1", [project_id], |r| r.get(0)).optional()?.unwrap_or(0);
-        if current != revision { return Err(AppError::Other("工作流已被其他窗口修改，请重新打开项目".into())); }
+        if current != revision { return Err(workflow_revision_conflict()); }
         let previous: Option<String> = tx.query_row("SELECT document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |row| row.get(0)).optional()?;
         let previous = previous.map(|json| serde_json::from_str::<Value>(&json)).transpose()?.unwrap_or(Value::Null);
         validate_schedule_claims(&previous, &document)?;
@@ -501,8 +651,9 @@ pub async fn canvas_workflow_get(paths: State<'_, Arc<LibraryPaths>>, project_id
 }
 #[tauri::command]
 pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value, created_content: Option<NewCanvasNode>) -> AppResult<i64> {
-    let before = db.workflow_get(&project_id)?.document;
-    if requires_run_pro(&before, &document) {
+    let before = db.workflow_get(&project_id)?;
+    if before.revision != revision { return Err(workflow_revision_conflict()); }
+    if workflow_save_requires_pro(&before.document, &document, created_content.is_some()) {
         require_pro(&auth, &entitlement).await?;
     }
     db.workflow_save_with_content(&project_id, revision, document, created_content.as_ref())
@@ -512,30 +663,85 @@ pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, 
 mod tests {
     use super::*;
     #[test]
-    fn pro_is_required_to_start_a_run_and_not_to_edit_or_restore_history() {
-        let before = json!({"nodes":[],"run":null});
-        let mut after = json!({"nodes":[node("paid", json!({}))],"run":null});
-        assert!(!requires_run_pro(&before, &after), "create a paid card locally");
-        let created = after.clone();
-        after["nodes"][0]["prompt"] = json!("edited without a login");
-        assert!(!requires_run_pro(&created, &after));
-
-        after["runs"] = json!([{"id":"restored","status":"done"}]);
-        assert!(!requires_run_pro(&created, &after), "restoring history on undo does not run anything");
-        let restored = after.clone();
-        after["runs"][0]["status"] = json!("running");
-        assert!(requires_run_pro(&restored, &after), "a terminal run cannot be made active without Pro");
-
-        after["run"] = json!({"id":"new","status":"running"});
-        assert!(requires_run_pro(&created, &after));
-        let accepted = after.clone();
-        after["run"]["status"] = json!("waiting");
-        after["nodes"][0]["outputs"] = json!({"image":{"type":"image","assetIds":["result"]}});
-        assert!(!requires_run_pro(&accepted, &after), "an accepted run may save checkpoints");
-        after["nodes"][0]["kind"] = json!("text");
-        assert!(!requires_run_pro(&before, &after), "text-only flows remain local");
+    fn paid_edits_and_new_runs_are_distinct_from_accepted_results() {
+        let before=json!({"nodes":[node("paid",json!({}))],"runs":[{"id":"accepted","status":"running"}],"run":null});
+        let mut result=before.clone(); result["nodes"][0]["outputs"]=json!({"image":{"type":"image","assetIds":["result"]}});
+        assert_eq!(paid_definition(&before),paid_definition(&result));
+        assert!(!has_new_run(&before,&result));
+        result["nodes"][0]["layoutSize"]=json!({"width":320,"height":156});
+        assert_eq!(paid_definition(&before),paid_definition(&result));
+        result["nodes"][0]["prompt"]=json!("changed"); assert_ne!(paid_definition(&before),paid_definition(&result));
+        result["runs"]=json!([{"id":"accepted","status":"running"},{"id":"new","status":"running"}]); assert!(has_new_run(&before,&result));
+        result["runs"] = json!([{"id":"accepted","status":"waiting"},{"id":"restored","status":"done"}]);
+        assert!(!has_new_run(&before,&result), "terminal history can be restored without running it");
+        let history = result.clone();
+        result["runs"][1]["status"] = json!("running");
+        assert!(has_new_run(&history,&result), "a terminal run becoming active is a new execution");
+        assert!(paid_definition(&json!({"nodes":[{"id":"text","kind":"text"}]})).is_empty());
     }
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    #[test]
+    fn workflow_cleanup_preserves_the_pro_boundary_and_saves_parked_audio_removal() {
+        let mut source = node("video", json!({}));
+        source["kind"] = json!("comfy-video");
+        let audio = json!({"nodeId":"video","portId":"image","videoAudio":{}});
+        let mut receiver = node("receiver", json!({"image":[{"nodeId":"video","portId":"image","slot":1},{"assetId":"still","slot":2}]}));
+        receiver["generation"] = json!({"media":"video"});
+        receiver["savedComfyAudio"] = json!([audio]);
+        let before = json!({"schema_version":1,"nodes":[source,receiver],"run":null});
+
+        let mut moved = before.clone();
+        moved["nodes"][0]["x"] = json!(120);
+        moved["nodes"][1]["y"] = json!(180);
+        assert!(!definition_changed(&before, &moved), "layout changes alone are free");
+        let mut disconnected = moved.clone();
+        disconnected["nodes"][1]["inputs"]["image"] = json!([{"assetId":"still","slot":1}]);
+        disconnected["nodes"][1]["savedComfyAudio"] = json!([]);
+        assert!(!definition_changed(&before, &disconnected), "remove inputs and renumber surviving slots");
+        let mut removed = disconnected.clone();
+        removed["nodes"].as_array_mut().unwrap().remove(0);
+        assert!(!definition_changed(&before, &removed), "deletion also clears parked audio");
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.create_project("p","test","blank:p","blank:p","blank").unwrap();
+        assert_eq!(db.workflow_save("p", 0, before.clone()).unwrap(), 1);
+        assert_eq!(db.workflow_save("p", 1, moved).unwrap(), 2);
+        assert_eq!(db.workflow_save("p", 2, disconnected).unwrap(), 3);
+        assert_eq!(db.workflow_save("p", 3, removed.clone()).unwrap(), 4);
+        assert_eq!(db.workflow_get("p").unwrap().document, removed);
+
+        let mut prompt = removed.clone();
+        prompt["nodes"][0]["prompt"] = json!("changed");
+        assert!(definition_changed(&before, &prompt));
+        let mut added = before.clone();
+        added["nodes"].as_array_mut().unwrap().push(node("new",json!({})));
+        assert!(definition_changed(&before, &added));
+        let mut wire = before.clone();
+        wire["nodes"][1]["inputs"]["image"][0]["nodeId"] = json!("different");
+        assert!(definition_changed(&before, &wire));
+        let mut doubled = before.clone();
+        doubled["nodes"][1]["inputs"]["image"] = json!([{"assetId":"still","slot":1},{"assetId":"still","slot":2}]);
+        assert!(definition_changed(&before, &doubled));
+        let mut writer = before.clone();
+        let mut text = node("writer", json!({"image":[{"nodeId":"video","portId":"image"}]}));
+        text["kind"] = json!("text");
+        text["textTarget"] = json!({"nodeId":"note","cellId":"cell","image":true});
+        writer["nodes"].as_array_mut().unwrap().push(text);
+        assert!(workflow_save_requires_pro(&before, &writer, false));
+        let mut run = before.clone();
+        run["run"] = json!({"id":"new-run","status":"running"});
+        assert!(workflow_save_requires_pro(&before, &run, false));
+
+        let mut trigger = node("switch", json!({}));
+        trigger["kind"] = json!("trigger");
+        trigger["triggerCount"] = json!(2);
+        let queued = json!({"nodes":[trigger],"run":{"id":"accepted","triggerQueue":["switch"]}});
+        let mut changed_count = queued.clone();
+        changed_count["nodes"][0]["triggerCount"] = json!(1);
+        assert!(workflow_save_requires_pro(&queued, &changed_count, false));
+        changed_count["run"] = json!({"id":"accepted","startId":"switch","triggerQueue":[]});
+        assert!(!workflow_save_requires_pro(&queued, &changed_count, false));
+    }
     #[test]
     fn dimension_wire_roundtrips_and_accepts_another_input() {
         let db = Database::open_in_memory().unwrap();
@@ -569,6 +775,84 @@ mod tests {
         assert!(validate(&document).is_err());
         document["nodes"][0]["inputs"]["image"][0]["videoFrame"] = json!({"position":"last"});
         assert!(validate(&document).is_err());
+    }
+    #[test]
+    fn video_audio_bindings_keep_both_assets_and_only_accept_audio_ports() {
+        let binding = json!({"assetId":"clip","assetNodeId":"original","autoConnect":"wire",
+            "mediaFilter":["image","video","audio"],"videoAudio":{"assetId":"sound"}});
+        let receiver = json!({"media":"video","videoOptions":{"model_version":"seedance2.5"}});
+        let mut target = node("target", json!({"image":[binding]}));
+        target["generation"] = receiver.clone();
+        let mut document = json!({"schema_version":1,"nodes":[target],"run":null});
+        assert_eq!(validate(&document).unwrap(), HashSet::from(["clip".to_owned(), "sound".to_owned()]));
+        for options in [json!({"kind":"frames2video"}), json!({"model_version":"seedance1.5"})] {
+            document["nodes"][0]["generation"]["videoOptions"] = options;
+            assert!(validate(&document).is_err());
+        }
+        document["nodes"][0]["generation"] = receiver;
+        for patch in [json!({"videoFrame":{"position":"first"}}), json!({"videoAudio":null}),
+            json!({"videoAudio":[]}), json!({"videoAudio":{}}), json!({"videoAudio":{"assetId":""}}),
+            json!({"videoAudio":{"assetId":"clip"}}), json!({"groupId":"group"}),
+            json!({"assetIds":["clip"]}), json!({"canvasNodeId":"table"}), json!({"cellId":"cell"}),
+            json!({"dimension":{}}), json!({"mediaFilter":["image"]}), json!({"portId":"image"})] {
+            let mut bad = binding.clone();
+            bad.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
+            document["nodes"][0]["inputs"]["image"][0] = bad;
+            assert!(validate(&document).is_err(), "{patch}");
+        }
+    }
+    #[test]
+    fn dynamic_video_audio_bindings_roundtrip_and_participate_in_cycles() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let binding = json!({"nodeId":"source","portId":"image","autoConnect":"wire","mediaFilter":["audio"],"videoAudio":{}});
+        let mut source = node("source", json!({}));
+        source["kind"] = json!("director3d");
+        let mut target = node("target", json!({"r2v-audio":[binding]}));
+        target["kind"] = json!("comfy-video");
+        target["comfyVideo"]["mode"] = json!("r2v");
+        let document = json!({"schema_version":1,"nodes":[source,target],"run":null});
+        assert_eq!(db.workflow_save("p", 0, document.clone()).unwrap(), 1);
+        assert_eq!(db.workflow_get("p").unwrap().document, document);
+
+        for port in ["first-frame","last-frame","reference-image","reference-video","text","signal"] {
+            let mut invalid = document.clone();
+            invalid["nodes"][1]["inputs"] = json!({port:[binding]});
+            assert!(validate(&invalid).is_err(), "{port}");
+        }
+        for patch in [json!({"videoAudio":{"assetId":"frozen"}}), json!({"assetId":"clip"}),
+            json!({"assetNodeId":"instance"}), json!({"portId":"text"}), json!({"nodeId":"missing"})] {
+            let mut invalid = document.clone();
+            invalid["nodes"][1]["inputs"]["r2v-audio"][0].as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
+            assert!(validate(&invalid).is_err(), "{patch}");
+        }
+        let mut invalid = document.clone();
+        invalid["nodes"][0]["kind"] = json!("generation");
+        assert!(validate(&invalid).is_err(), "still image source");
+        let mut cycle = document.clone();
+        cycle["nodes"][0]["inputs"]["image"] = json!([{"nodeId":"target","portId":"image"}]);
+        assert!(validate(&cycle).unwrap_err().to_string().contains("循环"));
+
+        for card in [
+            json!({"kind":"voice"}),
+            json!({"kind":"agent","skill":"hyperframes","agentTransport":"codex-cli"}),
+            json!({"kind":"generation","generation":{"media":"video"}}),
+        ] {
+            let mut target = node("target", json!({"image":[binding]}));
+            target.as_object_mut().unwrap().extend(card.as_object().unwrap().clone());
+            let mut valid = document.clone();
+            valid["nodes"][1] = target;
+            assert!(validate(&valid).is_ok(), "{card}");
+        }
+        for card in [json!({"kind":"agent"}), json!({"kind":"agent","skill":"hyperframes","agentTransport":"local-ds"}),
+            json!({"kind":"trigger"}), json!({"kind":"generation","generation":{"media":"image"}})] {
+            let mut target = node("target", json!({"image":[binding]}));
+            target.as_object_mut().unwrap().extend(card.as_object().unwrap().clone());
+            let mut invalid = document.clone();
+            invalid["nodes"][1] = target;
+            assert!(validate(&invalid).is_err(), "{card}");
+        }
     }
     #[test]
     fn dynamic_video_frame_bindings_roundtrip_before_generation_and_reject_cycles() {
@@ -632,10 +916,14 @@ mod tests {
         let started = db.begin_local_chat(&input).unwrap();
         let mut snapshot = db.workflow_get("p").unwrap();
         let mut moved = snapshot.document.clone(); moved["nodes"][0]["x"] = json!(125); moved["nodes"][0]["y"] = json!(250);
+        assert_eq!(paid_definition(&snapshot.document), paid_definition(&moved));
         let revision = db.workflow_save("p", snapshot.revision, moved).unwrap();
         let position: (f64,f64) = db.conn.lock().unwrap().query_row("SELECT x,y FROM canvas_nodes WHERE id=?1", [&started.conversation.summary.node_id], |row|Ok((row.get(0)?,row.get(1)?))).unwrap();
         assert_eq!(position, (125.,250.));
         let empty = json!({"schema_version":1,"nodes":[],"run":null});
+        assert!(!definition_changed(&snapshot.document, &empty));
+        let mut changed_task = snapshot.document.clone(); changed_task["nodes"][0]["prompt"] = json!("不同的任务");
+        assert!(definition_changed(&snapshot.document, &changed_task));
         assert!(db.workflow_save("p", revision, empty.clone()).is_err());
         db.finish_local_chat(&started.conversation.summary.id, &started.turn_id, "done", None).unwrap();
         snapshot = db.workflow_get("p").unwrap();
@@ -694,9 +982,9 @@ mod tests {
         }
         let mut changed = doc.clone(); changed["nodes"][0]["kind"] = json!("generation"); assert!(validate(&changed).is_err());
         changed = doc.clone(); changed["nodes"][0]["triggerSchedule"]["status"] = json!("failed");
-        assert!(!requires_run_pro(&doc, &changed));
+        assert_eq!(paid_definition(&doc), paid_definition(&changed));
         changed["nodes"][0]["triggerSchedule"]["at"] = json!(1800000060000u64);
-        assert!(!requires_run_pro(&doc, &changed));
+        assert_ne!(paid_definition(&doc), paid_definition(&changed));
     }
     #[test]
     fn trigger_modes_roundtrip_and_inactive_appointments_cannot_be_claimed() {
@@ -742,7 +1030,7 @@ mod tests {
         assert!(validate_schedule_claims(&cancelled, &candidate).is_err());
     }
     #[test]
-    fn daily_trigger_validates_local_time_and_saves_schedule_without_pro() {
+    fn daily_trigger_validates_local_time_and_keeps_progress_out_of_paid_definition() {
         let mut trigger = node("timer", json!({})); trigger["kind"] = json!("trigger");
         trigger["triggerSchedule"] = json!({"id":"daily","at":1800000000000u64,"dailyAt":"21:00","status":"armed"});
         let doc = json!({"schema_version":1,"nodes":[trigger],"run":null});
@@ -752,9 +1040,9 @@ mod tests {
             assert!(validate(&bad).is_err());
         }
         let mut next = doc.clone(); next["nodes"][0]["triggerSchedule"]["at"] = json!(1800086400000u64);
-        assert!(!requires_run_pro(&doc, &next));
+        assert_eq!(paid_definition(&doc), paid_definition(&next));
         next["nodes"][0]["triggerSchedule"]["dailyAt"] = json!("22:00");
-        assert!(!requires_run_pro(&doc, &next));
+        assert_ne!(paid_definition(&doc), paid_definition(&next));
         next["nodes"][0]["triggerSchedule"]["status"] = json!("fired"); assert!(validate(&next).is_err());
     }
     #[test]

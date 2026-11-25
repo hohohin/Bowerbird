@@ -59,11 +59,13 @@ try {
     await page.mouse.up();
     await options.waitFor().catch(error => { throw new Error(`Video menu did not appear for ${sourceId}`, { cause: error }); });
     assert.deepEqual(await options.getByRole('menuitem').allTextContents(),
-      ['引用完整视频', '引用首帧画面', '引用尾帧画面']);
+      ['引用完整视频', '引用首帧画面', '引用尾帧画面', '引用视频音频']);
   }
   const option = name => options.getByRole('menuitem', { name, exact: true });
   await openVideoOptions('clip-node', imageReceiver);
   assert.equal(await option('引用完整视频').isDisabled(), true);
+  assert.equal(await option('引用视频音频').isDisabled(), true);
+  assert.match(await option('引用视频音频').getAttribute('title'), /音频|不能接收/);
   await page.keyboard.press('Escape');
   assert.equal(await options.count(), 0);
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'import_image_bytes').length), 0);
@@ -80,13 +82,18 @@ try {
   await option('引用完整视频').click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes
     .find(node => node.id === 'video-receiver').inputs.image?.some(input => input.assetId === 'clip'));
+  await openVideoOptions('clip-node', videoReceiver);
+  await option('引用视频音频').click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes
+    .find(node => node.id === 'video-receiver').inputs.image?.some(input => input.videoAudio?.assetId === 'audio-clip'));
+  await videoReceiver.locator('[data-workflow-reference-asset="audio-clip"]').waitFor();
 
   const evidence = await page.evaluate(async () => {
     const { workflowInputValues, workflowBindingKey } = await import('/src/lib/canvasWorkflow.ts');
     const { filterAutomaticMediaValues } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { nodes } = JSON.parse(sessionStorage.getItem('workflow-p')).document;
     const [image, video] = nodes;
-    const frames = image.inputs.image, complete = video.inputs.image[0];
+    const frames = image.inputs.image, [complete, audio] = video.inputs.image;
     const values = workflowInputValues(nodes, image);
     await filterAutomaticMediaValues(image, values, nodes);
     const imports = window.calls.filter(call => call.command === 'import_image_bytes' && call.args.source === 'video-frame');
@@ -99,13 +106,15 @@ try {
     }
     window.save();
     const first = frames[0], sameSourceTail = { ...first, videoFrame: { ...first.videoFrame, position: 'last' } };
-    return { frames, complete, keys: new Set([complete, first, sameSourceTail].map(workflowBindingKey)).size, pixels,
-      imageValues: values.image.map(value => value.assetIds[0]), videoValue: workflowInputValues(nodes, video).image[0].assetIds[0] };
+    return { frames, complete, audio, keys: new Set([complete, first, sameSourceTail, audio].map(workflowBindingKey)).size, pixels,
+      imageValues: values.image.map(value => value.assetIds[0]), videoValues: workflowInputValues(nodes, video).image.flatMap(value => value.assetIds) };
   });
-  assert.equal(evidence.keys, 3);
+  assert.equal(evidence.keys, 4);
   assert.equal(evidence.complete.assetId, 'clip');
   assert.equal(evidence.complete.videoFrame, undefined);
-  assert.equal(evidence.videoValue, 'clip');
+  assert.deepEqual(evidence.videoValues, ['clip', 'audio-clip']);
+  assert.equal(evidence.audio.assetId, 'clip');
+  assert.equal(evidence.audio.assetNodeId, 'clip-node');
   assert.deepEqual(evidence.frames.map(input => [input.assetId, input.assetNodeId, input.videoFrame.position]),
     [['clip', 'clip-node', 'first'], ['clip', 'clip-session-output', 'last']]);
   assert.deepEqual(evidence.imageValues, evidence.frames.map(input => input.videoFrame.assetId));
@@ -137,6 +146,14 @@ try {
   await page.getByRole('button', { name: '撤销画布操作' }).click();
   await savedFrameCount(2);
   await imageReceiver.locator(`[data-workflow-reference-asset="${tail.videoFrame.assetId}"] img`).waitFor();
+  const audio = evidence.audio;
+  const audioWire = page.locator(`path[data-auto-connection="${audio.autoConnect}"][data-workflow-target="video-receiver"]`);
+  await audioWire.waitFor({ state: 'attached' });
+  await videoReceiver.locator('[data-canvas-connect-side="input"]').click({ button: 'right' });
+  await disconnection.getByRole('menuitem').filter({ has: page.locator('[data-workflow-disconnect-asset="audio-clip"]') }).click();
+  await audioWire.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '撤销画布操作' }).click();
+  await audioWire.waitFor({ state: 'attached' });
   const cover = await page.evaluate(async () => {
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     const nodes = ['a', 'b'].map((id, i) => ({ ...newWorkflowNode('comfy-video', 160 + i * 490, 100, 'codex'), id }));
@@ -191,6 +208,9 @@ try {
   assert.equal(input.nodeId, 'a');
   assert.equal(input.portId, 'image');
   assert.equal(input.assetId, undefined);
+  await dragVideoWire('a', { x: targetHeader.x + targetHeader.width / 2, y: targetHeader.y + 10 });
+  await option('引用视频音频').click();
+  await workflowCard('b').getByText('视频音频 · 等待上游素材', { exact: true }).waitFor();
   await workflowCard('b').getByRole('combobox', { name: 'H3 模式' }).click();
   await page.getByRole('option', { name: /多素材参考/ }).click();
   await dragVideoWire('a', { x: targetHeader.x + targetHeader.width / 2, y: targetHeader.y + 10 });
@@ -202,7 +222,11 @@ try {
   await referenceImages.getByText('1 / 9', { exact: true }).waitFor();
   await referenceImages.getByText('<Picture 1>', { exact: true }).waitFor();
   await referenceImages.getByText('首帧画面 · 等待上游素材', { exact: true }).waitFor();
-  await referenceImages.getByText('待输入', { exact: true }).waitFor();
+  await dragVideoWire('a', { x: targetHeader.x + targetHeader.width / 2, y: targetHeader.y + 10 });
+  await option('引用视频音频').click();
+  const referenceAudios = workflowCard('b').getByRole('group', { name: '参考音频输入' });
+  await referenceAudios.getByText('1 / 3', { exact: true }).waitFor();
+  await referenceAudios.getByText('视频音频 · 等待上游素材', { exact: true }).waitFor();
   await dragVideoWire('a', { x: 1190, y: 450 });
   await page.getByRole('menu', { name: '添加下游', exact: true }).getByRole('menuitem', { name: '图片生成', exact: true }).click();
   await option('引用首帧画面').click();
@@ -335,6 +359,6 @@ try {
   await lastThumb.press('Escape');
   await enlarged.waitFor({ state: 'detached' });
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'import_image_bytes').length), 0);
-  console.log('PASS: video boundary pixels, dynamic H3 frame wires, R2V gallery previews, ellipsis, per-item disconnect, reload and undo');
+  console.log('PASS: static video boundary pixels and audio references, dynamic H3 frame and audio wires, R2V references, covered and coverless frame previews, reload, disconnect and undo');
 } catch (error) { console.error(error); throw error; }
 finally { await browser.close(); await server.close(); }

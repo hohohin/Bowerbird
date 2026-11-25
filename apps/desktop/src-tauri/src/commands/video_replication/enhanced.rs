@@ -267,6 +267,7 @@ pub(super) fn handle(app: &tauri::AppHandle, root: PathBuf, project: String, act
     let root = root.join("enhanced");
     let id = field(&data,"id").to_owned();
     let value = own(&root,&id,&project)?;
+    if action == "enhanced-read" { return Ok(value); }
     if action == "enhanced-finish" && value["state"] == "finished" && value["outputPath"].as_str().is_some_and(|path| Path::new(path).is_file()) { return Ok(value); }
     if action == "enhanced-save" {
         let active = ACTIVE.lock().unwrap();

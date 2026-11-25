@@ -233,15 +233,20 @@ pub async fn video_collection(app: tauri::AppHandle, paths: State<'_,Arc<Library
     let root = paths.root.join("video-collection");
     fs::create_dir_all(&root)?;
     if action != "list" { check_project(&db,project)?; }
-    if action == "list" || action == "create" {
-        let _create = if action == "create" { Some(CREATE_LOCK.lock().await) } else { None };
+    if matches!(action.as_str(),"list"|"create"|"create-douyin") {
+        let _create = if action != "list" { Some(CREATE_LOCK.lock().await) } else { None };
         let mut items = records(&root,project)?;
         items.extend(douyin::handle(&app,&root,project,"douyin-list",json!({})).await?.as_array().cloned().unwrap_or_default());
         items.sort_by(|a,b| field(b,"createdAt").cmp(field(a,"createdAt")));
         if action == "list" { return Ok(json!(items)); }
         let (kind,url) = source(field(&data,"text"))?;
-        if let Some(existing) = same_source(&items,&url) { return Ok(existing.clone()); }
-        if kind == "douyin" { return douyin::handle(&app,&root,project,"douyin-create",json!({"text":data["text"]})).await; }
+        let toolbox = action == "create-douyin";
+        if toolbox && kind != "douyin" {return Err(error("请粘贴抖音视频分享链接"))}
+        if let Some(existing) = same_source(&items,&url) {
+            if toolbox && existing["autoSave"] != true {return patch(&root,field(existing,"id"),json!({"autoSave":true}))}
+            return Ok(existing.clone());
+        }
+        if kind == "douyin" { return douyin::handle(&app,&root,project,"douyin-create",json!({"text":data["text"],"autoSave":toolbox})).await; }
         let task = json!({"id":uuid::Uuid::new_v4().simple().to_string(),"kind":"direct","projectId":project,"sourceUrl":url,
             "shareText":data["text"],"state":"starting","createdAt":now()});
         save(&root,&task)?;

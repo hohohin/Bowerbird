@@ -9,6 +9,7 @@ type Hover =
   | { kind: "image"; assetId: string }
   | { kind: "keyword"; body: string }
   | null;
+const EMPTY_ASSETS: readonly Asset[] = [];
 
 /**
  * 创作板编辑框 chip 的交互浮层。ProseMirror 渲染的 image/keyword chip 是非 React DOM，
@@ -27,24 +28,27 @@ export function BoardChipPreview({
   hostRef,
   clickToFocus = true,
   extraAssets,
+  knownAssets,
   zIndex,
 }: {
   hostRef: RefObject<HTMLDivElement>;
   clickToFocus?: boolean;
   extraAssets?: Asset[];
+  knownAssets?: ReadonlyMap<string, Asset>;
   zIndex?: number;
 }) {
-  const assets = useStore((s) => s.assets);
-  const promptedAssets = useStore((s) => s.promptedAssets);
+  const assets = useStore((s) => knownAssets ? EMPTY_ASSETS : s.assets);
+  const promptedAssets = useStore((s) => knownAssets ? EMPTY_ASSETS : s.promptedAssets);
   const focusAsset = useStore((s) => s.focusAsset);
 
   const assetMap = useMemo(() => {
+    if (knownAssets) return knownAssets;
     const m = new Map<string, Asset>();
     for (const a of extraAssets ?? []) m.set(a.id, a);
     for (const a of promptedAssets) m.set(a.id, a);
     for (const a of assets) m.set(a.id, a);
     return m;
-  }, [assets, promptedAssets, extraAssets]);
+  }, [knownAssets, assets, promptedAssets, extraAssets]);
 
   const [hover, setHover] = useState<Hover>(null);
   const [mouse, setMouse] = useState({ x: 0, y: 0 });

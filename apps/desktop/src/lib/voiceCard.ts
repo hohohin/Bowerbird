@@ -9,6 +9,7 @@ export interface VoiceCardRequest {
   key: string;
   jobId?: string;
   previewKey?: string;
+  videoAudio?: { sourceAssetId: string; assetId: string };
   assetId?: string;
 }
 export const defaultVoiceSample = "欢迎回来，我们可以开始今天的创作了。";

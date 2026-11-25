@@ -1,7 +1,7 @@
 import { DimensionBadge } from "./DimensionBadge";
-import { replicationAnalysisNote } from "../lib/replicationAnalysisNote";
+
 import { optimizeComposerLocalVideo } from "../lib/composerLocalVideo";
-import { generationProgressLabel } from "../lib/generationProgress";
+import { JobProgressText } from "./JobProgressText";
 import { originalDeletionEpoch, originalDeletionFor, subscribeOriginalDeletionCommits, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { dismissNotices, readDismissedNotices, subscribeDismissedNotices } from "../lib/dismissedNotices";
 import { userErrorMessage } from "../lib/userError";
@@ -18,8 +18,10 @@ import { libraryProject, libraryShortcutMode } from "../lib/localFileMode";
 import { ProjectInspectorShell } from "./ProjectInspectorShell";
 import { WorkflowAgentDetail } from "./WorkflowAgentDetail";
 import { WORKFLOW_SKILL_ENABLED, WORKFLOW_PLANNER_ENABLED, WORKFLOW_TEMPLATE_LIBRARY_ENABLED } from "../lib/featureFlags";
-import { CanvasTextCard } from "./CanvasTextCard";
-import { CanvasDocumentCard } from "./CanvasDocumentCard";
+import { CanvasNoteCardItem, type CanvasNoteCardHandlers } from "./CanvasNoteCardItem";
+import { CanvasChatCardItem } from "./CanvasChatCardItem";
+import { CanvasGraphEdges } from "./CanvasGraphEdges";
+import { createCanvasAssetLoader } from "../lib/canvasAssetLoader";
 import type { TextWorkspaceDocument } from "../lib/documentTypes";
 import { documentToPromptLoad } from "../lib/documentComposer";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
@@ -39,10 +41,11 @@ import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkf
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { resolveWorkflowTaskFocus } from "../lib/workflowTaskFocus";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
+import { isWorkflowProDenied } from "../lib/workflowEntitlement";
 import { restoreCanvasNoteEdit } from "../lib/canvasNoteUndo";
 import { removeWorkflowNodes } from "../lib/workflowRemoval";
-import { WORKFLOW_CARD_DRAG_TYPE, workflowCardWidth, workflowNodeRun, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
-import { replicationWorkflow } from "../lib/replicationWorkflow";
+import { WORKFLOW_CARD_DRAG_TYPE, workflowCardWidth, workflowNodeRun, type WorkflowInput, type WorkflowKind, type WorkflowNode } from "../lib/canvasWorkflow";
+
 import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasLibraryResize } from "./CanvasLibraryResize";
@@ -69,7 +72,8 @@ import { CanvasMediaHover } from "./CanvasMediaHover";
 import { renderCanvasCards, useCanvasEntryCardContext } from "./CanvasEntryCard";
 import { CanvasImage, CanvasMediaProvider } from "./CanvasImage";
 import { useCanvasFrame, useLatestCallback } from "../lib/useCanvasFrame";
-import { CANVAS_DRAG_Z_LIFT, canvasDragPreview, dragWire, graphWirePath } from "../lib/canvasDragPreview";
+import { useCatalogRevision } from "../lib/useCatalogRevision";
+import { CANVAS_DRAG_Z_LIFT, canvasDragPreview } from "../lib/canvasDragPreview";
 import { canvasPaintWindow } from "../lib/canvasPaintWindow";
 import { createCanvasCellHitCache } from "../lib/canvasCellHitCache";
 import { lazyModule } from "../lib/lazyModule";
@@ -115,7 +119,6 @@ import {
   Scan,
   Table2,
   TextCursorInput,
-  GripHorizontal,
   Hand,
   PanelLeftClose,
   PanelLeftOpen,
@@ -137,9 +140,9 @@ import { VIDEO_COLLECTION_CANVAS_EVENT, VIDEO_COLLECTION_PROJECT_EVENT, type Vid
 import type { VideoTrimRequest } from "../lib/videoTrim";
 import { CreativeComposer } from "./CreativeComposer";
 import { CanvasConversation } from "./CanvasConversation";
-import { LocalChatPanel, LocalChatCard, LocalChatHistory } from "./LocalChatPanel";
+import { LocalChatPanel, LocalChatHistory } from "./LocalChatPanel";
 import { useProjectChatSummaries, useLocalChatStore } from "../lib/localChatStore";
-import { LOCAL_CHAT_CARDS_CHANGED_EVENT, LOCAL_CHAT_UPDATED_EVENT, localChat, localChatRunning, type ChatCardAction, type ChatCardDefaults, type ChatConversation, type ChatComposeRequest } from "../lib/localChat";
+import { LOCAL_CHAT_CARDS_CHANGED_EVENT, LOCAL_CHAT_UPDATED_EVENT, localChat, type ChatCardAction, type ChatCardDefaults, type ChatConversation, type ChatComposeRequest } from "../lib/localChat";
 import { canvasChatId } from "../lib/canvasChat";
 import { canvasConversationTurn, canvasConversationTurns } from "../lib/canvasConversation";
 import { GenerationPanel } from "./GenerationPanel";
@@ -235,6 +238,7 @@ import type {
   CanvasEdge,
   CanvasNode as ProjectGraphNode,
   CreativeThread,
+  GenJob,
   Project,
   ProjectTitleSource,
   CreativeViewMode,
@@ -242,6 +246,16 @@ import type {
 
 const TextWorkspace = lazyModule(() => import("./TextWorkspace").then(module => ({ default: module.TextWorkspace })));
 const ASSET_WIDTH = 190;
+const EMPTY_WORKFLOW_NODES: WorkflowNode[] = [];
+
+/** Board geometry and results depend on job identity, live preview and saved turns. */
+function sameCanvasGenerationJob(before: GenJob | undefined | null, next: GenJob | undefined | null) {
+  return before === next || !!before && !!next
+    && before.id === next.id && before.projectId === next.projectId && before.conversationId === next.conversationId
+    && before.running === next.running && before.preview === next.preview && before.turns === next.turns
+    && before.provider === next.provider && before.media === next.media && before.videoOptions === next.videoOptions
+    && before.lastPrompt === next.lastPrompt;
+}
 let canvasClipboardText = "";
 const FOLDER_WIDTH = 204;
 const FOLDER_HEIGHT = 178;
@@ -481,6 +495,7 @@ export function CanvasWorkspace({
   projectId,
   exploring = false,
   focusThreadId = null,
+  focusProjectNode = false,
   focusNodeId = null,
   focusRequestId = null,
   onFocusConsumed,
@@ -491,6 +506,7 @@ export function CanvasWorkspace({
   projectId: string | null;
   exploring?: boolean;
   focusThreadId?: string | null;
+  focusProjectNode?: boolean;
   focusNodeId?: string | null;
   focusRequestId?: string | null;
   onFocusConsumed?: (requestId: string) => void;
@@ -534,7 +550,6 @@ export function CanvasWorkspace({
   const genPanelOpen = useStore((state) => state.genPanelOpen);
   const boardOpen = useStore((state) => state.boardOpen);
   const activeSessionKind = useStore((state) => state.activeSessionKind);
-  const genJobs = useStore((state) => state.genJobs);
   const activeJobId = useStore((state) => state.activeJobId);
   const openGenerationJob = useStore((state) => state.openGenerationJob);
   const genEditing = useStore((state) => state.genEditing);
@@ -568,7 +583,7 @@ export function CanvasWorkspace({
   const pendingOriginals = usePendingOriginalDeletion();
   const [canvasReadEpoch, setCanvasReadEpoch] = useState(originalDeletionEpoch);
   const hideCanvasOriginal = useCallback((id?: string | null, path?: string | null) =>
-    !!originalDeletionFor(id, path, canvasReadEpoch), [canvasReadEpoch]);
+    !!originalDeletionFor(id, path, canvasReadEpoch), [canvasReadEpoch, pendingOriginals]);
   const projection = useMemo(() =>
     pendingOriginals.size || canvasReadEpoch < originalDeletionEpoch()
       ? canvasOriginalDeletionProjection(nodes, graphNodes, graphEdges, hideCanvasOriginal)
@@ -674,8 +689,9 @@ export function CanvasWorkspace({
   const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
   const [pendingProductGroup, setPendingProductGroup] = useState<{ projectId: string; id: string } | null>(null);
+  const [replicationPreview,setReplicationPreview] = useState<Asset|null>(null);
   const [replicationProjectId, setReplicationProjectId] = useState<string | null>(null);
-  useEffect(() => { setReplicationProjectId(null); }, [projectId]);
+  useEffect(() => { setReplicationPreview(null); setReplicationProjectId(null); }, [projectId]);
   const expandedFolderIdsRef = useRef(expandedFolderIds);
   const [externalDragOver, setExternalDragOver] = useState(false);
   const [spacePanReady, setSpacePanReady] = useState(false);
@@ -702,7 +718,7 @@ export function CanvasWorkspace({
   const documentSaveTimer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => { setDocumentEditor(null); return () => { documentEditorSession.current++; flushDocumentCard(); }; }, [projectId, viewMode]);
   useEffect(() => { setDocumentPromptLoad(null); }, [projectId]);
-  const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
+  const activeGenerationJob = useStore(state => activeJobId ? state.genJobs[activeJobId] ?? null : null, sameCanvasGenerationJob);
   const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
   const snapshotPrompt = !activeGenerationJob && !activeAgentRun && genPanelOpen
     ? graphNodes.find(node => node.id === snapshotPromptId && node.hiddenAt == null) ?? null : null;
@@ -846,7 +862,40 @@ export function CanvasWorkspace({
   const currentWorkflowEntry = workflowEntry?.projectId === projectId && workflowEntry?.revision === projectRouteRevision ? workflowEntry : null;
   const workflowInteractive = !!workflow?.ready && currentWorkflowEntry?.error === null && !loading && !loadFailed
     && !projectRoutePending && activeCanvas.id === projectId;
-  const workflowNodes = workflowInteractive ? workflow.document.nodes : [];
+  const workflowNodes = workflowInteractive ? workflow.document.nodes : EMPTY_WORKFLOW_NODES;
+  const canvasGenerationJobIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const node of graphNodes) {
+      if (node.kind !== "prompt") continue;
+      const id = promptNodeSummary(node).jobId;
+      if (id) ids.add(id);
+    }
+    if (workflowInteractive && workflow) for (const node of workflowNodes) {
+      if (node.kind !== "generation" && node.kind !== "comfy-video") continue;
+      const id = workflowNodeRun(workflow.document, node.id)?.steps[node.id]?.jobId;
+      if (id) ids.add(id);
+    }
+    return ids;
+  }, [graphNodes, workflowInteractive, workflow, workflowNodes, workflowRevision]);
+  const selectCanvasGenerationJobs = useMemo(() => {
+    const ids = [...canvasGenerationJobIds];
+    let lastJobs: Record<string, GenJob> | undefined;
+    let selectedJobs: Record<string, GenJob> = {};
+    return (state: ReturnType<typeof useStore.getState>) => {
+      if (state.genJobs === lastJobs) return selectedJobs;
+      lastJobs = state.genJobs;
+      if (ids.some(id => !sameCanvasGenerationJob(selectedJobs[id], state.genJobs[id]))) {
+        const nextJobs: Record<string, GenJob> = {};
+        for (const id of ids) {
+          const job = state.genJobs[id];
+          if (job) nextJobs[id] = job;
+        }
+        selectedJobs = nextJobs;
+      }
+      return selectedJobs;
+    };
+  }, [canvasGenerationJobIds]);
+  const genJobs = useStore(selectCanvasGenerationJobs);
   const writerFailureKeys = useMemo(() => {
     const byCard = new Map<string, string[]>();
     if (!projectId || !workflowInteractive) return byCard;
@@ -1049,14 +1098,14 @@ export function CanvasWorkspace({
     const newest = images[images.length - 1];
     return (selection?.newest === newest?.id && images.find(image => image.id === selection?.selected)) || newest;
   }
-  const selectedConversationOutputs = new Map([...conversationCards.cards].flatMap(([id, card]) => {
+  const selectedConversationOutputs = useMemo(() => new Map([...conversationCards.cards].flatMap(([id, card]) => {
     const selected = selectedConversationImage(id, conversationImages(id));
     const output = selected && (card.allOutputs.find(item => item.id === selected.id) ?? card.allOutputs.find(item => item.assetId === selected.assetId));
     const embedded = output && conversationCards.embedded.get(output.id);
     if (!output) return [];
     const source = { id: output.id, video: isVideoPath(selected?.storePath) };
     return [[id, source] as const, ...(embedded ? [[JSON.stringify([embedded.nodeId, embedded.cellId]), source] as const] : [])];
-  }));
+  })), [conversationCards, conversationImagesById, conversationImageSelection]);
   const imageOnlyConversationIds = useMemo(() => new Set([...conversationCards.cards].flatMap(([id, card]) => {
     const summary = promptNodeSummary(card.latest);
     const running = genJobs[summary.jobId]?.running ?? ["running", "querying", "queued"].includes(summary.status);
@@ -2079,6 +2128,7 @@ export function CanvasWorkspace({
     let unlisten: UnlistenFn | undefined;
     let unlistenAssets: UnlistenFn | undefined;
     let unlistenImport: UnlistenFn | undefined;
+    let unlistenNodes: UnlistenFn | undefined;
     let unlistenChat: UnlistenFn | undefined;
     let unlistenChatCards: UnlistenFn | undefined;
     let restoreImportedView = false;
@@ -2183,6 +2233,12 @@ export function CanvasWorkspace({
       else cleanup();
     });
 
+    listen<string>("project-canvas://nodes-changed", ({ payload: changedProject }) => {
+      if (!alive || changedProject !== projectId) return;
+      scheduleRefresh(changedProject, 0);
+      workflowCardsChanged.current();
+    }).then(cleanup => { if (alive) unlistenNodes = cleanup; else cleanup(); });
+
     listen<ChatConversation>(LOCAL_CHAT_UPDATED_EVENT, ({ payload: chat }) => {
       if (chat.projectId !== projectId) return;
       if (!graphNodesRef.current.some(node => node.id === chat.nodeId && node.hiddenAt == null)) scheduleRefresh(chat.projectId, 40);
@@ -2233,6 +2289,7 @@ export function CanvasWorkspace({
       unlistenDeletions();
       unlistenAssets?.();
       unlistenImport?.();
+      unlistenNodes?.();
       unlistenChat?.();
       unlistenChatCards?.();
       if (timer) clearTimeout(timer);
@@ -2256,7 +2313,10 @@ export function CanvasWorkspace({
     );
     const workflow = projectId ? canvasWorkflowController(projectId) : null;
     if (resolution.state === "pending" && workflow?.ready) {
-      const workflowResolution = resolveWorkflowTaskFocus(workflow.document, focusNodeId ?? null, focusThreadId ?? null, threadResolution === "ready");
+      // A board delivery targets an editable project card before that card has a task or thread.
+      const delivered = focusProjectNode && !focusThreadId ? workflow.document.nodes.find(node => node.id === focusNodeId) : null;
+      const workflowResolution = delivered ? { state: "ready", node: delivered } as const
+        : resolveWorkflowTaskFocus(workflow.document, focusNodeId ?? null, focusThreadId ?? null, threadResolution === "ready");
       if (workflowResolution.state === "ready" && stageRef.current) {
         const node = workflowResolution.node;
         const representative = collapsedGenerationAnchors.get(node.id);
@@ -2292,6 +2352,11 @@ export function CanvasWorkspace({
       zoomRef.current = 1;
       setPan(nextPan);
       setZoom(1);
+      if (focusProjectNode) {
+        setSelectedCanvasNodeIds(new Set([target.id]));
+        viewModeRef.current = "canvas";
+        setViewMode("canvas");
+      }
       focusGraphNode(target.id);
     } else if (resolution.state === "thread-only" && threadResolution === "ready" && focusThreadId) {
       setFocusedThreadId(focusThreadId);
@@ -2301,7 +2366,7 @@ export function CanvasWorkspace({
     }
     appliedFocusRequestRef.current = requestKey;
     onFocusConsumed?.(focusRequestId);
-  }, [focusNodeId, focusRequestId, focusThreadId, graphNodes, graphEdges, loadFailed, opening, onFocusConsumed, projectId, threads, workflowRevision, workflowInteractive, collapsedGenerationAnchors]);
+  }, [focusNodeId, focusRequestId, focusThreadId, focusProjectNode, graphNodes, graphEdges, loadFailed, opening, onFocusConsumed, projectId, threads, workflowRevision, workflowInteractive, collapsedGenerationAnchors]);
 
   const entryFocusProject = useRef<string | null>(null);
   useEffect(() => {
@@ -5031,17 +5096,36 @@ export function CanvasWorkspace({
       for (const node of [...cloned.nodes, ...cloned.groups, ...cloned.workflow]) node.x += shift;
       const ids: string[] = cloned.workflow.map(node => node.id);
       if (controller.document.nodes.length + ids.length > 500) throw new Error("粘贴后工作流卡片超过 500 张，请缩小选区");
+      const requiresPro = cloned.workflow.some(node => node.kind !== "text");
+      if (requiresPro) await api.canvasWorkflowAuthorize();
+      let deniedPaste: unknown;
+      const discardDeniedPaste = async () => {
+        const current = await api.projectCanvasGet(draft.id);
+        for (const group of cloned.groups) if (current.groups.some(item => item.id === group.id)) await api.projectCanvasGroupDelete(group.id);
+        for (const node of cloned.nodes) if (current.nodes.some(item => item.id === node.id && item.hiddenAt == null)) await api.projectCanvasNodeRemove(node.id);
+        await refreshClipboardCanvas(draft.id);
+        notifyError(deniedPaste, "粘贴卡片失败");
+      };
       let completed = false;
       await enqueueWrite(async () => {
+        if (deniedPaste) { await discardDeniedPaste(); return; }
         await ensureMaterialized(draft);
         // Retry a partial write using the same identities, never create a second copy.
         const existing = await api.projectCanvasGet(draft.id);
         for (const node of cloned.nodes) if (!existing.nodes.some(item => item.id === node.id)) await api.projectCanvasNodeCreate(node);
         for (const group of cloned.groups) if (!existing.groups.some(item => item.id === group.id)) await api.projectCanvasGroupCreate(group, cloned.items.filter(item => item.groupId === group.id).map(item => item.nodeId));
         if (ids.length) {
-          if (controller.document.nodes.some(node => ids.includes(node.id))) {
-            if (controller.error) await controller.retrySave();
-          } else await controller.edit([...controller.document.nodes, ...cloned.workflow]);
+          try {
+            if (controller.document.nodes.some(node => ids.includes(node.id))) {
+              if (controller.error) await controller.retrySave();
+            } else await controller.edit([...controller.document.nodes, ...cloned.workflow]);
+          } catch (error) {
+            if (!isWorkflowProDenied(error)) throw error;
+            // A later native denial can follow a successful precheck.
+            deniedPaste = error;
+            await discardDeniedPaste();
+            return;
+          }
         }
         await refreshClipboardCanvas(draft.id);
         if (!completed && activeCanvasRef.current.id === draft.id) {
@@ -6071,6 +6155,73 @@ export function CanvasWorkspace({
   const workflowOnDragMove = useLatestCallback(moveGraphNode);
   const workflowOnDragEnd = useLatestCallback(endGraphNodeDrag);
   const workflowOnNodeMenu = useLatestCallback(openCanvasNodeMenu);
+  const noteReadCurrentValue = useLatestCallback<Parameters<CanvasNoteCardHandlers["readCurrentValue"]>, CanvasNotePayload>((savedNode, value) => {
+    const current = graphNodesRef.current.find(item => item.id === savedNode.id);
+    return current && current !== savedNode ? resolveGenerationCells(readCanvasNote(current), graphNodesRef.current) : value;
+  });
+  const noteOpenDocument = useCallback<CanvasNoteCardHandlers["onOpenDocument"]>((node, value) => {
+    documentEditorSession.current++;
+    setDocumentEditor({ nodeId: node.id, projectId: node.projectId, initialDocument: { title: value.title || "文本", markdown: value.text } });
+  }, []);
+  const noteOpenArtboard = useLatestCallback(openArtboardComposition);
+  const noteMediaMenu = useLatestCallback<Parameters<CanvasNoteCardHandlers["onMediaContextMenu"]>, void>((event, node, asset) => openCellAssetContextMenu(event, node, asset.id, asset));
+  const noteOpenGeneration = useLatestCallback<Parameters<CanvasNoteCardHandlers["onOpenGeneration"]>, void>((cell) => {
+    const session = graphNodes.find(item => item.id === cell.generation_ref?.session_node_id && item.hiddenAt == null);
+    if (session) openWorkflowGeneration(session);
+  });
+  const renderNoteGeneration = useLatestCallback<Parameters<CanvasNoteCardHandlers["renderGeneration"]>, ReturnType<CanvasNoteCardHandlers["renderGeneration"]>>((node, cell) => {
+      const session = graphNodes.find(item => item.id === cell.generation_ref?.session_node_id && item.hiddenAt == null);
+      const anchorId = session && conversationCards.aliases.get(session.id);
+      const card = anchorId && conversationCards.cards.get(anchorId);
+      const images = card ? card.allOutputs.flatMap(output => {
+        const material = nodes.find(item => item.kind === "asset" && item.id === output.id);
+        return material?.kind === "asset" ? [material.asset] : [];
+      }) : [];
+      if (anchorId && images.length && (images.length > 1 || images[0].assetId !== cell.image_refs?.[0]?.asset_id)) return <CanvasConversationImages images={images} imageOnly
+        selectedId={selectedConversationImage(anchorId, images)?.id}
+        onSelect={selected => { cancelConversationImageClick(); setConversationImageSelection(previous => ({ ...previous, [anchorId]: { newest: images[images.length - 1].id, selected } })); }}
+        onPointerDown={event => event.stopPropagation()}
+        onClick={event => {
+          cancelConversationImageClick();
+          if (event.detail < 2 && session) conversationImageClickRef.current = setTimeout(() => openWorkflowGeneration(card ? card.latest : session), event.detail === 0 ? 0 : 350);
+        }}
+        onDoubleClick={(_event, shown) => { cancelConversationImageClick(); const path = shown.storePath ?? shown.thumbPath; if (path) setCanvasLightbox({ images: [path], assetIds: [shown.assetId], index: 0 }); }}
+        onContextMenu={(event, shown) => { if (shown.assetId) openCellAssetContextMenu(event, node, shown.assetId, assetById.get(shown.assetId), shown.id); }}/>
+      if (cell.image_refs?.length) return null;
+      const summary = session && promptNodeSummary(session);
+      const running = summary && (genJobs[summary.jobId]?.running ?? ["running", "querying", "queued"].includes(summary.status));
+      const failureKey = session && summary?.status === "failed" && !running ? generationFailureKey(session, summary) : null;
+      const showFailure = !!failureKey && !dismissed.has(failureKey);
+      return <><button type="button" className={`canvas-cell-generation ${running ? "canvas-card-running" : ""} ${showFailure ? "is-failed" : ""}`}
+        data-cell-generation={cell.generation_ref?.session_node_id} aria-label="查看单元格生成会话" aria-busy={!!running}
+        onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); if (session) openWorkflowGeneration(session); }}>
+        <span><strong>生成会话</strong><small>{summary?.provider} · {running ? <JobProgressText jobId={summary?.jobId} /> : failureKey ? showFailure ? "生成失败" : "查看详情" : summary?.status === "done" ? "等待结果图片" : summary?.status === "cancelled" ? "已取消" : "等待生成"}</small></span>
+        <p>{summary?.text ?? "生成会话已不可用"}</p>
+      </button>{showFailure && dismissFailureButton(failureKey)}</>;
+  });
+  const noteGenerationRevision = useMemo(() => ({}), [graphNodes, nodes, conversationCards, conversationImageSelection, genJobs, dismissed]);
+  const noteConnect = useCallback<CanvasNoteCardHandlers["onConnect"]>((nodeId, ...args) => { workflowRef.current?.connectCell(nodeId, ...args); }, []);
+  const noteInput = useCallback<CanvasNoteCardHandlers["onInput"]>((nodeId, ...args) => { workflowRef.current?.inputText(nodeId, ...args); }, []);
+  const noteChange = useLatestCallback(updateCanvasNote);
+  const noteResize = useLatestCallback(resizeCanvasGraphNode);
+  const noteSelect = useCallback((id: string) => setSelectedCanvasNodeIds(new Set([id])), []);
+  const assetCatalogRevision = useCatalogRevision();
+  const loadCanvasAssets = useMemo(() => createCanvasAssetLoader(), [projectId, assetCatalogRevision, canvasReadEpoch]);
+  const graphCardHandlers = useMemo(() => ({
+    onDragStart: workflowOnDragStart, onDragMove: workflowOnDragMove, onDragEnd: workflowOnDragEnd, onMenu: workflowOnNodeMenu,
+  }), [workflowOnDragStart, workflowOnDragMove, workflowOnDragEnd, workflowOnNodeMenu]);
+  const noteCardHandlers = useMemo<CanvasNoteCardHandlers>(() => ({
+    ...graphCardHandlers, getZoom: readCanvasZoom, hideOriginal: hideCanvasOriginal, onOpenPreview: openCanvasSourcePreview,
+    readCurrentValue: noteReadCurrentValue, onOpenDocument: noteOpenDocument, onOpenArtboard: noteOpenArtboard,
+    onMediaContextMenu: noteMediaMenu, onOpenGeneration: noteOpenGeneration, renderGeneration: renderNoteGeneration,
+    onConnect: noteConnect, onInput: noteInput, onChange: noteChange, onResize: noteResize, onSelect: noteSelect,
+  }), [graphCardHandlers, readCanvasZoom, hideCanvasOriginal, openCanvasSourcePreview, noteReadCurrentValue, noteOpenDocument,
+    noteOpenArtboard, noteMediaMenu, noteOpenGeneration, renderNoteGeneration, noteConnect, noteInput, noteChange, noteResize, noteSelect]);
+  const chatCardOpen = useLatestCallback(openLocalChat);
+  const chatCardClick = useLatestCallback((event: React.MouseEvent<HTMLElement>, chatId: string) => {
+    if (consumeSuppressedNodeClick(event) || event.ctrlKey || event.metaKey || spacePressedRef.current || drawingTool === "pan") return;
+    openLocalChat(chatId);
+  });
   const workflowOnRemove = useLatestCallback((id: string) => removeNodes(selectedCanvasNodeIdsRef.current.has(id) ? selectedCanvasNodeIdsRef.current : [id]));
   const workflowOnPlaced = useLatestCallback((card: CanvasRect) => {
     const stage = stageRef.current; if (!stage || useStore.getState().activeProjectId !== projectId) return;
@@ -6113,9 +6264,9 @@ export function CanvasWorkspace({
     : undefined;
   const lightboxVideo = isVideoPath(lightboxPath) ? lightboxMedia : undefined;
   const lightboxAudio = isAudioPath(lightboxPath) ? lightboxMedia : undefined;
-  const lightboxVideoJob = lightboxVideo && lightboxPath
-    ? Object.values(genJobs).find(job => job.turns.some(turn => turn.images.includes(lightboxPath)))
-    : undefined;
+  const lightboxVideoJob = useStore(state => lightboxVideo && lightboxPath
+    ? Object.values(state.genJobs).find(job => job.turns.some(turn => turn.images.includes(lightboxPath)))
+    : undefined);
   const lightboxOrigin = canvasLightbox?.canvasNodeId ? generationOrigin(canvasLightbox.canvasNodeId) : undefined;
 
   if (loadFailed) {
@@ -6544,6 +6695,7 @@ export function CanvasWorkspace({
               onOpenAgent={workflowOnOpenAgent} getChatCardDefaults={agentCardDefaults} onNewAgentChat={workflowOnNewAgentChat} onOpenGeneration={workflowOnOpenGeneration}
               onDragStart={workflowOnDragStart} onDragMove={workflowOnDragMove} onDragEnd={workflowOnDragEnd} onNodeMenu={workflowOnNodeMenu}
               onRemove={workflowOnRemove} onPlaced={workflowOnPlaced}
+              knownAssets={assetById} loadAssets={loadCanvasAssets}
               ensureMaterialized={workflowEnsureMaterialized} materials={workflowMaterials} />}
             {workflowInteractive && materialSelection && <div className="canvas-material-selection" data-canvas-selection-frame={materialSelection.ids[0]}
               style={{ left: materialSelection.left, top: materialSelection.top, width: materialSelection.width, height: materialSelection.height }}>
@@ -6559,133 +6711,26 @@ export function CanvasWorkspace({
                   workflowRef.current?.connectSelection(materialSelection.ids, rect.left + rect.width / 2, rect.top + rect.height / 2, true);
                 }} />
             </div>}
-            {renderCanvasCards(graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null && cardMounted(node.id) && !canvasChatId(node)), stagedCardContext, savedNode => {
-              const value = resolveGenerationCells(readCanvasNote(savedNode), graphNodes);
-              const minimum = value.note_type === "text" || value.note_type === "images" ? canvasTextMinSize(value.cells) : savedNode;
-              const node = { ...savedNode, width: Math.max(savedNode.width, minimum.width), height: value.note_type === "document" ? canvasDocumentHeight(savedNode.width) : Math.max(savedNode.height, minimum.height) };
-              const section = value.note_type === "section";
-              const plainSection = section && !value.artboard && !value.workflow_container;
+            {renderCanvasCards(graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null && cardMounted(node.id) && !canvasChatId(node)), stagedCardContext, node => {
               const selected = selectedCanvasNodeIds.has(node.id);
-              const openDocument = () => { documentEditorSession.current++; setDocumentEditor({ nodeId: node.id, projectId: node.projectId, initialDocument: { title: value.title || "文本", markdown: value.text } }); };
-              const writerFailures = writerFailureKeys.get(node.id) ?? [];
-              return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} data-workflow-container={value.workflow_container ? node.id : undefined} tabIndex={0}
-                className={`canvas-note ${section ? "is-section" : value.note_type === "bubble" ? "is-bubble" : "is-text is-content-card"} ${value.note_type === "document" ? "is-document-card" : ""} ${value.artboard ? "is-artboard" : ""} ${selected ? "is-selected" : ""} ${writerFailures.length ? "canvas-card-error" : ""}`}
-                style={{ "--section-color": value.section_color, width: node.width, height: node.height,
-                  ...(plainSection ? { left: node.x, top: node.y } : { transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: section ? 0 : activeDragId === node.id || (activeDragId != null && selected) ? CANVAS_DRAG_Z_LIFT + node.zIndex : node.zIndex }) } as CSSProperties & { "--section-color"?: string }}
-                onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
-                onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
-                onLostPointerCapture={event => endGraphNodeDrag(event, true)}
-                onContextMenu={event => openCanvasNodeMenu(event, node.id)}
-                onDoubleClick={value.note_type === "document" ? event => { if ((event.target as Element).closest("button")) return; event.stopPropagation(); openDocument(); } : undefined}>
-                {writerFailures.length > 0 && <button type="button" className="canvas-note-dismiss-error"
-                  onPointerDown={event => event.stopPropagation()} onClick={event => {
-                    event.stopPropagation(); writerFailures.forEach(key => canvasWorkflowController(node.projectId).dismissCardFailure(key));
-                  }}>关闭错误提示</button>}
-                {section ? <>
-                  {value.artboard?.base_asset_id && !hideCanvasOriginal(value.artboard.base_asset_id, assetById.get(value.artboard.base_asset_id)?.store_path) && assetById.get(value.artboard.base_asset_id)?.store_path && <CanvasImage className="canvas-artboard-base" data-frequent-asset-id={value.artboard.base_asset_id} draggable={false}
-                    path={assetById.get(value.artboard.base_asset_id)!.store_path} sourceWidth={assetById.get(value.artboard.base_asset_id)!.width} sourceHeight={assetById.get(value.artboard.base_asset_id)!.height} alt="画板基底" />}
-                  <div className="canvas-section-heading" title={value.artboard ? "拖动画板" : "拖动分区"}><GripHorizontal size={17} />
-                    {value.workflow_container && <span className="canvas-workflow-container-badge">封装 · {value.member_ids.length}</span>}
-                  </div>
-                  {value.artboard && <button type="button" className="canvas-artboard-compose" style={node.width < 300 ? { bottom: "calc(100% + 36px)" } : undefined} onPointerDown={event => event.stopPropagation()}
-                    onClick={event => { event.stopPropagation(); openArtboardComposition(node); }}><Sparkles size={14} />合成画板中的内容</button>}
-                  {["top", "bottom", "left", "right"].map(edge => <div key={edge} className={`canvas-section-edge ${edge}`} />)}
-                  {selected && !value.workflow_container && ([["nw", "左上角"], ["ne", "右上角"], ["sw", "左下角"], ["se", "右下角"]] as const).map(([corner, label]) => (
-                    <CanvasResizeHandle key={corner} label={`调整${value.artboard ? "画板" : "分区"}大小（${label}）`} corner={corner} size={node} position={{ x: node.x, y: node.y }} zoom={zoomRef.current} getZoom={readCanvasZoom}
-                      minimum={{ width: 120, height: 80 }} onResize={(size, finished, cancelled) => resizeCanvasGraphNode(node.id, size, finished, cancelled)} />
-                  ))}
-                </> : value.note_type === "document" ? <CanvasDocumentCard value={value} editing={documentEditor?.nodeId === node.id}
-                  onEdit={openDocument}
-                  onConnect={!workflowInteractive ? undefined : (port, x, y, keyboard) => workflowRef.current?.connectCell(node.id, port, x, y, keyboard)}/>
-                : <CanvasTextCard value={value} hideOriginal={hideCanvasOriginal} selected={selected} width={node.width} height={node.height} zoom={zoomRef.current} getZoom={readCanvasZoom}
-                  readCurrentValue={() => {
-                    const current = graphNodesRef.current.find(item => item.id === node.id);
-                    return current && current !== savedNode ? resolveGenerationCells(readCanvasNote(current), graphNodesRef.current) : value;
-                  }}
-                  onOpenPreview={openCanvasSourcePreview}
-                  onMediaContextMenu={(event, asset) => openCellAssetContextMenu(event, node, asset.id, asset)}
-                  onOpenGeneration={cell => {
-                    const session = graphNodes.find(item => item.id === cell.generation_ref?.session_node_id && item.hiddenAt == null);
-                    if (session) openWorkflowGeneration(session);
-                  }}
-                  renderGeneration={cell => {
-                    const session = graphNodes.find(item => item.id === cell.generation_ref?.session_node_id && item.hiddenAt == null);
-                    const anchorId = session && conversationCards.aliases.get(session.id);
-                    const card = anchorId && conversationCards.cards.get(anchorId);
-                    const images = card ? card.allOutputs.flatMap(output => {
-                      const material = nodes.find(item => item.kind === "asset" && item.id === output.id);
-                      return material?.kind === "asset" ? [material.asset] : [];
-                    }) : [];
-                    if (anchorId && images.length && (images.length > 1 || images[0].assetId !== cell.image_refs?.[0]?.asset_id)) return <CanvasConversationImages images={images} imageOnly
-                      selectedId={selectedConversationImage(anchorId, images)?.id}
-                      onSelect={selected => { cancelConversationImageClick(); setConversationImageSelection(previous => ({ ...previous, [anchorId]: { newest: images[images.length - 1].id, selected } })); }}
-                      onPointerDown={event => event.stopPropagation()}
-                      onClick={event => {
-                        cancelConversationImageClick();
-                        if (event.detail < 2 && session) conversationImageClickRef.current = setTimeout(() => openWorkflowGeneration(card ? card.latest : session), event.detail === 0 ? 0 : 350);
-                      }}
-                      onDoubleClick={(_event, shown) => { cancelConversationImageClick(); const path = shown.storePath ?? shown.thumbPath; if (path) setCanvasLightbox({ images: [path], assetIds: [shown.assetId], index: 0 }); }}
-                      onContextMenu={(event, shown) => { if (shown.assetId) openCellAssetContextMenu(event, node, shown.assetId, assetById.get(shown.assetId), shown.id); }}/>
-                    if (cell.image_refs?.length) return null;
-                    const summary = session && promptNodeSummary(session);
-                    const running = summary && (genJobs[summary.jobId]?.running ?? ["running", "querying", "queued"].includes(summary.status));
-                    const failureKey = session && summary?.status === "failed" && !running ? generationFailureKey(session, summary) : null;
-                    const showFailure = !!failureKey && !dismissed.has(failureKey);
-                    return <><button type="button" className={`canvas-cell-generation ${running ? "canvas-card-running" : ""} ${showFailure ? "is-failed" : ""}`}
-                      data-cell-generation={cell.generation_ref?.session_node_id} aria-label="查看单元格生成会话" aria-busy={!!running}
-                      onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); if (session) openWorkflowGeneration(session); }}>
-                      <span><strong>生成会话</strong><small>{summary?.provider} · {running ? generationProgressLabel(summary ? genJobs[summary.jobId] : undefined) : failureKey ? showFailure ? "生成失败" : "查看详情" : summary?.status === "done" ? "等待结果图片" : summary?.status === "cancelled" ? "已取消" : "等待生成"}</small></span>
-                      <p>{summary?.text ?? "生成会话已不可用"}</p>
-                    </button>{showFailure && dismissFailureButton(failureKey)}</>;
-                  }}
-                  onConnectCell={!workflowInteractive ? undefined : (cellId, x, y, keyboard) => workflowRef.current?.connectCell(node.id, cellId, x, y, keyboard)}
-                  onInput={!workflowInteractive ? undefined : (cellId, disconnect, type, point, keyboard) => workflowRef.current?.inputText(node.id, cellId, disconnect, type, point, keyboard)}
-                  inputLocked={workflowRef.current?.isLocked(node.id)}
-                  onResize={(size, finished, cancelled) => resizeCanvasGraphNode(node.id, size, finished, cancelled)} onSelect={() => setSelectedCanvasNodeIds(new Set([node.id]))}
-                  onChange={(next, size, history) => updateCanvasNote(node.id, next, size, history)} />}
-              </div>;
+              // Only cards with embedded results need to follow generation state.
+              const hasGeneration = node.payloadJson.includes('"generation_ref"');
+              return <CanvasNoteCardItem key={node.id} savedNode={node} selected={selected}
+                lifted={activeDragId === node.id || (activeDragId != null && selected)} editing={documentEditor?.nodeId === node.id}
+                generationNodes={hasGeneration ? graphNodes : undefined} generationRevision={hasGeneration ? noteGenerationRevision : undefined}
+                workflowInteractive={workflowInteractive} inputLocked={workflowRef.current?.isLocked(node.id)}
+                writerFailures={writerFailureKeys.get(node.id)} assetById={assetById} loadReferenceAssets={loadCanvasAssets} handlers={noteCardHandlers} />;
             })}
             {sectionPreview && <div className="canvas-section-preview" style={{ left: sectionPreview.x, top: sectionPreview.y, width: sectionPreview.width, height: sectionPreview.height }} />}
             {hoverIntent?.kind === "cell" && <div key={hoverIntent.key} className={`canvas-cell-drop-target ${hoverReady ? "is-ready" : ""}`} style={{ left: hoverIntent.rect.x, top: hoverIntent.rect.y, width: hoverIntent.rect.width, height: hoverIntent.rect.height }}>
               <span className="canvas-folder-hint" role="tooltip">{hoverReady ? "松开放入单元格" : "悬停以放入单元格"}</span>
             </div>}
-            <svg className="canvas-graph-edges" aria-hidden="true">
-              {drawableEdges.map(({ edge, from, to }) => {
-                const fromMaterial = nodes.find(node => node.id === from.id || (node.kind === "folder" && node.assets.some(asset => asset.id === from.id)));
-                const toMaterial = nodes.find(node => node.id === to.id || (node.kind === "folder" && node.assets.some(asset => asset.id === to.id)));
-                if (!cardMounted(fromMaterial?.id ?? from.id) || !cardMounted(toMaterial?.id ?? to.id)) return null;
-                const x1 = from.x + (fromMaterial ? nodeRect(fromMaterial).width : from.width);
-                const y1 = from.y + (fromMaterial ? nodeRect(fromMaterial).height : nodeRect(from).height) / 2;
-                const x2 = to.x;
-                const y2 = to.y + (toMaterial ? nodeRect(toMaterial).height : nodeRect(to).height) / 2;
-                return (
-                  <path
-                    key={edge.id}
-                    className={`is-${edge.kind}${selectedCanvasNodeIds.has(fromMaterial?.id ?? from.id) || selectedCanvasNodeIds.has(toMaterial?.id ?? to.id) ? " is-selected" : ""}`}
-                    {...dragWire({ x: x1, y: y1, owner: fromMaterial?.id ?? from.id }, { x: x2, y: y2, owner: toMaterial?.id ?? to.id }, graphWirePath)}
-                  />
-                );
-              })}
-            </svg>
+            <CanvasGraphEdges edges={drawableEdges} materialNodes={nodes} selectedIds={selectedCanvasNodeIds} cardMounted={cardMounted} nodeRect={nodeRect} />
             {renderCanvasCards(chatGraphNodes.filter(node => cardMounted(node.id)), stagedCardContext, node => {
               const chatId = canvasChatId(node)!;
-              const chat = chatSummaries[chatId];
-              return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} data-local-chat-id={chatId}
-                role="button" tabIndex={0} aria-label={`对话 · ${chat?.title ?? "正在读取"}`} aria-busy={localChatRunning(chat)}
-                className={`canvas-chat-node${selectedCanvasNodeIds.has(node.id) ? " is-selected" : ""}${selectedChatId === chatId ? " is-focused" : ""}${localChatRunning(chat) ? " canvas-card-running" : ""}`}
-                style={{ width: node.width, minHeight: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: activeDragId === node.id ? CANVAS_DRAG_Z_LIFT + node.zIndex : node.zIndex }}
-                onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
-                onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
-                onContextMenu={event => openCanvasNodeMenu(event, node.id)}
-                onClick={event => {
-                  if (consumeSuppressedNodeClick(event) || event.ctrlKey || event.metaKey || spacePressedRef.current || drawingTool === "pan") return;
-                  openLocalChat(chatId);
-                }}
-                onKeyDown={event => {
-                  if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) { event.preventDefault(); openLocalChat(chatId); }
-                }}>
-                {chat ? <LocalChatCard conversation={chat} /> : <div className="local-chat-card-content"><strong>对话</strong><p>打开对话详情</p></div>}
-              </div>;
+              return <CanvasChatCardItem key={node.id} node={node} chatId={chatId} chat={chatSummaries[chatId]}
+                selected={selectedCanvasNodeIds.has(node.id)} focused={selectedChatId === chatId} lifted={activeDragId === node.id}
+                handlers={graphCardHandlers} onClick={chatCardClick} onOpen={chatCardOpen} />;
             })}
             {renderCanvasCards(promptGraphNodes.filter(node => cardMounted(node.id)), stagedCardContext, node => {
               const conversation = conversationCards.cards.get(node.id);
@@ -6746,8 +6791,8 @@ export function CanvasWorkspace({
                     event.currentTarget.click();
                   }}
                 >
-                  {!imageOnly && <div><span>{conversation?.outputs.length ? "生成会话" : "生成指令"}</span><small>{summary.provider} · <span role={running ? "status" : undefined}>{running ? generationProgressLabel(genJobs[summary.jobId]) : acknowledged ? "查看详情" : generationStatusLabel(summary.status)}</span></small>{failureKey && !acknowledged && dismissFailureButton(failureKey)}</div>}
-                  {imageOnly && running && <span className="canvas-generation-stage" role="status">{generationProgressLabel(genJobs[summary.jobId])}</span>}
+                  {!imageOnly && <div><span>{conversation?.outputs.length ? "生成会话" : "生成指令"}</span><small>{summary.provider} · <span role={running ? "status" : undefined}>{running ? <JobProgressText jobId={summary.jobId} /> : acknowledged ? "查看详情" : generationStatusLabel(summary.status)}</span></small>{failureKey && !acknowledged && dismissFailureButton(failureKey)}</div>}
+                  {imageOnly && running && <span className="canvas-generation-stage" role="status"><JobProgressText jobId={summary.jobId} /></span>}
                   {imageOnly && renderGenerationImageActions(node.id, shownImage)}
                   {!imageOnly && previewUrl && <img src={previewUrl} alt="本轮生成预览" draggable={false} className="mx-auto block max-h-[230px] max-w-full object-contain" />}
                   {(imageOnly || !previewUrl) && conversation && <CanvasConversationImages images={images} imageOnly={imageOnly}
@@ -7135,74 +7180,12 @@ export function CanvasWorkspace({
               { projectId: origin.projectId, threadId: thread.threadId, referenceNodeIds: references.map((asset, index) => index < 2 ? null : origin.composition.images.find(image => image.asset.id === asset.id)?.nodeId ?? null) }, true);
             if (!result.accepted) throw new Error(result.error || "合成提交失败");
           }} />}
+        {replicationPreview?.store_path && <CreationImagePreview asset={replicationPreview} projectId={projectId} openReplication video={{path:replicationPreview.store_path,sourceKey:videoSourceKey(replicationPreview),onAddFrame:addVideoFrame,onSaveTrim:saveVideoTrim}} onClose={()=>setReplicationPreview(null)}/>}
         {replicationProjectId === projectId && replicationProjectId && <VideoReplicationDialog key={`replication-${replicationProjectId}`} projectId={replicationProjectId}
-          onAddFrame={addVideoFrame}
-          onAddAnalysis={async output => {
-            const project = activeCanvasRef.current, stage = stageRef.current;
-            const check = () => { if (activeCanvasRef.current.id !== project.id || project.id !== replicationProjectId || useStore.getState().projectRoutePending) throw new Error("项目已切换，请返回原画板重试"); };
-            check(); if (!stage) throw new Error("画板尚未准备完成");
-            await ensureMaterialized(project); await flushCanvasWrites(false); check();
-            const nodeId = `replication-analysis-${output.id}`;
-            const existing = await api.projectCanvasGet(project.id); check();
-            if (!existing.nodes.some(node => node.id === nodeId)) {
-              const rows = [];
-              for (const row of output.rows) {
-                check();
-                const asset = await api.importImageBytes({ dataUrl: row.dataUrl, projectId: project.id, source: "video-frame", fileName: `镜头-${row.index + 1}.jpg` });
-                check(); rows.push({ ...row, assetId: asset.id });
-              }
-              const bounds = stage.getBoundingClientRect();
-              const center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
-              const payload = replicationAnalysisNote(rows);
-              const rect = placeCanvasCardNearSource({ x: center.x - 320, y: center.y - 160, width: 640, height: Math.max(300, rows.length * 180 + 46) }, selectionAnchors().map(item => item.rect));
-              check();
-              await api.projectCanvasNodeCreate({ id: nodeId, projectId: project.id, threadId: null, kind: "note", assetId: null, role: null,
-                payloadJson: JSON.stringify(payload), ...rect, width: 640, height: Math.max(300, rows.length * 180 + 46), zIndex: Math.max(0, ...selectionAnchors().map(anchor => anchor.order)) + 1, positionLocked: false });
-              check(); pushCanvasUndo({ kind: "paste", projectId: project.id, nodeIds: [nodeId], groupIds: [], workflowIds: [] });
-            }
-            check(); const snapshot = await api.projectCanvasGet(project.id); check();
-            graphNodesRef.current = snapshot.nodes; setGraphNodes(snapshot.nodes); setSelectedCanvasNodeIds(new Set([nodeId]));
-          }}
-          onAddVideo={async (path, operationId) => {
-            const project = activeCanvasRef.current;
-            if (project.id !== replicationProjectId || useStore.getState().projectRoutePending) throw new Error("项目已切换，请重新打开工具");
-            await ensureMaterialized(project);
-            const [asset] = await api.importFiles([path], project.id, true);
-            if (!asset) throw new Error("视频未能加入素材库，请重试");
-            if (activeCanvasRef.current.id !== project.id || useStore.getState().projectRoutePending) throw new Error("视频已保存到素材库，项目已切换，请返回原画板重试");
-            await addCollectedVideo({ asset, projectId: project.id, operationId });
-          }}
-          onCreateWorkflow={async request => {
-            const draft = activeCanvasRef.current, stage = stageRef.current;
-            if (!draft || draft.id !== replicationProjectId || !stage) throw new Error("项目已切换，请重新打开工具");
-            await ensureMaterialized(draft); await flushCanvasWrites(false);
-            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，请重新打开工具");
-            const controller = canvasWorkflowController(draft.id);
-            await controller.load();
-            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，请重新打开工具");
-            if (!controller.ready || controller.error) throw new Error(controller.error || "画板正在载入");
-            const bounds = stage.getBoundingClientRect();
-            const center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
-            const position = placeCanvasCardNearSource({ x: center.x - 180, y: center.y - 160, width: 1460, height: 680 }, selectionAnchors().map(item => item.rect));
-            const current = useStore.getState();
-            const built = replicationWorkflow(request, draft.id, current.activeGenProvider || current.defaultProvider, position.x, position.y);
-            const existing = await api.projectCanvasGet(draft.id);
-            for (const note of built.notes) {
-              if (existing.nodes.some(item => item.id === note.id)) continue;
-              const { hiddenAt: _hidden, createdAt: _created, updatedAt: _updated, ...input } = note;
-              await api.projectCanvasNodeCreate(input);
-            }
-            await controller.edit([...controller.document.nodes, ...built.nodes.filter(node => !controller.document.nodes.some(item => item.id === node.id))]);
-            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，工作流已保存在原项目，尚未运行");
-            pushCanvasUndo({ kind: "paste", projectId: draft.id, nodeIds: built.notes.filter(node => !existing.nodes.some(item => item.id === node.id)).map(node => node.id), groupIds: [], workflowIds: built.nodes.map(node => node.id) });
-            const snapshot = await api.projectCanvasGet(draft.id);
-            if (activeCanvasRef.current?.id !== draft.id) return;
-            graphNodesRef.current = snapshot.nodes; setGraphNodes(snapshot.nodes);
-            setSelectedCanvasNodeIds(new Set([built.selectedId]));
-            const first = controller.document.nodes.find(node => node.id === built.selectedId)!;
-            const rect = { ...built.rect, x: first.x, y: first.y };
-            const view = canvasViewForNewCard(rect, { x: 80, y: 60, width: Math.max(200, bounds.width - 120), height: Math.max(200, bounds.height - 270) }, panRef.current, zoomRef.current, true);
-            if (view) { panRef.current = view.pan; zoomRef.current = view.zoom; setPan(view.pan); setZoom(view.zoom); markViewDirty(); }
+          onOpenReplication={asset => {setReplicationProjectId(null);setReplicationPreview(asset);}}
+          onAddVideo={async (asset,operationId) => {
+            if(activeCanvasRef.current.id !== replicationProjectId || useStore.getState().projectRoutePending) throw new Error("项目已切换，请返回原画板重试");
+            await addCollectedVideo({asset,projectId:replicationProjectId,operationId});
           }}
           onClose={() => setReplicationProjectId(null)} ensureProject={async () => {
             const draft = activeCanvasRef.current;

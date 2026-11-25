@@ -9,6 +9,7 @@ import { isReplication, replicationOperations, replicationService, replicationPr
 import { shortRewrite, standardTextFits } from "../_shared/bcoin-text.ts";
 import { imageMetadata } from "../_shared/image-metadata.ts";
 import { FILE_SPEECH_AUDIO_NAME, FILE_SPEECH_BUCKET, FILE_SPEECH_KEY_PREFIX, FILE_SPEECH_MAX_DURATION_MS, FILE_SPEECH_MIME, FILE_SPEECH_OPERATION, FILE_SPEECH_SERVICE, fileSpeechAudioKey, parseFileSpeechAudio } from "../_shared/file-speech.ts";
+import { libraryShotAction } from "../_shared/library-shot-edge.ts";
 import { LIBRARY_VISUAL_PREFIX } from "../_shared/library-visual.ts";
 import { commitLibraryVisual, getLibraryVisual, libraryVisualCapabilities, prepareLibraryVisual } from "../_shared/library-visual-edge.ts";
 
@@ -251,6 +252,10 @@ Deno.serve(async (request) => {
     userId = user.id;
     const raw = await readJsonBody(request, 50 * 1024 * 1024);
     if (raw.action === "replication-capabilities") return jsonResponse({ services: await replicationCapabilities(admin) }, 200, cors);
+    if (["library-shot-quote","library-shot-prepare","library-shot-commit","library-shot-get"].includes(String(raw.action)) ||
+        (raw.action === "get-by-key" && typeof raw.idempotency_key === "string" && raw.idempotency_key.startsWith("library-shot:"))) {
+      return await libraryShotAction(admin,user.id,raw,cors);
+    }
     if (raw.action === "library-visual-capabilities") return jsonResponse(await libraryVisualCapabilities(admin), 200, cors);
     if (raw.action === "library-visual-prepare") return await prepareLibraryVisual(admin, user.id, raw, cors);
     if (raw.action === "library-visual-commit") return await commitLibraryVisual(admin, user.id, raw.job_id, cors);

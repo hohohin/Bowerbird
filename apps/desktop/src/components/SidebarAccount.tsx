@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, CircleArrowUp, Coins, Download, LogIn, LogOut, Settings, Zap } from "lucide-react";
 import { useStore } from "../store";
 import { accountEntitlement, understandReady } from "../lib/entitlement";
+import { displayCreditBalances } from "../lib/creditHistory";
 import type { SettingsRequest, SettingsSection } from "../lib/types";
 import { updateDownloadPercent, useAppUpdater } from "../lib/appUpdater";
 import { NotificationBell } from "./NotificationBell";
@@ -38,8 +39,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
 
   const loggedIn = cloudAuth?.logged_in === true;
   const current = accountEntitlement(cloudEntitlement, loggedIn ? cloudAuth?.user_id : null);
-  const balances = current?.balances;
-  const credits = loggedIn && balances ? balances.daily + balances.sub + balances.topup : null;
+  const credits = loggedIn ? displayCreditBalances(current)?.total ?? null : null;
   const creditsText = credits == null ? "—" : credits.toLocaleString("zh-CN");
   const creditsLabel = !loggedIn ? "登录后查看 Bcoin" : credits == null ? "Bcoin 余额暂不可用" : `可用 Bcoin：${creditsText}`;
   const name = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";

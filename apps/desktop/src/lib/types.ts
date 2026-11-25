@@ -675,6 +675,7 @@ export interface PreferenceCapsule {
 export interface CreditTransaction {
   kind: string;
   amount: number;
+  amount_milli?: number | null;
   service: string | null;
   meta?: {
     entity_type: "agent_run";
@@ -699,6 +700,7 @@ export interface EntitlementSnapshot {
   membership_ends_at?: string | null;
   trial_available?: boolean | null;
   balances: { daily: number; sub: number; topup: number };
+  balances_milli?: { daily: number; sub: number; topup: number } | null;
   policy: FeaturePolicy;
   recent_transactions: CreditTransaction[];
   /** 缺失/为空时前端用内置兜底档位（genProviders.DEFAULT_CLOUD_PROVIDERS）。 */

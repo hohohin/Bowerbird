@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { api } from "../lib/api";
 import type { Asset } from "../lib/types";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
@@ -18,8 +18,9 @@ import { parseCanvasTableClipboard, pasteCanvasTable } from "../lib/canvasTableP
 import { useLatestCallback } from "../lib/useCanvasFrame";
 
 const MIN_GRID_WEIGHT_SHARE = 0.04;
+const EMPTY_REFERENCE_ASSETS: ReadonlyMap<string, Asset> = new Map();
 
-export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected, width, height, zoom, getZoom, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview, onOpenGeneration, renderGeneration, onMediaContextMenu }: {
+export const CanvasTextCard = memo(function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected, width, height, getZoom, assetById = EMPTY_REFERENCE_ASSETS, loadReferenceAssets = api.getAssetsByIds, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview, onOpenGeneration, renderGeneration, onMediaContextMenu }: {
   hideOriginal?: (id: string, path?: string | null) => boolean;
   onMediaContextMenu?: (event: MouseEvent<HTMLElement>, asset: Asset) => void;
   renderGeneration?: (cell: CanvasTextCell) => ReactNode;
@@ -33,8 +34,9 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
   selected: boolean;
   width: number;
   height: number;
-  zoom: number;
   getZoom?: () => number;
+  assetById?: ReadonlyMap<string, Asset>;
+  loadReferenceAssets?: (ids: string[]) => Promise<Asset[]>;
   onChange: (value: CanvasNotePayload, size?: { width: number; height: number }, history?: "edit" | "typing" | "layout") => void;
   onSelect: () => void;
   onResize: (size: { width: number; height: number }, finished: boolean, cancelled?: boolean) => void;
@@ -47,23 +49,47 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
   const [resizingCard, setResizingCard] = useState(false);
   const resizeDrag = useRef<{ axis: "row" | "column"; boundary: number; start: number; base: number; original: number[]; latest: number[]; pointerId: number } | null>(null);
   const grid = useRef<HTMLDivElement>(null);
-  const [referenceAssets, setReferenceAssets] = useState<Asset[]>([]);
+  const [loadedReferences, setLoadedReferences] = useState<{ loader: typeof loadReferenceAssets; assets: ReadonlyMap<string, Asset> }>();
   const imageClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelImageClick = () => { if (imageClickTimer.current !== null) clearTimeout(imageClickTimer.current); imageClickTimer.current = null; };
-  const referenceKey = [...new Set(value.cells.flat().flatMap(cell => canvasCellValue(cell).assetIds))].sort().join("|");
-  const generationKey = value.cells.flat().map(cell => `${cell.id}:${cell.generation_ref?.session_node_id ?? ""}`).join("|");
+  const { referenceIds, referenceKey, generationKey, mediaCells } = useMemo(() => {
+    const ids = new Set<string>();
+    const generation: string[] = [];
+    const media = value.cells.map(row => row.map(cell => {
+      const { assetIds, imageRefs } = canvasCellValue(cell);
+      for (const id of assetIds) ids.add(id);
+      generation.push(`${cell.id}:${cell.generation_ref?.session_node_id ?? ""}`);
+      return cell.content_type === "image" && imageRefs.length > 0;
+    }));
+    const referenceIds = [...ids];
+    return { referenceIds, referenceKey: JSON.stringify([...referenceIds].sort()), generationKey: generation.join("|"), mediaCells: JSON.stringify(media) };
+  }, [value.cells]);
+  const missingKey = useMemo(() => JSON.stringify(referenceIds.filter(id => !assetById.has(id)).sort()), [referenceIds, assetById]);
+  const referenceAssetById = useMemo(() => {
+    const references = new Map<string, Asset>();
+    const fallback = loadedReferences?.loader === loadReferenceAssets ? loadedReferences.assets : EMPTY_REFERENCE_ASSETS;
+    for (const id of referenceIds) {
+      const asset = assetById.get(id) ?? fallback.get(id);
+      if (asset) references.set(id, asset);
+    }
+    return references;
+  }, [referenceIds, assetById, loadedReferences, loadReferenceAssets]);
   useEffect(() => cancelImageClick, [referenceKey, generationKey]);
   function previewImage(asset: Asset) {
-    onOpenPreview?.(asset, value.cells.flat().flatMap(cell => canvasCellValue(cell).assetIds)
-      .filter((id, index, ids) => ids.indexOf(id) === index)
-      .flatMap(id => { const image = referenceAssets.find(candidate => candidate.id === id); return image && !hideOriginal?.(id, image.store_path) ? [image] : []; }));
+    onOpenPreview?.(asset, [...referenceAssetById.values()].filter(image => !hideOriginal?.(image.id, image.store_path)));
   }
   useEffect(() => {
+    const missing: string[] = JSON.parse(missingKey);
+    if (!missing.length) {
+      setLoadedReferences(undefined);
+      return;
+    }
     let current = true;
-    if (!referenceKey) { setReferenceAssets([]); return; }
-    void api.getAssetsByIds(referenceKey.split("|")).then(assets => { if (current) setReferenceAssets(assets); }).catch(() => {});
+    void loadReferenceAssets(missing).then(assets => {
+      if (current) setLoadedReferences({ loader: loadReferenceAssets, assets: new Map(assets.map(asset => [asset.id, asset])) });
+    }).catch(() => {});
     return () => { current = false; };
-  }, [referenceKey]);
+  }, [missingKey, loadReferenceAssets]);
   const cell = value.cells[active[0]]?.[active[1]] ?? value.cells[0][0];
   const lineHeight = value.line_height_percent ?? 165;
   const bubble = value.note_type === "bubble";
@@ -72,12 +98,9 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
   const columns = value.cells[0]?.length ?? 1;
   const columnWeights = canvasGridWeights(resizing?.axis === "column" ? resizing.weights : value.column_widths, columns);
   const rowWeights = canvasGridWeights(resizing?.axis === "row" ? resizing.weights : value.row_heights, rows);
-  const mediaCells = JSON.stringify(value.cells.map(line => line.map(item =>
-    item.content_type === "image" && canvasCellValue(item).imageRefs.length > 0,
-  )));
   const fittingPaused = bubble || resizing !== null || resizingCard;
   const fitMedia = useLatestCallback((element: HTMLDivElement, mediaRows: readonly { index: number; row: HTMLElement; contents: HTMLElement[] }[]) => {
-    const currentZoom = getZoom?.() ?? zoom;
+    const currentZoom = getZoom?.() ?? 1;
     const gridHeight = element.getBoundingClientRect().height / currentZoom;
     if (gridHeight <= 0) return;
     const unit = rowWeights.reduce((sum, weight) => sum + weight, 0) / gridHeight;
@@ -130,7 +153,7 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
       change.text !== undefined && change.content_type === undefined && change.image_refs === undefined ? "typing" : "edit");
   }
   function changeGrid(next: CanvasNotePayload) {
-    const currentZoom = getZoom?.() ?? zoom;
+    const currentZoom = getZoom?.() ?? 1;
     const rect = grid.current?.getBoundingClientRect();
     const total = (weights: number[]) => weights.reduce((sum, weight) => sum + weight, 0);
     // Grow by the new weights, keeping existing cells at their current world sizes.
@@ -248,7 +271,7 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
   }
   return <>
     {!bubble && <div className="canvas-tactical-card-shell" aria-hidden="true" />}
-    <BoardChipPreview hostRef={grid} extraAssets={referenceAssets} clickToFocus={false} />
+    <BoardChipPreview hostRef={grid} knownAssets={referenceAssetById} clickToFocus={false} />
     {selected && !images && <div className="canvas-text-stylebar" role="toolbar" aria-label="文本样式（当前单元格）"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}>
       <button title="加粗" aria-label="加粗" aria-pressed={cell.bold} onClick={() => updateCell(...active, { bold: !cell.bold })}><Bold size={16} /></button>
@@ -355,7 +378,7 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
             onValueChange={text => updateCell(row, column, { text })} />}
           {generation || (images && !item.image_refs?.length && <div className="canvas-image-empty">连接图片输入</div>)}
           {!generation && !!canvasCellValue(item).imageRefs.length && <div className={images ? "canvas-image-content" : "canvas-cell-images"}>{canvasCellValue(item).imageRefs.map(ref => {
-            const asset = referenceAssets.find(asset => asset.id === ref.asset_id);
+            const asset = referenceAssetById.get(ref.asset_id);
             if (hideOriginal?.(ref.asset_id, asset?.store_path)) return null;
             const video = isVideoPath(asset?.store_path);
             const path = asset && canvasAssetMediaPath({ storePath: asset.store_path ?? null, thumbPath: asset.thumb_path ?? null });
@@ -441,10 +464,10 @@ export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected
     </div>
     {bubble && <CanvasBubbleTail value={value.bubble_tail ?? { side: "bottom", position: 25 }} width={width} height={height}
       onSelect={onSelect} onChange={tail => onChange({ ...value, bubble_tail: tail })} />}
-    {selected && <CanvasResizeHandle label={bubble ? "调整文本卡片大小" : "调整内容卡片大小"} size={{ width, height }} zoom={zoom} getZoom={getZoom}
+    {selected && <CanvasResizeHandle label={bubble ? "调整文本卡片大小" : "调整内容卡片大小"} size={{ width, height }} zoom={1} getZoom={getZoom}
       minimum={canvasTextMinSize(value.cells, false, bubble)} onResize={(size, finished, cancelled) => {
         setResizingCard(!finished);
         onResize(size, finished, cancelled);
       }} />}
   </>;
-}
+});

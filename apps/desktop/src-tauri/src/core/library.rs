@@ -520,7 +520,7 @@ impl Database {
     }
 
     pub(crate) fn insert_saved_asset(&self, a: &Asset, automatic: bool, annotation: Option<&str>) -> AppResult<()> {
-        self.insert_saved_asset_for_project(a, automatic, annotation, None, || Ok(()))
+        self.insert_saved_asset_for_project(a, automatic, annotation, None, |_| Ok(()))
     }
 
     pub(super) fn insert_saved_asset_for_project(
@@ -529,7 +529,7 @@ impl Database {
         automatic: bool,
         annotation: Option<&str>,
         project_id: Option<&str>,
-        publish: impl FnOnce() -> AppResult<()>,
+        publish: impl FnOnce(&rusqlite::Transaction<'_>) -> AppResult<()>,
     ) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
@@ -571,7 +571,7 @@ impl Database {
             tx.execute("INSERT INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,strftime('%s','now'))",
                 rusqlite::params![project, a.id])?;
         }
-        publish()?;
+        publish(&tx)?;
         tx.commit()?;
         Ok(())
     }

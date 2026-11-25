@@ -171,8 +171,8 @@ class ImageGesture {
 /** One gesture policy for canvas images and every library catalog; hosts only resolve ownership. */
 export function useCreationImageInteraction(options: Options) {
   const [preview, setPreview] = useState<{ asset: Asset; canvasNodeId?: string } | null>(null);
-  const asset = preview?.asset;
-  const jobs = useStore(state => state.genJobs);
+  const path = preview?.asset.store_path;
+  const job = useStore(state => path ? Object.values(state.genJobs).find(item => item.turns.some(turn => turn.images.includes(path))) : undefined);
   const boardOpen = useStore(state => state.boardOpen);
   const genEditing = useStore(state => state.genEditing);
   const route = useStore(state => state.projectRouteRevision);
@@ -184,6 +184,5 @@ export function useCreationImageInteraction(options: Options) {
     gesture.close();
     return gesture.cancel;
   }, [gesture, options.enabled, options.scope, boardOpen, genEditing, route]);
-  const job = asset && Object.values(jobs).find(item => item.turns.some(turn => !!asset.store_path && turn.images.includes(asset.store_path)));
-  return { gesture, preview: preview ? { ...preview, job: job || undefined } : null };
+  return { gesture, preview: preview ? { ...preview, job } : null };
 }

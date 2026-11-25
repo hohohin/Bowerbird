@@ -122,7 +122,7 @@ try {
   assert.equal(await cards(history).count(), 0, "editor waits for recovery of historical H3 results");
   await history.getByRole("button", { name: "工具箱", exact: true }).click();
   assert.equal(await history.getByRole("menuitem", { name: /本地 H3 视频/ }).isDisabled(), true);
-  assert.equal(await history.getByRole("menuitem", { name: /视频复刻工具/ }).isEnabled(), true);
+  assert.equal(await history.getByRole("menuitem", { name: /抖音视频采集/ }).isEnabled(), true);
   await history.keyboard.press("Escape");
   await history.evaluate(() => window.releaseWorkflow.history());
   await ready(history, "p");

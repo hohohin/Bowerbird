@@ -274,7 +274,7 @@ interface State {
   projectUnreadThreads: Record<string, string[]>;
   markProjectThreadUnread: (projectId: string, threadId: string) => void;
   clearProjectThreadUnread: (projectId: string, threadId?: string | null) => void;
-  creativeNavigation: { projectId: string; threadId: string | null; nodeId: string | null } | null;
+  creativeNavigation: { projectId: string; threadId: string | null; nodeId: string | null; projectNode?: boolean } | null;
   clearCreativeNavigation: () => void;
   promptedAssets: PromptedAsset[]; // 创作板挑图集合中带 caption（反推）的子集，供编辑器补 sections / 展开维度片段
   promptedAssetsLoaded: boolean; // promptedAssets 是否与库同步（false=补拉中，维度环加载态提示用）
@@ -1623,9 +1623,11 @@ export const useStore = create<State>((set, get) => {
     }
   },
   syncCloudEntitlement: async () => {
+    const owner = get().cloudAuth?.user_id;
     set({ cloudBusy: true, cloudError: null });
     try {
       const cloudEntitlement = await api.cloudSyncEntitlement();
+      if (get().cloudAuth?.user_id !== owner) return;
       set((s) => ({
         cloudEntitlement,
         activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
@@ -1634,6 +1636,7 @@ export const useStore = create<State>((set, get) => {
       }));
     } catch (e) {
       const message = taskErrorMessage(e) || "权益同步失败";
+      if (get().cloudAuth?.user_id !== owner) return;
       set({ cloudError: message });
       await reconcileRejectedCloudSession(message);
     } finally {

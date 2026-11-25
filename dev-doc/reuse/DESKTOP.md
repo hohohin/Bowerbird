@@ -35,6 +35,7 @@
 - **用途／关键词**：画板撤销、文字连续输入、内容格、保存队列。
 - **入口**：[CanvasWorkspace](../../apps/desktop/src/components/CanvasWorkspace.tsx) 的 `pushCanvasUndo`／`undoCanvasAction` 复用有序写入队列。[canvasNoteUndo.ts](../../apps/desktop/src/lib/canvasNoteUndo.ts) 的 `restoreCanvasNoteEdit` 按格 ID 和字段恢复。
 - **调用**：业务编辑显式记账，`CanvasTextCard.onChange` 的第三参数区分普通编辑、连续输入和自动撑高。恢复时保留其他格随后到达的结果。
+- 内容卡和工作流共用画板的素材索引。未加载的精确 ID 由 [canvasAssetLoader.ts](../../apps/desktop/src/lib/canvasAssetLoader.ts) 合并查询，作用域随项目、素材目录版本及原件删除状态更新。
 - **边界／状态**：**当前画布会话专用**。手动编辑进入撤销历史，自动布局和任务进度由各自路径更新。原件与服务端任务沿原操作处理。[撤销契约](../CANVAS-WORKFLOW.md#2026-11-10画布编辑撤销源码待发布)。
 
 ## 计算画板产物落点
@@ -206,6 +207,7 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 - 工作流视频卡切换供应商使用 [selectWorkflowVideoProvider](../../apps/desktop/src/lib/canvasWorkflow.ts)，由卡面的视频模型选择器调用，负责普通引用与 H3 帧输入的往返转换。
 - H3 多素材参考（R2V）的图片、视频和独立音频端口由 [canvasWorkflow.ts](../../apps/desktop/src/lib/canvasWorkflow.ts) 的 `H3_R2V_INPUT_PORTS` 定义。`workflowExecutionInputs` 只读取当前模式的端口，`selectWorkflowVideoProvider` 保存切换时暂时停用的连线。混合素材自动连线复用 [planAutomaticConnection](../../apps/desktop/src/lib/workflowAutoConnect.ts)，按媒体类型分别绑定端口。
 - 视频卡动态首帧、尾帧与视频素材静态抽帧共用 [workflowVideoFrames.ts](../../apps/desktop/src/lib/workflowVideoFrames.ts)。动态连线保存帧位置，在下游读取输入时调用现有视频解码和图片入库接口。交互约定见[画板工作流](../CANVAS-WORKFLOW.md)。
+- 视频音频引用沿 [workflowVideoAudio.ts](../../apps/desktop/src/lib/workflowVideoAudio.ts) 解析。视频素材连接时保存 PCM WAV 素材 ID，工作流视频卡随下游执行解析当次视频输出。端口选择沿现有自动连线，音频提取复用本机命令。[音轨命令](SERVICES.md#接入已有本地文件或保存新收到的媒体)
 - 边界：仅首尾帧为显式模式，其余按提交引用推导；不能把只是连接到工作流的素材全部当成引用。历史恢复保留冻结参数，不用当前自动识别重写；本机 H3 用自身固定工作流。前端校验不替代 Rust／服务端能力与权益校验。
 - 状态：**可跨模块复用**；模型／模式契约见 [Seedance](../SEEDANCE-2.5-INTEGRATION.md) 与 [Cloud 视频](../VIDEO-API-INTEGRATION.md)。
 
@@ -231,6 +233,11 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 - 文档卡的展示、框选和连线端点共用 `canvasDocumentHeight(width)`。卡片保持 3:4 比例，接近视口时通过 `requestDocumentReading(source, "card")` 在共用 Worker 中生成可滚动全文；素材目录使用同一队列的 `"excerpt"` 模式。
 - 可移植 Markdown 和 Agent 文本调用 `serializeReadableMarkdown`。编辑器日常保存通过 [documentSerialization.ts](../../apps/desktop/src/lib/documentSerialization.ts) 的 `serializeMarkdownInWorker` 使用同一完整 Markdown 编解码。`parseMarkdownWithState` 供编辑入口识别有效尾注与正文冲突，`parseMarkdown` 继续提供以最新正文为准的文档值。外部富文本粘贴通过 `documentPasteData` 处理统一的网页默认字体，内部 Slate 复制沿原有剪贴板格式传递。
 - 工作流读取文档时，`canvasSessionOutputs.ts` 的 `canvasWorkflowInputState` 检查端口，`canvasInputAssetIds` 返回有序素材 ID，`canvasInputValue` 提供实际执行需要的完整文本与引用。画板文档编辑沿用 `TextDocumentAutosave`，`stage` 暂存最新编辑，`capture` 和 `flush` 分别用于同步读取和等待保存。
+
+## 素材库分镜与画板交付
+
+- `LibraryVideoReplication` 在共用视频预览中联动 `VideoPlayer`。切点与勾选通过 `commands/video_shots` 的带修订写入保存。镜头台词使用 `alignShotSpeech` 读取第一层文稿，画板首帧通过 `video_shots_frame_asset` 生成。
+- `ShotBoardDelivery` 使用现有 `replicationAnalysisNote`、工作流生成卡、控制器持久化与项目导航。引用同一批镜头再次发送会定位原卡。抖音采集与新入口共用 `VideoCollectionDialog` 和项目素材入库流程。
 
 ## 视频采集与复刻原件添加画板
 
