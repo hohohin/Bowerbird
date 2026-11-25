@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-import { selectCanvasTool } from './fixtures/canvas-reference/place-card.mjs';
+import { enableCanvasToolbarPro, selectCanvasTool } from './fixtures/canvas-reference/place-card.mjs';
 
 const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } },
   cacheDir: '.tmp/canvas-workflow-access/vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] },
@@ -38,6 +38,7 @@ try {
       return invoke(command, args);
     };
   }, denial);
+  await enableCanvasToolbarPro(page);
   await selectCanvasTool(page, '本地 H3 视频');
   await page.mouse.click(890, 180);
   const card = page.locator('.workflow-card.is-comfy-video');

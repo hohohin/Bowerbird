@@ -525,8 +525,7 @@ mod tests {
         let mut video = node("video", json!({}));
         video["generation"] = json!({"media":"video","localVideo":{"endpoint":"http://127.0.0.1:8188"}});
         let mut doc = json!({"schema_version":1,"nodes":[video],"run":null});
-        assert_eq!(save_as_free(&db, 0, doc.clone()).await.unwrap_err().to_string(), "需要 Pro");
-        assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+        assert_eq!(save_as_free(&db, 0, doc.clone()).await.unwrap(), 1);
         doc["run"] = gate_run("legacy-local", "video", "running");
         assert_eq!(save_as_free(&db, 1, doc).await.unwrap_err().to_string(), "需要 Pro");
         assert_eq!(db.workflow_get("p").unwrap().revision, 1);
@@ -541,7 +540,7 @@ mod tests {
         ).unwrap();
         let empty = json!({"schema_version":1,"nodes":[],"run":null});
         assert_eq!(db.workflow_save("p", 0, empty.clone()).unwrap(), 1);
-        let paid = json!({"schema_version":1,"nodes":[paid_card()],"run":null});
+        let paid = json!({"schema_version":1,"nodes":[paid_card()],"run":gate_run("race", "instruction", "running")});
 
         let calls = std::cell::Cell::new(0);
         let stale = save_workflow_with_authorization(&db, "p".into(), 0, paid.clone(), None, || async {
