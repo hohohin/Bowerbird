@@ -78,7 +78,7 @@ try {
   await page.waitForFunction(() => !window.store.getState().projectRoutePending);
   assert.equal(await canvas.isVisible(), true, 'failed save keeps the project open');
   await page.evaluate(async () => { (await import('/src/lib/projectCanvasCallbacks.ts')).projectCanvasCallbacks.flush = window.originalFlush; });
-  await page.getByRole('button', { name: '侧边探索', exact: true }).click();
+  await page.getByRole('button', { name: '探索', exact: true }).click();
   await page.getByRole('region', { name: '探索浏览器', exact: true }).waitFor();
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await nav.waitFor();

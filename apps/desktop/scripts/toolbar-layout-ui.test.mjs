@@ -15,7 +15,7 @@ try {
   await mkdir(".tmp/toolbar-layout", { recursive: true });
   for (const mode of ["library", "canvas"]) {
     await page.goto(`http://127.0.0.1:1581/scripts/fixtures/project-drop/preview.html?layout${mode === "canvas" ? "&canvas-toolbar" : ""}`);
-    await page.getByRole("button", { name: mode === "canvas" ? "侧边探索" : "探索", exact: true }).waitFor();
+    await page.getByRole("button", { name: "探索", exact: true }).waitFor();
     const more=page.getByRole('button',{name:'更多素材库控件',exact:true});
     if(await more.isVisible()) await more.click();
     await page.getByRole('button',{name:'文件浏览器',exact:true}).click();

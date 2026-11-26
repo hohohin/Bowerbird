@@ -57,7 +57,7 @@ const assetsOf = (entries: ConnectionEntry[]) => [...new Map(entries.map(entry =
 const visibleEntry = (entry: ConnectionEntry) => !originalDeletionFor(entry.asset_id, entry.asset.store_path);
 const browsePositions = new Map<string, LibraryBrowsePosition>();
 
-export function ConnectedCollections({ media = "images", projectId = null, positionId = "default", sidebarBody, showGallery, selectedFolderId, foldersExpanded, onFoldersExpandedChange, onClose, onNavigate, onCreateProject, onAssetsChange, toolbarActions, onPickImages, onInsertAsset, onOpenAsset, onAssetContextMenu, catalogPreview }: Omit<ComponentProps<typeof CategorizedLibrary>, "kind"> & {
+export function ConnectedCollections({ media = "images", projectId = null, positionId = "default", sidebarBody, showGallery, selectedFolderId, foldersExpanded, onFoldersExpandedChange, onClose, onNavigate, onCreateProject, onAssetsChange, toolbarActions, onPickImages, onInsertAsset, onOpenAsset, onAssetContextMenu, catalogPreview, thumbnailScope = "library" }: Omit<ComponentProps<typeof CategorizedLibrary>, "kind"> & {
   showGallery: boolean; selectedFolderId: string | null; foldersExpanded: boolean; onFoldersExpandedChange: (expanded: boolean) => void;
 }) {
   const mode = useLibraryModeStore();
@@ -110,7 +110,7 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
   const pendingJump = useRef<string | null>(null);
   const request = useConnectedNavigation();
   const lastRequest = useRef(0);
-  const { width } = useLibraryThumbnail("library"), pinch = useThumbnailPinch("library"), glass = useLibraryGlass();
+  const { width } = useLibraryThumbnail(thumbnailScope), pinch = useThumbnailPinch(thumbnailScope), glass = useLibraryGlass();
   const scope = null;
   const rows = useMemo(() => connectedRows(folders), [folders]);
   const compact = !!catalogPreview;
@@ -463,7 +463,7 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none", scrollPaddingTop: 48 }}>
           {searching && !loading && !error && !searchCount && <p className="catalog-hint catalog-empty">没有匹配的素材。</p>}
           {!searching && !loading && !sections.length && !error && <p className="catalog-hint catalog-empty">{selectedFolderId ? "此文件夹当前不可用。" : "点击「建立连接」选择素材文件夹。"}</p>}
-          {galleryReady && <VirtualCatalog key={compact ? `${folderQueryKey}:${selectedFolderId}:${captureRevision}` : folderQueryKey} browseScope={selectedFolderId} filter={pageFilter} sections={sections} headings={!compact || !selectedFolderId} compact={compact} width={width} revision={revision} scroll={scroll} selected={selected} jump={null} initialTop={previewTop} onActive={onActive}
+          {galleryReady && <VirtualCatalog key={compact ? `${folderQueryKey}:${selectedFolderId}:${captureRevision}` : folderQueryKey} browseScope={selectedFolderId} filter={pageFilter} sections={sections} headings={!compact || !selectedFolderId} compact={compact} responsive={thumbnailScope === "canvas"} width={width} revision={revision} scroll={scroll} selected={selected} jump={null} initialTop={previewTop} onActive={onActive}
             readPage={readPage} pageScope="folders" itemKey={entryKey} emptySection={id => {
               const folder = foldersById.get(id);
               return folder && foldersById.get(folder.root_id)?.available === false ? "文件夹已离线" : folder?.scanning ? "正在读取文件夹…" : null;
@@ -484,7 +484,7 @@ export function ConnectedCollections({ media = "images", projectId = null, posit
               {entry.is_reference && <LibraryReferenceBadge/>}{!entry.available && <span className="connected-missing"><Unlink size={18}/>原文件失联</span>}
             </div>; }}/>}/>}
         </OverlayScrollArea>
-        {!catalogPreview && <ThumbnailSizeSlider scope="library"/>}
+        {!catalogPreview && <ThumbnailSizeSlider scope={thumbnailScope}/>}
       </div>
     </div></>}
     {sidebarBody && createPortal(<div className="library-folder-tree" aria-label="文件夹目录">

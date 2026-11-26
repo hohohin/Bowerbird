@@ -39,8 +39,8 @@ function visiblePage(page: Page, hasPending: boolean): Page & { sourceIndices?: 
 // total height alone cannot continue uneven columns or adapt to a new width.
 const layoutHistory = new Map<string, Map<string, readonly number[]>>();
 const assetKey = (asset: Asset) => asset.id;
-export function VirtualCatalog({ filter, sections, headings, width: thumbnailWidth, compact = false, revision, scroll, selected, jump, onJumped, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, pageScope, browseScope, itemKey = assetKey, renderItem, emptySection }: {
-  filter: CatalogFilter; sections: PageSection[]; headings: boolean; width: number; compact?: boolean; revision: number;
+export function VirtualCatalog({ filter, sections, headings, width: thumbnailWidth, compact = false, responsive = false, revision, scroll, selected, jump, onJumped, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, pageScope, browseScope, itemKey = assetKey, renderItem, emptySection }: {
+  filter: CatalogFilter; sections: PageSection[]; headings: boolean; width: number; compact?: boolean; responsive?: boolean; revision: number;
   scroll: RefObject<HTMLDivElement>; selected: Set<string>; jump: CatalogJump | null; onJumped?: (jump: CatalogJump) => void; initialTop?: number;
   onActive: (id: string | null) => void; onAssetsChange?: (assets: Asset[]) => void;
   onBrowseGroup?: (head: string, shown: string | null) => void;
@@ -88,7 +88,7 @@ export function VirtualCatalog({ filter, sections, headings, width: thumbnailWid
     oldGeometry.current = geometryKey;
   }
   const layout = useMemo(() => {
-    const layout = catalogLayout(sections, viewport.width, width, measured.current, headings, placements.current);
+    const layout = catalogLayout(sections, viewport.width, width, measured.current, headings, placements.current, responsive);
     if (showEmpty) {
       let extra = 0;
       const offsets: number[] = [];
@@ -107,7 +107,7 @@ export function VirtualCatalog({ filter, sections, headings, width: thumbnailWid
       layout.height = last.top + Math.max(last.height, viewport.height);
     }
     return layout;
-  }, [sections, viewport.width, viewport.height, width, headings, geometryRevision, geometryKey, showEmpty]);
+  }, [sections, viewport.width, viewport.height, width, responsive, headings, geometryRevision, geometryKey, showEmpty]);
   const layoutRef = useRef(layout); layoutRef.current = layout;
   const scale = catalogScrollScale(layout.height + 100, viewport.height);
   const top = changingScope ? initialTop ?? 0 : viewport.top;
@@ -118,10 +118,11 @@ export function VirtualCatalog({ filter, sections, headings, width: thumbnailWid
   const wanted = useRef(visible); wanted.current = visible;
   const pump = useRef<() => void>(() => {});
   const applyPreviews = useRef<(change: CatalogPreviewChange) => void>(() => {});
+  const anchorBeforeResize = useRef<() => void>(() => {});
   function rememberAnchor() {
     const view = scroll.current;
     if (!view || anchor.current) return;
-    const top = view.scrollTop / catalogScrollScale(layoutRef.current.height + 100, view.clientHeight);
+    const top = view.scrollTop / catalogScrollScale(layoutRef.current.height + 100, viewport.height);
     const currentSections = sectionsRef.current;
     const emptyIndex = showEmpty ? layoutRef.current.groups.findIndex((group, index) => !currentSections[index].count && group.top <= top + 1 && group.top + group.height > top) : -1;
     if (emptyIndex >= 0) {
@@ -135,7 +136,7 @@ export function VirtualCatalog({ filter, sections, headings, width: thumbnailWid
     for (const block of visible) {
       const page = cache.current.get(block.key);
       if (!page) continue;
-      const geometry = masonryGeometry(page.assets, viewport.width, width, block.columnTops);
+      const geometry = masonryGeometry(page.assets, viewport.width, width, block.columnTops, responsive);
       geometry.cells.forEach((cell, index) => {
         const y = block.top + cell.top;
         if (y + cell.height < top || y > top + view.clientHeight || Math.abs(y - top) >= distance) return;
@@ -148,6 +149,7 @@ export function VirtualCatalog({ filter, sections, headings, width: thumbnailWid
     const block = intersecting[intersecting.length - 1];
     if (block) anchor.current = { key: block.key, delta: top - block.top };
   }
+  anchorBeforeResize.current = rememberAnchor;
   function measurePage(key: string, assets: Asset[]) {
     const next = masonryRatios(assets);
     const before = measured.current.get(key);
@@ -215,8 +217,19 @@ export function VirtualCatalog({ filter, sections, headings, width: thumbnailWid
   useLayoutEffect(() => {
     const view = scroll.current;
     if (!view) return;
-    let frame = 0;
-    const update = () => { frame = 0; setViewport({ top: view.scrollTop, height: view.clientHeight, width: view.clientWidth }); };
+    let frame = 0, lastWidth = view.clientWidth;
+    const update = () => {
+      frame = 0;
+      const width = view.clientWidth;
+      if (width <= 0) return;
+      if (width !== lastWidth) {
+        // Capture against the currently rendered columns before reflow.
+        anchorBeforeResize.current();
+        lastWidth = width;
+      }
+      const top = view.scrollTop, height = view.clientHeight;
+      setViewport(current => current.top === top && current.height === height && current.width === width ? current : { top, height, width });
+    };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
     const observer = new ResizeObserver(schedule); observer.observe(view);
     const wheel = (event: WheelEvent) => {
@@ -248,7 +261,7 @@ export function VirtualCatalog({ filter, sections, headings, width: thumbnailWid
       if (block) {
         const page = cache.current.get(block.key);
         const index = saved.asset && page ? page.assets.findIndex(asset => itemKey(asset) === saved.asset!.id) : -1;
-        const cell = index >= 0 ? masonryGeometry(page!.assets, viewport.width, width, block.columnTops).cells[index] : null;
+        const cell = index >= 0 ? masonryGeometry(page!.assets, viewport.width, width, block.columnTops, responsive).cells[index] : null;
         const top = cell ? block.top + cell.top + saved.asset!.delta : block.top + Math.min(saved.delta, Math.max(0, block.height - 1));
         scroll.current.scrollTop = top * scale;
         const scrollTop = scroll.current.scrollTop;
@@ -303,7 +316,7 @@ export function VirtualCatalog({ filter, sections, headings, width: thumbnailWid
         const failed = errors.current.get(block.key);
         const error = failed?.revision === catalogCache.revision(colorFiltered, section.collection) ? failed.message : null;
         const page = raw && visiblePage(raw, pendingDeletion.size > 0);
-        const geometry = page ? masonryGeometry(page.assets, viewport.width, width, block.columnTops) : null;
+        const geometry = page ? masonryGeometry(page.assets, viewport.width, width, block.columnTops, responsive) : null;
         return <div key={block.key} data-catalog-page={block.key} data-columns={geometry?.columns} className="folder-masonry catalog-virtual-page" style={{ position: "absolute", top: block.top - logicalTop + top - layout.groups[index].top * scale, height: block.height, pointerEvents: "none" }}
           onFocusCapture={() => setFocused(block.key)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setFocused(null); }}>
           {error && <p className="catalog-error" role="alert" style={{ position: "relative", zIndex: 1, width: "fit-content", background: "var(--lt-screen)", pointerEvents: "auto" }}>{userErrorMessage(error, "素材列表暂时无法读取，请重试。")}<button onClick={() => { errors.current.delete(block.key); setTick(v => v + 1); }}>重试</button></p>}

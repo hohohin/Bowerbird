@@ -13,7 +13,7 @@ const disruptive = ['open_source_browser', 'hide_source_browser', 'navigate_sour
 const navigation = page => page.getByRole('navigation', { name: '首页', exact: true });
 const homeButton = (page, name) => navigation(page).getByRole('button', { name, exact: true });
 const panel = page => page.getByRole('complementary', { name: '探索面板', exact: true });
-const canvasExplore = page => page.getByRole('button', { name: '侧边探索', exact: true });
+const canvasExplore = page => page.locator('.app-topbar').getByRole('button', { name: '探索', exact: true });
 const latestResize = page => page.waitForFunction(() => window.calls.filter(call => call.command === 'resize_source_browser').at(-1)?.args.visible === true);
 
 async function openWorkspace(page, canvas = false, explore = true) {
@@ -35,19 +35,28 @@ async function openWorkspace(page, canvas = false, explore = true) {
   });
 }
 
+async function assertToolbarFits(page, context) {
+  const geometry = await page.locator('.app-topbar').evaluate(element => {
+    const bar = element.getBoundingClientRect();
+    const boxes = [...element.querySelectorAll('button')].map(button => ({ ...button.getBoundingClientRect().toJSON(), label: button.getAttribute('aria-label') || button.textContent })).filter(box => box.width && box.height);
+    return {
+      outside: boxes.filter(box => box.left < bar.left || box.right > bar.right || box.top < bar.top || box.bottom > bar.bottom).map(box => box.label),
+      overlap: boxes.flatMap((a, i) => boxes.slice(i + 1).filter(b => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top).map(b => [a.label, b.label])),
+    };
+  });
+  assert.deepEqual(geometry, { outside: [], overlap: [] }, context);
+}
+
 async function navigationLayout(page, name) {
   const nav = page.getByRole('navigation', { name: '首页' });
-  for (const theme of ['dark', 'light']) for (const width of [900, 980, 1100, 1440]) {
+  for (const theme of ['dark', 'light']) for (const width of [760, 900, 980, 1100, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
-    await page.waitForTimeout(60);
-    const geometry = await page.locator('.app-topbar').evaluate(element => {
-      const nav = element.querySelector('.home-page-navigation').getBoundingClientRect();
-      const boxes = [...element.querySelectorAll('button')].map(button => ({ ...button.getBoundingClientRect().toJSON(), label: button.getAttribute('aria-label') || button.textContent })).filter(box => box.width && box.height);
-      return { centered: Math.abs(nav.x + nav.width / 2 - innerWidth / 2) < 1,
-        overlap: boxes.flatMap((a, i) => boxes.slice(i + 1).filter(b => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top).map(b => [a.label, b.label, a.right - b.left])) };
-    });
-    assert.deepEqual(geometry, { centered: true, overlap: [] }, `${name} navigation fits ${width}px ${theme}`);
+    await assertToolbarFits(page, `${name} navigation fits ${width}px ${theme}`);
+    assert.equal(await nav.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return Math.abs(rect.x + rect.width / 2 - innerWidth / 2) < 1;
+    }), true, `${name} navigation is centered at ${width}px ${theme}`);
     for (const label of ['素材库', '项目', '探索']) {
       assert.equal(await nav.getByRole('button', { name: label, exact: true }).evaluate(element => {
         const rect = element.getBoundingClientRect();
@@ -124,14 +133,65 @@ const cases = {
     await page.getByRole('region', { name: '项目管理' }).waitFor();
     assert.equal(await page.evaluate(() => window.store.getState().libraryHomeView), 'projects');
     await unchangedBrowser(page, null, false);
+    await navigationLayout(page, 'home-projects');
     await nav.getByRole('button', { name: '素材库', exact: true }).click();
     await page.locator('.library-home').waitFor();
     assert.equal(await page.evaluate(() => window.store.getState().libraryHomeView), 'library');
     await unchangedBrowser(page, null, false);
+    await navigationLayout(page, 'home-library');
     await homeButton(page, '探索').click();
     assert.equal(await homeButton(page, '探索').getAttribute('aria-current'), 'page');
     await unchangedBrowser(page, null, true, true);
     await navigationLayout(page, 'home');
+  },
+  'canvas-toolbar': async page => {
+    const toolbar = page.locator('.app-topbar');
+    const panes = toolbar.getByRole('group', { name: '画板分屏', exact: true });
+    const openLibrary = panes.getByRole('button', { name: '打开素材库', exact: true });
+    const explore = canvasExplore(page);
+    assert.equal(await navigation(page).count(), 0);
+    assert.equal(await explore.count(), 1);
+    assert.equal(await panes.getByRole('button', { name: '探索', exact: true }).count(), 1);
+    assert.equal(await explore.getAttribute('aria-controls'), 'explore-browser-panel');
+    assert.equal(await explore.getAttribute('aria-pressed'), 'false');
+    await toolbar.getByRole('group', { name: '素材视图', exact: true }).waitFor();
+    for (const width of [760, 900]) {
+      await page.setViewportSize({ width, height: 900 });
+      await assertToolbarFits(page, `canvas view controls fit ${width}px while the library is closed`);
+    }
+    await openLibrary.click();
+    const library = panes.getByRole('button', { name: '收起素材库', exact: true });
+    await library.focus();
+    await page.keyboard.press('Tab');
+    assert.equal(await explore.evaluate(button => button === document.activeElement && getComputedStyle(button).outlineStyle !== 'none'), true);
+
+    for (const open of [false, true]) {
+      if (open) {
+        await page.keyboard.press('Space');
+        await panel(page).waitFor();
+        await latestResize(page);
+        await explore.blur();
+        assert.equal(await explore.evaluate(button => getComputedStyle(button, '::after').opacity), '1', 'the selected mark remains after keyboard focus moves');
+      }
+      assert.equal(await explore.getAttribute('aria-pressed'), String(open));
+      assert.equal(await library.getAttribute('aria-expanded'), 'true');
+      assert.equal(await explore.count(), 1);
+      for (const theme of ['dark', 'light']) for (const width of [760, 900, 1440]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+        await assertToolbarFits(page, `canvas ${open ? 'open' : 'closed'} fits ${width}px ${theme}`);
+        const bounds = await panes.getByRole('button').evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().toJSON()));
+        assert.equal(bounds[0].height, 32);
+        assert.equal(bounds[1].height, bounds[0].height);
+        assert.equal(bounds[1].y, bounds[0].y);
+        assert.equal(bounds[1].x - bounds[0].right, 4);
+        if (width === 900) await page.screenshot({ path: `${evidence}/canvas-toolbar-${open ? 'open' : 'closed'}-${theme}.png` });
+      }
+    }
+    await explore.click();
+    await panel(page).waitFor({ state: 'hidden' });
+    assert.equal(await explore.getAttribute('aria-pressed'), 'false');
+    assert.equal(await library.getAttribute('aria-expanded'), 'true');
   },
   'catalog-navigation': async page => {
     const sidebar = page.getByRole('complementary', { name: '素材库导航', exact: true });
@@ -265,7 +325,7 @@ try {
       remote.push(route.request().url()); return route.abort();
     });
     try {
-      await openWorkspace(page, name.startsWith('canvas-'), !name.endsWith('asset-source-navigation'));
+      await openWorkspace(page, name.startsWith('canvas-'), !name.endsWith('asset-source-navigation') && name !== 'canvas-toolbar');
       await run(page);
       assert.deepEqual(errors, []);
       assert.deepEqual(remote, []);

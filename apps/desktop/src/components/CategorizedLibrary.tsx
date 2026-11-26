@@ -16,6 +16,7 @@ import { api } from "../lib/api";
 import { VirtualCatalog, type CatalogJump, type CatalogLocation } from "./VirtualCatalog";
 import type { CatalogSectionInfo } from "../lib/catalogVirtualLayout";
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
+import type { ThumbnailScope } from "../lib/thumbnailSize";
 import { addMaterialAssets } from "../lib/materialActions";
 import { selectCatalogItem } from "../lib/catalogSelection";
 import { externalFiles } from "../lib/externalFiles";
@@ -55,11 +56,11 @@ export type CatalogPreview = {
   onSelectTag?: (id: string) => void;
 };
 
-export function CategorizedLibrary({ kind, media = "images", projectId = null, browseProjectId = projectId, projectScope = false, overviewProjects, sidebarBody, labelToLocate, onLabelLocated, onManageTags, onClose, onNavigate, onCreateProject, onAssetsChange, onPickImages, onInsertAsset, onOpenAsset, onAssetContextMenu, positionId = "default", toolbarActions, dropPreview = false, semanticSearchEnabled = false, catalogPreview }: {
+export function CategorizedLibrary({ kind, media = "images", projectId = null, browseProjectId = projectId, projectScope = false, overviewProjects, sidebarBody, labelToLocate, onLabelLocated, onManageTags, onClose, onNavigate, onCreateProject, onAssetsChange, onPickImages, onInsertAsset, onOpenAsset, onAssetContextMenu, positionId = "default", toolbarActions, dropPreview = false, semanticSearchEnabled = false, catalogPreview, thumbnailScope = "library" }: {
   kind: Exclude<CatalogKind, "collections">; projectId?: string | null; browseProjectId?: string | null; projectScope?: boolean; onClose: () => void; onNavigate?: () => void; onCreateProject?: (ids?: string[]) => Promise<unknown>;
   overviewProjects?: Project[]; sidebarBody?: HTMLElement | null;
   labelToLocate?: CatalogJump | null; onLabelLocated?: (jump: CatalogJump) => void; onManageTags?: (action?: CatalogTagAction) => void;
-  media?: LibraryMedia; positionId?: string;
+  media?: LibraryMedia; positionId?: string; thumbnailScope?: ThumbnailScope;
   toolbarActions?: ReactNode; dropPreview?: boolean; semanticSearchEnabled?: boolean; catalogPreview?: CatalogPreview;
   onAssetsChange?: (assets: Asset[]) => void;
   onPickImages?: (assets: Asset[]) => Promise<void>;
@@ -116,8 +117,8 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const [dragItem, setDragItem] = useState({ name: "", preview: null as string | null, count: 0 });
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const { ids: pinnedTags, toggle: togglePin } = useLibraryPins();
-  const { width } = useLibraryThumbnail("library");
-  const pinch = useThumbnailPinch("library");
+  const { width } = useLibraryThumbnail(thumbnailScope);
+  const pinch = useThumbnailPinch(thumbnailScope);
   const tags = useMemo(() => orderCatalogTags(catalog.tags, [], false, pinnedTags), [catalog, pinnedTags]);
   const previewTag = catalogPreview && !flow && (tags.find(tag => tag.id === catalogPreview.tagId) ?? tags[0]);
   const browseKey = previewTag ? `${positionKey}:${previewTag.id}` : positionKey;
@@ -474,12 +475,12 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
         {flat && !session && catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => invalidateCatalog()}>重试</button></p>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none" }}>
           {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !galleryTotal && (session || !catalogError) ? <p className="catalog-hint catalog-empty">{session ? emptySemanticResultMessage(session) : query || color || generatedFilter ? "没有匹配的素材。" : "还没有已登记的素材。"}</p> : null}
-          {(session || galleryReady) && <VirtualCatalog key={galleryKey} filter={pageFilter} sections={sections} headings={projectOverview || (!flat && !catalogPreview)} width={width} compact={!!catalogPreview} revision={revision} scroll={scroll}
+          {(session || galleryReady) && <VirtualCatalog key={galleryKey} filter={pageFilter} sections={sections} headings={projectOverview || (!flat && !catalogPreview)} width={width} compact={!!catalogPreview} responsive={thumbnailScope === "canvas"} revision={revision} scroll={scroll}
             selected={selected} jump={flat || catalogPreview ? null : labelJump ?? jump} onJumped={onJumped} pageScope={projectOverview ? "projects" : sessionId} emptySection={projectOverview || (!flat && !catalogPreview) ? () => null : undefined} readPage={session ? (_section, offset, limit) => semantic.readPage(session, offset, limit) : undefined}
             initialTop={session ? 0 : catalogPreview ? previewTop : browseBeforeSearch.current?.key === filterKey ? browseBeforeSearch.current.top : returnPosition?.query === query && returnPosition?.color === color && returnPosition?.generatedFilter === generatedFilter ? returnPosition.top : 0}
             onActive={onActive} onAssetsChange={catalogAssetsChanged} onBrowseGroup={onBrowseGroup} onSelect={select} onActivate={onPickImages || multiple || working ? undefined : activate} onOpen={openAsset} onContextMenu={context}/>}
         </OverlayScrollArea>
-        {!catalogPreview && <ThumbnailSizeSlider scope="library"/>}
+        {!catalogPreview && <ThumbnailSizeSlider scope={thumbnailScope}/>}
       </div>
     </div>
     {preview && <LibraryVideoPreview {...preview} onClose={() => setPreview(null)}/>}

@@ -16,7 +16,9 @@ page.on('pageerror', error => errors.push(error.message));
 await page.addInitScript(() => localStorage.setItem('bowerbird.canvasLibraryWidth', new URL(location.href).searchParams.get('test-library-width') ?? '480'));
 await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
 const panel = page.locator('.canvas-source-panel');
-const nav = panel.getByRole('tablist', { name: '素材库来源', exact: true });
+const nav = panel.getByRole('complementary', { name: '素材库导航', exact: true });
+const activeSource = nav.locator('button[aria-current="true"]');
+const activeMode = nav.getByRole('button', { name: '层级模式', pressed: true });
 const more = panel.getByRole('button', { name: '更多素材库控件', exact: true });
 const types = panel.locator('.library-media-switch[aria-label="素材类型"]');
 async function assertClosedControlsHidden() {
@@ -46,10 +48,8 @@ try {
     if (await open.isVisible()) await open.click();
     await nav.waitFor();
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
-    const activeSource = nav.getByRole('tab', { selected: true });
-    const activeLabel = activeSource.locator('.library-view-label');
-    const fits = await activeLabel.evaluate(label => {
-      const button = label.closest('button'), bounds = button.closest('.canvas-source-panel').getBoundingClientRect();
+    const fits = await activeSource.evaluate(label => {
+      const bounds = label.closest('.library-sidebar').getBoundingClientRect();
       const box = label.getBoundingClientRect();
       return getComputedStyle(label).opacity === '1' && box.width > 0 && box.left >= bounds.left && box.right <= bounds.right;
     });
@@ -57,7 +57,7 @@ try {
     await nav.hover(); await page.waitForTimeout(550);
     assert.equal(await more.isVisible(), width === 480, 'exercise both overflow and inline controls');
     await assertClosedControlsHidden();
-    await assertIconVisible(nav.getByRole('tab', { selected: true }));
+    await assertIconVisible(activeMode);
     await page.screenshot({ path: `${output}/${width}-${theme}-closed.png` });
     for (const name of ['全部类型', '视频', '音频', '文本', '图片']) {
       await openControls();
@@ -74,7 +74,7 @@ try {
       await assertClosedControlsHidden();
       await openControls();
       await assertIconVisible(types.locator('button[aria-pressed="true"]'));
-      await assertIconVisible(nav.getByRole('tab', { selected: true }));
+      await assertIconVisible(activeMode);
     }
     await page.screenshot({ path: `${output}/${width}-${theme}-open.png` });
     if (await more.isVisible()) {

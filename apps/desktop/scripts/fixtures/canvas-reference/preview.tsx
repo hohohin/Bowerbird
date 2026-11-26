@@ -40,6 +40,7 @@ const explorer = new URLSearchParams(location.search).has("explorer");
 const localFiles = new URLSearchParams(location.search).has("local-files");
 const sourceLibrary = new URLSearchParams(location.search).has("source-library");
 const canvasLibrary = new URLSearchParams(location.search).has("canvas-library");
+const resizeLibrary = new URLSearchParams(location.search).has("resize-library");
 const strictCanvas = new URLSearchParams(location.search).has("strict-canvas");
 const detailRoute = new URLSearchParams(location.search).has("detail-route");
 let canvasExists = !strictCanvas || !!sessionStorage.getItem("reference-fixture");
@@ -53,7 +54,7 @@ if (new URLSearchParams(location.search).has("provisional") && !sessionStorage.g
 const canvas = { projectId: "p", draftJson: "{}", createdAt: 1, updatedAt: 1 };
 const base = { projectId: "p", threadId: "t", hiddenAt: null, positionLocked: false, createdAt: 1, updatedAt: 1,
   width: 190, height: 180, zIndex: 1, role: "reference", kind: "asset", assetId: "existing" };
-const image = (color: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="190" height="150"><rect width="190" height="150" fill="${color}"/></svg>`)}`;
+const image = (color: string, width = 190, height = 150) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="${color}"/></svg>`)}`;
 const assets = ["existing", "a", "b", "c", "d"].map((id, i) => ({ id, name: `合成参考 ${id}`, width: 190, height: 150,
   ...(sourceLibrary ? { thumb_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]) } : {}),
   store_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]), source: "imported" }));
@@ -67,7 +68,13 @@ if (sessionStorage.getItem("canvas-media-dimensions")) {
 assets.push(...JSON.parse(sessionStorage.getItem("reference-drafts") || "[]"));
 const draftWorkspaces = new Map<string, any>(JSON.parse(sessionStorage.getItem("reference-draft-workspaces") || "[]"));
 const draftSaves = new Map<string, string>();
-if (detailRoute) assets.push(...Array.from({ length: 60 }, (_, index) => ({ ...assets[0], id: `detail-${index}`, name: `返回位置测试 ${index}` })));
+if (detailRoute) assets.push(...Array.from({ length: resizeLibrary ? 120 : 60 }, (_, index) => {
+  const asset = { ...assets[0], id: `detail-${index}`, name: `返回位置测试 ${index}` };
+  if (!resizeLibrary) return asset;
+  const [width, height] = [[160, 220], [200, 140], [180, 180]][index % 3];
+  const path = image(["#0369a1", "#4f46e5", "#0d9488"][index % 3], width, height);
+  return { ...asset, width, height, thumb_path: path, store_path: path };
+}));
 if (canvasLibrary) {
   const hidden: string[] = JSON.parse(sessionStorage.getItem("canvas-only-assets") || "[]");
   for (const asset of assets) Object.assign(asset, { ext: "svg", library_hidden: hidden.includes(asset.id) });

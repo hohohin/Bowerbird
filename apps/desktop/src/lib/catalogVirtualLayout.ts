@@ -1,6 +1,7 @@
 // Page reads and mounted cards stay bounded; visited pages retain only aspect ratios.
 import { isAudioPath } from "./audioMedia.ts";
 import { isTextPath, TEXT_CARD_ASPECT_RATIO } from "./textMedia.ts";
+import { MAX_THUMBNAIL_WIDTH } from "./thumbnailSize.ts";
 export const CATALOG_PAGE_SIZE = 60;
 export const CATALOG_CACHE_PAGES = 16;
 export const CATALOG_GAP = 8;
@@ -20,9 +21,13 @@ export function masonryRatios(items: readonly Dimensions[]) {
   return items.map(item => isTextPath(item.store_path) ? TEXT_CARD_ASPECT_RATIO : isAudioPath(item.store_path) ? 2 : item.width && item.height ? item.width / item.height : 1);
 }
 
-function masonryDimensions(available: number, target: number) {
-  const columns = Math.max(1, Math.floor((available - 16 + CATALOG_GAP) / (target + CATALOG_GAP)));
-  const width = Math.max(1, (available - 16 - CATALOG_GAP * (columns - 1)) / columns);
+function masonryDimensions(available: number, target: number, responsive: boolean) {
+  const content = available - 16;
+  const columnsForPreference = Math.floor((content + CATALOG_GAP) / (target + CATALOG_GAP));
+  const minimum = responsive && content >= 2 * 80 + CATALOG_GAP ? 2 : 1;
+  const columnsForMaxWidth = responsive ? Math.ceil((content + CATALOG_GAP) / (MAX_THUMBNAIL_WIDTH + CATALOG_GAP)) : 1;
+  const columns = Math.max(minimum, columnsForPreference, columnsForMaxWidth);
+  const width = Math.max(1, (content - CATALOG_GAP * (columns - 1)) / columns);
   return { columns, width };
 }
 type Cell = { left: number; top: number; width: number; height: number; ratio: number };
@@ -54,8 +59,8 @@ function placeMasonry(ratios: readonly number[] | undefined, count: number, widt
   return { top, bottom };
 }
 
-export function masonryGeometry(items: readonly Dimensions[], available: number, target: number, initialTops?: readonly number[]) {
-  const { columns, width } = masonryDimensions(available, target);
+export function masonryGeometry(items: readonly Dimensions[], available: number, target: number, initialTops?: readonly number[], responsive = false) {
+  const { columns, width } = masonryDimensions(available, target, responsive);
   const heights = initialTops ? [...initialTops] : Array<number>(columns).fill(8);
   const cells: Cell[] = [];
   placeMasonry(masonryRatios(items), items.length, width, heights, cells);
@@ -68,8 +73,8 @@ type PagePlacement = {
 };
 export type CatalogPlacementCache = Map<string, PagePlacement>;
 
-export function catalogLayout(sections: CatalogSectionInfo[], available: number, target: number, measured: ReadonlyMap<string, readonly number[]>, headings: boolean, placements?: CatalogPlacementCache) {
-  const geometry = masonryDimensions(available, target);
+export function catalogLayout(sections: CatalogSectionInfo[], available: number, target: number, measured: ReadonlyMap<string, readonly number[]>, headings: boolean, placements?: CatalogPlacementCache, responsive = false) {
+  const geometry = masonryDimensions(available, target, responsive);
   let top = 0, maxBottom = 0;
   const blocks: CatalogBlock[] = [];
   const groups = sections.map((section, index) => {

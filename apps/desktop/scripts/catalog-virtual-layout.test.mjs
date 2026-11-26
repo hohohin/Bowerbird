@@ -19,12 +19,12 @@ test('mixed media keeps text at 3:4 without changing image and audio geometry',(
   }
 });
 
-function assertContinuous(ratios,available,target,measured=measuredPages('all',ratios)) {
+function assertContinuous(ratios,available,target,measured=measuredPages('all',ratios),responsive=false) {
   const assets=assetsFor(ratios);
-  const expected=masonryGeometry(assets,available,target);
-  const layout=catalogLayout([section('all',assets.length)],available,target,measured,false);
+  const expected=masonryGeometry(assets,available,target,undefined,responsive);
+  const layout=catalogLayout([section('all',assets.length)],available,target,measured,false,undefined,responsive);
   for(const block of layout.blocks) {
-    const page=masonryGeometry(assets.slice(block.offset,block.offset+block.count),available,target,block.columnTops);
+    const page=masonryGeometry(assets.slice(block.offset,block.offset+block.count),available,target,block.columnTops,responsive);
     page.cells.forEach((cell,index)=>{
       const whole=expected.cells[block.offset+index];
       close(block.top+cell.top,whole.top,`asset ${block.offset+index} top`);
@@ -50,6 +50,27 @@ test('masonry uses aspect ratios, deterministic positions and nonoverlapping col
 test('pages continue the same masonry columns as one uninterrupted layout at different widths',()=>{
   const ratios=Array.from({length:187},(_,index)=>[1,.25,2,1.5,.75,4,1/9][index%7]);
   for(const available of [330,481,1000]) assertContinuous(ratios,available,150);
+});
+test('canvas masonry keeps compact columns monotonic and within the gallery',()=>{
+  const items=assetsFor([1,.5,2,.75,1,2]);
+  for(const target of [48,160,320]) {
+    let previous=0;
+    for(let available=48;available<=1440;available++) {
+      const geometry=masonryGeometry(items,available,target,undefined,true);
+      assert.ok(geometry.columns>=previous,`columns decreased at ${available}px for target ${target}`);
+      assert.ok(geometry.width<=320);
+      assert.ok(geometry.cells.every(cell=>cell.left>=8 && cell.left+cell.width<=available-8+1e-7));
+      previous=geometry.columns;
+    }
+  }
+  for(const [available,maximum] of [[183,167],[184,80],[227,102],[307,142]]) {
+    const geometry=masonryGeometry(items,available,320,undefined,true);
+    assert.equal(geometry.columns,available<184?1:2);
+    assert.ok(geometry.width<=maximum);
+  }
+  assert.equal(masonryGeometry(items,227,320).columns,1,'default layouts use their existing column calculation');
+  const ratios=Array.from({length:187},(_,index)=>[1,.5,2,.75][index%4]);
+  for(const width of [227,307,408,690,1160]) assertContinuous(ratios,width,320,undefined,true);
 });
 test('fractional column heights retain deterministic ties when page coordinates become relative',()=>{
   const ratios=Array.from({length:1320},(_,index)=>(index+1)%60===0?.25:1);

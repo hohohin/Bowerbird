@@ -8,7 +8,7 @@
 
 ### 2026-11-25 一级探索和画板右侧分屏
 
-顶栏的「素材库」「项目」「探索」是三个一级入口。一级探索将目录与紧凑素材流放在左侧，将原生网页放在右侧。单击项目、已连接文件夹或全局标签只更改素材流范围。双击项目或点击「进画板」沿原项目进入事务打开画板，左侧素材栏默认收起。画板右侧可开合探索窗口，已经手动展开的左侧素材栏可以同时使用。
+主屏顶栏的「素材库」「项目」「探索」是三个一级入口。一级探索将目录与紧凑素材流放在左侧，将原生网页放在右侧。单击项目、已连接文件夹或全局标签只更改素材流范围。双击项目或点击「进画板」沿原项目进入事务打开画板。画板顶栏左侧将「素材库」与「探索」放在同一组，分别控制左侧素材栏和右侧探索分屏。素材栏默认收起，两栏可以同时展开。
 
 一级探索、素材库、项目和画板之间共用同一个 `SourceBrowserPanel`。进入素材库或项目时隐藏原生视图。直接从探索进入画板时同步视口边界并保留当前文档、网页表单、滚动位置和登录态。主屏的来源和以图搜图进入一级探索，画板内沿用右侧分屏。显式导航和搜图继续走各自的队列。
 
@@ -50,9 +50,23 @@ Windows 隔离夹具的三项 Rust 单测通过，覆盖坐标限制、旧协议
 
 后续复核确认 Rust 与 Objective-C 的 `bb_browser_overlay` 签名均为七参数，旧的 Mac 烟测仍按六参数调用。已同步 [Mac 烟测](../apps/desktop/src-tauri/tests/macos-browser-overlay-smoke.m)，覆盖左右镜像切角、把手命中透传、WKWebView 遮罩与恢复。Mac 实机仍需运行 `cargo check`、`cargo test` 及左侧把手和跨 WebView 拖图。
 
+Mac 有图形会话时，在仓库根执行以下验证。使用专用 macOS 测试用户或独立测试机隔离 WKWebView 浏览资料，开发版用 `BOWERBIRD_DEV_REGISTER_URLS=0` 禁止注册回调协议，并用 `BOWERBIRD_LIBRARY_ROOT_OVERRIDE` 指向空的测试库。打开本机测试网页，点左侧把手确认主视图响应，再点切角两侧的网页按钮，最后从原生网页拖一张测试图片到素材流和画板，核对各自的采集记录和落点。Windows 的 `verify-native-explorer.mjs` 使用 Chromium CDP 和 Win32 输入。
+
+```bash
+cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib source_browser
+overlay_test_dir=$(mktemp -d)
+xcrun --sdk macosx clang -fobjc-arc -fblocks \
+  -framework AppKit -framework WebKit -framework QuartzCore -framework CoreGraphics \
+  apps/desktop/src-tauri/tests/macos-browser-overlay-smoke.m -o "$overlay_test_dir/browser-overlay-smoke"
+"$overlay_test_dir/browser-overlay-smoke"
+```
+
 ### 2026-11-25 EXP-01 Windows 点击排查
 
 本轮在隔离 WebView2 中用 Win32 点击和滚轮复测初次打开、关弹窗、调宽、左右把手、视口重排、带链接图片及拖图后的网页响应。在无登录资料的 Pinterest 公开 Ideas 页，原生滚轮和点击均抵达文档。小红书 `/explore` 重定向至 RedNote 首页，未进入原测试场景。原报障的站点地址、触发动作及应用版本仍待补齐，EXP-01 保持待定位。
+
+2026-11-26 在 Windows 10.0.26100、WebView2 158.0.4370.33、150% 缩放下继续排查。隔离夹具发现连续移动鼠标和注入点击时，点击可能落到上一个位置。将移动与输入分步后，网页点击、滚轮以及手形和文本光标切换均通过。系统跨 WebView 拖放尝试受前台和鼠标位置变化影响，仍待拿到稳定回执。原故障尚未复现，生产输入逻辑无变更。
 
 ### 2026-11-18 探索暂时不可操作的入口与 Pinterest 浮动工具栏
 

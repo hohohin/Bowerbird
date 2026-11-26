@@ -15,6 +15,7 @@ await page.route('**/*', route => new URL(route.request().url()).hostname === '1
 const panel = page.locator('.canvas-source-panel');
 const handle = page.getByRole('separator', { name: '调整素材库宽度' });
 const close = page.getByRole('button', { name: '关闭素材库', exact: true });
+const scroller = panel.locator('.catalog-scroller:visible');
 async function clickControl(name) {
   const button = panel.getByRole('button', { name, exact: true });
   if (!await button.isVisible()) await panel.getByRole('button', { name: '更多素材库控件', exact: true }).click();
@@ -66,7 +67,7 @@ async function sampleMotion(opening) {
   const distances = samples.samples.slice(1).map((sample, i) => Math.abs(sample.x - samples.samples[i].x));
   assert.ok(opening ? distances[3] < distances[1] : distances[0] < distances[2], 'arrival decelerates and departure accelerates');
 }
-async function assertGrid() {
+async function assertGrid(minimumColumns = 1, maximumCardWidth = 320) {
   const handleGeometry = await handle.evaluate(el => {
     const box = el.getBoundingClientRect();
     const panel = document.getElementById(el.getAttribute('aria-controls')).getBoundingClientRect();
@@ -76,21 +77,44 @@ async function assertGrid() {
   });
   assert.ok(handleGeometry.outside && handleGeometry.visible && handleGeometry.clickable,
     'pull tab stays outside the panel/scrollbar/tag column and fully inside the window');
-  const grid = panel.locator('.masonry-layout:visible, .folder-masonry:visible').filter({ has: page.locator('.folder-media-card, .masonry-item') }).first();
+  const grid = panel.locator('[data-catalog-page][data-columns]:visible').filter({ has: page.locator('.folder-media-card') }).first();
   await grid.waitFor();
-  await page.waitForFunction(() => {
-    const grid = [...document.querySelectorAll('.canvas-source-panel .masonry-layout, .canvas-source-panel .folder-masonry')].find(el => el.getBoundingClientRect().width && el.checkVisibility());
-    if (!grid) return false;
-    const cells = [...grid.children].map(child => child.getBoundingClientRect());
-    return cells.every((cell, i) => cells.slice(i + 1).every(other => cell.right <= other.left + 1 || cell.left >= other.right - 1 || cell.bottom <= other.top + 1 || cell.top >= other.bottom - 1));
-  });
-  const result = await grid.evaluate(el => {
-    const box = el.getBoundingClientRect();
-    const cells = [...el.children].map(child => child.getBoundingClientRect());
-    return { columns: new Set(cells.map(cell => Math.round(cell.left))).size, inBounds: cells.every(cell => cell.left >= box.left && cell.right <= box.right + 1), count: cells.length };
+  const result = await scroller.evaluate(view => {
+    const box = view.getBoundingClientRect();
+    const pages = [...view.querySelectorAll('[data-catalog-page][data-columns]')];
+    const cells = pages.flatMap(page => [...page.children].filter(child => child.matches('.folder-media-card, .connected-media, .catalog-positioned-card, .catalog-generation-group'))
+      .map(child => child.getBoundingClientRect()));
+    return {
+      columns: Number(pages[0]?.dataset.columns),
+      renderedColumns: new Set(cells.map(cell => Math.round(cell.left))).size,
+      count: cells.length, widest: Math.max(...cells.map(cell => cell.width)),
+      inBounds: view.scrollWidth <= view.clientWidth && cells.every(cell => cell.left >= box.left && cell.right <= box.right + 1),
+      overlaps: cells.some((cell, index) => cells.slice(index + 1).some(other =>
+        cell.right > other.left + 1 && cell.left < other.right - 1 && cell.bottom > other.top + 1 && cell.top < other.bottom - 1)),
+    };
   });
   assert.ok(result.inBounds && result.count > 0, 'every card stays inside its resized layout');
+  assert.equal(result.overlaps, false, 'cards never overlap, including across pages');
+  assert.ok(result.columns >= minimumColumns && result.renderedColumns >= minimumColumns, JSON.stringify(result));
+  assert.ok(result.widest <= maximumCardWidth + 1, JSON.stringify(result));
   return result.columns;
+}
+async function visibleAnchor() {
+  return scroller.evaluate(view => {
+    const viewport = view.getBoundingClientRect();
+    return [...view.querySelectorAll('[data-asset-id]')].map(card => {
+      const box = card.getBoundingClientRect();
+      return { id: card.dataset.assetId, offset: box.top - viewport.top, bottom: box.bottom - viewport.top };
+    }).filter(card => card.bottom > 0 && card.offset < viewport.height)
+      .sort((a, b) => Math.abs(a.offset) - Math.abs(b.offset))[0];
+  });
+}
+async function assertAnchor(anchor) {
+  const offset = await scroller.evaluate((view, id) => {
+    const card = view.querySelector(`[data-asset-id="${id}"]`);
+    return card ? card.getBoundingClientRect().top - view.getBoundingClientRect().top : null;
+  }, anchor.id);
+  assert.ok(offset !== null && Math.abs(offset - anchor.offset) <= 30, `lost anchor ${anchor.id}: ${anchor.offset} → ${offset}`);
 }
 async function assertCanvasInteractive() {
   const stage = page.locator('.canvas-stage');
@@ -124,12 +148,23 @@ async function assertCanvasInteractive() {
 }
 try {
   await mkdir('.tmp/canvas-library-resize', { recursive: true });
-  await page.goto('http://127.0.0.1:1699/scripts/fixtures/canvas-reference/preview.html?source-library&canvas-library&detail-route');
+  await page.goto('http://127.0.0.1:1699/scripts/fixtures/canvas-reference/preview.html?source-library&canvas-library&detail-route&resize-library');
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.waitForFunction(() => document.activeElement?.classList.contains('canvas-stage'));
   // Exercise the actual home → project picker → project path, including modal focus restoration.
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
-  await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '项目', exact: true }).click();
+  const homeNav = page.getByRole('navigation', { name: '首页' });
+  await homeNav.getByRole('button', { name: '素材库', exact: true }).click();
+  const homeGallery = page.locator('.library-home .catalog-gallery:visible');
+  const homeSize = homeGallery.locator('input[type="range"][aria-label="主页素材大小"]');
+  await homeGallery.locator('.folder-media-card').first().waitFor();
+  await homeGallery.evaluate(el => {
+    for (let notch = 0; notch < 6; notch++) {
+      el.dispatchEvent(new WheelEvent('wheel', { ctrlKey: true, deltaY: -12, bubbles: true, cancelable: true }));
+    }
+  });
+  assert.equal(await homeSize.inputValue(), '100');
+  await homeNav.getByRole('button', { name: '项目', exact: true }).click();
   await page.getByRole('button', { name: '打开项目 引用布局合成验收', exact: true }).click();
   await page.waitForFunction(() => document.activeElement?.classList.contains('canvas-stage'));
   const stage = await page.locator('.canvas-stage').boundingBox();
@@ -142,6 +177,8 @@ try {
   assert.ok(closeBox.y + closeBox.height <= gripBox.y && gripBox.width === 24, 'close icon sits above the narrow six-dot grip');
   const sidebar = panel.getByRole('complementary', { name: '素材库导航', exact: true });
   assert.equal(await sidebar.getAttribute('data-collapsed'), null);
+  const canvasSize = panel.getByRole('slider', { name: '项目素材大小', exact: true });
+  assert.equal(await canvasSize.inputValue(), '41', 'the canvas keeps its 160px default despite the 320px home preference');
   await selectSource('引用布局合成验收');
   await settle();
   assert.ok(await panel.evaluate(el => {
@@ -171,7 +208,14 @@ try {
   await page.keyboard.press('Home');
   await settle();
   assert.equal(await handle.getAttribute('aria-valuenow'), await handle.getAttribute('aria-valuemin'));
-  await assertGrid();
+  await assertGrid(2, 112);
+  await canvasSize.press('Home');
+  assert.equal(await page.evaluate(() => window.store.getState().canvasThumbnailWidth), 48);
+  await assertGrid(3, 65);
+  await scroller.evaluate(el => el.dispatchEvent(new WheelEvent('wheel', { ctrlKey: true, deltaY: -12, bubbles: true, cancelable: true })));
+  assert.ok(await page.evaluate(() => window.store.getState().canvasThumbnailWidth) > 48);
+  await canvasSize.press('End');
+  await assertGrid(2, 112);
   const node = page.locator('[data-canvas-node-id="old"]');
   const original = await node.boundingBox();
   await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
@@ -209,7 +253,7 @@ try {
   await settle();
   await assertGrid();
   await dragTo(620);
-  for (const name of ['全部素材', '引用布局合成验收', '全部文件夹素材']) {
+  for (const name of ['全部素材', '引用布局合成验收', '全部文件夹素材', '标签模式']) {
     await selectSource(name);
     await panel.locator('.folder-media-card').first().waitFor();
     await settle();
@@ -221,8 +265,11 @@ try {
     await settle();
     await selectSource(name);
     await panel.locator('.folder-media-card').first().waitFor();
+    await dragTo(370);
+    const minimum = await assertGrid(2, 112);
+    assert.equal(await sidebar.getAttribute('data-collapsed'), null, 'narrowing preserves the sidebar preference');
     await dragTo(480);
-    await assertGrid();
+    const narrow = await assertGrid(2, 152);
     await assertCanvasInteractive();
     assert.ok(await panel.locator('.library-controls-host > button, .folder-floating-controls > button, .library-color-control > button').evaluateAll(buttons => buttons.filter(button => button.checkVisibility() && getComputedStyle(button).visibility === "visible" && !button.closest("[inert], [aria-hidden=\"true\"]")).every(button => {
       const box = button.getBoundingClientRect();
@@ -238,13 +285,35 @@ try {
     }), 'expanded color controls stay inside a narrow drawer');
     await page.keyboard.press('Escape');
     await page.screenshot({ path: `.tmp/canvas-library-resize/${name}-480.png` });
+    await dragTo(620);
+    const medium = await assertGrid(2);
     await dragTo(900);
-    await assertGrid();
+    const wide = await assertGrid(2);
+    await handle.dblclick();
+    await settle();
+    const full = await assertGrid(2);
+    assert.ok(minimum <= narrow && narrow <= medium && medium <= wide && wide <= full);
   }
+  await dragTo(480);
+  await scroller.evaluate(view => { view.scrollTop = 2400; });
+  await settle();
+  const anchor = await visibleAnchor();
+  assert.ok(anchor && await scroller.evaluate(view => view.scrollTop) > 1000);
+  const columnsBeforeHide = await assertGrid(2, 152);
+  await scroller.evaluate(view => { view.style.display = 'none'; });
+  await settle();
+  assert.equal(await panel.locator('[data-catalog-page][data-columns]').first().getAttribute('data-columns'), String(columnsBeforeHide));
+  await panel.locator('.catalog-scroller').evaluate(view => { view.style.display = ''; });
+  await settle();
+  await assertAnchor(anchor);
+  await dragTo(900);
+  await assertAnchor(anchor);
+  const beforeWindowResize = await visibleAnchor();
   await page.setViewportSize({ width: 760, height: 700 });
   await settle();
   assert.ok((await panel.boundingBox()).width <= 760 - 12, 'window resize clamps the panel');
-  await assertGrid();
+  await assertGrid(2);
+  await assertAnchor(beforeWindowResize);
   await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
   await page.screenshot({ path: '.tmp/canvas-library-resize/dark-760.png' });
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -255,6 +324,9 @@ try {
   await page.evaluate(() => window.emitChange());
   await page.waitForTimeout(300);
   assert.ok(await page.locator('.canvas-board-title').evaluate(el => el === document.activeElement), 'background updates do not steal input focus');
+  await page.getByRole('button', { name: '返回主页', exact: true }).click();
+  await homeNav.getByRole('button', { name: '素材库', exact: true }).click();
+  assert.equal(await homeSize.inputValue(), '100', 'changing the canvas slider preserves the home preference');
   assert.deepEqual(errors, []);
-  console.log('PASS project entry focus/Tab, integrated pull tab/close, eased motion, resize/reflow, canvas drag/copy/undo/context menu and pan/zoom with all three sources open, scoped keyboard focus, window bounds, dark/reduced motion and input focus');
+  console.log('PASS drawer motion and canvas interactions, four responsive library views, independent thumbnail controls, anchored resize and hidden viewport, dark/reduced motion and input focus');
 } finally { await browser.close(); await server.close(); }

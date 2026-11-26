@@ -19,7 +19,7 @@ async function boot(context){
  return page;
 }
 async function open(page,expected){
- await page.getByRole('button',{name:'侧边探索',exact:true}).click();
+ await page.getByRole('button',{name:'探索',exact:true}).click();
  await page.waitForFunction(()=>window.calls.some(c=>c.command==='open_source_browser'));
  assert.equal(await page.evaluate(()=>window.calls.find(c=>c.command==='open_source_browser').args.url),expected,'exploration opens the remembered page');
 }
@@ -38,7 +38,7 @@ try{
   useOnboarding.setState({panel:'closed',guide:{version:2,status:'active',role:'designer',completedRoles:[],sessions:{designer:{step:3,projectId:'p',runId:'fixture',tasks:{},ready:false,baselineText:'',stepStartedAt:Date.now()}}}});
  });
  await page.getByRole('button',{name:'收起浏览器',exact:true}).click();
- await page.getByRole('button',{name:'侧边探索',exact:true}).click();
+ await page.getByRole('button',{name:'探索',exact:true}).click();
  await page.waitForTimeout(150);
  assert.equal(await counts(),before,'reopening keeps the native document, including during onboarding');
  assert.equal(await page.getByLabel('网页地址',{exact:true}).inputValue(),visited);

@@ -73,7 +73,7 @@ try {
     };
     window.failNodeSave = true;
   });
-  await page.getByRole('button', { name: '侧边探索', exact: true }).click();
+  await page.getByRole('button', { name: '探索', exact: true }).click();
   const entry = page.getByRole('navigation', { name: '探索网站', exact: true }).getByRole('button', { name: '采集视频', exact: true });
   await entry.click();
   const collection = page.getByRole('dialog', { name: '采集视频', exact: true });

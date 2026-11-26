@@ -6085,7 +6085,7 @@ export function CanvasWorkspace({
           });
         }}>
         <div id={`${sourcePanelId}-content`} className="canvas-source-content">
-          {(sourceCatalogVisited || !sourceCollapsed) && <LibraryCatalog key={projectId} media={libraryMedia} projectId={projectId} semanticSearchEnabled={!sourceCollapsed}
+          {(sourceCatalogVisited || !sourceCollapsed) && <LibraryCatalog key={projectId} media={libraryMedia} thumbnailScope="canvas" projectId={projectId} semanticSearchEnabled={!sourceCollapsed}
             onClose={closeSource} onAssetsChange={setCatalogAssets}/>}
         </div>
         <CanvasFrequentAssets library={frequentLibrary} projectId={projectId} picking={frequentPicking} onPickingChange={setFrequentPicking}/>

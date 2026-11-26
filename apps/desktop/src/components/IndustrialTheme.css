@@ -219,6 +219,8 @@ html[data-theme] .app-topbar-leading {
   gap: 10px;
   background: none;
 }
+.canvas-pane-controls { display: flex; align-items: center; gap: 4px; }
+.canvas-pane-controls > button { flex-shrink: 0; }
 html[data-theme] .app-topbar-import {
   position: relative;
   padding-right: 12px;
@@ -295,6 +297,27 @@ html[data-theme] .app-topbar :is(button, input):focus-visible { outline: 1px sol
   html[data-theme] .app-topbar[class] { padding-inline: 12px; gap: 8px; }
   html[data-theme] .app-topbar-view-controls { gap: 8px; padding-right: 12px; }
   html[data-theme] .app-topbar-leading { gap: 4px; }
+}
+@media (max-width: 884px) {
+  html[data-theme] .app-topbar.has-home-navigation {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    gap: 2px;
+    padding-block: 4px;
+  }
+  html[data-theme] .app-topbar.has-home-navigation .home-page-navigation { grid-column: 1 / -1; grid-row: 1; }
+  html[data-theme] .app-topbar.has-home-navigation .app-topbar-leading { grid-column: 1; grid-row: 2; }
+  html[data-theme] .app-topbar.has-home-navigation .app-topbar-actions { grid-column: 2; grid-row: 2; }
+}
+@media (max-width: 768px) {
+  html[data-theme] .app-topbar.canvas-tactical {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    padding-block: 4px;
+  }
+  .app-topbar.canvas-tactical .app-topbar-actions { grid-column: 1; grid-row: 2; }
 }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme] .app-topbar button,

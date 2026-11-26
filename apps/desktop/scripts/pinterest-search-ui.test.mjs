@@ -78,7 +78,7 @@ try {
   assert.equal((await calls("hide_source_browser")).length, hidesWhileOpen, "starting a search in the open browser does not hide it");
   await page.getByRole("button", { name: "收起浏览器", exact: true }).click();
   assert.equal((await calls("cancel_pinterest_image_search")).at(-1).args.requestId, second.requestId);
-  await page.getByRole("button", { name: "侧边探索", exact: true }).click();
+  await page.getByRole("button", { name: "探索", exact: true }).click();
   await page.waitForTimeout(150);
   assert.equal((await calls("start_pinterest_image_search")).length, 2, "reopening does not silently resubmit a cancelled image");
   for (const operation of ["花瓣", "返回上一页", "前往下一页", "刷新"]) {

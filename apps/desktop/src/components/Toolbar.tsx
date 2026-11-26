@@ -143,11 +143,17 @@ export function Toolbar({
   return (
     <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? " canvas-tactical" : " is-library"}${tactical ? " library-tactical" : ""}${homeNavigation ? " has-home-navigation" : ""}${exploring ? " is-exploring" : ""}${localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
       <div className="app-topbar-leading">
-        {canvasMode && <button type="button" className="app-button-dark"
-          aria-label={canvasLibraryOpen ? "收起素材库" : "打开素材库"} title={canvasLibraryOpen ? "收起素材库" : "打开素材库"}
-          aria-expanded={canvasLibraryOpen} disabled={projectRoutePending} onClick={toggleCanvasLibrary}>
-          <Images size={15} aria-hidden="true"/><span className="app-topbar-button-label">素材库</span>
-        </button>}
+        {canvasMode && <div className="canvas-pane-controls" role="group" aria-label="画板分屏">
+          <button type="button" className="app-button-dark"
+            aria-label={canvasLibraryOpen ? "收起素材库" : "打开素材库"} title={canvasLibraryOpen ? "收起素材库" : "打开素材库"}
+            aria-expanded={canvasLibraryOpen} disabled={projectRoutePending} onClick={toggleCanvasLibrary}>
+            <Images size={15} aria-hidden="true"/><span className="app-topbar-button-label">素材库</span>
+          </button>
+          {onExplore && <button type="button" data-tour="explore" className="app-button-dark"
+            aria-controls="explore-browser-panel" aria-pressed={exploring} disabled={projectRoutePending} onClick={onExplore} title="探索">
+            <Compass size={15} aria-hidden="true"/><span className="app-topbar-button-label">探索</span>
+          </button>}
+        </div>}
         {showLibraryActions && (!canvasMode || canvasLibraryOpen) && <div className="app-topbar-import">
           <button type="button" data-import-trigger data-tour="import-folder" onClick={connectFolder} disabled={busy}
             className="app-button-dark disabled:opacity-50" aria-label={busy ? "连接中" : "建立连接"} title="建立连接">
@@ -189,10 +195,6 @@ export function Toolbar({
           <MediaTypeFilter />
 
         </div>}
-        {canvasMode && onExplore && <button type="button" data-tour="explore" className="app-button-dark"
-          aria-pressed={exploring} disabled={projectRoutePending} onClick={onExplore} aria-label="侧边探索" title="侧边探索">
-          <Compass size={15} aria-hidden="true"/><span className="app-topbar-button-label">侧边探索</span>
-        </button>}
         <ScreenshotMenu />
         <SidebarAccount placement="topbar" />
       </div>
