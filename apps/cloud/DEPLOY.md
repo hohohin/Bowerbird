@@ -1,5 +1,9 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-26 DSH · Cloud 付费基础设施关闭态已部署
+
+生产已应用 0096，`chat-proxy` v20、`chat-worker` v14 和新版 VPS Worker 已读回。两个付费目录停用，现有账号继续按 0 Bcoin 试用。[发布回执和回退](CHAT.md#2026-11-26-0096-关闭态部署)
+
 ## 2026-11-24 H3 空槽预优化与音色参考已部署
 
 北京时间 11:45:44，现役 VPS Worker 切换到 `sha256:efbb87fbddc4d1f7fc1ec50e457827f35748026571dd8190ba939f089643f633`。本次发布范围为 Worker 的 `cloud-text-skills.ts`（SHA-256 `7ffc6b998898f1b6503921d48a7fc562ea9931c554816416047bcd6177b60c4b`）和只读挂载的 H3 视频 Skill（`50dbb22adfb8c7ea7edc5bec091c9ae5155de1cb3ed8ec53db5eb79d99882b42`）。切换前断网候选通过 10 项专项测试，切换后独立核对了现役文件、运行配置、挂载和容器状态。11:45 和 11:47 两次查询的五类活动队列均为空。
