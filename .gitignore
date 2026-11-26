@@ -6,6 +6,7 @@ node_modules/
 dist/
 dist-ssr/
 target/
+.tmp/
 *.tsbuildinfo
 apps/agent-worker/artifacts/
 apps/cloud/artifacts/
