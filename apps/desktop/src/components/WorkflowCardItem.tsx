@@ -201,17 +201,22 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
   }, [node.kind, node.id, document]);
   const chatBusy = localChatRunning(agentChat);
   const conversationId = agentChat?.id ?? node.chatConversationId;
+  const workflowExecuting = controller.isNodeExecuting(node.id, run?.id);
+  const imageRunning = imageActivity.running;
+  const statusText = starting ? "准备运行" : step?.detail === "连线已断开，本次未执行" ? step.detail : undefined;
   const queuedTrigger = node.kind === "trigger" && run?.status === "waiting" && !run.order.length && run.triggerQueue?.[0] === node.id;
   const triggerExecuting = node.kind === "trigger" && (run?.status === "running" || run?.status === "waiting") && run.order.includes(node.id);
-  const activeWorkflow = run && (queuedTrigger || triggerExecuting || locked && run.order.includes(node.id)) ? run : undefined;
+  const activeWorkflow = run && (queuedTrigger || triggerExecuting || workflowExecuting
+    || run.status === "waiting" && ((run.order.includes(node.id) && step?.status !== "done") || deliveryPending && node.id === run.startId))
+    ? run : undefined;
   const retryDelivery = !!activeWorkflow && deliveryPending && node.id === activeWorkflow.startId;
   const continueWorkflow = activeWorkflow?.status === "waiting" && !Object.values(activeWorkflow.steps).some(step => step.status === "failed")
     && (activeWorkflow.order.find(id => activeWorkflow.steps[id].status !== "done")
       ?? (activeWorkflow.triggerQueue?.length ? activeWorkflow.startId : null)) === node.id;
   const stopAgent = node.kind !== "agent" ? undefined : starting ? () => controller.cancelStarting(node.id)
-    : chatBusy && agentChat && !controller.isLocked(node.id) ? () => useLocalChatStore.getState().stop(agentChat.id)
+    : chatBusy && agentChat && !workflowExecuting ? () => useLocalChatStore.getState().stop(agentChat.id)
       : activeWorkflow ? () => controller.stop(activeWorkflow.id) : undefined;
-  const busy = creating || node.kind !== "trigger" && (!!starting || imageActivity.running || locked || chatBusy || pendingAgent || node.planning?.status === "waiting");
+  const busy = creating || node.kind !== "trigger" && (!!starting || imageRunning || locked || chatBusy || pendingAgent || node.planning?.status === "waiting");
   const loop = node.kind === "loop" && run?.loop?.nodeId === node.id ? run.loop : undefined;
   const restartIssue = loop && run?.status === "stopped" ? loop.bodyIds.map(id => loopProviderIssues?.get(id)).find(Boolean) : null;
   // A saved request may only need a status query. Block retries known to submit again.
@@ -330,17 +335,16 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
   </div>;
   const presentation = WORKFLOW_CARD_PRESENTATION[videoCard ? "comfy-video" : node.kind], CardIcon = node.kind === "trigger" ? TRIGGER_MODES.find(mode => mode.id === triggerMode)!.icon : presentation.icon;
   const optimization = step?.comfyOptimization;
-  const optimizing = starting === "optimize" || run?.status === "running" && step?.status !== "done"
+  const optimizing = starting === "optimize" || workflowExecuting && step?.status !== "done"
     && (step?.comfyAutoGeneration ? !optimization?.result : !!optimization);
   const generatingStatus = localVideo ? "正在生成视频" : "正在生成图片";
   const h3Status = (localVideo || localImage) ? (() => {
     if (step?.comfyStopping) return optimization && !optimization.result ? "正在停止提示词优化…" : "正在中断本机生成…";
     if (optimizing) return "正在优化提示词";
-    if (starting === "run" && run?.status !== "running") return "准备运行";
+    if (statusText) return statusText;
     if (step?.comfyCancelled) return "已取消";
     if (run?.status === "stopped" && step?.status !== "done") return step?.status === "pending" ? "已停止，未执行" : "已停止";
-    if (imageActivity.running || run?.status === "running"
-      && (starting === "run" || step?.status === "running" || (localVideo && step?.status === "pending" && step.detail))) return generatingStatus;
+    if (imageRunning || workflowExecuting) return generatingStatus;
     if (step?.status === "done") {
       if (optimization && !step.comfyAutoGeneration) return optimization.keptOriginal ? "已保留原提示词" : "提示词已优化";
       if (localVideo) return userErrorMessage(step.detail, "视频已生成");
@@ -394,7 +398,15 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
       (field || card?.querySelector<HTMLElement>('[aria-label="卡片指令"]'))?.focus({ preventScroll: true });
     }}
     onContinue={runId => handle(openOptimizationChat(node.id, runId))} />;
-  const running = !!starting || imageActivity.running || chatBusy || run?.status === "running" && step?.status === "running";
+  const running = !!starting || imageRunning || chatBusy || workflowExecuting;
+  const footerStatus = statusText ?? (imageRunning ? <JobProgressText jobId={imageActivity.jobId} />
+    : workflowExecuting && (!step || step.status === "pending") ? "准备运行"
+      : agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount)
+        : queuedTrigger || triggerExecuting ? run?.status === "waiting" ? "等待继续" : "运行中"
+          : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行"
+            : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行"
+              : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成"
+                : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行");
   const pinLabel = pinned ? "取消固定并收起" : "固定在画板上";
   const videoControls = videoCard && <VideoControls card menuClassName="canvas-tactical-model-menu" options={videoOptions} channel={node.generation?.videoChannel ?? "jimeng"}
     onChange={(options, channel) => {
@@ -684,8 +696,8 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
             {!localVideo && h3Status === generatingStatus && imageActivity.jobId && <JobProgressText jobId={imageActivity.jobId} detailOf={h3Status} />}
           </span>
           {h3Progress && <ComfyGenerationProgress progress={h3Progress} />}
-        </span> : (!hasAgentMessages || agentChat?.status !== "idle") && <span role={imageActivity.running ? "status" : undefined}>{imageActivity.running ? <JobProgressText jobId={imageActivity.jobId} /> : agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount) : node.kind === "trigger" && (queuedTrigger || triggerExecuting) ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>}
-        {starting && node.kind !== "agent" ? <button title="取消启动" onClick={() => controller.cancelStarting(node.id)}><Square size={13} />停止</button> : imageActivity.running && imageActivity.jobId && !controller.isLocked(node.id) ? <button type="button" aria-label="停止生成" onClick={() => useStore.getState().cancelGeneration(imageActivity.jobId)}><Square size={13} />停止</button> : activeWorkflow ? <>
+        </span> : (running || statusText || !hasAgentMessages || agentChat?.status !== "idle") && <span role={running ? "status" : undefined}>{footerStatus}</span>}
+        {starting && node.kind !== "agent" ? <button title="取消启动" onClick={() => controller.cancelStarting(node.id)}><Square size={13} />停止</button> : imageRunning && imageActivity.jobId && !workflowExecuting ? <button type="button" aria-label="停止生成" onClick={() => useStore.getState().cancelGeneration(imageActivity.jobId)}><Square size={13} />停止</button> : activeWorkflow ? <>
           {retryDelivery && <button onClick={() => handle(controller.continue(activeWorkflow.id))}>重试写入内容卡</button>}
           {continueWorkflow && <button aria-label="继续工作流" onClick={() => handle(controller.continue(activeWorkflow.id))}><Play size={13} />继续</button>}
           {node.kind !== "agent" && <button disabled={!!step?.comfyStopping} aria-label="停止工作流" title={node.kind === "comfy-video" ? "取消排队或中断本次生成" : "停止工作流"} onClick={() => handle(controller.stop(activeWorkflow.id))}><Square size={12} /></button>}
@@ -719,7 +731,7 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
         const run = await api.cloudAgentGet(step.agentRunId!); useStore.getState().openCloudAgentRun(run, { navigate: false }); setAgentOpen(true);
       })())}>查看技能执行 / 审批</button>}
     </div>
-    {!peek && (node.kind === "trigger" ? inputPorts.map((port, index) => portButton(node, port, "input", index)) : inputPorts.length > 0 && automaticButton(node.id, "input", creating, activeHandle === "input"))}
+    {!peek && (node.kind === "trigger" ? inputPorts.map((port, index) => portButton(node, port, "input", index)) : inputPorts.length > 0 && automaticButton(node.id, "input", busy, activeHandle === "input"))}
     {!peek && (node.kind === "trigger" ? outputPorts.map((port, index) => portButton(node, port, "output", index)) : outputPorts.length > 0 && automaticButton(node.id, "output", creating, activeHandle === "output"))}
   </article>;
 });

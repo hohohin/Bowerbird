@@ -108,6 +108,7 @@ export interface H3ImageGenerationInput {
 export interface WorkflowStep {
   generationRunInput?: { prompt: string; references: string[][] };
   voiceRequest?: import("./voiceCard").VoiceCardRequest;
+  voiceJobActive?: boolean;
   comfyProgress?: import("./comfyVideo").ComfyVideoProgress;
   comfyCancelled?: boolean;
   comfyStopping?: boolean;
@@ -158,6 +159,8 @@ export interface WorkflowRun {
   writeNodeIds?: string[];
   cellTexts?: Record<string, string>;
   cellValues?: Record<string, WorkflowValue>;
+  /** Outputs invalidated by an edit that this accepted phase can still read. */
+  inputOutputs?: Record<string, WorkflowNode["outputs"]>;
   loop?: WorkflowLoop;
   /** Durable completion events, consumed together with the next execution and counter. */
   triggerQueue?: string[];
@@ -472,6 +475,23 @@ export function workflowExecutionNodes(nodes: WorkflowNode[], startId: string): 
   if (!sources.length) return nodes;
   return nodes.map(node => ({ ...node, inputs: Object.fromEntries(Object.entries(node.inputs).map(([port, inputs]) =>
     [port, inputs.map(input => { const source = sources.find(source => source.textSource === input.canvasNodeId); return source ? { ...input, canvasNodeId: undefined, cellId: undefined, nodeId: source.id, portId: input.cellId } : input; })])) }));
+}
+
+/** Live edges can narrow a phase, but cannot bring new cards into it. Already started steps can still deliver to their receivers. */
+export function workflowPhaseReachable(run: WorkflowRun, dependencies: ReadonlyMap<string, string[]>, started: ReadonlySet<string>): Set<string> {
+  const receivers = new Map<string, string[]>();
+  for (const [id, inputs] of dependencies) for (const source of inputs) {
+    const downstream = receivers.get(source);
+    if (downstream) downstream.push(id);
+    else receivers.set(source, [id]);
+  }
+  const reachable = new Set(run.order.filter(id => {
+    const step = run.steps[id];
+    return id === run.startId || started.has(id) || step && (step.status !== "pending" || step.jobId || step.chatInput || step.agentRunId || step.localDsRequestId);
+  }));
+  for (const source of reachable) for (const receiver of receivers.get(source) ?? []) reachable.add(receiver);
+  for (const id of reachable) for (const producer of dependencies.get(id) ?? []) reachable.add(producer);
+  return reachable;
 }
 
 /** Completion wires are events, never data prerequisites or an ordinary graph cycle. */

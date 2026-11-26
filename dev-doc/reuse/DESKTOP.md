@@ -38,6 +38,11 @@
 - 内容卡和工作流共用画板的素材索引。未加载的精确 ID 由 [canvasAssetLoader.ts](../../apps/desktop/src/lib/canvasAssetLoader.ts) 合并查询，作用域随项目、素材目录版本及原件删除状态更新。
 - **边界／状态**：**当前画布会话专用**。手动编辑进入撤销历史，自动布局和任务进度由各自路径更新。原件与服务端任务沿原操作处理。[撤销契约](../CANVAS-WORKFLOW.md#2026-11-10画布编辑撤销源码待发布)。
 
+## 读取剪贴板媒体
+
+- `clipboardMedia.ts` 合并 `DataTransfer.files` 与 `DataTransfer.items` 中的媒体文件并去重。[入口](../../apps/desktop/src/lib/clipboardMedia.ts)
+- `CanvasWorkspace` 优先处理画布内部复制格式，复制后再次点击画布可指定粘贴位置。外部媒体入库并建立素材卡，纯文本建立内容卡。这两种内容落在最近一次画布点击处，无记录时用视口中心。`App` 在画布以外沿用截图入库行为。
+
 ## 计算画板产物落点
 
 - **用途／关键词**：工作流输出、自动落点、可见占位、尺寸缓存、显式整理。

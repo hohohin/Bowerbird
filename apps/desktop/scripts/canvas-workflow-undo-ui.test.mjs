@@ -79,7 +79,7 @@ try {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const c = canvasWorkflowController('p');
     const copy = c.document.nodes.find(node => !['producer', 'consumer', 'writer'].includes(node.id));
-    const run = { id: 'locked-copy', startId: copy.id, threadId: 'thread', status: 'waiting', order: [copy.id], lockedNodeIds: [copy.id], steps: { [copy.id]: { status: 'waiting' } } };
+    const run = { id: 'locked-copy', startId: copy.id, threadId: 'thread', status: 'running', order: [copy.id], lockedNodeIds: [copy.id], steps: { [copy.id]: { status: 'running' } } };
     await c.save({ ...c.document, runs: [...c.document.runs, run], run });
   });
   await undo(); assert.equal((await persisted()).nodes.length, 4, 'active cards block undo without losing the entry');
@@ -102,8 +102,7 @@ try {
   await page.waitForFunction(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); return canvasWorkflowController('p').document.nodes.length === 4; });
   await undo(); assert.equal((await persisted()).nodes.length, 3);
   await page.reload(); await card('producer').waitFor();
-  assert.deepEqual((await state()).runs, restored.runs.map(run => ({ ...run,
-    steps: Object.fromEntries(Object.entries(run.steps).map(([id, step]) => [id, { ...step, comfyStopping: false, comfyProgress: undefined }])) })));
+  assert.deepEqual((await state()).runs, restored.runs);
   assert.deepEqual(errors, []);
   console.log('PASS workflow deletion/writer/wire/history recovery, sequential movement undo, focused-button shortcut, copy/create/parameter undo, active-run protection, form protection and persisted reload.');
 } finally { await browser.close(); await server.close(); }

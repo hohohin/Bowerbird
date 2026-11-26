@@ -51,7 +51,8 @@ import { useStore } from "./store";
 import { codexModelCatalog, startChatCapabilityChecks } from "./lib/chatCapabilities";
 import { api } from "./lib/api";
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
-import { importDroppedMedia, prepareMediaImport } from "./lib/mediaImport";
+import { importDroppedMedia, prepareMediaImport, readClipboardMediaPaths } from "./lib/mediaImport";
+import { clipboardEditing, clipboardMediaFiles, isClipboardImage } from "./lib/clipboardMedia";
 import { notify, notifyError, notifySuccess } from "./lib/notify";
 import { userErrorMessage } from "./lib/userError";
 import {
@@ -779,32 +780,17 @@ function App() {
   // 焦点在 input/textarea/contenteditable（搜索框/创作板 ProseMirror）时不拦截，让正常文本/图片粘贴。
   useEffect(() => {
     function onPaste(e: ClipboardEvent) {
-      if (useLocalFileMode.getState().open) return;
-      if (e.defaultPrevented || useStore.getState().collectionPanelId) return;
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      let imageFile: File | null = null;
-      for (const it of items) {
-        if (it.kind === "file" && it.type.startsWith("image/")) {
-          imageFile = it.getAsFile();
-          if (imageFile) break;
-        }
-      }
-      if (!imageFile) return;
-      const ae = document.activeElement;
-      if (
-        ae instanceof HTMLInputElement ||
-        ae instanceof HTMLTextAreaElement ||
-        (ae instanceof HTMLElement && ae.isContentEditable)
-      ) {
-        return;
-      }
+      const state = useStore.getState();
+      if (e.defaultPrevented || state.collectionPanelId || !e.clipboardData || clipboardEditing(e)) return;
+      // LibraryHome also marks file mode open. Only the active canvas drawer owns that paste surface.
+      const stage = useLocalFileMode.getState().open && document.querySelector('[data-canvas-stage]:not(.is-view-hidden)');
+      if (stage && !stage.closest('[inert]')) return;
+      const file = clipboardMediaFiles(e.clipboardData).find(isClipboardImage);
+      if (!file) return;
       e.preventDefault();
-      const file = imageFile;
-      const projectId = useStore.getState().activeProjectId;
-      const revision = useStore.getState().projectRouteRevision;
-      void prepareMediaImport(projectId, revision)
-        .then(() => importDroppedMedia(file, projectId, "clipboard"))
+      const { activeProjectId: projectId, projectRouteRevision: revision } = state;
+      void Promise.all([readClipboardMediaPaths([file]), prepareMediaImport(projectId, revision)])
+        .then(([paths]) => importDroppedMedia(file, projectId, "clipboard", { paths, multiple: false }))
         .then(() => notifySuccess("剪贴板图片已加入素材库"))
         .catch(err => {
           console.error("paste failed", err);

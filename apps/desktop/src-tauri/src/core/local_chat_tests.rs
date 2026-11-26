@@ -91,6 +91,39 @@ fn local_chat_new_on_card_keeps_history_and_starts_each_provider_without_its_pre
 }
 
 #[test]
+fn local_chat_switch_provider_locks_only_the_executing_agent_card() {
+    for (step, blocked) in [
+        (serde_json::json!({"status":"pending"}), false),
+        (serde_json::json!({"status":"done"}), false),
+        (serde_json::json!({"status":"waiting"}), false),
+        (serde_json::json!({"status":"running"}), true),
+        (serde_json::json!({"status":"waiting","chatInput":{"requestId":"uncertain-native-send"}}), true),
+    ] {
+        let db = fixture();
+        let started = db.begin_local_chat(&input("previous-turn")).unwrap();
+        let previous = started.conversation.summary;
+        db.finish_local_chat(&previous.id, &started.turn_id, "done", None).unwrap();
+        let mut before = agent_projection(&db);
+        let run = serde_json::json!({"id":"workflow","startId":"upstream","threadId":"thread","status":"running",
+            "order":["upstream",previous.node_id],"lockedNodeIds":["upstream",previous.node_id],"writeNodeIds":["upstream",previous.node_id],
+            "steps":{"upstream":{"status":"running"},(previous.node_id.clone()):step}});
+        before["run"] = run.clone();
+        before["runs"] = serde_json::json!([run]);
+        db.conn.lock().unwrap().execute("UPDATE canvas_workflows SET document_json=?1 WHERE project_id='project-a'", [before.to_string()]).unwrap();
+        let result = db.new_agent_chat("project-a", &previous.node_id, &previous.id, Some(ChatProvider::DshCloud), None);
+        if blocked {
+            assert!(result.is_err(), "{step}");
+            assert_eq!(agent_projection(&db), before);
+        } else {
+            let switched = result.unwrap();
+            assert_eq!(switched.summary.node_id, previous.node_id);
+            assert_eq!(switched.summary.provider, "dsh-cloud");
+            assert_eq!(agent_projection(&db)["runs"], before["runs"]);
+        }
+    }
+}
+
+#[test]
 fn local_chat_switch_provider_archives_used_turns_and_reuses_the_empty_conversation() {
     let db = fixture();
     let mut input = input("old-codex");

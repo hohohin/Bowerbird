@@ -225,7 +225,7 @@ try {
     const agent = { ...newWorkflowNode('agent', 420, 0, 'codex'), id: 'agent', prompt: '处理当前行', inputs: { text: [{ nodeId: 'loop', portId: 'text' }, { nodeId: 'loop', portId: 'iteration' }], image: [{ nodeId: 'loop', portId: 'image' }] } };
     await create('loop-rows', [rows, agent]); await c.start('loop');
     check(c.document.run.status === 'waiting' && c.document.run.loop.completed.length === 1 && c.document.run.loop.index === 1, 'failure pauses current row');
-    check(c.isLocked('agent'), 'failed loop retains lock');
+    check(!c.isLocked('agent'), 'a failed loop retains its retry checkpoint without editing locks');
     check(savedInputs[0]['引用文本 1'].rows[0][0] === '产品甲' && savedInputs[1]['引用文本 1'].rows[0][0] === '产品乙', 'Agent receives one table row');
     check(savedInputs[0]['引用文本 2'] === '1' && savedInputs[1]['引用文本 2'] === '2', 'row text and numeric iteration remain separate');
     await api.projectCanvasNoteUpdate('loop-table', JSON.stringify({ schema_version: 1, note_type: 'text', cells: [[cell('a1', 'changed')]], text: 'changed', member_ids: [] }));

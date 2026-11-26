@@ -258,6 +258,25 @@ fn validate_image_output(value: &Value, assets: &mut HashSet<String>) -> AppResu
     Ok(())
 }
 
+fn validate_outputs(outputs: &Value, assets: &mut HashSet<String>) -> AppResult<()> {
+    for value in outputs.as_object().ok_or_else(invalid)?.values() {
+        match value["type"].as_str() {
+            Some("session") if value["nodeIds"].as_array().is_some_and(|ids| ids.iter().all(|id| id.is_string())) => {},
+            Some("image") => validate_image_output(value, assets)?,
+            Some("text") if value["text"].is_string() => {
+                if let Some(ids) = value.get("assetIds") {
+                    for asset in ids.as_array().ok_or_else(invalid)? {
+                        assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
+                    }
+                }
+            },
+            Some("visual-profile") if value["profileId"].as_str().is_some_and(|id| !id.is_empty()) && value["version"].as_i64().is_some_and(|v| v > 0) => {},
+            _ => return Err(invalid()),
+        }
+    }
+    Ok(())
+}
+
 fn validate_loop(run: &Value, nodes: &[Value], assets: &mut HashSet<String>) -> AppResult<()> {
     let Some(state) = run.get("loop") else { return Ok(()); };
     let owner = state["nodeId"].as_str().ok_or_else(invalid)?;
@@ -505,21 +524,7 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
             }
         }
         dependencies.insert(id, deps);
-        for value in node["outputs"].as_object().ok_or_else(invalid)?.values() {
-            match value["type"].as_str() {
-                Some("session") if value["nodeIds"].as_array().is_some_and(|ids| ids.iter().all(|id| id.is_string())) => {},
-                Some("image") => validate_image_output(value, &mut assets)?,
-                Some("text") if value["text"].is_string() => {
-                    if let Some(ids) = value.get("assetIds") {
-                        for asset in ids.as_array().ok_or_else(invalid)? {
-                            assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
-                        }
-                    }
-                },
-                Some("visual-profile") if value["profileId"].as_str().is_some_and(|id| !id.is_empty()) && value["version"].as_i64().is_some_and(|v| v > 0) => {},
-                _ => return Err(invalid()),
-            }
-        }
+        validate_outputs(&node["outputs"], &mut assets)?;
     }
     let mut settled = HashSet::new();
     while settled.len() < nodes.len() {
@@ -568,10 +573,20 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 if !reads_and_writes.contains(id) || !writes.insert(id) { return Err(invalid()); }
             }
             if run["order"].as_array().ok_or_else(invalid)?.iter().any(|id| !writes.contains(id.as_str().unwrap())) { return Err(invalid()); }
+            if let Some(snapshots) = run.get("inputOutputs") {
+                // Frozen fallback outputs must not reattach removed project assets.
+                let mut snapshot_assets = HashSet::new();
+                for (id, outputs) in snapshots.as_object().ok_or_else(invalid)? {
+                    if !reads_and_writes.contains(id.as_str()) { return Err(invalid()); }
+                    validate_outputs(outputs, &mut snapshot_assets)?;
+                }
+            }
             writes.retain(|id| !triggers.contains(id));
             reads_and_writes.retain(|id| !triggers.contains(id));
             if accesses.iter().any(|(other_access, other_writes)| !writes.is_disjoint(other_access) || !other_writes.is_disjoint(&reads_and_writes)) { return Err(invalid()); }
             accesses.push((reads_and_writes, writes));
+        } else if run.get("inputOutputs").is_some() {
+            return Err(invalid());
         }
     }
     Ok(assets)
@@ -1658,5 +1673,62 @@ mod tests {
         assert!(validate(&doc).is_err());
         doc["runs"][1]["writeNodeIds"] = json!([]);
         assert!(validate(&doc).is_err());
+    }
+
+    #[test]
+    fn active_workflow_saves_pending_deletion_with_trimmed_scope() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.create_project("p","test","blank:p","blank:p","blank").unwrap();
+        let mut owner = node("loop", json!({}));
+        owner["kind"] = json!("loop");
+        let from_loop = json!({"image":[{"nodeId":"loop","portId":"image"}]});
+        let accepted = json!({"status":"running","jobId":"original-job","turnKey":"original-turn",
+            "generationRunInput":{"prompt":"已提交","references":[["original-image"]]}});
+        let first = json!({"id":"first","threadId":"t1","startId":"loop","status":"running",
+            "order":["loop","keep","remove"],"lockedNodeIds":["loop","keep","remove","shared"],"writeNodeIds":["loop","keep","remove"],
+            "steps":{"loop":{"status":"done"},"keep":accepted,"remove":{"status":"pending"}},
+            "inputOutputs":{"shared":{"image":{"type":"image","assetIds":["frozen-image"]}},"remove":{"text":{"type":"text","text":"历史"}}},
+            "loop":{"nodeId":"loop","bodyIds":["keep","remove"],"index":1,"items":[{"text":"第一项","assetIds":[]},{"text":"第二项","assetIds":[]}],
+                "completed":[{"outputs":{"keep":{},"remove":{}},"steps":{"keep":{"status":"done","jobId":"old-keep"},"remove":{"status":"done","jobId":"old-remove"}}}]}});
+        let other = json!({"id":"other","threadId":"t2","startId":"outside","status":"running","order":["outside"],
+            "lockedNodeIds":["outside","shared"],"writeNodeIds":["outside"],"steps":{"outside":{"status":"running"}}});
+        let before = json!({"schema_version":1,"nodes":[owner,node("keep",from_loop.clone()),node("remove",from_loop),
+            node("shared",json!({})),node("outside",json!({}))],"run":other,"runs":[first,other]});
+        assert!(!validate(&before).unwrap().contains("frozen-image"), "run snapshots do not relink project assets");
+        let mut invalid_snapshot = before.clone();
+        invalid_snapshot["runs"][0]["inputOutputs"]["outside"] = json!({});
+        assert!(validate(&invalid_snapshot).is_err(), "a run cannot snapshot nodes outside its scope");
+        invalid_snapshot = before.clone();
+        invalid_snapshot["runs"][0]["inputOutputs"]["shared"]["image"]["assetIds"] = json!([17]);
+        assert!(validate(&invalid_snapshot).is_err(), "frozen outputs use the same shape as live outputs");
+        assert_eq!(db.workflow_save("p", 0, before.clone()).unwrap(), 1);
+
+        let mut cleaned = before.clone();
+        cleaned["nodes"].as_array_mut().unwrap().remove(2);
+        assert!(db.workflow_save("p", 1, cleaned.clone()).is_err(), "stale node IDs cannot be persisted");
+        let run = &mut cleaned["runs"][0];
+        run["order"] = json!(["loop","keep"]);
+        run["lockedNodeIds"] = json!(["loop","keep","shared"]);
+        run["writeNodeIds"] = json!(["loop","keep"]);
+        run["steps"].as_object_mut().unwrap().remove("remove");
+        run["loop"]["bodyIds"] = json!(["keep"]);
+        assert!(validate(&cleaned).is_err(), "completed loop rows must match the surviving body");
+        let completed = &mut cleaned["runs"][0]["loop"]["completed"][0];
+        completed["outputs"].as_object_mut().unwrap().remove("remove");
+        completed["steps"].as_object_mut().unwrap().remove("remove");
+        assert!(validate(&cleaned).is_err(), "deleted keys cannot remain in the active snapshot");
+        cleaned["runs"][0]["inputOutputs"].as_object_mut().unwrap().remove("remove");
+        assert!(!workflow_save_requires_pro(&before, &cleaned, false));
+        assert_eq!(db.workflow_save("p", 1, cleaned.clone()).unwrap(), 2);
+        let saved = db.workflow_get("p").unwrap();
+        assert_eq!(saved.document, cleaned);
+        assert_eq!(saved.document["runs"][0]["steps"]["keep"], accepted);
+        assert_eq!(saved.document["runs"][0]["loop"]["completed"][0]["steps"]["keep"]["jobId"], "old-keep");
+        assert!(db.workflow_save("p", 1, cleaned.clone()).is_err(), "stale revision cannot revive the old plan");
+        cleaned["runs"][1]["lockedNodeIds"] = json!(["outside","shared","keep"]);
+        cleaned["runs"][1]["writeNodeIds"] = json!(["outside","keep"]);
+        assert!(db.workflow_save("p", 2, cleaned).is_err(), "a second run cannot write an accepted card");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 2);
     }
 }

@@ -61,6 +61,7 @@ const activityNodesBySnapshot = new WeakMap<readonly CanvasNode[], Map<string, C
 
 export interface WorkflowGenerationActivity {
   running: boolean;
+  holdingPlacement?: boolean;
   attemptId?: string;
   terminal?: "done" | "failed" | "cancelled";
   awaitingOutput?: boolean;
@@ -77,8 +78,7 @@ export function workflowGenerationActivity(node: WorkflowNode, run: WorkflowRun 
   if (!collapsibleGenerationCard(node)) return { running: false };
   const step = run?.steps[node.id];
   const submitted = step?.generationSubmission === "submitted";
-  const executing = !!run && workflowRunActive(run) && (step?.status === "running"
-    || run.status === "running" && step?.status === "pending" && (run.startId === node.id || !!step.detail));
+  const executing = !!run && workflowRunActive(run) && step?.status === "running";
   if (step?.comfyOptimization && !step.comfyAutoGeneration) return { running: executing };
   let canvasNodes = activityNodesBySnapshot.get(nodes);
   if (!canvasNodes) {
