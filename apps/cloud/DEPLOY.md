@@ -1,12 +1,14 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
-## 2026-11-24 H3 空槽预优化与音色参考已部署
+## 逐镜分析单账号试价
 
-北京时间 11:45:44，现役 VPS Worker 切换到 `sha256:efbb87fbddc4d1f7fc1ec50e457827f35748026571dd8190ba939f089643f633`。本次发布范围为 Worker 的 `cloud-text-skills.ts`（SHA-256 `7ffc6b998898f1b6503921d48a7fc562ea9931c554816416047bcd6177b60c4b`）和只读挂载的 H3 视频 Skill（`50dbb22adfb8c7ea7edc5bec091c9ae5155de1cb3ed8ec53db5eb79d99882b42`）。切换前断网候选通过 10 项专项测试，切换后独立核对了现役文件、运行配置、挂载和容器状态。11:45 和 11:47 两次查询的五类活动队列均为空。
+2026-11-25 北京时间 11:13:33，生产已启用单账号私价。定向迁移 `0104_library_shot_pilot.sql` 并发布 `understand-proxy` v58 后，才在同一事务登记试用账号并启价。两档分别为每镜 ≤15 秒 0.054 Bcoin、>15 至 60 秒 0.134 Bcoin。官网与 Edge 直连的匿名报价均返回 HTTP 401。真单及扣费由用户本人在 Windows 验收版确认。[生产部署回执](../../project_logs/2026-11-25-library-shot-deployment.md)
 
-一次临时 QA 登录通过正式 Agent Run 接口完成了单图 Ref2VA 的真实优化，返回六个字段。结果把声音属性限定给 (S1)，保留新对白 `<d>[English] The train leaves at noon.</d>`。登录已清理。候选、哈希和优化后正文位于 `.tmp/h3-ref-voice-20261124/`。回退时先确认共用 Worker 队列空闲，再在 VPS 执行 `sudo bash /opt/bowerbird/deploy-backups/h3-ref-voice-20261124/release.sh restore`。
+运营启用时原子设置该服务行 `active=true`、`pricing_ready=true`、`pilot_only=true` 和唯一 `pilot_user_id`，同时保留已核准的两档价格与定价版本。数据库对报价和建单共用已鉴权主体判断，试价行对匿名及普通登录账号的表查询均不可见。注册测试账号可以多次使用，每镜沿用既有余额、速率和成本保护。关闭新试单仅将该行设为 inactive 且 `pricing_ready=false`，保留私有标记、旧任务及其原价恢复。进入将来的公开报价需独立确认，清除私有配置后再开启公开门控。
 
-## 素材库分镜复刻关闭态候选
+## 素材库分镜复刻基础服务的关闭态部署
+
+2026-11-25 北京时间 10:43:47，生产理解 Worker 完成首次切换。当时数据库为 `0103_library_video_shots`，`entitlement` v51、`understand-proxy` v57、`understand-worker` v35 的生产包均已逐文件读回，逐镜服务目录 `active=false`、`pricing_ready=false`。[生产部署回执](../../project_logs/2026-11-25-library-shot-deployment.md)
 
 逐镜视觉理解使用 `library_video_shot_analysis`。2026-11-24 用户已确认上游账单。按已实测模型 `doubao-seed-2-1-lite-260915` 的 1.6 倍口径，单镜不超过 15 秒为 0.054 Bcoin，超过 15 秒至 60 秒为 0.134 Bcoin。每镜使用 1 fps 无声视频并一次返回三项结果。批量确认使用各待分析区间的合计，停止后仅已受理的镜头具有预留。整币消费者继续使用原有的整币分配及签名字段。本服务的余额和交易可通过 `entitlement.balances_milli` 和 `recent_transactions[].amount_milli` 核对，每千单位为一个 Bcoin。
 
@@ -19,7 +21,13 @@
 
 分镜迁移独立于整段画面描述 0100、0101 以及分层生图 0102。部署工具应定向执行分镜迁移并核实实际履历，避免一并推送或登记未执行的并行迁移。Worker 先领取原理解任务，空闲且消费者声明对应能力时才尝试独立视觉队列。缺少可选队列 RPC 或表时保留原领取和清理响应。缺少精确余额视图的旧库继续返回原权益字段。三层入口仍需 0103 和全部新组件就绪后才准入。
 
-隔离验证入口为 `apps/cloud/scripts/text-job-upload-db.test.mjs <PG-bin> <pg-driver> --library-shots`、Deno 的 `library-shot-edge_test.ts` 与 `understand-worker/library-migration-compat_test.ts`、理解 Worker 的 `library-visual.test.ts`。此节记录待部署范围。
+隔离验证入口为 `apps/cloud/scripts/text-job-upload-db.test.mjs <PG-bin> <pg-driver> --library-shots`、Deno 的 `library-shot-edge_test.ts` 与 `understand-worker/library-migration-compat_test.ts`、理解 Worker 的 `library-visual.test.ts`。
+
+## 2026-11-24 H3 空槽预优化与音色参考已部署
+
+北京时间 11:45:44，现役 VPS Worker 切换到 `sha256:efbb87fbddc4d1f7fc1ec50e457827f35748026571dd8190ba939f089643f633`。本次发布范围为 Worker 的 `cloud-text-skills.ts`（SHA-256 `7ffc6b998898f1b6503921d48a7fc562ea9931c554816416047bcd6177b60c4b`）和只读挂载的 H3 视频 Skill（`50dbb22adfb8c7ea7edc5bec091c9ae5155de1cb3ed8ec53db5eb79d99882b42`）。切换前断网候选通过 10 项专项测试，切换后独立核对了现役文件、运行配置、挂载和容器状态。11:45 和 11:47 两次查询的五类活动队列均为空。
+
+一次临时 QA 登录通过正式 Agent Run 接口完成了单图 Ref2VA 的真实优化，返回六个字段。结果把声音属性限定给 (S1)，保留新对白 `<d>[English] The train leaves at noon.</d>`。登录已清理。候选、哈希和优化后正文位于 `.tmp/h3-ref-voice-20261124/`。回退时先确认共用 Worker 队列空闲，再在 VPS 执行 `sudo bash /opt/bowerbird/deploy-backups/h3-ref-voice-20261124/release.sh restore`。
 
 ## 素材库画面分析关闭态候选
 
