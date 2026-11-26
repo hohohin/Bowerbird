@@ -11,7 +11,7 @@
 
 DSH · Cloud 当前处于 DSH 上云测试阶段，用户暂时免费使用。现行测试价为 **0 Bcoin**，上游模型费用由 Bowerbird 承担。
 
-正式收费按实际消耗的 token 计算。一轮对话触发多次模型调用时，累计当轮各次调用的实际用量，再按适用费率结算。首版 1.60 倍系数已确认，单轮授权上限和启费时间待验收及确认。0094 和 0095 已上线。0096 和配套付费路径是默认关闭的工程候选。
+正式收费按实际消耗的 token 计算。一轮对话触发多次模型调用时，累计当轮各次调用的实际用量，再按适用费率结算。首版 1.60 倍系数已确认，单轮授权上限和启费时间待验收及确认。0094 和 0095 已上线。0096、配套 Edge 和 VPS Worker 已关闭态部署，线上仍按 0 Bcoin 试用。[部署回执](#2026-11-26-0096-关闭态部署)
 
 ## 实际 Token 到 Bcoin 的映射草案
 
@@ -39,8 +39,44 @@ DSH · Cloud 当前处于 DSH 上云测试阶段，用户暂时免费使用。�
 - 0096 初始目录为关闭。报价绑定账号适用范围和所选模型，桌面人工发送确认费率及预授权整币后，在建单前复核当前账号、模型、计价版本、整币上限、输出上限。原单按原键读取，费用用原任务 ID 读取。自动工作流无明确授权时拒绝付费提交。原生和网页模拟验证均通过。[桌面协议](../../apps/desktop/src-tauri/src/commands/local_chat.rs) · [Edge 报价与建单](supabase/functions/chat-proxy/index.ts)
 - VPS 每次调用携带原任务 ID、租约、调用 ID、模型及实际发出的 `max_tokens`，取得数据库授权才请求固定官方上游，授权不明确时不重放。以官方组合上下文 1,048,576 为保守上限，最坏费用为「全未命中上下文 × 未命中单价＋允许输出 × 输出与未命中单价之差」。示例以单次 16,384 输出计算，Flash 至少需冻 71 Bcoin、Pro 312 Bcoin，实际按用量结算。该例仅说明一笔最坏风险，运营的整轮上限及输出限制尚待确认。钉版 DSH Pro 回环共 7 次普通、工具续调及压缩调用均逐次匹配并记录用量。43 项 Worker 定向回归与全量类型检查通过。[Worker 上游调用](../agent-worker/src/cloud-chat/dsh.ts) · [DeepSeek 接口上限](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion/)
 - 独立 PostgreSQL 18.7 按生产迁移顺序 0095→0094→0096，通过并行锁、超授权、实冻不足拒绝、原键重放、取消、过期和跨轮退款测试。两个实际 Edge handler 与该数据库组合验证了报价、建单、领取、授权、用量和唯一终态回执。用户在运行中停止且用量迟到时，按同一租约补报，完整回执在后续轮询结算。已登记的 `unknown` 如超期仍缺可信用量，按期限释放对应冻结。待核和终态费用可按原用户原任务查询。[0096 与结算](supabase/migrations/0096_chat_paid_billing.sql) · [隔离数据库用例](scripts/chat-paid-db.fixture.mjs)
-- 0096、配套付费 Edge／Worker、桌面正式包尚未上线，线上仍是 0 Bcoin。启费前须完成自然用量与供应商实账核对，确认单轮边界并审批配套部署。暂停付费新单时，先按原身份收尾已受理上传，再关 `CHAT_DSH_TOKEN_BILLING_ENABLED`。保留付费 Worker 能力与原单读写，直到所有待核费用已结算或过期释放，然后再退出付费领取。原试用单保持零价。2026-11-21 01:58:28 对现役 0095 的只读聚合仍为零个模型调用及零个可比结算样本。
+- 当日 0096、配套付费 Edge／Worker 和桌面正式包均待部署，线上为 0 Bcoin。2026-11-21 01:58:28 对现役 0095 的只读聚合为零个模型调用及零个可比结算样本。原试用单按零价结算。最新发布按下方部署回执执行。
 - 第八轮后，模型别名改由受控付费目录读取并按轮冻结。Flash 与 Pro 的配置不能混用。无效配置拒绝新付费报价，未知型号仍保留原 0095 回执，到期免收该调用。目录不向普通账号及匿名公开后台别名，报价与钱包回执也不携带该列表。真实 PostgreSQL 角色、目录轮换、旧单快照、未知回执及 Edge 组合复跑通过。02:26:46 生产只读聚合仍无自然用量。
+
+### 0096 部署、放量与暂停
+
+1. 部署前读回迁移履历，核对 0094／0095 和 0096 的应用状态、现役两个 Edge 的文件和 JWT 配置、VPS Worker 的镜像与挂载以及五类活动队列。确认 0096 与现用钱包、分镜交易和服务目录兼容。将候选差异叠到已核实的现役基线，保留并行发布的 Edge 和 Worker 改动。备份现役版本和配置。获批后定向应用 0096，在保持付费接单关闭的情况下依次发布 `chat-proxy`、`chat-worker` 和 VPS Worker。核对三张新增账务表的强制 RLS 和受限权限、两条付费目录初始不可报价、原零价轮次可查可停、Worker 控制面拒绝无效令牌。
+2. 获批上限后，同一事务配置 `chat_paid_flash_v1` 与 `chat_paid_pro_v1` 的 `unit_cost`、`parameters.max_output_tokens` 和 `active`。保留 `pricing_version=20261121`、对应模型别名与已确认费率。事务内回读 `quote_chat_paid_turn`，两条报价均须可用，且版本、模型、整币预冻、输出上限与获批值一致。
+3. 确认配套桌面可用，VPS Worker 具备受支持的 DeepSeek 上游地址和持久会话卷。启用 Edge 的 `CHAT_DSH_TOKEN_BILLING_WORKER_ENABLED` 和 VPS 的 `BOWERBIRD_DSH_TOKEN_BILLING` 后核对付费领取能力。先以 `CHAT_DSH_VPS_V2_TEST_ONLY=true`、`CHAT_DSH_TOKEN_BILLING_ENABLED=true` 开试点。此时仅 `app_metadata.bowerbird_test=true` 可新建付费轮次。旧客户端不能开新免费轮次，已受理原轮次按原价完成。验证核准的普通和 Pro 账号分别通过第 6 轮，核对 Flash／Pro 实耗、余数、主动停止、余额不足与回退。用 Pro 画板验收工作流的统一确认和多步执行。复核实账和日桶后，经批准将 `CHAT_DSH_VPS_V2_TEST_ONLY` 设为 `false` 开放其他账号。
+4. 暂停时把 `CHAT_DSH_TOKEN_BILLING_ENABLED` 设为 `false`，同时把 `CHAT_DSH_VPS_V2_TEST_ONLY` 恢复为 `true`，将可能恢复的 0 Bcoin 试用报价限制在试用账号。暂停所有 v2 新单时，同时关闭 `CHAT_DSH_VPS_V2_ENABLED`。保持 `CHAT_ENABLED=true`，保留付费原键续传、查单、工具回执、取消和费用回执。若须拒绝仍运行旧环境的新付费请求，在单独事务将两条付费目录设为 `active=false`，核对两条报价关闭。已冻结轮次和结算使用各自快照。环境切换传播期间继续盘点新进入的订单和预冻。
+5. 保持付费 Edge 和 VPS Worker 运行，直至已受理订单和待核费用有终态回执。按 `chat_completion_jobs.status` 监控 `uploading`、`queued`、`running`，并通过 `hold_id` 和 `job_id` 关联 `credit_holds`、`chat_paid_receipts` 检查未决账务。对照同账号 `chat_paid_accounts.carry_nano`、结算与退款流水。到期订单等待原 Worker 释放并读回。处理完所有未决账务后才退出付费领取。保留 0096 表、原回执和账本。
+
+| 候选输出上限 | Flash 最低整币预冻／¥500 最多新轮 | Pro 最低整币预冻／¥500 最多新轮 |
+| ---: | ---: | ---: |
+| 16,384 | 71 Bcoin／225 | 312 Bcoin／51 |
+| 32,768 | 74 Bcoin／216 | 321 Bcoin／49 |
+
+上表按当天空桶、单一模型计算。新付费轮次按 `ceil(预冻 Bcoin × 1,000,000 ÷ 32)` 微元占用 `CHAT_DAILY_COST_LIMIT_CNY`，北京时间换日。已受理轮次取消或返还钱包预冻不会回补日桶，免费与付费轮次共用该桶。日预算按试点或全量的目标日轮次、模型比例和实际预冻值核定，另核对每账号默认每分钟 10 轮。最低预冻按一次最坏调用向上取整。以 16,384 输出为例，Flash 首次已核费用超过 0.745408 Bcoin 或 Pro 超过 0.572928 Bcoin 后，同一轮下一次等上限调用会超过最低预冻。试点须验证工具续调和上下文压缩，按实测确定整轮预冻。
+
+下列只读查询有结果时继续保留付费领取和结算能力。
+
+```sql
+select j.status, h.status as hold_status, count(*) as jobs,
+       min(j.content_expires_at) filter (where r.job_id is null) as first_unsettled_deadline
+from public.chat_completion_jobs j
+join public.credit_holds h on h.id = j.hold_id
+left join public.chat_paid_receipts r on r.job_id = j.id
+where j.paid_billing is not null
+  and (j.status in ('uploading', 'queued', 'running') or r.job_id is null
+       or h.status in ('held', 'pending_settlement'))
+group by j.status, h.status;
+```
+
+### 2026-11-26 0096 关闭态部署
+
+- 经用户确认定向应用 0096，规范 LF 正文 SHA-256 为 `d82380f86c66b46b40bb08a7a436c6213f9f61f235520692ed61722a914424c9`。已按包含 0104 的生产顺序隔离重放。事务与独立只读复核确认旧 98 条迁移记录逐条一致。三张付费表启用强制 RLS，七个付费 RPC 仅服务角色能执行。付费账号、调用授权和回执均为零。原 10 条 0095 用量、两项试点保护策略和分镜退款触发器均保留。
+- 北京时间 13:22:43 读回 `chat-proxy` v20 和 `chat-worker` v14，均为 ACTIVE。Proxy JWT 继续开启，Worker 由专用令牌校验。两个包的十个运行文件与候选逐一匹配。付费接单与付费领取开关均未设置，Flash 与 Pro 目录停用。原有 7 个试用账号继续按 0 Bcoin、每日 5 轮受理，对话日预算为 ¥500。
+- 北京时间 13:23:06 现役 VPS 切换至 `sha256:8ea827b1c1de29e567c0414e9eee62e4f7d0088687ebf25c5c4f1544a977c68c`。基于原镜像仅覆盖四个计量文件，在 VPS 断网通过 44 项回归。生产读回核对宿主与容器文件、配置和持久会话挂载，重启、OOM 和消费错误均为零。切换前后六类队列均为空。官网网关及直连的匿名报价和查单均返回 401，Worker 控制面接受有效令牌并拒绝无效令牌。部署烟测未提交真实模型调用或扣款。
+- 本机发布回执位于 `.tmp/dsh-paid-release-20261126/`。关闭态回退可分别恢复已备份 Edge v19／v13 的源码包及 JWT 设置。先确认共用 Worker 六类队列为空，再用该目录 `worker.ps1 -Mode Restore` 恢复 `bowerbird/generation-worker:rollback-dsh-paid-20261126` 及四份宿主文件。保留 0096 和全部历史账本。启费仍须确认配套桌面包、整轮预冻、日预算和试点范围，并核对真实供应商账单。
 
 ## 逐次模型用量记录（0095 已部署）
 

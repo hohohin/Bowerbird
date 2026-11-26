@@ -37,7 +37,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 | macOS | 公开通道为 Apple Silicon **26.10.801**、Intel **26.10.1501**。Apple Silicon 26.11.2403 本地签名测试包已交付 R2 独立目录。Mac 源码统一至 `dev` 26.11.2403／SQLite 0062。ARM 构建、Rust 全量和隔离 WKWebView 烟测通过，负责人已确认真实登录及线上 DSH · Cloud v2 验收通过。[桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 正式验收](macOS/RELEASE-READINESS.md) · [源码收口验证](macOS/DEV-CONVERGENCE-2026-11-24.md) |
 | 浏览器扩展 | Windows 公开桌面包内为 **0.5.3**。新版本合并多标签页心跳和批量连接，桌面能提示扩展更新。更新文件后在浏览器重新加载并刷新采集网页。[版本与验收](apps/extension/README.md) |
 | Cloud 与官网 | Cloud 网关、原请求恢复和 VPS 定时巡检已上线。微信 Native v3 已开放公开购买，注册及 Pro 月度赠币已启用。Seedance 2.5 已开三档，分层已部署。GPT／Flash 未启价，Studio 未新增销售。[部署](apps/cloud/DEPLOY.md) · [微信支付](apps/cloud/WECHATPAY.md) · [现行定价](dev-doc/Bowerbird定价方案v2-订阅积分制.md) |
-| 对话 | 桌面对话与 Agent 卡片共用本机 Codex、本机 DSH 0.2 和 DSH · Cloud v2。Cloud 仅对标记账号开放 0 Bcoin 试用，0094／0095 已上线，0096 付费版是默认关闭的隔离候选。[桌面契约](dev-doc/CHAT-PROVIDERS.md) · [云端契约](apps/cloud/CHAT.md) |
+| 对话 | 桌面对话与 Agent 卡片共用本机 Codex、本机 DSH 0.2 和 DSH · Cloud v2。Cloud 仅对标记账号开放 0 Bcoin 试用。0094／0095 已上线，0096 与配套 Edge、VPS Worker 已按关闭态部署，付费入口待启用。[桌面契约](dev-doc/CHAT-PROVIDERS.md) · [云端契约](apps/cloud/CHAT.md) |
 | 云端异步 Agent Run | 统一 Harness 与独立 HTML renderer 已部署，保持 **test-only**。[Harness](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) |
 | 素材视频转录 | 0099、逐字时间 Worker 已部署。指定账号可按每条 1 Bcoin 重复试跑，公开入口关闭。[转录与试跑](dev-doc/VIDEO-MEDIA.md#2026-11-21-转录入口直接报价与逐字定位) · [部署](apps/cloud/DEPLOY.md#2026-11-21-指定账号可重复转录与字级时间已部署) |
 
@@ -46,7 +46,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 | 事项 | 完成条件与入口 |
 |---|---|
 | 全量发布门禁 | 11 月 21 日第九轮复审维持 **No-Go**。待 Windows 可信发布者签名及正式双签包，Mac 双架构正式签名、公证和发布环境回执，双平台原生及旧版升级实机验收，目标规格混合压测、容灾与远端告警送达，供应商和商业化实账、微信登录与 Pro 到期实测。团队当前缺 Windows 正式签名资源。[第九轮复审](https://gemini.google.com/u/1/app/7000ffa86b500fd5?pli=1&pageId=none) · [发布和签名](dev-doc/DESKTOP-UPDATES.md) · [复审流水](project_logs/2026-11-22-project-docs-history.md) |
-| 对话启费与 Harness 扩围 | DSH · Cloud 等待首条生产自然用量及供应商实账，验证单轮授权、扣费、回退及启费范围。通用 Harness 扩围前补自然任务小名单样本，重扫并处理基础镜像风险。[对话](apps/cloud/CHAT.md) · [Harness](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) |
+| 对话启费与 Harness 扩围 | DSH · Cloud 0096 关闭态已验收。启费待配套桌面包、整轮预冻与日预算确认，再用获准账号核对供应商实账、付费结算与回退。通用 Harness 扩围前补自然任务小名单样本，重扫并处理基础镜像风险。[对话](apps/cloud/CHAT.md) · [Harness](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) |
 | 任务数据过期 | 用专用账号验证理解／视觉终态仍可按原身份在线取回，并检查过期拒读和清理。[部署与读回](project_logs/2026-11-11-audit-cloud-deployment.md) |
 | 文件工作区 | 完成跨设备随图资料恢复，验收真实回收站、跨盘、Mac 原生及大型 NAS。核验旧迁移启动进度、界面恢复和 Vite 跨重启。补充连接原件变更触发自动分类的设置说明。[文件工作区](dev-doc/FOLDER-MODE.md) · [迁移诊断](project_logs/2026-10-19.md) · [分类](dev-doc/LOCAL-CLASSIFICATION.md) |
 | 桌面原生体验 | 验收用户库升级、重项目长期性能、项目删除、拖放／剪贴板、HEIC HDR／广色域和视频封面。排查探索可滚动但不可点击，验证真实站点拖图及 Mac 媒体稳定性。[画板](dev-doc/PROJECT-CANVAS-PLAN.md) · [探索](dev-doc/EMBEDDED-BROWSER.md) · [发布验收](dev-doc/DESKTOP-UPDATES.md) |

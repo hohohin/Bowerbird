@@ -122,6 +122,7 @@ H3 图片卡和视频卡在原文框下复用 `H3OptimizationActions` 和 `H3Pro
 - DSH 接入沿 `local_chat.rs` 分派，历史与建卡复用 SQLite 和 `local_chat_cards::create_cards`。本机桥复用 `agent_ds::dsh_connection/dsh_client`；新版 Cloud 桥由 `local_chat_dsh_vps.rs` 按原任务身份收发。卡片、创作框与详情复用 [DshSkillSelect](../../apps/desktop/src/components/creation/DshSkillSelect.tsx)，仅传技能 ID 与用户参数。详见[对话 provider](../CHAT-PROVIDERS.md)。
 - Codex CLI 和本机 DSH 共用 [AgentCardQuestion](../../apps/desktop/src/components/AgentCardQuestion.tsx)。提问与工作流卡片的右上关闭按钮共用 `canvas-tactical-card-close` 样式。待答快照与回答分别使用 `localChat.questions` 和 `localChat.answerQuestion`，桌面根据 provider 将答案交给原生会话。
 - Agent 卡片的回复操作在 [AgentCardConversation](../../apps/desktop/src/components/AgentCardConversation.tsx)。复制与详情共用 `useCopyChatReply`，重跑沿用画布的单卡运行入口。
+- 付费确认复用 [ChatPaidConfirmation](../../apps/desktop/src/components/ChatPaidConfirmation.tsx) 与 [localChatPaid](../../apps/desktop/src/lib/localChatPaid.ts)。普通发送传当前轮报价，工作流按模型汇总本次执行范围，经同一弹窗确认后向原生透传授权。
 - 本机／Cloud 来源使用 `creation/ChatProviderSelect.tsx`，模型和推理参数使用 `creation/CodexModelSelect.tsx`，由 Agent 卡片、`CreationBoard` 和 `LocalChatPanel` 共用。Agent 卡片启用选择器的紧凑图标显示。能力快照由 [chatCapabilities.ts](../../apps/desktop/src/lib/chatCapabilities.ts) 在主窗口启动时读取。Cloud 报价按登录账号隔离，本机 Codex 安装／登录变化后重读目录，DSH 设置结果同步到所有选择器。发送仍由原生执行路径验证。
 - 型号及支持的推理强度来自 `localChat.models()` 的本机 CLI 能力目录。只用于桌面对话，不把图片生成 provider 当成 Codex 子模型；Cloud 隐藏且不发送这些参数。
 - 参数属于下一轮消息，未发送选择随草稿保留，已发送选择从会话恢复。更换型号时重新核对该型号支持的强度，过期选项不静默替换。

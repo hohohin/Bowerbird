@@ -18,13 +18,19 @@ function fixture(initial = doc([node('original')]), options = {}) {
   const interleavedChanges = [];
   const writes = [];
   const modules = new Map();
-  const requests = new Map(), sends = [], stops = [];
+  const requests = new Map(), sends = [], stops = [], quotes = [], payments = [];
   const genJobs = {}, generationRequests = [];
-  const workflowHost = { getState: () => ({ genJobs,
+  const workflowHost = { getState: () => ({ genJobs, cloudAuth: options.paid ? { user_id: options.accountId ?? 'operator' } : undefined,
     startGeneration: async (...args) => { generationRequests.push(args.at(-1)); return { accepted: true }; } }) };
   const chatListeners = new Set(), checkpoints = new Map();
   const reads = { checkpoints: 0, full: 0 };
-  const chatApi = { revision: async id => { reads.checkpoints++; return checkpoints.get(id); }, getByRequest: async id => clone(requests.get(id) ?? null) };
+  const chatApi = { revision: async id => { reads.checkpoints++; return checkpoints.get(id); }, getByRequest: async id => clone(requests.get(id) ?? null),
+    quote: async () => ({ paid_available: !!options.paid }),
+    quotePaid: async model => {
+      quotes.push(model);
+      return { available: true, account_id: 'operator', model, pricing_version: 3, max_credits: model === 'deepseek-flash' ? 71 : 312,
+        max_output_tokens: 16384, rates_nano: { cache_hit: 1280, cache_miss: 64000, output: 256000 } };
+    } };
   const chatStore = { summaries: {}, conversations: {}, drafts: {}, loadProject: async () => {},
     applyConversation(chat) {
       const previous = { conversations: chatStore.conversations };
@@ -33,11 +39,14 @@ function fixture(initial = doc([node('original')]), options = {}) {
     },
     loadConversation: async id => { reads.full++; return clone([...requests.values()].find(chat => chat.id === id) ?? null); },
     stop: async (id, turnId) => { stops.push([id, turnId]); },
-    send: async input => {
+    send: async (input, payment) => {
       assert.equal(saved.document.run.steps[input.agentNodeId].chatInput.requestId, input.requestId, 'save the request before submitting');
       sends.push(clone(input));
+      payments.push(clone(payment));
+      if (options.sendFailure) await options.sendFailure(input, sends.length);
       const chat = { id: input.conversationId ?? 'chat', revision: 1, projectId: input.projectId, nodeId: input.agentNodeId, provider: input.provider, submittedTurnId: 'turn', status: 'idle', error: null,
         messages: [{ turnId: 'turn', role: 'assistant', status: 'done', text: '原轮次输出', referenceAssetIds: [] }] };
+      if (options.asyncRejection) { chat.status = 'failed'; chat.error = options.asyncRejection; chat.messages[0].status = 'failed'; }
       requests.set(input.requestId, clone(chat)); return chat;
     } };
   const api = {
@@ -69,7 +78,7 @@ function fixture(initial = doc([node('original')]), options = {}) {
       if (nestedExecutor && specifier.startsWith('../')) specifier = './' + specifier.slice(3);
       const base = nestedExecutor ? lib : dirname(path);
       if (specifier.startsWith('./executors/')) return load(resolve(lib, specifier + '.ts'));
-      if (['./canvasWorkflowCardExecutors', './canvasWorkflowMediaInputs', './workflowEntitlement'].includes(specifier)) return load(resolve(lib, specifier + '.ts'));
+      if (['./canvasWorkflowCardExecutors', './canvasWorkflowMediaInputs', './workflowEntitlement', './localChatPaid'].includes(specifier)) return load(resolve(lib, specifier + '.ts'));
       if (specifier === './api') return { api };
       if (specifier === './userError') return load(resolve(dirname(path), 'userError.ts'));
       if (specifier === './dshSkill.ts' || specifier === './chatProvider.ts') return load(resolve(dirname(path), specifier));
@@ -108,7 +117,7 @@ function fixture(initial = doc([node('original')]), options = {}) {
   const { CanvasWorkflowController } = load(resolve(lib, 'canvasWorkflowRuntime.ts'));
   const { mergeWorkflowChanges } = load(resolve(lib, 'workflowExternalChanges.ts'));
   return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), writes, requests, sends, stops, chatStore, chatApi, chatListeners, checkpoints, reads, load, genJobs, generationRequests,
-    external: document => { saved = { revision: saved.revision + 1, document: clone(document) }; },
+    quotes, payments, external: document => { saved = { revision: saved.revision + 1, document: clone(document) }; },
     fail: value => { fail = value; }, failNext: () => { failNext = true; }, failRead: value => { failRead = value; },
     interleave: (...changes) => { interleavedChanges.push(...changes); },
     holdRead: () => {
@@ -233,13 +242,16 @@ test('Canvas Pro preserves queued completion from an accepted paid phase and gat
 });
 
 test('Canvas Pro gates explicit retries only when the reset loop step is paid', async () => {
-  const owner = { ...node('loop'), kind: 'loop', loopMode: 'count' };
+  const owner = { ...node('loop'), kind: 'loop', loopMode: 'count', loopCount: 1, outputs: { iteration: { type: 'text', text: '1' } } };
+  const input = { nodeId: owner.id, portId: 'iteration', slot: 1 };
   for (const kind of ['generation', 'agent']) {
-    const card = { ...node('body', '再次提交'), kind };
+    const card = { ...node('body', '再次提交 @[iteration]'), kind, inputs: { text: [input] },
+      promptReferences: [{ id: 'iteration', type: 'text', input, slot: 1, label: '当前轮次' }] };
     const run = { id: 'loop-run', startId: owner.id, order: [owner.id, card.id], status: 'waiting',
       steps: { [owner.id]: { status: 'done' }, [card.id]: { status: 'failed', retrySafe: true } },
       loop: { nodeId: owner.id, bodyIds: [card.id], index: 0, items: [{ text: '', assetIds: [] }], completed: [] } };
     const f = fixture({ ...doc([owner, card]), run }, { authorize: deniedCanvasPro });
+    assert.deepEqual(plain(f.load(resolve(lib, 'canvasWorkflow.ts')).workflowOrder([owner, card], owner.id)), run.order);
     await f.controller.load();
     if (kind === 'agent') {
       await assert.rejects(() => f.controller.retryLoop(run.id), /需要 Pro/);
@@ -329,6 +341,131 @@ test('only clicking run on the Agent itself opts its saved request into bound co
     assert.equal(request.manualCardRun, expected);
     assert.deepEqual(f.saved().document.run.steps[agent.id].chatInput, plain(request));
   }
+});
+
+const paidAgent = (id, model = 'deepseek-flash', inputs = {}) => ({ ...node(id, '写一段文字'), kind: 'agent', chatProvider: 'dsh-cloud', chatCodexOptions: { model }, inputs });
+
+async function approveWorkflowPayment(f, start) {
+  const { chatPaidConfirmation, finishChatPaymentConfirmation } = f.load(resolve(lib, 'localChatPaid.ts'));
+  const pending = chatPaidConfirmation.getState().pending ?? await Promise.race([
+    start.then(() => { throw new Error('Workflow exited before requesting payment'); }),
+    new Promise(resolve => {
+      const unsubscribe = chatPaidConfirmation.subscribe(({ pending }) => { if (pending) { unsubscribe(); resolve(pending); } });
+    }),
+  ]);
+  finishChatPaymentConfirmation(true);
+  return plain(pending.workflow);
+}
+
+test('workflow quotes distinct models once, covers fixed loop turns and submits only the reviewed authorization', async () => {
+  const loop = { ...node('owner'), kind: 'loop', loopMode: 'count', loopCount: 3, loopStartItem: 2 };
+  const first = paidAgent('flash-one', 'deepseek-flash', { text: [{ nodeId: loop.id, portId: 'text' }] });
+  const second = paidAgent('flash-two', 'deepseek-flash', { text: [{ nodeId: first.id, portId: 'text' }] });
+  const pro = paidAgent('pro', 'deepseek-v4-pro', { text: [{ nodeId: second.id, portId: 'text' }] });
+  const f = fixture(doc([loop, first, second, pro]), { paid: true });
+  await f.controller.load();
+  const run = f.controller.start(loop.id);
+  const payment = await approveWorkflowPayment(f, run);
+  assert.equal(payment.cardCount, 3);
+  assert.deepEqual(payment.models.map(({ quote, turns }) => [quote.model, turns]), [['deepseek-flash', 4], ['deepseek-v4-pro', 2]]);
+  await run;
+  assert.equal(f.saved().document.run.status, 'done', JSON.stringify(f.saved().document.run.steps));
+  assert.deepEqual(f.quotes, ['deepseek-flash', 'deepseek-v4-pro']);
+  assert.deepEqual(f.payments.map(({ model }) => model), ['deepseek-flash', 'deepseek-flash', 'deepseek-v4-pro', 'deepseek-flash', 'deepseek-flash', 'deepseek-v4-pro']);
+  assert.ok(f.payments.every(payment => payment.account_id === 'operator' && payment.pricing_version === 3 && payment.max_output_tokens === 16384));
+  assert.equal(new Set(f.sends.map(input => input.requestId)).size, 6);
+});
+
+test('paid automatic phases fail before send and do not inherit an earlier manual phase authorization', async () => {
+  const source = paidAgent('source');
+  const trigger = { ...node('receiver'), kind: 'trigger', triggerMode: 'completion', triggerCount: 2,
+    inputs: { completion: [{ nodeId: source.id, portId: 'signal' }] } };
+  const downstream = paidAgent('downstream', 'deepseek-flash', { signal: [{ nodeId: trigger.id, portId: 'signal' }] });
+  const f = fixture(doc([source, trigger, downstream]), { paid: true });
+  await f.controller.load();
+  const execution = f.controller.start(source.id, true);
+  await approveWorkflowPayment(f, execution);
+  await execution;
+  const finished = f.saved().document.run;
+  assert.deepEqual(f.sends.map(input => input.agentNodeId), [source.id]);
+  assert.equal(finished.status, 'failed');
+  assert.equal(finished.steps[downstream.id].status, 'failed');
+  assert.match(finished.steps[downstream.id].error, /定时或完成触发.*请手动运行/);
+  assert.equal(finished.chatPayments, undefined);
+  assert.deepEqual(f.quotes, ['deepseek-flash']);
+});
+
+test('switching accounts between two paid Agent steps cannot reuse the earlier authorization', async () => {
+  const first = paidAgent('first');
+  const second = paidAgent('second', 'deepseek-flash', { text: [{ nodeId: first.id, portId: 'text' }] });
+  const options = { paid: true, sendFailure: () => { options.accountId = 'new-account'; } };
+  const f = fixture(doc([first, second]), options);
+  await f.controller.load();
+  const execution = f.controller.start(first.id);
+  await approveWorkflowPayment(f, execution);
+  await execution;
+  const run = f.saved().document.run;
+  assert.deepEqual(f.sends.map(input => input.agentNodeId), [first.id]);
+  assert.equal(run.steps[first.id].status, 'done');
+  assert.equal(run.steps[second.id].status, 'failed');
+  assert.match(run.steps[second.id].error, /账号已切换/);
+});
+
+test('paid pre-admission rejections are terminal and unknown transport retries the original request', async () => {
+  const card = paidAgent('paid');
+  const cases = [
+    [{ sendFailure: () => { throw '云端对话报价已变化，请先核对原请求及当前报价。'; } }, /报价已变化/],
+    [{ sendFailure: () => { throw { status: 426 }; } }, /请更新 Bowerbird/],
+    [{ asyncRejection: '当前 Bcoin 余额低于本轮授权上限' }, /Bcoin 余额低于/],
+    [{ asyncRejection: '云端对话今日服务额度已用完，请明日再试。' }, /平台今日额度/],
+  ];
+  for (const [failure, message] of cases) {
+    const f = fixture(doc([card]), { paid: true, ...failure });
+    await f.controller.load();
+    const execution = f.controller.start(card.id, true);
+    await approveWorkflowPayment(f, execution);
+    await execution;
+    const run = f.saved().document.run;
+    assert.equal(run.status, 'failed');
+    assert.equal(run.steps[card.id].status, 'failed');
+    assert.match(run.steps[card.id].error, message);
+    await f.controller.continue(run.id);
+    assert.equal(f.sends.length, 1);
+  }
+  const f = fixture(doc([card]), { paid: true, sendFailure: (_, attempt) => { if (attempt === 1) throw new Error('IPC connection reset'); } });
+  await f.controller.load();
+  const execution = f.controller.start(card.id, true);
+  await approveWorkflowPayment(f, execution);
+  await execution;
+  const waiting = f.saved().document.run;
+  assert.equal(waiting.status, 'waiting');
+  await f.controller.continue(waiting.id);
+  assert.equal(f.saved().document.run.status, 'done');
+  assert.equal(f.sends[0].requestId, f.sends[1].requestId);
+  assert.deepEqual(f.payments[0], f.payments[1]);
+  assert.deepEqual(f.quotes, ['deepseek-flash']);
+});
+
+test('manually restarting a stopped paid loop requests fresh consent before a new request key', async () => {
+  const owner = { ...node('owner'), kind: 'loop', loopMode: 'count', loopCount: 2 };
+  const card = paidAgent('paid', 'deepseek-flash', { text: [{ nodeId: owner.id, portId: 'text' }] });
+  const f = fixture(doc([owner, card]), { paid: true, sendFailure: (_, attempt) => { if (attempt === 1) throw new Error('IPC connection reset'); } });
+  await f.controller.load();
+  const original = f.controller.start(owner.id);
+  await approveWorkflowPayment(f, original);
+  await original;
+  const runId = f.saved().document.run.id;
+  assert.equal(f.saved().document.run.status, 'waiting');
+  await f.controller.stop(runId);
+  assert.equal(f.saved().document.run.status, 'stopped');
+  const restarted = f.controller.restartLoop(runId);
+  const payment = await approveWorkflowPayment(f, restarted);
+  assert.equal(payment.models[0].turns, 2);
+  assert.equal(f.sends.length, 1);
+  await restarted;
+  assert.equal(f.saved().document.run.status, 'done', JSON.stringify(f.saved().document.run.steps));
+  assert.deepEqual(f.quotes, ['deepseek-flash', 'deepseek-flash']);
+  assert.equal(new Set(f.sends.map(input => input.requestId)).size, 3);
 });
 
 test('lost chat admission response keeps the request and stops the accepted original conversation', async () => {

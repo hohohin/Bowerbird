@@ -4,6 +4,8 @@ import { contentTableRows } from "./contentTable";
 import { canvasInputValue, canvasSessionImages, resolveGenerationCells } from "./canvasSessionOutputs";
 import type { CanvasNode } from "./types";
 
+export const WORKFLOW_LOOP_MAX_ITEMS = 100;
+
 /** The loop owns every effective descendant, including native content writers. */
 export function workflowLoopScope(nodes: WorkflowNode[], order: string[]): WorkflowLoop | undefined {
   const loops = nodes.filter(node => node.kind === "loop" && order.includes(node.id));
@@ -17,13 +19,13 @@ export function workflowLoopScope(nodes: WorkflowNode[], order: string[]): Workf
   if (!body.size) throw new WorkflowNodeError("请把循环的当前项连接到需要逐项执行的下游卡片", owner);
   if ([...body].some(id => !order.includes(id))) throw new WorkflowNodeError("请从循环卡片或它的上游触发器启动完整循环", owner);
   const startItem = owner.loopStartItem ?? 1;
-  if (!Number.isInteger(startItem) || startItem < 1 || startItem > 100) throw new WorkflowNodeError("循环起始项须为 1–100 的整数", owner);
+  if (!Number.isInteger(startItem) || startItem < 1 || startItem > WORKFLOW_LOOP_MAX_ITEMS) throw new WorkflowNodeError("循环起始项须为 1–100 的整数", owner);
   return { nodeId: owner.id, bodyIds: order.filter(id => body.has(id)), startIndex: startItem - 1, index: startItem - 1, completed: [] };
 }
 
 export function validateLoopItems(items: WorkflowLoopItem[], node: WorkflowNode) {
   if (!items.length) throw new WorkflowNodeError("循环输入为空，请先添加待处理内容", node);
-  if (items.length > 100) throw new WorkflowNodeError("一次循环最多处理 100 项，请减少输入", node);
+  if (items.length > WORKFLOW_LOOP_MAX_ITEMS) throw new WorkflowNodeError("一次循环最多处理 100 项，请减少输入", node);
   return items;
 }
 
@@ -35,7 +37,7 @@ export function validateLoopStart(items: WorkflowLoopItem[], index: number, node
 /** The selector and executor must use the same input order and empty-row rules. */
 export function workflowLoopItems(node: WorkflowNode, nodes: WorkflowNode[], canvas: CanvasNode[], readCell?: (nodeId: string, cellId: string) => string | WorkflowValue | undefined): WorkflowLoopItem[] {
   if (node.loopMode === "count") {
-    if (!Number.isInteger(node.loopCount) || node.loopCount! < 1 || node.loopCount! > 100) throw new WorkflowNodeError("循环次数须为 1–100 的整数", node);
+    if (!Number.isInteger(node.loopCount) || node.loopCount! < 1 || node.loopCount! > WORKFLOW_LOOP_MAX_ITEMS) throw new WorkflowNodeError("循环次数须为 1–100 的整数", node);
     return Array.from({ length: node.loopCount! }, (_, index) => ({ text: `第 ${index + 1} 轮`, assetIds: [] }));
   }
   if (node.loopMode === "rows") return workflowLoopRows(node, nodes, canvas);

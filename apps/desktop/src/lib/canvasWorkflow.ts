@@ -125,6 +125,7 @@ export interface WorkflowStep {
   comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput | import("./h3PromptOptimization").H3ImagePromptInput; instruction: string; inputBindings?: string; createdAt?: number; submissionStarted?: boolean; keptOriginal?: boolean; result?: string; dshContinuation?: true };
   agentInput?: { prompt: string; source: string; assetIds: string[]; visualProfile?: import("./types").VisualProfileDetail | null };
   chatInput?: import("./localChat").LocalChatSendInput;
+  chatPaidAuthorization?: import("./localChat").ChatPaidAuthorization;
   chatConversationId?: string;
   chatTurnId?: string;
   confirmedFailedChatTurnId?: string;
@@ -159,6 +160,8 @@ export interface WorkflowAgentGenerationResponse { images?: string[]; error?: st
 export interface WorkflowRun {
   id: string; startId: string; threadId: string; order: string[];
   manualCardRun?: true;
+  automatic?: true;
+  chatPayments?: Record<string, { authorization: import("./localChat").ChatPaidAuthorization; options: import("./localChat").ChatCodexOptions; lastLoopIndex?: number }>;
   scheduleId?: string;
   accountId?: string | null;
   status: "running" | "waiting" | "done" | "failed" | "stopped";

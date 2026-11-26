@@ -1,5 +1,9 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-26 DSH · Cloud 付费基础设施关闭态已部署
+
+生产已应用 0096，`chat-proxy` v20、`chat-worker` v14 和新版 VPS Worker 已读回。两个付费目录停用，现有账号继续按 0 Bcoin 试用。[发布回执和回退](CHAT.md#2026-11-26-0096-关闭态部署)
+
 ## 逐镜分析单账号试价
 
 2026-11-25 北京时间 11:13:33，生产已启用单账号私价。定向迁移 `0104_library_shot_pilot.sql` 并发布 `understand-proxy` v58 后，才在同一事务登记试用账号并启价。两档分别为每镜 ≤15 秒 0.054 Bcoin、>15 至 60 秒 0.134 Bcoin。官网与 Edge 直连的匿名报价均返回 HTTP 401。真单及扣费由用户本人在 Windows 验收版确认。[生产部署回执](../../project_logs/2026-11-25-library-shot-deployment.md)

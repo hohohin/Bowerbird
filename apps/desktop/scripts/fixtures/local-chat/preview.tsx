@@ -5,6 +5,7 @@ import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
 import { AccountOnboarding } from "../../../src/components/AccountOnboarding";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { ToastViewport } from "../../../src/components/ToastViewport";
+import { ChatPaidConfirmation } from "../../../src/components/ChatPaidConfirmation";
 import { useStore } from "../../../src/store";
 import { startChatCapabilityChecks } from "../../../src/lib/chatCapabilities";
 import { installCatalogPagingMock } from "../catalogPagingMock";
@@ -70,7 +71,7 @@ function Fixture() {
       </div>
       <details className="chat-fixture-evidence"><summary>IPC 记录（{localCalls.length}）</summary><pre aria-label="合成 IPC 记录">{JSON.stringify(localCalls, null, 2)}</pre></details>
     </details>
-    <main className="chat-fixture-workspace"><CanvasWorkspace key={projectId} projectId={projectId} /><AssetContextMenu /><ToastViewport /></main>
+    <main className="chat-fixture-workspace"><CanvasWorkspace key={projectId} projectId={projectId} /><AssetContextMenu /><ToastViewport /><ChatPaidConfirmation /></main>
     {location.search === "?settings" && <AccountOnboarding />}
   </div>;
 }

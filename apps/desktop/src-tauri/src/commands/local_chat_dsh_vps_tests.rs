@@ -105,6 +105,69 @@ async fn local_chat_vps_paid_create_preserves_authorization_and_recovers_only_or
 }
 
 #[tokio::test]
+async fn local_chat_vps_paid_recovery_resends_only_a_confirmed_upload() {
+    for admitted in [false, true] {
+        let (db, id, turn) = cloud_turn_for("dsh-cloud");
+        let mut pending = Pending::new(&turn, "test-user".into());
+        pending.paid = true;
+        let mut create = create_body(&db, &id, &turn, &pending.key, None).unwrap();
+        PaidAuthorization { account_id: "test-user".into(), model: "deepseek-flash".into(), pricing_version: 7,
+            max_credits: 71, max_output_tokens: 16384 }.apply(&mut create);
+        create["video_card_options"] = json!(true);
+        let key = pending.key.clone();
+        let original = create.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let handler = Router::new().route("/functions/v1/chat-proxy", post(move |Json(body): Json<Value>| {
+            let step = observed.fetch_add(1, Ordering::SeqCst);
+            let key = key.clone();
+            let original = original.clone();
+            async move {
+                use axum::http::StatusCode;
+                let (status, response) = match step {
+                    0 => {
+                        assert_eq!(body, original);
+                        (StatusCode::BAD_GATEWAY, json!({"error":{"message":"上传前断开"}}))
+                    }
+                    1 => {
+                        assert_eq!(body, json!({"action":"get","idempotency_key":key}));
+                        if admitted {
+                            (StatusCode::ACCEPTED, json!({"job_id":"original","status":"uploading"}))
+                        } else {
+                            (StatusCode::NOT_FOUND, json!({"error":{"message":"无原订单"}}))
+                        }
+                    }
+                    2 if admitted => {
+                        assert_eq!(body, original);
+                        (StatusCode::OK, done())
+                    }
+                    _ => panic!("unexpected call: {body}"),
+                };
+                (status, Json(response))
+            }
+        }));
+        let (cloud, auth, server) = gateway(handler).await;
+        let (_stop, cancel) = watch::channel(false);
+        let apply = |_: String, _: Value| async { panic!("no tool requested") };
+        assert!(drive(&db, &cloud, &auth, &id, &turn, pending, Some(create), cancel.clone(), apply).await.is_err());
+        db.finish_local_chat(&id, &turn, "interrupted", None).unwrap();
+        let (_, saved) = db.local_chat_recovery(&id).unwrap();
+        db.resume_vps_chat(&id, &turn, &saved).unwrap();
+        let pending = Pending::parse(&turn, &saved).unwrap().unwrap();
+        let result = drive(&db, &cloud, &auth, &id, &turn, pending, None, cancel, apply).await;
+        if admitted {
+            assert_eq!(result.unwrap(), "done");
+            let saved = db.local_chat_vps_checkpoint(&id, &turn).unwrap().unwrap();
+            assert!(!saved.contains("create_paid"));
+        } else {
+            assert!(result.is_err());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), if admitted { 3 } else { 2 });
+        server.abort();
+    }
+}
+
+#[tokio::test]
 async fn local_chat_vps_one_create_and_idempotent_tool_ack_after_disconnect() {
     let (db, id, turn) = cloud_turn_for("dsh-cloud");
     let pending = Pending::new(&turn, "test-user".into());
