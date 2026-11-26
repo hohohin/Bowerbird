@@ -31,7 +31,7 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 | 范围 | 当前状态与证据 |
 |---|---|
-| Windows | 公开版 **26.11.2601**，产品源码 `66f252e76`，SQLite **0062**。11 月 26 日公网验证通过，Tauri 更新签名有效，按授权跳过 Authenticode。[发布与回滚](dev-doc/DESKTOP-UPDATES.md#windows-26112601-已公开发布2026-11-26) |
+| Windows | 公开版 **26.11.2602**，产品源码 `de7bd4907`，SQLite **0062**。11 月 26 日公网验证通过，Tauri 更新签名有效，按授权跳过 Authenticode。[发布与回滚](dev-doc/DESKTOP-UPDATES.md#windows-26112602-已公开发布2026-11-26) |
 | macOS | 公开通道为 Apple Silicon **26.10.801**、Intel **26.10.1501**。Apple Silicon 26.11.2403 本地签名测试包已交付 R2 独立目录。Mac 源码统一至 `dev` 26.11.2403／SQLite 0062。ARM 构建、Rust 全量和隔离 WKWebView 烟测通过，负责人已确认真实登录及线上 DSH · Cloud v2 验收通过。[桌面自动更新](dev-doc/DESKTOP-UPDATES.md) · [Mac 正式验收](macOS/RELEASE-READINESS.md) · [源码收口验证](macOS/DEV-CONVERGENCE-2026-11-24.md) |
 | 浏览器扩展 | Windows 公开桌面包内为 **0.5.3**。新版本合并多标签页心跳和批量连接，桌面能提示扩展更新。更新文件后在浏览器重新加载并刷新采集网页。[版本与验收](apps/extension/README.md) |
 | Cloud 与官网 | Cloud 网关、原请求恢复和 VPS 定时巡检已上线。微信 Native v3 已开放公开购买，注册及 Pro 月度赠币已启用。Seedance 2.5 已开三档，分层已部署。GPT／Flash 未启价，Studio 未新增销售。[部署](apps/cloud/DEPLOY.md) · [微信支付](apps/cloud/WECHATPAY.md) · [现行定价](dev-doc/Bowerbird定价方案v2-订阅积分制.md) |
@@ -53,11 +53,11 @@ Bowerbird 的当前状态、决策和未闭环事项维护在本页。技术契�
 
 ### 近期里程碑
 
+- **2026-11-26｜Windows 26.11.2602 已公开发布。** 调整画板的素材库与探索入口，优化素材库缩略图设置和分屏浏览。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112602-已公开发布2026-11-26)
+
 - **2026-11-26｜Windows 26.11.2601 已公开发布。** 改进探索图片和视频采集的失败提示，重试可继续未完成的素材交付。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112601-已公开发布2026-11-26)
 
 - **2026-11-25｜Windows 26.11.2504 已公开发布。** 放宽画板编辑权限，改进 Agent 停止与恢复、运行中卡片接线和 Windows H3 内存处理。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112504-已公开发布2026-11-25)
-
-- **2026-11-25｜Windows 26.11.2503 已公开发布。** 画板工具重新分组，重构画板状态、工作流执行和存储。[发布记录](dev-doc/DESKTOP-UPDATES.md#windows-26112503-已公开发布2026-11-25)
 
 ## 关键约定
 
