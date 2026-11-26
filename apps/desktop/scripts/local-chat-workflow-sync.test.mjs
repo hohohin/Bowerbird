@@ -233,13 +233,16 @@ test('Canvas Pro preserves queued completion from an accepted paid phase and gat
 });
 
 test('Canvas Pro gates explicit retries only when the reset loop step is paid', async () => {
-  const owner = { ...node('loop'), kind: 'loop', loopMode: 'count' };
+  const owner = { ...node('loop'), kind: 'loop', loopMode: 'count', loopCount: 1, outputs: { iteration: { type: 'text', text: '1' } } };
+  const input = { nodeId: owner.id, portId: 'iteration', slot: 1 };
   for (const kind of ['generation', 'agent']) {
-    const card = { ...node('body', '再次提交'), kind };
+    const card = { ...node('body', '再次提交 @[iteration]'), kind, inputs: { text: [input] },
+      promptReferences: [{ id: 'iteration', type: 'text', input, slot: 1, label: '当前轮次' }] };
     const run = { id: 'loop-run', startId: owner.id, order: [owner.id, card.id], status: 'waiting',
       steps: { [owner.id]: { status: 'done' }, [card.id]: { status: 'failed', retrySafe: true } },
       loop: { nodeId: owner.id, bodyIds: [card.id], index: 0, items: [{ text: '', assetIds: [] }], completed: [] } };
     const f = fixture({ ...doc([owner, card]), run }, { authorize: deniedCanvasPro });
+    assert.deepEqual(plain(f.load(resolve(lib, 'canvasWorkflow.ts')).workflowOrder([owner, card], owner.id)), run.order);
     await f.controller.load();
     if (kind === 'agent') {
       await assert.rejects(() => f.controller.retryLoop(run.id), /需要 Pro/);
