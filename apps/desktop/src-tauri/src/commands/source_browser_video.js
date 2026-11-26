@@ -286,40 +286,50 @@
     finally { await close(requestId); }
   }
   async function open(url, maximum, requestId = crypto.randomUUID()) {
-    if (reads.size >= 4 || !Number.isSafeInteger(maximum) || maximum <= 0 || maximum > 200*1024*1024) fail('视频读取任务过多或大小限制无效。');
-    if (!url.startsWith('blob:') && !http(url)) fail('视频地址无效。');
-    const abort = new AbortController(); const timeout = setTimeout(() => { void close(requestId); }, 120000);
-    const state = {reader:null, abort, maximum, received:0, rest:null, total:null, timer:timeout};
+    if (reads.size >= 4 || !Number.isSafeInteger(maximum) || maximum <= 0 || maximum > 200*1024*1024) fail('resource-limit-invalid');
+    if (!url.startsWith('blob:') && !http(url)) fail('resource-url-invalid');
+    const state = {reader:null, abort:new AbortController(), maximum, received:0, rest:null, total:null, timedOut:false, timer:null};
+    state.timer = setTimeout(() => { state.timedOut = true; void close(requestId); }, 120000);
     reads.set(requestId,state);
     try {
-      const response = await fetchResource(url, {credentials:'include', signal:abort.signal}).catch(error => {
-        if (error?.name === 'TypeError') fail('当前页面无法读取该网络资源。');
+      const response = await fetchResource(url, {credentials:'include', signal:state.abort.signal}).catch(error => {
+        if (error?.name === 'TypeError') fail('resource-network-unavailable');
         throw error;
       });
-      if (!response.ok || response.status === 206) fail('网站未返回完整视频内容，请重新拖入。');
+      if (response.status === 401 || response.status === 403) fail('resource-access-denied');
+      if (!response.ok || response.status === 206) fail('resource-response-incomplete');
       const rawLength = response.headers.get('content-length');
       const encoding = response.headers.get('content-encoding');
       const total = rawLength === null || encoding && encoding.toLowerCase() !== 'identity' ? null : Number(rawLength);
-      if (total !== null && (!Number.isSafeInteger(total) || total < 0 || total > maximum)) fail('视频超过大小限制。');
-      if (!response.body) fail('浏览器没有返回视频内容。');
-      if (!reads.has(requestId)) fail('视频读取已结束，请重新拖入。');
+      if (total !== null && (!Number.isSafeInteger(total) || total < 0 || total > maximum)) fail('resource-too-large');
+      if (!response.body) fail('resource-empty');
+      if (!reads.has(requestId)) fail('resource-read-ended');
       state.reader = response.body.getReader(); state.total = total;
       return {id:requestId, url:response.url || url, contentType:response.headers.get('content-type') || '', totalBytes:total};
-    } catch (error) { await close(requestId); throw error; }
+    } catch (error) {
+      await close(requestId);
+      if (state.timedOut) fail('resource-timeout');
+      throw error;
+    }
   }
   async function read(id) {
-    const state = reads.get(id); if (!state) fail('视频读取已结束，请重新拖入。');
+    const state = reads.get(id); if (!state) fail('resource-read-ended');
     try {
       const item = state.rest ? {value:state.rest,done:false} : await state.reader.read();
+      if (state.timedOut) fail('resource-timeout');
       if (item.done) {
-        if (state.total !== null && state.received !== state.total) fail('网站未返回完整视频内容。');
+        if (state.total !== null && state.received !== state.total) fail('resource-read-incomplete');
         await close(id); return {data:'',eof:true};
       }
       const bytes = item.value.subarray(0,CHUNK); state.rest = item.value.length > CHUNK ? item.value.subarray(CHUNK) : null;
       state.received += bytes.length;
-      if (state.received > state.maximum) fail('视频超过大小限制。');
+      if (state.received > state.maximum) fail('resource-too-large');
       return {data:btoa(String.fromCharCode(...bytes)),eof:false};
-    } catch (error) { await close(id); throw error; }
+    } catch (error) {
+      await close(id);
+      if (state.timedOut) fail('resource-timeout');
+      throw error;
+    }
   }
   window.__bbSourceVideo = Object.freeze({pageUrl, remember, resolve, open, read, close, manifestBase});
   window.addEventListener('pagehide', () => { for (const id of reads.keys()) void close(id); });

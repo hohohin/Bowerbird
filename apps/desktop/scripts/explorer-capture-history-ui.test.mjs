@@ -40,8 +40,10 @@ try {
   assert.equal((await calls('resize_source_browser')).at(-1).args.bounds.overlay.side, 'left');
   await page.setViewportSize({ width: 520, height: 800 });
   await page.waitForFunction(() => window.calls.filter(call => call.command === 'resize_source_browser').at(-1)?.args.visible === false);
-  const narrowHistory = await history().boundingBox();
-  assert.ok(narrowHistory.x >= 0 && narrowHistory.x + narrowHistory.width <= 520, 'overlapping history stays within a narrow viewport');
+  await page.waitForFunction(() => {
+    const bounds = document.querySelector('.source-browser-popover')?.getBoundingClientRect();
+    return bounds && bounds.left >= 0 && bounds.right <= innerWidth;
+  });
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.waitForFunction(() => window.calls.filter(call => call.command === 'resize_source_browser').at(-1)?.args.visible === true);
   assert.equal(await history().isVisible(), true, 'expanding the workspace restores the webpage during history review');
@@ -69,6 +71,8 @@ try {
   await page.evaluate(() => window.store.setState({ activeProjectId: null, projectRouteRevision: 1 }));
   await page.evaluate(() => { window.failDelivery = true; }); await complete(second);
   await history().getByText('已入库，交付未完成', { exact: true }).waitFor();
+  await history().getByText('模拟保存失败', { exact: true }).waitFor();
+  await page.getByRole('status').getByText('素材已入库，交付未完成：模拟保存失败', { exact: true }).waitFor();
   await page.evaluate(() => { window.failDelivery = false; });
   await history().getByRole('button', { name: '重试', exact: true }).click();
   await page.waitForFunction(() => window.deliveries.length === 2);
@@ -173,9 +177,9 @@ try {
   await complete(await captureId(2)); await waitCaptures(4);
   assert.equal((await calls('capture_source_browser_image'))[3].args.projectId, 'p', 'queued target stays frozen after switching project');
   const detachedId = await captureId(3);
-  const publicFailure = '无法公开下载此素材，请返回来源网页后重试。';
+  const publicFailure = '无法公开下载此图片，请返回来源网页后重试。';
   await page.evaluate(({id, message}) => window.pending[id].reject(message), {id: detachedId, message: publicFailure});
-  await page.evaluate(id => window.pending[id].reject('下载中断，请重试。'), await captureId(1));
+  await page.evaluate(id => window.pending[id].reject('图片下载中断，请重试。'), await captureId(1));
   await page.getByRole('button', { name: '采集记录', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('[data-capture-state="failed"]').length === 2);
   await history().getByText(publicFailure, { exact: true }).waitFor();
@@ -198,6 +202,22 @@ try {
   await history().getByRole('button', { name: '清空已结束记录', exact: true }).click();
   await history().getByText('暂无采集记录', { exact: true }).waitFor();
   await history().getByRole('button', { name: '关闭采集记录', exact: true }).click();
+  const failureCases = [
+    ['image', '图片', '浏览器读取图片超时，请重试。'],
+    ['image', '图片', '网站未返回完整图片内容。'],
+    ['image', '图片', '图片超过大小限制。'],
+    ['image', '图片', '网站拒绝读取图片，请确认已登录或刷新网页。'],
+    ['video', '视频', '浏览器未能读取当前视频，请播放视频后重试。'],
+  ];
+  for (const [index, [kind, media, reason]] of failureCases.entries()) {
+    const before = (await calls('capture_source_browser_image')).length;
+    await drop(200 + index, kind); await waitCaptures(before + 1);
+    await page.evaluate(({ id, reason }) => window.pending[id].reject(reason), { id: await captureId(before), reason });
+    await page.getByRole('status').getByText(`${media}采集失败：${reason}`, { exact: true }).waitFor();
+    await page.getByRole('button', { name: '采集记录', exact: true }).click();
+    await history().getByText(reason, { exact: true }).waitFor();
+    await history().getByRole('button', { name: '关闭采集记录', exact: true }).click();
+  }
   await page.evaluate(() => window.captureHistory.setState({ records: Array.from({ length: 50 }, (_, index) => ({
     id: `queued-${index}`, createdAt: index, mediaKind: 'image', sourceHost: 'fixture.example', phase: 'queued', receivedBytes: 0,
   })) }));

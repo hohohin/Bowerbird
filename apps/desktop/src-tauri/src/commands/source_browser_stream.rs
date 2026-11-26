@@ -200,7 +200,7 @@ pub(crate) async fn capture_video(webview: &tauri::Webview, source: &str, page_u
     control.check()?;
     let page = tauri::Url::parse(page_url).map_err(|_| invalid())?;
     let source = resolve_video_source(webview, source, page_url, &page, control).await?;
-    let resource = browser_capture_resource(webview, &source, &page, MAX_BYTES, control).await?;
+    let resource = browser_capture_resource(webview, &source, &page, MAX_BYTES, "视频", control).await?;
     if resource.is_manifest() {
         capture_stream(webview, resource, &page, control).await
     } else {

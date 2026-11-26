@@ -115,8 +115,11 @@ function failedSession(id: string, session: SessionCapture, error: unknown) {
     patch(id, { phase: "cancelled", retryable: false, error: undefined });
     sessions.delete(id); return;
   }
-  patch(id, { phase: "failed", retryable: true, error: userErrorMessage(error, saved ? "素材已入库，交付未完成，请重试" : "采集失败，请重试") });
-  notifyError(null, saved ? "素材已入库，交付未完成，可在采集记录中重试" : "采集失败，请查看采集记录");
+  const reason = userErrorMessage(error, saved ? "请在采集记录中重试。" : "暂时无法确定原因，请重试。");
+  const media = session.mediaKind === "video" ? "视频" : "图片";
+  const status = saved ? "素材已入库，交付未完成" : `${media}采集失败`;
+  patch(id, { phase: "failed", retryable: true, error: reason });
+  notifyError(null, `${status}：${reason}`);
 }
 async function runSession(id: string, session: SessionCapture) {
   if (session.cancelRequested) return;

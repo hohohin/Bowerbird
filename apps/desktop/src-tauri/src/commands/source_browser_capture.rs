@@ -177,7 +177,7 @@ pub async fn capture_source_browser_image(
     let bytes = match preview {
         Some(bytes) => bytes,
         None => Arc::new(capture_from_source(&image_url, false, in_source_origin, approved, &control, async {
-            Ok(browser_capture_resource(&browser, image_url.as_str(), &page_url, 50 * 1024 * 1024, &control).await?.bytes)
+            Ok(browser_capture_resource(&browser, image_url.as_str(), &page_url, 50 * 1024 * 1024, "图片", &control).await?.bytes)
         }).await?),
     };
     control.start_saving()?;
@@ -246,8 +246,9 @@ async fn public_capture_bytes(url: &str, max_bytes: usize, is_video: bool, contr
 
 async fn read_public_capture(response: reqwest::Response, max_bytes: usize, is_video: bool, control: &CaptureControl) -> AppResult<Vec<u8>> {
     use futures_util::StreamExt;
+    let media = if is_video { "视频" } else { "图片" };
     if !response.status().is_success() || response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-        return Err(AppError::Other("无法公开下载此素材，请返回来源网页后重试。".into()));
+        return Err(AppError::Other(format!("无法公开下载此{media}，请返回来源网页后重试。")));
     }
     let mut resource = CaptureResource {
         url: response.url().to_string(),
@@ -259,14 +260,17 @@ async fn read_public_capture(response: reqwest::Response, max_bytes: usize, is_v
     if is_video && resource.is_manifest() {
         return Err(AppError::Other(SOURCE_DOCUMENT_REQUIRED.into()));
     }
-    let too_large = || AppError::Other("素材超过采集大小限制。".into());
+    let too_large = || AppError::Other(format!("{media}超过采集大小限制。"));
     if resource.total_bytes.is_some_and(|total| total > max_bytes as u64) {
         return Err(too_large());
     }
     control.report("downloading", 0, resource.total_bytes, None, None);
     let mut stream = response.bytes_stream();
     while let Some(chunk) = checked(control, async {
-        stream.next().await.transpose().map_err(|_| AppError::Other("下载中断，请重试。".into()))
+        stream.next().await.transpose().map_err(|error| {
+            tracing::warn!(diagnostic=%error.without_url(), "explorer public media download interrupted");
+            AppError::Other(format!("{media}下载中断，请重试。"))
+        })
     }).await? {
         if resource.bytes.len() + chunk.len() > max_bytes {
             return Err(too_large());
@@ -279,7 +283,7 @@ async fn read_public_capture(response: reqwest::Response, max_bytes: usize, is_v
         control.report("downloading", resource.bytes.len() as u64, resource.total_bytes, None, None);
     }
     if resource.bytes.is_empty() || resource.total_bytes.is_some_and(|total| resource.bytes.len() as u64 != total) {
-        return Err(AppError::Other("网站未返回完整素材，请重试。".into()));
+        return Err(AppError::Other(format!("网站未返回完整{media}，请重试。")));
     }
     Ok(resource.bytes)
 }

@@ -29,6 +29,9 @@ await serve(1557, (req, res) => {
 });
 await serve(1558, (req, res) => {
   if (req.url === "/login") { res.setHeader("Set-Cookie", "explorerSession=logged-in; HttpOnly; Max-Age=3600; SameSite=Lax; Path=/"); res.writeHead(302, { Location: "/fixture" }); res.end(); return; }
+  if (req.url === "/empty-image.png") { res.writeHead(200, { "Content-Type": "image/png", "Content-Length": 0 }); res.end(); return; }
+  if (req.url === "/oversized-image.png") { res.writeHead(200, { "Content-Type": "image/png", "Content-Length": 1025 }); res.end(Buffer.alloc(1025)); return; }
+  if (req.url === "/refused-image.png") { res.writeHead(403); res.end(); return; }
   res.setHeader("Content-Type", "text/html");
   if (req.url === "/visual-fixture") { res.end('<html><body style="padding:30px"><img id="visual-image" width="320" height="160" src="http://127.0.0.1:1559/visual.svg"></body></html>'); return; }
   res.end(`<html><body><h1>${req.headers.cookie?.includes("explorerSession=logged-in") ? "logged in" : "logged out"}</h1><a href="/login">Login</a><a href="/pin/123"><img id="image" draggable="true" style="width:150px;height:150px" src="http://127.0.0.1:1559/small.png" srcset="http://127.0.0.1:1559/small.png 1x, http://127.0.0.1:1559/protected.png 2x"></a><video id="video" controls muted style="display:block;width:320px;height:180px" poster="http://127.0.0.1:1559/protected.png" src="http://127.0.0.1:1559/video.mp4"></video></body></html>`);
@@ -222,7 +225,18 @@ async function verifyNativePointer(main, source) {
   await source.locator("#native-click-probe").evaluate(button => { button.style.top = "292px"; });
   await clickAndScroll("below the left cutout");
   await source.locator("#image").scrollIntoViewIfNeeded();
-  const image = await source.locator("#image").boundingBox();
+  const linkedImage = source.locator("#image");
+  await linkedImage.evaluate(element => {
+    window.nativeImageClicked = false;
+    element.closest("a").addEventListener("click", event => {
+      if (event.isTrusted) window.nativeImageClicked = true;
+      event.preventDefault();
+    }, {once: true});
+  });
+  const image = await linkedImage.boundingBox();
+  await pointer(bounds.x + image.x + 30, bounds.y + image.y + 30, "click");
+  await source.waitForFunction(() => window.nativeImageClicked, undefined, {timeout: 3000});
+  console.log("PASS Windows input clicks the linked image before dragging it");
   const drag = await startBrowserDrag(source, image.x + 30, image.y + 30);
   try {
     assert.ok(drag.data.items.some(item => item.mimeType === "application/x-bowerbird-explorer"));
@@ -301,6 +315,15 @@ try {
   await verifyNativeHistory(main, source);
   await source.getByText("Login", { exact: true }).click(); await source.getByText("logged in", { exact: true }).waitFor();
   if (useNativePointer) await verifyNativePointer(main, source);
+  for (const [index, [resource, reason]] of [
+    ["empty-image.png", "网站未返回完整图片内容。"],
+    ["oversized-image.png", "图片超过大小限制。"],
+    ["refused-image.png", "网站拒绝读取图片，请确认已登录或刷新网页。"],
+  ].entries()) {
+    const args = { url: new URL(resource, source.url()).href, pageUrl: source.url(), captureId: String(index + 20).padStart(32, "0"), mediaKind: "image" };
+    await assert.rejects(main.evaluate(args => window.__TAURI_INTERNALS__.invoke("smoke_capture_resource", args), args), error => String(error).includes(reason));
+  }
+  console.log("PASS native image capture keeps empty, size limit and same-origin denial reasons specific to images");
   // Source-generated data crosses into the second isolated WebView through CDP.
   // This exercises each browser's real drag handling, not Windows' OS drag loop.
   await main.evaluate(() => {

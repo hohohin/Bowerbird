@@ -86,11 +86,17 @@ async fn smoke_native_pointer(app: tauri::AppHandle, x: f64, y: f64, action: Str
 }
 
 #[tauri::command]
-async fn smoke_capture_resource(app: tauri::AppHandle, url: String, page_url: String, capture_id: String) -> Result<String, String> {
+async fn smoke_capture_resource(app: tauri::AppHandle, url: String, page_url: String, capture_id: String, media_kind: Option<String>) -> Result<String, String> {
     use base64::Engine;
     let webview = app.get_webview("source-discovery").ok_or("missing browser")?;
     let control = source_browser_jobs::CaptureControl::begin(app, Some(capture_id)).map_err(|e| e.to_string())?;
-    let bytes = source_browser_stream::capture_video(&webview, &url, &page_url, &control).await.map_err(|e| e.to_string())?;
+    let bytes = if media_kind.as_deref() == Some("image") {
+        let page = tauri::Url::parse(&page_url).map_err(|e| e.to_string())?;
+        source_browser_network::browser_capture_resource(&webview, &url, &page, 1024, "图片", &control).await
+            .map(|resource| resource.bytes)
+    } else {
+        source_browser_stream::capture_video(&webview, &url, &page_url, &control).await
+    }.map_err(|e| e.to_string())?;
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 

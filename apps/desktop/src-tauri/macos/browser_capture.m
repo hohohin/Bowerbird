@@ -30,6 +30,11 @@ API_AVAILABLE(macos(11.3))
 static NSMutableDictionary *BBActiveCaptures;
 
 @implementation BBCapture
+- (NSString *)sizeLimitError {
+    if (self.resourceCallback) return self.video ? @"视频超过本次大小限制" : @"图片超过本次大小限制";
+    return self.video ? @"视频超过 200 MiB 上限" : @"图片超过 50 MiB 上限";
+}
+
 - (unsigned long long)fileSize {
     return self.file ? [[[NSFileManager defaultManager] attributesOfItemAtPath:self.file.path error:nil][NSFileSize] unsignedLongLongValue] : 0;
 }
@@ -44,11 +49,12 @@ static NSMutableDictionary *BBActiveCaptures;
     if (self.timer) { dispatch_source_cancel(self.timer); self.timer = nil; }
     NSData *bytes = nil;
     if (!error) {
-        if ([self fileSize] > self.maxBytes) error = self.resourceCallback ? @"媒体超过本次大小限制" : self.video ? @"视频超过 200 MiB 上限" : @"图片超过 50 MiB 上限";
+        if ([self fileSize] > self.maxBytes) error = [self sizeLimitError];
         else {
             bytes = [NSData dataWithContentsOfURL:self.file options:NSDataReadingMappedIfSafe error:nil];
             if (!bytes.length) error = self.video ? @"网站返回了空视频" : @"网站返回了空图片";
-            else if (self.video && self.expectedLength >= 0 && bytes.length != (NSUInteger)self.expectedLength) error = @"网站未返回完整视频，请确认视频可播放后重新拖入。";
+            else if ((self.video || self.resourceCallback) && self.expectedLength >= 0 && bytes.length != (NSUInteger)self.expectedLength)
+                error = self.video ? @"网站未返回完整视频，请确认视频可播放后重新拖入。" : @"网站未返回完整图片，请重新拖入。";
         }
     }
     if (self.resourceCallback) {
@@ -70,9 +76,10 @@ static NSMutableDictionary *BBActiveCaptures;
     NSString *encoding = [response isKindOfClass:[NSHTTPURLResponse class]] ? [(NSHTTPURLResponse *)response valueForHTTPHeaderField:@"Content-Encoding"] : nil;
     self.encoded = encoding.length && ![encoding.lowercaseString isEqual:@"identity"];
     NSString *error = nil;
-    if (status < 200 || status >= 300) error = [NSString stringWithFormat:@"网站未允许读取%@（HTTP %ld），请确认已登录或刷新网页", self.video ? @"视频" : @"图片", (long)status];
-    else if (self.video && status == 206) error = @"网站只返回了部分视频，无法采集；请使用完整视频文件链接。";
-    else if (!self.encoded && response.expectedContentLength > (long long)self.maxBytes) error = self.resourceCallback ? @"媒体超过本次大小限制" : self.video ? @"视频超过 200 MiB 上限" : @"图片超过 50 MiB 上限";
+    if (status < 200 || status >= 300) error = [NSString stringWithFormat:@"网站未允许读取%@（状态码 %ld），请确认已登录或刷新网页", self.video ? @"视频" : @"图片", (long)status];
+    else if ((self.video || self.resourceCallback) && status == 206)
+        error = self.video ? @"网站只返回了部分视频，无法采集；请使用完整视频文件链接。" : @"网站只返回了部分图片，请刷新网页后重试。";
+    else if (!self.encoded && response.expectedContentLength > (long long)self.maxBytes) error = [self sizeLimitError];
     else if ([response.MIMEType.lowercaseString containsString:@"html"]) error = @"网站返回了网页，请确认已登录或刷新网页";
     else if (self.video && !self.resourceCallback && ([response.MIMEType.lowercaseString containsString:@"mpegurl"] || [response.MIMEType.lowercaseString containsString:@"dash+xml"])) error = @"此视频使用分段播放，暂不支持拖入采集；请使用完整视频文件链接。";
     if (error) { completion(nil); [self finish:error]; return; }
@@ -100,6 +107,10 @@ static NSMutableDictionary *BBActiveCaptures;
 
 - (void)downloadDidFinish:(WKDownload *)download { [self finish:nil]; }
 - (void)download:(WKDownload *)download didFailWithError:(NSError *)error resumeData:(NSData *)resumeData {
+    if (self.resourceCallback && [error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorTimedOut) {
+        [self finish:self.video ? @"浏览器读取视频超时，请重试" : @"浏览器读取图片超时，请重试"];
+        return;
+    }
     [self finish:self.video ? @"浏览器无法读取视频，请刷新网页后重试" : @"浏览器无法读取这张图片，请刷新网页后重试"];
 }
 @end
@@ -112,13 +123,13 @@ static void bb_browser_capture_start(void *view, const char *rawURL, bool video,
         NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:rawURL]];
         if (!webview || !url.host.length || url.user.length || url.password.length
             || !([url.scheme isEqual:@"https"] || [url.scheme isEqual:@"http"])) {
-            if (resourceCallback) resourceCallback(context, NULL, 0, NULL, "媒体地址无效");
+            if (resourceCallback) resourceCallback(context, NULL, 0, NULL, video ? "视频地址无效" : "图片地址无效");
             else callback(context, NULL, 0, video ? "视频地址无效" : "图片地址无效");
             return;
         }
         if (!BBActiveCaptures) BBActiveCaptures = [NSMutableDictionary new];
         BBCapture *capture = [BBCapture new];
-        capture.video = video; capture.maxBytes = maximum; capture.timeout = video ? 120 : 45;
+        capture.video = video; capture.maxBytes = maximum; capture.timeout = (video || resourceCallback) ? 120 : 45;
         capture.expectedLength = -1;
         capture.identifier = requestID ? [[NSUUID alloc] initWithUUIDString:[NSString stringWithUTF8String:requestID]] : [NSUUID UUID];
         capture.callback = callback; capture.resourceCallback = resourceCallback; capture.context = context;
@@ -132,7 +143,7 @@ static void bb_browser_capture_start(void *view, const char *rawURL, bool video,
             if (!capture || capture.finished) return;
             if (CFAbsoluteTimeGetCurrent() - started > capture.timeout) { [capture finish:capture.video ? @"浏览器读取视频超时，请重试" : @"浏览器读取图片超时，请重试"]; return; }
             if ((!capture.encoded && capture.download.progress.completedUnitCount > (int64_t)capture.maxBytes) || [capture fileSize] > capture.maxBytes)
-                [capture finish:capture.resourceCallback ? @"媒体超过本次大小限制" : capture.video ? @"视频超过 200 MiB 上限" : @"图片超过 50 MiB 上限"];
+                [capture finish:[capture sizeLimitError]];
         });
         dispatch_resume(capture.timer);
         NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
@@ -152,9 +163,9 @@ void bb_browser_capture_media(void *view, const char *rawURL, bool video, void *
     bb_browser_capture_start(view, rawURL, video, video ? 200 * 1024 * 1024 : BBMaxImageBytes, NULL, context, callback, NULL);
 }
 
-void bb_browser_capture_resource(void *view, const char *rawURL, size_t maximum, const char *requestID,
+void bb_browser_capture_resource(void *view, const char *rawURL, bool video, size_t maximum, const char *requestID,
     void *context, BBResourceCallback callback) {
-    bb_browser_capture_start(view, rawURL, true, maximum, requestID, context, NULL, callback);
+    bb_browser_capture_start(view, rawURL, video, maximum, requestID, context, NULL, callback);
 }
 
 void bb_browser_cancel_resource(const char *requestID) {
@@ -177,11 +188,11 @@ void bb_browser_evaluate(void *view, const char *expression, void *context, BBCa
         NSString *body = [@"return await (" stringByAppendingFormat:@"%s);", expression];
         [webview callAsyncJavaScript:body arguments:@{} inFrame:nil inContentWorld:WKContentWorld.pageWorld
             completionHandler:^(id result, NSError *error) {
-                if (error) { callback(context, NULL, 0, "浏览器未能读取当前视频，请播放视频后重试。"); return; }
+                if (error) { callback(context, NULL, 0, "浏览器读取失败。"); return; }
                 NSData *bytes = [NSJSONSerialization dataWithJSONObject:result ?: [NSNull null]
                     options:NSJSONWritingFragmentsAllowed error:&error];
-                if (!bytes || bytes.length > 256 * 1024) { callback(context, NULL, 0, "浏览器返回的视频数据无效。"); return; }
+                if (!bytes || bytes.length > 256 * 1024) { callback(context, NULL, 0, "浏览器返回的数据无效。"); return; }
                 callback(context, bytes.bytes, bytes.length, NULL);
             }];
-    } else callback(context, NULL, 0, "当前系统暂不支持浏览器视频采集。");
+    } else callback(context, NULL, 0, "当前系统暂不支持浏览器采集。");
 }

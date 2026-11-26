@@ -42,9 +42,19 @@ try {
     return { equal: output.every((v,i) => v === bytes[i]) && output.length === bytes.length, largest, mime:opened.contentType };
   });
   assert.equal(result.equal, true); assert.ok(result.largest <= 65536); assert.equal(result.mime, 'video/mp4');
-  assert.match(await blob.evaluate(async () => {
+  assert.equal(await blob.evaluate(async () => {
     try { await window.__bbSourceVideo.open(target.src, 10); return ''; } catch (e) { return e.message; }
-  }), /大小/);
+  }), 'resource-too-large');
+  await blob.route('**/empty.png', route => route.fulfill({ contentType: 'image/png', body: '' }));
+  assert.deepEqual(await blob.evaluate(async () => {
+    const opened = await window.__bbSourceVideo.open(new URL('/empty.png', location.href).href, 100);
+    return window.__bbSourceVideo.read(opened.id);
+  }), { data: '', eof: true });
+  await blob.route('**/denied.png', route => route.abort('failed'));
+  assert.equal(await blob.evaluate(async () => {
+    try { await window.__bbSourceVideo.open(new URL('/denied.png', location.href).href, 100); return ''; }
+    catch (error) { return error.message; }
+  }), 'resource-network-unavailable');
   const compressed = gzipSync(Buffer.alloc(8192, 42));
   // CDP fulfillment supplies decoded bytes with original transport headers;
   // the native suite additionally verifies a real gzip HTTP response.

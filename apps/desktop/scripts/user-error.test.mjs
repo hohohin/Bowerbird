@@ -52,6 +52,21 @@ test('ambiguous responses never encourage submitting a second paid task', () => 
   }
 });
 
+test('explorer image and delivery errors retain their specific Chinese reasons in notifications', () => {
+  for (const [status, reason] of [
+    ['图片采集失败', '浏览器读取图片超时，请重试。'],
+    ['图片采集失败', '网站未返回完整图片内容。'],
+    ['图片采集失败', '图片超过大小限制。'],
+    ['图片采集失败', '浏览器未能读取当前图片，请刷新网页后重试。'],
+    ['图片采集失败', '网站未允许读取图片（状态码 403），请确认已登录或刷新网页'],
+    ['素材已入库，交付未完成', '当前画板暂时无法保存，请重试。'],
+  ]) {
+    assert.equal(userErrorMessage(reason, fallback), reason);
+    const notice = `${status}：${reason}`;
+    assert.equal(userErrorMessage(notice), notice);
+  }
+});
+
 test('unsupported Codex model errors explain the failure without hiding it as a generic error', () => {
   const message = "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.";
   const expected = '当前账号无法使用所选模型，请更新应用或更换可用模型后重试。';

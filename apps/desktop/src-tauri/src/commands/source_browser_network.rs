@@ -5,6 +5,30 @@ use super::source_browser_jobs::CaptureControl;
 const MAX_BYTES: usize = 50 * 1024 * 1024;
 const MAX_VIDEO_BYTES: usize = 200 * 1024 * 1024;
 pub(super) const SOURCE_ORIGIN_CHANGED: &str = "来源页面已切换，请返回来源后重试。";
+const RENDERER_NETWORK_UNAVAILABLE: &str = "当前页面无法读取该网络资源。";
+
+fn renderer_unreadable(media: &str) -> &'static str {
+    if media == "视频" {
+        "浏览器未能读取当前视频，请播放视频后重试。"
+    } else {
+        "浏览器未能读取当前图片，请刷新网页后重试。"
+    }
+}
+
+fn download_timeout(media: &str) -> AppError {
+    AppError::Other(format!("浏览器读取{media}超时，请重试。"))
+}
+
+fn too_large(media: &str) -> AppError {
+    AppError::Other(format!("{media}超过大小限制。"))
+}
+
+fn validate_capture_length(length: usize, expected: Option<u64>, media: &str) -> AppResult<()> {
+    if length == 0 || expected.is_some_and(|value| value != length as u64) {
+        return Err(AppError::Other(format!("网站未返回完整{media}内容。")));
+    }
+    Ok(())
+}
 
 fn verify_source_origin(webview: &Webview, page: &Url) -> AppResult<()> {
     if webview.url().ok().is_some_and(|current| current.origin() == page.origin()) {
@@ -43,51 +67,51 @@ pub(super) async fn checked<T>(control: &CaptureControl, future: impl std::futur
 }
 
 #[cfg(windows)]
-async fn evaluate(webview: &Webview, expression: &str) -> AppResult<serde_json::Value> {
+async fn evaluate(webview: &Webview, expression: &str, media: &'static str) -> AppResult<serde_json::Value> {
     let value = cdp_timed(webview, "Runtime.evaluate", serde_json::json!({
         "expression": expression, "awaitPromise": true, "returnByValue": true,
-    }), std::time::Duration::from_secs(120), "视频").await?;
+    }), std::time::Duration::from_secs(120), media).await?;
     if value.get("exceptionDetails").is_some() {
-        return Err(AppError::Other("浏览器未能读取当前视频，请播放视频后重试。".into()));
+        return Err(AppError::Other(renderer_unreadable(media).into()));
     }
     Ok(value["result"]["value"].clone())
 }
 
 #[cfg(target_os = "macos")]
-async fn evaluate(webview: &Webview, expression: &str) -> AppResult<serde_json::Value> {
+async fn evaluate(webview: &Webview, expression: &str, media: &'static str) -> AppResult<serde_json::Value> {
     use std::ffi::{c_char, c_void, CStr, CString};
-    type Sender = tokio::sync::oneshot::Sender<AppResult<serde_json::Value>>;
+    type Sender = (tokio::sync::oneshot::Sender<AppResult<serde_json::Value>>, &'static str);
     #[link(name = "bowerbird_browser_capture", kind = "static")]
     extern "C" {
         fn bb_browser_evaluate(view: *mut c_void, expression: *const c_char, context: *mut c_void,
             callback: extern "C" fn(*mut c_void, *const u8, usize, *const c_char));
     }
     extern "C" fn complete(context: *mut c_void, bytes: *const u8, len: usize, error: *const c_char) {
-        let sender = *unsafe { Box::from_raw(context.cast::<Sender>()) };
+        let (sender, media) = *unsafe { Box::from_raw(context.cast::<Sender>()) };
         let value = if !error.is_null() {
             tracing::warn!(diagnostic=%unsafe { CStr::from_ptr(error) }.to_string_lossy(), "browser renderer read failed");
-            Err(AppError::Other("浏览器未能读取当前视频，请播放视频后重试。".into()))
+            Err(AppError::Other(renderer_unreadable(media).into()))
         } else if bytes.is_null() || len > 256 * 1024 {
-            Err(AppError::Other("浏览器返回的视频数据无效。".into()))
+            Err(AppError::Other(format!("浏览器返回的{media}数据无效。")))
         } else {
             serde_json::from_slice(unsafe { std::slice::from_raw_parts(bytes, len) })
-                .map_err(|_| AppError::Other("浏览器返回的视频数据无效。".into()))
+                .map_err(|_| AppError::Other(format!("浏览器返回的{media}数据无效。")))
         };
         let _ = sender.send(value);
     }
-    let expression = CString::new(expression).map_err(|_| AppError::Other("视频读取请求无效。".into()))?;
+    let expression = CString::new(expression).map_err(|_| AppError::Other(format!("{media}读取请求无效。")))?;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     webview.with_webview(move |view| unsafe {
-        bb_browser_evaluate(view.inner(), expression.as_ptr(), Box::into_raw(Box::new(sender)).cast(), complete);
+        bb_browser_evaluate(view.inner(), expression.as_ptr(), Box::into_raw(Box::new((sender, media))).cast(), complete);
     }).map_err(|_| AppError::Other("浏览器读取初始化失败。".into()))?;
     tokio::time::timeout(std::time::Duration::from_secs(125), receiver).await
-        .map_err(|_| AppError::Other("浏览器读取视频超时，请重试。".into()))?
+        .map_err(|_| download_timeout(media))?
         .map_err(|_| AppError::Other("浏览器已关闭，请重新打开后重试。".into()))?
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-async fn evaluate(_: &Webview, _: &str) -> AppResult<serde_json::Value> {
-    Err(AppError::Other("此平台暂不支持浏览器视频采集。".into()))
+async fn evaluate(_: &Webview, _: &str, media: &str) -> AppResult<serde_json::Value> {
+    Err(AppError::Other(format!("此平台暂不支持浏览器{media}采集。")))
 }
 
 fn renderer_expression(method: &str, args: serde_json::Value, page: &Url) -> String {
@@ -96,28 +120,43 @@ fn renderer_expression(method: &str, args: serde_json::Value, page: &Url) -> Str
     format!("(async()=>{{try{{if(location.origin!=={origin})throw new Error({error});return {{value:await window.__bbSourceVideo.{method}(...{args})}}}}catch(error){{return {{error:String(error?.message||'')}}}}}})()")
 }
 
-async fn renderer_call(webview: &Webview, method: &str, args: serde_json::Value, page: &Url) -> AppResult<serde_json::Value> {
-    let result = evaluate(webview, &renderer_expression(method, args, page)).await?;
+fn renderer_failure(media: &str, method: &str, message: &str) -> String {
+    // The renderer uses shared resource methods as well as video-only methods.
+    // Only allow known responses from page content and translate the shared ones.
+    match message {
+        SOURCE_ORIGIN_CHANGED => message.into(),
+        "resource-network-unavailable" => RENDERER_NETWORK_UNAVAILABLE.into(),
+        "resource-limit-invalid" => format!("{media}读取任务过多或大小限制无效。"),
+        "resource-url-invalid" => format!("{media}地址无效。"),
+        "resource-access-denied" => format!("网站拒绝读取{media}，请确认已登录或刷新网页。"),
+        "resource-response-incomplete" => format!("网站未返回完整{media}内容，请重新拖入。"),
+        "resource-read-incomplete" => format!("网站未返回完整{media}内容。"),
+        "resource-too-large" => too_large(media).to_string(),
+        "resource-empty" => format!("浏览器没有返回{media}内容。"),
+        "resource-read-ended" => format!("{media}读取已结束，请重新拖入。"),
+        "resource-timeout" => download_timeout(media).to_string(),
+        "site-video-rules-miss" if media == "视频" && method == "resolve" =>
+            "网页视频暂未识别。请先播放后重新拖入，也可尝试用系统浏览器的插件采集。".into(),
+        "来源页面或视频已切换，请重新拖入。" | "此视频受播放保护，无法采集。" |
+        "此笔记包含多个视频，暂时无法确认本次拖动的视频。" | "网页提供了多个视频来源，暂时无法确认本次拖动的视频。" |
+        "检测到多个分段清单，暂时无法确认本次拖动的视频。" | "尚未找到当前视频的分段清单，请播放视频后重新拖入。"
+            if media == "视频" => message.into(),
+        _ => renderer_unreadable(media).into(),
+    }
+}
+
+async fn renderer_call(webview: &Webview, method: &str, args: serde_json::Value, page: &Url, media: &'static str) -> AppResult<serde_json::Value> {
+    let result = evaluate(webview, &renderer_expression(method, args, page), media).await?;
     if let Some(message) = result["error"].as_str() {
-        if method == "resolve" && message == "site-video-rules-miss" {
-            tracing::warn!(method, "source video site rules did not resolve the media");
-            return Err(AppError::Other("网页视频暂未识别。请先播放后重新拖入，也可尝试用系统浏览器的插件采集。".into()));
-        }
-        // Page content cannot supply arbitrary user-facing errors or internal URLs.
-        let known = [SOURCE_ORIGIN_CHANGED, "来源页面或视频已切换，请重新拖入。", "此视频受播放保护，无法采集。", "视频超过大小限制。",
-            "当前页面无法读取该网络资源。",
-            "此笔记包含多个视频，暂时无法确认本次拖动的视频。", "网页提供了多个视频来源，暂时无法确认本次拖动的视频。",
-            "检测到多个分段清单，暂时无法确认本次拖动的视频。", "尚未找到当前视频的分段清单，请播放视频后重新拖入。",
-            "网站未返回完整视频内容，请重新拖入。", "网站未返回完整视频内容。"];
-        let message = known.into_iter().find(|known| *known == message);
-        tracing::warn!(method, diagnostic = ?message, "source video renderer rejected request");
-        return Err(AppError::Other(message.unwrap_or("浏览器未能读取当前视频，请播放视频后重试。").into()));
+        let reason = renderer_failure(media, method, message);
+        tracing::warn!(method, diagnostic = %reason, "source media renderer rejected request");
+        return Err(AppError::Other(reason));
     }
     Ok(result["value"].clone())
 }
 
 pub async fn resolve_video_source(webview: &Webview, source: &str, page_url: &str, page: &Url, control: &CaptureControl) -> AppResult<String> {
-    let value = checked(control, renderer_call(webview, "resolve", serde_json::json!([source, page_url]), page)).await?;
+    let value = checked(control, renderer_call(webview, "resolve", serde_json::json!([source, page_url]), page, "视频")).await?;
     let source = value.as_str().filter(|source| source.len() <= 8192)
         .ok_or_else(|| AppError::Other("无法确认当前视频来源，请重新拖入。".into()))?;
     let parsed = tauri::Url::parse(source).map_err(|_| AppError::Other("视频来源地址无效。".into()))?;
@@ -130,69 +169,73 @@ pub async fn resolve_video_source(webview: &Webview, source: &str, page_url: &st
     Ok(source.into())
 }
 
-pub async fn browser_capture_resource(webview: &Webview, url: &str, page: &Url, max_bytes: usize, control: &CaptureControl) -> AppResult<CaptureResource> {
-    capture_resource(webview, url, page, max_bytes, control, true).await
+pub async fn browser_capture_resource(webview: &Webview, url: &str, page: &Url, max_bytes: usize, media: &'static str, control: &CaptureControl) -> AppResult<CaptureResource> {
+    capture_resource(webview, url, page, max_bytes, media, control, true).await
 }
 
 pub async fn browser_capture_resource_silent(webview: &Webview, url: &str, page: &Url, max_bytes: usize, control: &CaptureControl) -> AppResult<CaptureResource> {
-    capture_resource(webview, url, page, max_bytes, control, false).await
+    capture_resource(webview, url, page, max_bytes, "视频", control, false).await
 }
 
-async fn capture_resource(webview: &Webview, url: &str, page: &Url, max_bytes: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
+async fn capture_resource(webview: &Webview, url: &str, page: &Url, max_bytes: usize, media: &'static str, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
     control.check()?;
     verify_source_origin(webview, page)?;
-    if max_bytes == 0 || max_bytes > MAX_VIDEO_BYTES { return Err(AppError::Other("视频大小限制无效。".into())); }
-    let parsed = tauri::Url::parse(url).map_err(|_| AppError::Other("视频地址无效。".into()))?;
+    if max_bytes == 0 || max_bytes > MAX_VIDEO_BYTES { return Err(AppError::Other(format!("{media}大小限制无效。"))); }
+    let parsed = tauri::Url::parse(url).map_err(|_| AppError::Other(format!("{media}地址无效。")))?;
     if parsed.scheme() == "blob" {
-        return renderer_resource(webview, url, page, max_bytes, control, report).await;
+        return renderer_resource(webview, url, page, max_bytes, media, control, report).await;
     }
     if !matches!(parsed.scheme(), "http" | "https") || !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(AppError::Other("视频地址无效。".into()));
+        return Err(AppError::Other(format!("{media}地址无效。")));
     }
     #[cfg(windows)]
     {
         // The renderer supplies the final response URL for relative manifest references.
         if page.origin() == parsed.origin() {
-            match renderer_resource(webview, url, page, max_bytes, control, report).await {
+            match renderer_resource(webview, url, page, max_bytes, media, control, report).await {
                 Ok(resource) => return Ok(resource),
-                Err(AppError::Other(message)) if message == "当前页面无法读取该网络资源。" => control.check()?,
+                Err(AppError::Other(message)) if message == RENDERER_NETWORK_UNAVAILABLE => control.check()?,
                 Err(error) => return Err(error),
             }
         }
-        capture_network_resource(webview, &parsed, page, max_bytes, control, report).await
+        capture_network_resource(webview, &parsed, page, max_bytes, media, control, report).await
     }
     #[cfg(target_os = "macos")]
-    { capture_mac_resource(webview, url, page, max_bytes, control, report).await }
+    { capture_mac_resource(webview, url, page, max_bytes, media, control, report).await }
     #[cfg(not(any(windows, target_os = "macos")))]
-    { renderer_resource(webview, url, page, max_bytes, control, report).await }
+    { renderer_resource(webview, url, page, max_bytes, media, control, report).await }
 }
 
 #[cfg(target_os = "macos")]
-async fn capture_mac_resource(webview: &Webview, url: &str, page: &Url, maximum: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
+async fn capture_mac_resource(webview: &Webview, url: &str, page: &Url, maximum: usize, media: &'static str, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
     use std::ffi::{c_char, c_void, CStr, CString};
-    type Sender = (tokio::sync::oneshot::Sender<AppResult<CaptureResource>>, usize);
+    type Sender = (tokio::sync::oneshot::Sender<AppResult<CaptureResource>>, usize, &'static str);
     if report { control.report("downloading", 0, None, None, None); }
     #[link(name = "bowerbird_browser_capture", kind = "static")]
     extern "C" {
-        fn bb_browser_capture_resource(view: *mut c_void, url: *const c_char, maximum: usize, request_id: *const c_char,
+        fn bb_browser_capture_resource(view: *mut c_void, url: *const c_char, video: bool, maximum: usize, request_id: *const c_char,
             context: *mut c_void, callback: extern "C" fn(*mut c_void, *const u8, usize, *const c_char, *const c_char));
         fn bb_browser_cancel_resource(request_id: *const c_char);
     }
     extern "C" fn complete(context: *mut c_void, bytes: *const u8, len: usize, metadata: *const c_char, error: *const c_char) {
-        let (sender, maximum) = *unsafe { Box::from_raw(context.cast::<Sender>()) };
+        let (sender, maximum, media) = *unsafe { Box::from_raw(context.cast::<Sender>()) };
         let result = if !error.is_null() {
             Err(AppError::Other(unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned()))
-        } else if bytes.is_null() || len == 0 || len > maximum || metadata.is_null() {
-            Err(AppError::Other("浏览器返回的媒体为空或超过大小限制。".into()))
+        } else if len > maximum {
+            Err(too_large(media))
+        } else if bytes.is_null() || len == 0 {
+            Err(AppError::Other(format!("网站没有返回{media}内容。")))
+        } else if metadata.is_null() {
+            Err(AppError::Other(format!("浏览器返回的{media}信息无效。")))
         } else {
             serde_json::from_slice::<serde_json::Value>(unsafe { CStr::from_ptr(metadata) }.to_bytes())
-                .map_err(|_| AppError::Other("浏览器返回的媒体信息无效。".into()))
+                .map_err(|_| AppError::Other(format!("浏览器返回的{media}信息无效。")))
                 .map(|value| CaptureResource {url:value["url"].as_str().unwrap_or("").into(), bytes:unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec(),
                     content_type:value["contentType"].as_str().unwrap_or("").into(),total_bytes:value["totalBytes"].as_u64()})
         };
         let _ = sender.send(result);
     }
-    let url = CString::new(url).map_err(|_| AppError::Other("媒体地址无效。".into()))?;
+    let url = CString::new(url).map_err(|_| AppError::Other(format!("{media}地址无效。")))?;
     let id = CString::new(uuid::Uuid::new_v4().to_string()).unwrap();
     let native_id = id.clone();
     let (sender, receiver) = tokio::sync::oneshot::channel::<AppResult<CaptureResource>>();
@@ -203,11 +246,11 @@ async fn capture_mac_resource(webview: &Webview, url: &str, page: &Url, maximum:
             let _ = sender.send(Err(error));
             return;
         }
-        unsafe { bb_browser_capture_resource(view.inner(), url.as_ptr(), maximum, native_id.as_ptr(), Box::into_raw(Box::new((sender,maximum))).cast(), complete); }
+        unsafe { bb_browser_capture_resource(view.inner(), url.as_ptr(), media == "视频", maximum, native_id.as_ptr(), Box::into_raw(Box::new((sender, maximum, media))).cast(), complete); }
     }).map_err(|_| AppError::Other("浏览器读取初始化失败。".into()))?;
     let result = checked(control, async {
         tokio::time::timeout(std::time::Duration::from_secs(125), receiver).await
-            .map_err(|_| AppError::Other("浏览器读取超时，请重试。".into()))?
+            .map_err(|_| download_timeout(media))?
             .map_err(|_| AppError::Other("浏览器已关闭，请重试。".into()))?
     }).await;
     if result.is_err() { let _ = webview.with_webview(move |_| unsafe { bb_browser_cancel_resource(id.as_ptr()); }); }
@@ -215,37 +258,35 @@ async fn capture_mac_resource(webview: &Webview, url: &str, page: &Url, maximum:
     result
 }
 
-async fn renderer_resource(webview: &Webview, url: &str, page: &Url, max_bytes: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
+async fn renderer_resource(webview: &Webview, url: &str, page: &Url, max_bytes: usize, media: &'static str, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
     // Native chooses the ID before starting fetch, so cancellation can abort even
     // while the response headers have not arrived yet.
     let id = uuid::Uuid::new_v4().to_string();
     let result = async {
-        let opened = checked(control, renderer_call(webview, "open", serde_json::json!([url, max_bytes, id]), page)).await?;
+        let opened = checked(control, renderer_call(webview, "open", serde_json::json!([url, max_bytes, id]), page, media)).await?;
         let total = opened["totalBytes"].as_u64();
         let mut bytes = Vec::new();
         loop {
-            let value = checked(control, renderer_call(webview, "read", serde_json::json!([id]), page)).await?;
-            let chunk = decode_chunk(&serde_json::json!({"data":value["data"],"base64Encoded":true}))?;
-            if bytes.len() + chunk.len() > max_bytes { return Err(AppError::Other("视频超过大小限制。".into())); }
+            let value = checked(control, renderer_call(webview, "read", serde_json::json!([id]), page, media)).await?;
+            let chunk = decode_chunk(&serde_json::json!({"data":value["data"],"base64Encoded":true}), media)?;
+            if bytes.len() + chunk.len() > max_bytes { return Err(too_large(media)); }
             bytes.extend(chunk);
             if report { control.report("downloading", bytes.len() as u64, total, None, None); }
             if value["eof"].as_bool() == Some(true) { break; }
         }
-        if bytes.is_empty() || total.is_some_and(|value| value != bytes.len() as u64) {
-            return Err(AppError::Other("网站未返回完整视频内容。".into()));
-        }
+        validate_capture_length(bytes.len(), total, media)?;
         Ok(CaptureResource {url:opened["url"].as_str().unwrap_or(url).into(), bytes,
             content_type:opened["contentType"].as_str().unwrap_or("").into(), total_bytes:total})
     }.await;
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), renderer_call(webview, "close", serde_json::json!([id]), page)).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), renderer_call(webview, "close", serde_json::json!([id]), page, media)).await;
     result
 }
 
 #[cfg(windows)]
 async fn confirm_manifest_base(webview: &Webview, url: &str, page: &Url, include_credentials: bool, control: &CaptureControl) -> AppResult<()> {
     let id = uuid::Uuid::new_v4().to_string();
-    let result = checked(control, renderer_call(webview, "manifestBase", serde_json::json!([url, id, include_credentials]), page)).await;
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), renderer_call(webview, "close", serde_json::json!([id]), page)).await;
+    let result = checked(control, renderer_call(webview, "manifestBase", serde_json::json!([url, id, include_credentials]), page, "视频")).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), renderer_call(webview, "close", serde_json::json!([id]), page, "视频")).await;
     control.check()?;
     if matches!(&result, Err(AppError::Other(message)) if message == SOURCE_ORIGIN_CHANGED) {
         return Err(AppError::Other(SOURCE_ORIGIN_CHANGED.into()));
@@ -268,44 +309,51 @@ fn include_media_credentials(page: &tauri::Url, media: &tauri::Url) -> bool {
 }
 
 #[cfg(windows)]
-async fn capture_network_resource(webview: &Webview, media: &Url, page: &Url, max_bytes: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
+async fn capture_network_resource(webview: &Webview, source: &Url, page: &Url, max_bytes: usize, media: &'static str, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
     use serde_json::json;
-    let url = media.as_str();
-    let include_credentials = include_media_credentials(page, media);
-    let tree = checked(control, cdp(webview, "Page.getFrameTree", json!({}))).await?;
+    let url = source.as_str();
+    let include_credentials = include_media_credentials(page, source);
+    let tree = checked(control, cdp_timed(webview, "Page.getFrameTree", json!({}), std::time::Duration::from_secs(45), media)).await?;
     let frame = tree["frameTree"]["frame"]["id"].as_str().ok_or_else(|| AppError::Other("网页尚未就绪。".into()))?;
     let response = checked(control, cdp_timed_for_source(webview, "Network.loadNetworkResource", json!({
         "frameId":frame, "url":url, "options":{"disableCache":false,"includeCredentials":include_credentials}
-    }), std::time::Duration::from_secs(120), "视频", Some(page))).await?;
+    }), std::time::Duration::from_secs(120), media, Some(page))).await?;
     let resource = &response["resource"];
     let stream = resource["stream"].as_str();
     let result = async {
         control.check()?;
-        if resource["success"].as_bool() != Some(true) || resource["httpStatusCode"].as_u64().is_none_or(|status| !(200..300).contains(&status) || status == 206) {
-            return Err(AppError::Other("网站未返回完整视频内容，请重新拖入。".into()));
+        if resource["success"].as_bool() != Some(true) {
+            tracing::warn!(net_error=?resource["netError"], diagnostic=?resource["netErrorName"], "native browser resource rejected");
+            if resource["netErrorName"].as_str().is_some_and(|error| error.ends_with("ERR_TIMED_OUT")) {
+                return Err(download_timeout(media));
+            }
+            return Err(AppError::Other(format!("网站未允许读取{media}，请刷新网页后重试。")));
+        }
+        if resource["httpStatusCode"].as_u64().is_none_or(|status| !(200..300).contains(&status) || status == 206) {
+            return Err(AppError::Other(format!("网站未返回完整{media}内容，请重新拖入。")));
         }
         let header = |name: &str| resource["headers"].as_object().and_then(|headers| headers.iter().find(|(key,_)| key.eq_ignore_ascii_case(name))).and_then(|(_,value)| value.as_str());
         let encoded = header("content-encoding").is_some_and(|value| !value.eq_ignore_ascii_case("identity"));
-        let total = if encoded { None } else { header("content-length").map(str::parse::<u64>).transpose().map_err(|_| AppError::Other("视频大小无效。".into()))? };
-        if total.is_some_and(|value| value > max_bytes as u64) { return Err(AppError::Other("视频超过大小限制。".into())); }
-        let stream = stream.ok_or_else(|| AppError::Other("网站没有返回视频内容。".into()))?;
+        let total = if encoded { None } else { header("content-length").map(str::parse::<u64>).transpose().map_err(|_| AppError::Other(format!("{media}大小无效。")))? };
+        if total.is_some_and(|value| value > max_bytes as u64) { return Err(too_large(media)); }
+        let stream = stream.ok_or_else(|| AppError::Other(format!("网站没有返回{media}内容。")))?;
         let mut bytes = Vec::new();
         loop {
-            let chunk = checked(control, cdp_timed(webview, "IO.read", json!({"handle":stream,"size":64*1024}), std::time::Duration::from_secs(120), "视频")).await?;
-            let data = decode_chunk(&chunk)?;
-            if bytes.len() + data.len() > max_bytes { return Err(AppError::Other("视频超过大小限制。".into())); }
+            let chunk = checked(control, cdp_timed(webview, "IO.read", json!({"handle":stream,"size":64*1024}), std::time::Duration::from_secs(120), media)).await?;
+            let data = decode_chunk(&chunk, media)?;
+            if bytes.len() + data.len() > max_bytes { return Err(too_large(media)); }
             bytes.extend(data);
             if report { control.report("downloading", bytes.len() as u64, total, None, None); }
             if chunk["eof"].as_bool() == Some(true) { break; }
         }
-        if bytes.is_empty() || total.is_some_and(|value| value != bytes.len() as u64) { return Err(AppError::Other("网站未返回完整视频内容。".into())); }
+        validate_capture_length(bytes.len(), total, media)?;
         let captured = CaptureResource {url:url.into(),bytes,content_type:header("content-type").unwrap_or("").into(),total_bytes:total};
         // CDP omits the final response URL. Never resolve relative fragments
         // against an unverified pre-redirect URL, even if those files exist.
-        if captured.is_manifest() { confirm_manifest_base(webview, url, page, include_credentials, control).await?; }
+        if media == "视频" && captured.is_manifest() { confirm_manifest_base(webview, url, page, include_credentials, control).await?; }
         Ok(captured)
     }.await;
-    if let Some(stream) = stream { let _ = cdp_timed(webview, "IO.close", json!({"handle":stream}), std::time::Duration::from_secs(2), "视频").await; }
+    if let Some(stream) = stream { let _ = cdp_timed(webview, "IO.close", json!({"handle":stream}), std::time::Duration::from_secs(2), media).await; }
     result
 }
 
@@ -369,10 +417,13 @@ async fn cdp_timed_for_source(webview: &Webview, method: &str, params: serde_jso
                 }
             }
         })
-        .map_err(|e| AppError::Other(format!("浏览器取图初始化失败：{e}")))?;
+        .map_err(|error| {
+            tracing::warn!(diagnostic=%error, "native browser media request could not start");
+            AppError::Other(format!("浏览器未能开始读取{media}，请重试。"))
+        })?;
     let raw = tokio::time::timeout(timeout, rx)
         .await
-        .map_err(|_| AppError::Other(format!("浏览器读取{media}超时，请重试")))?
+        .map_err(|_| download_timeout(media))?
         .map_err(|_| AppError::Other(format!("浏览器已关闭，无法读取{media}")))?
         .map_err(|error| {
             if error == SOURCE_ORIGIN_CHANGED { return AppError::Other(error); }
@@ -382,15 +433,15 @@ async fn cdp_timed_for_source(webview: &Webview, method: &str, params: serde_jso
     serde_json::from_str(&raw).map_err(|_| AppError::Other(format!("浏览器{media}响应无效")))
 }
 
-fn decode_chunk(value: &serde_json::Value) -> AppResult<Vec<u8>> {
+fn decode_chunk(value: &serde_json::Value, media: &str) -> AppResult<Vec<u8>> {
     use base64::Engine;
     let data = value["data"]
         .as_str()
-        .ok_or_else(|| AppError::Other("图片数据为空".into()))?;
+        .ok_or_else(|| AppError::Other(format!("{media}数据为空")))?;
     if value["base64Encoded"].as_bool().unwrap_or(false) {
         base64::engine::general_purpose::STANDARD
             .decode(data)
-            .map_err(|_| AppError::Other("图片数据编码无效".into()))
+            .map_err(|_| AppError::Other(format!("{media}数据编码无效")))
     } else {
         Ok(data.as_bytes().to_vec())
     }
@@ -480,7 +531,7 @@ async fn browser_resource(webview: &Webview, url: &str, video: bool) -> AppResul
                 deadline,
             )
             .await?;
-            let data = decode_chunk(&chunk).map_err(|error| {
+            let data = decode_chunk(&chunk, media).map_err(|error| {
                 if video {
                     tracing::warn!(diagnostic=%error, "invalid browser video chunk");
                     AppError::Other("浏览器返回的视频数据无效，请重新拖入。".into())
@@ -630,10 +681,31 @@ mod tests {
     #[test]
     fn binary_chunks_are_decoded_without_utf8_corruption() {
         assert_eq!(
-            decode_chunk(&serde_json::json!({"data":"AP+A", "base64Encoded":true})).unwrap(),
+            decode_chunk(&serde_json::json!({"data":"AP+A", "base64Encoded":true}), "图片").unwrap(),
             vec![0, 255, 128]
         );
-        assert!(decode_chunk(&serde_json::json!({"data":"!", "base64Encoded":true})).is_err());
-        assert!(decode_chunk(&serde_json::json!({})).is_err());
+        assert!(decode_chunk(&serde_json::json!({"data":"!", "base64Encoded":true}), "图片").is_err());
+        assert!(decode_chunk(&serde_json::json!({}), "视频").unwrap_err().to_string().contains("视频"));
+    }
+
+    #[test]
+    fn source_browser_image_failures_keep_their_specific_reasons() {
+        for (reason, expected) in [
+            ("resource-timeout", "浏览器读取图片超时，请重试。"),
+            ("resource-empty", "浏览器没有返回图片内容。"),
+            ("resource-read-incomplete", "网站未返回完整图片内容。"),
+            ("resource-too-large", "图片超过大小限制。"),
+            ("resource-access-denied", "网站拒绝读取图片，请确认已登录或刷新网页。"),
+            ("unknown-renderer-error", "浏览器未能读取当前图片，请刷新网页后重试。"),
+            ("此视频受播放保护，无法采集。", "浏览器未能读取当前图片，请刷新网页后重试。"),
+        ] {
+            assert_eq!(renderer_failure("图片", "open", reason), expected);
+        }
+        assert_eq!(validate_capture_length(0, None, "图片").unwrap_err().to_string(), "网站未返回完整图片内容。");
+        assert_eq!(validate_capture_length(2, Some(3), "图片").unwrap_err().to_string(), "网站未返回完整图片内容。");
+        assert_eq!(renderer_failure("视频", "open", "resource-too-large"), "视频超过大小限制。");
+        assert_eq!(renderer_failure("视频", "resolve", "此视频受播放保护，无法采集。"), "此视频受播放保护，无法采集。");
+        assert_eq!(renderer_failure("图片", "open", "resource-network-unavailable"), RENDERER_NETWORK_UNAVAILABLE);
+        assert_eq!(renderer_failure("图片", "open", SOURCE_ORIGIN_CHANGED), SOURCE_ORIGIN_CHANGED);
     }
 }

@@ -169,7 +169,7 @@ try {
   assert.equal(await page.locator('[aria-label="探索采集素材"] video').count(), 0, "passive collection previews must not initialize video decoders");
   await page.getByText("PSD", { exact: true }).waitFor();
   await page.evaluate(() => { window.fail = true; }); await drop();
-  const failureNotice = page.getByRole("status").getByText("采集失败，请查看采集记录", { exact: true });
+  const failureNotice = page.getByRole("status").getByText("图片采集失败：模拟网站拒绝图片", { exact: true });
   await failureNotice.waitFor();
   const notice = await failureNotice.boundingBox();
   const native = await page.locator("[data-source-browser-viewport]").boundingBox();
