@@ -1,7 +1,7 @@
 import { api } from "./api";
-import { emptyWorkflow, type CanvasWorkflow, type WorkflowRun } from "./canvasWorkflow";
+import { emptyWorkflow, workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowRun } from "./canvasWorkflow";
 import { isWorkflowProDenied } from "./workflowEntitlement";
-import { mergeWorkflowChanges } from "./workflowExternalChanges";
+import { mergeWorkflowChanges, sameWorkflowValue } from "./workflowExternalChanges";
 
 interface WorkflowPersistenceHost {
   readonly projectId: string;
@@ -10,6 +10,7 @@ interface WorkflowPersistenceHost {
   readonly discarded: boolean;
   readonly error: string;
   liveGenerationCheckpoint(nodeId: string, run: WorkflowRun): boolean;
+  reconcileRuns(document: CanvasWorkflow, previous: CanvasWorkflow, validateAccess?: boolean): CanvasWorkflow;
   changed(promptEditor?: string): void;
   saved(previous: CanvasWorkflow, next: CanvasWorkflow): void;
   writeSettled(promptEditor?: string): void;
@@ -92,10 +93,15 @@ export class WorkflowPersistenceQueue {
         if (needsAuthorization) await api.canvasWorkflowAuthorize();
         let merged = mergeWorkflowChanges(writeBase, snapshot, this.persistedDocument, this.host.liveGenerationCheckpoint);
         let mergeBase = this.persistedDocument, revision = this.host.revision;
+        const knownRuns = new Set(workflowRuns(snapshot).map(run => run.id));
         // A chat turn can append four batches while unrelated runs checkpoint.
         for (let conflicts = 0; ; conflicts++) {
           if (this.host.discarded) return;
           try {
+            if (!sameWorkflowValue(merged.nodes, snapshot.nodes)
+              || workflowRuns(merged).some(run => workflowRunActive(run) && !knownRuns.has(run.id))) {
+              merged = this.host.reconcileRuns(merged, mergeBase, true);
+            }
             this.host.revision = await api.canvasWorkflowSave(this.host.projectId, revision, merged);
             break;
           } catch (error) {
@@ -112,7 +118,9 @@ export class WorkflowPersistenceQueue {
         // Keep that edit's original base when reconciling with the committed document.
         const publishedBase = deferPublication ? optimisticBase : snapshot;
         writeBase = publishedBase;
-        this.host.document = mergeWorkflowChanges(publishedBase, this.host.document, merged);
+        const published = mergeWorkflowChanges(publishedBase, this.host.document, merged);
+        this.host.document = deferPublication && !sameWorkflowValue(published.nodes, merged.nodes)
+          ? this.host.reconcileRuns(published, merged) : published;
         if (this.queuedDocument === (deferPublication ? base : snapshot)) this.queuedDocument = merged;
         this.failedWrite = undefined;
         this.host.saved(previous, merged);

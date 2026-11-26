@@ -22,7 +22,7 @@ import { enqueueCloudAgentRunOperation } from "../cloudAgentRuntime";
 import { describeBrandImage } from "../describeBrandImage";
 import { comfyVideoMode, type ComfyVideoInput } from "../comfyVideo";
 import { compileAgentPrompt, compileGenerationPrompt, filterDisconnectedReferences, generationInputNode, generationReferencePreviewOrder,
-  h3OriginalPrompt, h3RunReferences, workflowInputProducers, workflowInputValues, H3_R2V_INPUT_PORTS, WORKFLOW_SKILLS, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "../canvasWorkflow";
+  h3OriginalPrompt, h3RunReferences, workflowInputProducers, workflowInputValues, workflowNodeRequiresPro, H3_R2V_INPUT_PORTS, WORKFLOW_SKILLS, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "../canvasWorkflow";
 
 interface WorkflowStepHost extends WorkflowCardExecution {
   layoutNodes(): WorkflowNode[];
@@ -42,16 +42,19 @@ interface StepExecution {
 }
 
 export function createWorkflowStepExecutor(host: WorkflowStepHost, { runId, start, halted, executionStopped, signal }: StepExecution) {
-  const prepareMediaInputs = (node: WorkflowNode, inputs: WorkflowNode["inputs"], values: Record<string, WorkflowValue[]>) =>
-    prepareWorkflowMediaInputs(host.projectId, node, inputs, values, () => host.document.nodes, halted);
   return async (id: string) => {
-    const accountId = host.run(runId).accountId;
+    const accepted = host.run(runId);
+    const { accountId, inputOutputs, cellTexts, cellValues, order } = accepted;
     if (accountId !== undefined && accountId !== (host.desktop.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
-    const step = host.run(runId).steps[id];
-    const current = host.document.nodes.find(node => node.id === id)!;
+    const step = accepted.steps[id];
+    const readNodes = inputOutputs ? host.document.nodes.map(node => inputOutputs[node.id]
+      ? { ...node, outputs: inputOutputs[node.id] } : node) : host.document.nodes;
+    const current = readNodes.find(node => node.id === id);
+    if (!current || !step || step.status === "done" || halted()) return;
+    const prepareMediaInputs = (node: WorkflowNode, inputs: WorkflowNode["inputs"], values: Record<string, WorkflowValue[]>) =>
+      prepareWorkflowMediaInputs(host.projectId, node, inputs, values, () => readNodes, halted);
     const storedNode = step.comfyAutoGeneration ? { ...current, prompt: h3OriginalPrompt(current) } : current;
     const node = storedNode.kind === "trigger" ? { ...storedNode, inputs: {} } : storedNode.kind === "comfy-video" ? generationInputNode(storedNode) : storedNode;
-    if (step.status === "done" || halted()) return;
     if (node.kind === "voice" && step.voiceRequest) { await executeVoiceCard(host, runId, node, halted); return; }
     host.progress(runId, id, node.kind === "generation" ? `生成${node.generation?.media === "video" ? "视频" : "图片"}，等待会话结果` : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
     if (node.kind === "comfy-video" && step.jobId) { await host.runComfyVideo(runId, node, halted); return; }
@@ -65,22 +68,26 @@ export function createWorkflowStepExecutor(host: WorkflowStepHost, { runId, star
     if (node.kind === "generation" && node.generation?.media === "video" && step.jobId) {
       await host.recoverVideoResult(runId, node, halted); return;
     }
+    if (step.status === "pending" && step.needsProAuthorization && workflowNodeRequiresPro(node)
+      && !step.jobId && !step.chatInput && !step.localDsRequestId && !step.agentRunId) {
+      await api.canvasWorkflowAuthorize();
+      if (halted()) return;
+    }
     const frozenChat = node.kind === "agent" && step.chatInput ? step.agentInput : undefined;
     const hasCells = !frozenChat && Object.values(node.inputs).flat().some(input => input.canvasNodeId);
-    const cellTexts = host.run(runId).cellTexts;
     let canvas = hasCells || node.kind === "loop" ? await api.projectCanvasGet(host.projectId) : null;
     let refreshedLatest = false;
     const readCell = (nodeId: string, cellId: string) => {
-      const frozenSource = host.document.nodes.some(node => node.textSource === nodeId && host.run(runId).order.includes(node.id));
-      const producedThisRun = !frozenSource && workflowInputProducers(host.document.nodes, { canvasNodeId: nodeId, cellId }).some(id => host.run(runId).order.includes(id));
-      const frozen = host.run(runId).cellValues?.[JSON.stringify([nodeId, cellId])] ?? cellTexts?.[JSON.stringify([nodeId, cellId])];
+      const frozenSource = readNodes.some(node => node.textSource === nodeId && order.includes(node.id));
+      const producedThisRun = !frozenSource && workflowInputProducers(readNodes, { canvasNodeId: nodeId, cellId }).some(id => order.includes(id));
+      const frozen = cellValues?.[JSON.stringify([nodeId, cellId])] ?? cellTexts?.[JSON.stringify([nodeId, cellId])];
       if (cellTexts && !producedThisRun && frozen !== undefined && !(refreshedLatest && ["*latest", "*latest-image"].includes(cellId))) return frozen;
       const source = canvas?.nodes.find(candidate => candidate.id === nodeId && candidate.hiddenAt == null);
       return source ? canvasInputValue(source, cellId, canvas!.nodes) : undefined;
     };
     // Latest-row sockets remain dynamic while waiting: a newly appended row
     // replaces the previous candidate for both text and image consumers.
-    const connectedNode = generationInputNode(node, host.document.nodes);
+    const connectedNode = generationInputNode(node, readNodes);
     const latestInputs = Object.values(connectedNode.inputs).flat().filter(input => input.canvasNodeId && ["*latest", "*latest-image"].includes(input.cellId ?? ""));
     const latestWaitStarted = Date.now();
     while (!frozenChat && latestInputs.length && !(node.kind === "text" && node.textTarget?.image) && !(node.kind === "loop" && host.run(runId).loop?.items)) {
@@ -99,7 +106,7 @@ export function createWorkflowStepExecutor(host: WorkflowStepHost, { runId, star
       refreshedLatest = true;
     }
     if (node.kind === "loop") {
-      await executeLoopCard(host, { runId, node, halted, accountId, canvas, readCell, prepareMediaInputs });
+      await executeLoopCard(host, { runId, node, halted, accountId, canvas, readNodes, readCell, prepareMediaInputs });
       return;
     }
     if (node.kind === "director3d") {
@@ -107,13 +114,13 @@ export function createWorkflowStepExecutor(host: WorkflowStepHost, { runId, star
       await host.finish(runId, node, {image:{type:"image",assetIds:[node.directorVideoId]}});
       return;
     }
-    const directedValue = agentWriterValue(node, host.document.nodes);
+    const directedValue = agentWriterValue(node, readNodes);
     if (directedValue === null) {
       await host.step(runId, id, { detail: "本次未指定此输出位置，保留原内容" });
       await host.finish(runId, node, {});
       return;
     }
-    const values: Record<string, WorkflowValue[]> = frozenChat ? {} : structuredClone(directedValue ? { [directedValue.type]: [directedValue] } : workflowInputValues(host.document.nodes, connectedNode, readCell));
+    const values: Record<string, WorkflowValue[]> = frozenChat ? {} : structuredClone(directedValue ? { [directedValue.type]: [directedValue] } : workflowInputValues(readNodes, connectedNode, readCell));
     {
       const pending = Object.entries(values).flatMap(([port, items]) => items.filter((value, index) =>
         value.nodeIds?.length && value.type === "image" &&
@@ -123,7 +130,7 @@ export function createWorkflowStepExecutor(host: WorkflowStepHost, { runId, star
     }
     // Compare the editor's references, before media conversion replaces sources with frame assets.
     const localVideoMode = node.kind === "comfy-video" ? comfyVideoMode(node.comfyVideo) : undefined;
-    let generationRunInput = node.kind === "generation" ? { prompt: node.prompt, references: [generationReferencePreviewOrder(connectedNode, values, host.document.nodes)] }
+    let generationRunInput = node.kind === "generation" ? { prompt: node.prompt, references: [generationReferencePreviewOrder(connectedNode, values, readNodes)] }
       : localVideoMode ? { prompt: node.prompt, references: h3RunReferences(filterDisconnectedReferences(connectedNode.inputs, values), localVideoMode) }
       : undefined;
     const inputNode: WorkflowNode = step.localAgentSkill === "hyperframes" ? { ...node, skill: "hyperframes", agentTransport: "codex-cli" } : node;
@@ -149,10 +156,10 @@ export function createWorkflowStepExecutor(host: WorkflowStepHost, { runId, star
       const count = (values.image ?? []).flatMap(value => value.assetIds ?? []).length;
       if (node.action === "describe" ? count < 1 : count !== 1) throw new Error("指令卡片的输入图片数量不符合要求");
     }
-    await resolveVideoCardOutputs(inputNode, values, canvas?.nodes ?? [], host.projectId, halted, host.document.nodes);
+    await resolveVideoCardOutputs(inputNode, values, canvas?.nodes ?? [], host.projectId, halted, readNodes);
     if (halted()) return;
-    const generated = node.kind === "generation" ? compileGenerationPrompt(node, values, host.document.nodes, !!step.comfyAutoGeneration) : null;
-    const outputTargets = node.kind === "agent" ? step.agentOutputTargets ?? agentOutputTargets(node, host.document.nodes) : [];
+    const generated = node.kind === "generation" ? compileGenerationPrompt(node, values, readNodes, !!step.comfyAutoGeneration) : null;
+    const outputTargets = node.kind === "agent" ? step.agentOutputTargets ?? agentOutputTargets(node, readNodes) : [];
     const agentInput = node.kind === "agent" ? frozenChat ?? compileAgentPrompt(node, values, outputTargets) : null;
     const referenceImages = localVideoMode === "r2v" ? (values[H3_R2V_INPUT_PORTS.image] ?? []).flatMap(value => value.assetIds ?? []) : undefined;
     const assetIds = generated?.assetIds ?? step.agentInput?.assetIds ?? agentInput?.assetIds ?? [...new Set(referenceImages ?? [...(values.image ?? []), ...(values.text ?? []), ...(values["first-frame"] ?? []), ...(values["last-frame"] ?? [])].flatMap(value => value.assetIds ?? []))];

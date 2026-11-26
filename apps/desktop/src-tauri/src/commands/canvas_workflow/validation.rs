@@ -367,6 +367,26 @@ fn validate_image_output(value: &Value, assets: &mut HashSet<String>) -> AppResu
     Ok(())
 }
 
+fn validate_output(value: &Value, assets: &mut HashSet<String>) -> AppResult<()> {
+    match OutputKind::deserialize(&value["type"]).map_err(|_| invalid())? {
+        OutputKind::Session
+            if value["nodeIds"].as_array().is_some_and(|ids| ids.iter().all(Value::is_string)) => {}
+        OutputKind::Image => validate_image_output(value, assets)?,
+        OutputKind::Text if value["text"].is_string() => {
+            if let Some(ids) = value.get("assetIds") {
+                for asset in ids.as_array().ok_or_else(invalid)? {
+                    assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
+                }
+            }
+        }
+        OutputKind::VisualProfile
+            if value["profileId"].as_str().is_some_and(|id| !id.is_empty())
+                && value["version"].as_i64().is_some_and(|v| v > 0) => {}
+        _ => return Err(invalid()),
+    }
+    Ok(())
+}
+
 fn validate_loop(run: &Value, nodes: &[Value], assets: &mut HashSet<String>) -> AppResult<()> {
     let Some(state) = run.get("loop") else {
         return Ok(());
@@ -1036,33 +1056,8 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
         }
         dependencies.push(deps);
         for (port, value) in current.outputs {
-            let invalid = || current.error(&format!("outputs.{port}"));
-            match OutputKind::deserialize(&value["type"]).map_err(|_| invalid())? {
-                OutputKind::Session
-                    if value["nodeIds"]
-                        .as_array()
-                        .is_some_and(|ids| ids.iter().all(|id| id.is_string())) => {}
-                OutputKind::Image => {
-                    validate_image_output(value, &mut assets).map_err(|_| invalid())?
-                }
-                OutputKind::Text if value["text"].is_string() => {
-                    if let Some(ids) = value.get("assetIds") {
-                        for asset in ids.as_array().ok_or_else(invalid)? {
-                            assets.insert(
-                                asset
-                                    .as_str()
-                                    .filter(|id| !id.is_empty())
-                                    .ok_or_else(invalid)?
-                                    .to_owned(),
-                            );
-                        }
-                    }
-                }
-                OutputKind::VisualProfile
-                    if value["profileId"].as_str().is_some_and(|id| !id.is_empty())
-                        && value["version"].as_i64().is_some_and(|v| v > 0) => {}
-                _ => return Err(invalid()),
-            }
+            validate_output(value, &mut assets)
+                .map_err(|_| current.error(&format!("outputs.{port}")))?;
         }
     }
     check_data_dependencies(&definitions, &index, &dependencies)?;
@@ -1175,6 +1170,21 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
             if order.iter().any(|id| !writes.contains(id)) {
                 return Err(invalid());
             }
+            if let Some(snapshots) = run.get("inputOutputs") {
+                let snapshot_error = || value_error(&path, id, "inputOutputs");
+                // Frozen fallback outputs must not reattach removed project assets.
+                let mut snapshot_assets = HashSet::new();
+                for (node_id, outputs) in snapshots.as_object().ok_or_else(snapshot_error)? {
+                    if !reads_and_writes.contains(node_id.as_str()) {
+                        return Err(snapshot_error());
+                    }
+                    for (port, value) in outputs.as_object().ok_or_else(snapshot_error)? {
+                        validate_output(value, &mut snapshot_assets).map_err(|_| {
+                            value_error(&path, id, &format!("inputOutputs.{node_id}.{port}"))
+                        })?;
+                    }
+                }
+            }
             writes.retain(|id| !triggers.contains(id));
             reads_and_writes.retain(|id| !triggers.contains(id));
             if accesses.iter().any(|(other_access, other_writes)| {
@@ -1183,6 +1193,8 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 return Err(invalid());
             }
             accesses.push((reads_and_writes, writes));
+        } else if run.get("inputOutputs").is_some() {
+            return Err(value_error(&path, id, "inputOutputs"));
         }
     }
     Ok(assets)

@@ -17,14 +17,22 @@ function readDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+function filePath(file: File) {
+  return (file as File & { path?: string }).path;
+}
+
+export async function readClipboardMediaPaths(files: File[]) {
+  return files.every(filePath) ? [] : invoke<string[]>("clipboard_file_paths");
+}
+
 /** Loose drops use the shared inbox; an accessible connected path can stay in place. */
-export async function importDroppedMedia(file: File, projectId: string | null, source = "imported"): Promise<Asset> {
-  let path = (file as File & { path?: string }).path;
+export async function importDroppedMedia(file: File, projectId: string | null, source = "imported", clipboard?: { paths: string[]; multiple: boolean }): Promise<Asset> {
+  let path = filePath(file);
   if (!path && source === "clipboard") {
-    const paths = await invoke<string[]>("clipboard_file_paths");
+    const paths = clipboard?.paths ?? await readClipboardMediaPaths([file]);
     if (paths.length) {
       path = paths.find(value => value.split(/[\\/]/).pop() === file.name);
-      if (!path && paths.length === 1) path = paths[0];
+      if (!path && paths.length === 1 && !clipboard?.multiple) path = paths[0];
       if (!path) throw new Error("无法确定原文件位置，请使用「建立连接」选择素材文件夹");
     }
   }

@@ -162,6 +162,8 @@
 
 ## 接收文件／位图粘贴，或复制画板结构
 
+- `clipboardMedia.ts` 合并 `DataTransfer.files` 与 `DataTransfer.items` 中的媒体并去重。`CanvasWorkspace` 优先处理内部复制数据。外部图片、视频和音频入库并建素材卡，纯文本建内容卡。选用最近点击处，无点击记录时用视口中心。`App` 在画布以外沿用截图入库行为。[剪贴板入口](../../apps/desktop/src/lib/clipboardMedia.ts)
+
 - 用途／关键词：clipboard、paste、File、导入、原位连接、画板复制。
 - 文件入口：[mediaImport.ts](../../apps/desktop/src/lib/mediaImport.ts) 的 `prepareMediaImport`、`importDroppedMedia`；实际调用：[FileDropImport.tsx](../../apps/desktop/src/components/FileDropImport.tsx) 与 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 的粘贴处理。单独拖入无需目录连接：有路径用 `api.importFiles(..., collect=true)`，无路径沿现有 `video_import_*` 分块命令接收，统一进入收集箱；可识别的已连接／受管路径不复制。包括 `.txt/.md/.markdown`；`showImportedMedia` 让纯文本切到文本、混合批次切到全部类型。[explorerCanvasDrop.ts](../../apps/desktop/src/lib/explorerCanvasDrop.ts) 的 `prepareExplorerCanvasDrop` 由正式画板接收，冻结项目与坐标，图片／视频创建素材卡，文本读取后创建独立的 3:4 文档卡；素材库内部文本拖入共用此入口。已知路径的文件粘贴仍原位引用，无文件路径的剪贴板位图走首次保存；先校验冻结的项目及 route revision。后端保存入口见 [服务地图](SERVICES.md#接入已有本地文件或保存新收到的媒体)。
 - 结构入口：[canvasClipboard.ts](../../apps/desktop/src/lib/canvasClipboard.ts) 的 `captureCanvasClipboard`、`parseCanvasClipboard`、`cloneCanvasClipboard`，由 `CanvasWorkspace` 调用；使用 `BOWERBIRD_CANVAS_V1` 协议并重映射节点／工作流身份、清除执行结果，不能拿来导入普通媒体或复制运行任务。

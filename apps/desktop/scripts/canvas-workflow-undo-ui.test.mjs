@@ -90,7 +90,7 @@ try {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const c = canvasWorkflowController('p');
     const copy = c.document.nodes.find(node => !['producer', 'consumer', 'writer'].includes(node.id));
-    const run = { id: 'locked-copy', startId: copy.id, threadId: 'thread', status: 'waiting', order: [copy.id], lockedNodeIds: [copy.id], steps: { [copy.id]: { status: 'waiting' } } };
+    const run = { id: 'locked-copy', startId: copy.id, threadId: 'thread', status: 'running', order: [copy.id], lockedNodeIds: [copy.id], steps: { [copy.id]: { status: 'running' } } };
     await c.save({ ...c.document, runs: [...c.document.runs, run], run });
   });
   await undo(); assert.equal((await persisted()).nodes.length, 4, 'active cards block undo without losing the entry');

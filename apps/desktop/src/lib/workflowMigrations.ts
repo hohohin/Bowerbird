@@ -42,6 +42,7 @@ export function migrateWorkflowDocument(persisted: CanvasWorkflow, canvasNodes: 
       run.order = [];
       run.lockedNodeIds = [];
       run.writeNodeIds = [];
+      run.inputOutputs = undefined;
       run.loop = undefined;
       continue;
     }
@@ -49,6 +50,7 @@ export function migrateWorkflowDocument(persisted: CanvasWorkflow, canvasNodes: 
     const nodes = workflowExecutionNodes(document.nodes, run.startId);
     run.lockedNodeIds = workflowDependencies(nodes, run.order);
     run.writeNodeIds = workflowWriteNodes(nodes, run.order);
+    if (run.inputOutputs) run.inputOutputs = Object.fromEntries(Object.entries(run.inputOutputs).filter(([id]) => run.lockedNodeIds!.includes(id)));
   }
   // Conversation metadata may hydrate later; baseline all completed turns before grouping them.
   const historicalSessionCompletions = new Set(canvasNodes.filter(node => node.kind === "prompt"
