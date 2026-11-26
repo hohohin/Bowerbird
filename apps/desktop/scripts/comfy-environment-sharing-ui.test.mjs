@@ -15,11 +15,17 @@ try {
     const { mountComfyEnvironment } = await import("/scripts/fixtures/canvas-reference/mountComfyEnvironment.tsx");
     const invoke = window.__TAURI_INTERNALS__.invoke;
     window.environmentChecks = [];
+    window.cancelModes = [];
     window.environmentPhase = "missing";
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
       if (command !== "comfy_video_environment") return invoke(command, args);
       window.environmentChecks.push(args.action);
       if (args.action === "install") window.environmentPhase = "installing";
+      if (args.action === "cancel") {
+        window.cancelModes.push(args.mode);
+        await new Promise(resolve => { window.finishCancellation = resolve; });
+        window.environmentPhase = "cancelled";
+      }
       return { mode: args.mode, phase: window.environmentPhase, message: "环境测试",
         endpoint: args.endpoint, directory: "D:/test", canInstall: true,
         installed: false, downloadBytes: 1024, completedBytes: 128, requiredBytes: 2048, totalBytes: 1024 };
@@ -57,7 +63,23 @@ try {
   assert.equal(await page.evaluate(() => window.environmentChecks.filter(action => action === "status").length), 1);
   assert.equal(await page.evaluate(() => window.environmentChecks.filter(action => action === "install").length), 1);
   assert.equal(await page.evaluate(() => window.environmentChecks.filter(action => action === "detect").length), 2);
-  console.log("Multiple controls share one detection, install and progress poll");
+  await panel.press("Escape");
+  await page.locator("[data-environment=reference] button").dispatchEvent("click");
+  const pause = panel.getByRole("button", { name: "暂停安装", exact: true });
+  await pause.click();
+  await panel.getByRole("status").filter({ hasText: "正在取消，已下载文件会保留" }).waitFor();
+  assert.equal(await pause.isDisabled(), true);
+  assert.deepEqual(await page.evaluate(() => window.cancelModes), ["frames"], "another mode cancels the original operation");
+  const seenPolls = await page.evaluate(() => window.environmentChecks.filter(action => action === "status").length);
+  await page.waitForFunction(count => window.environmentChecks.filter(action => action === "status").length > count, seenPolls);
+  await page.evaluate(() => window.finishCancellation());
+  await panel.press("Escape");
+  await composer.click();
+  const resume = panel.getByRole("button", { name: "继续安装", exact: true });
+  await resume.click();
+  await panel.getByLabel("环境下载进度").waitFor();
+  assert.equal(await page.evaluate(() => window.environmentChecks.filter(action => action === "install").length), 2);
+  console.log("Multiple controls share one detection, install, progress poll, cancellation and resume");
 } finally {
   await browser.close();
   await server.close();

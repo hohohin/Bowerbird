@@ -72,17 +72,17 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   const [directory, setDirectory] = useState<string>();
   const [driverOpening, setDriverOpening] = useState(false);
   const [pickerError, setPickerError] = useState("");
-  const { environment, error, checking, acting, check } = useComfyEnvironment(mode, endpoint, directory);
+  const { environment, error, checking, acting, canCancel, cancelling, check } = useComfyEnvironment(mode, endpoint, directory);
   const connectionError = pickerError || error;
+  const preparing = environment?.phase === "installing" || environment?.phase === "starting";
   useEffect(() => {
     if (connectionError || !environment || (environment.mode && environment.mode !== mode)) return;
-    if (comfyEnvironmentReady(environment)) dialog.current?.close();
+    if (!preparing && comfyEnvironmentReady(environment)) dialog.current?.close();
     if (!imageMode && environment.phase === "ready" && environment.endpoint !== options.endpoint && !disabled) {
       onChange({ comfyVideo: { ...options, endpoint: environment.endpoint } });
     }
-  }, [connectionError, environment, mode, imageMode, options, disabled, onChange]);
-  const ready = comfyEnvironmentReady(environment) && (!environment?.mode || environment.mode === mode) && !connectionError;
-  const preparing = environment?.phase === "installing" || environment?.phase === "starting";
+  }, [connectionError, environment, mode, imageMode, options, disabled, onChange, preparing]);
+  const ready = !preparing && comfyEnvironmentReady(environment) && (!environment?.mode || environment.mode === mode) && !connectionError;
   const existing = environment?.existing ?? [];
   const canPrepare = existing.length ? existing[0].canStart : environment?.installed && environment.canInstall;
   const recheck = !!connectionError || environment?.phase === "unavailable" && !environment.canAddModels;
@@ -98,7 +98,8 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
     : failed ? "重试安装" : environment.phase === "cancelled" ? "继续安装" : "安装";
   const actionDisabled = disabled || checking || acting || preparing || ready || (!recheck && !needsDriver && !canPrepare && !environment?.canInstall);
   const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
-  const message = connectionError ? userErrorMessage(connectionError, "暂时无法检查本地生成环境，请重新检测。") : (checking ? "正在检查本机环境…" : ready && environment?.phase !== "ready" && environment?.phase !== "starting" && environment?.phase !== "recoverable"
+  const message = cancelling ? "正在取消，已下载文件会保留"
+    : connectionError ? userErrorMessage(connectionError, "暂时无法检查本地生成环境，请重新检测。") : (checking ? "正在检查本机环境…" : ready && environment?.phase !== "ready" && environment?.phase !== "recoverable"
     ? "环境已就绪，运行卡片时会自动启动" : userErrorMessage(environment?.message, "环境未就绪，请重新检测或检查安装位置。"));
   const busyHint = disabled ? "当前生成任务正在执行，请等待任务结束或停止任务后再调整环境。"
     : driverOpening ? "正在匹配官方显卡驱动，请稍候，勿重复点击。"
@@ -169,6 +170,8 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
           catch (error) { setPickerError(String(error)); }
         }} />
         <EnvironmentAction label={actionLabel} disabled={actionDisabled} hint={actionHint} onClick={() => void install()} />
+        {preparing && <EnvironmentAction label={environment?.phase === "starting" ? "取消启动" : "暂停安装"}
+          disabled={!canCancel || cancelling} hint="已下载文件会保留，可以稍后继续安装。" onClick={() => void check.run("cancel")} />}
       </div>
     </dialog>, document.body)}
   </>;

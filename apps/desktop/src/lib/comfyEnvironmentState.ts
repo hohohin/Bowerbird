@@ -1,11 +1,12 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { comfyEnvironment, type ComfyEnvironment, type ComfyEnvironmentMode } from "./comfyVideo";
+import { userErrorMessage } from "./userError";
 import { useStore } from "../store";
 
-type Snapshot = { environment?: ComfyEnvironment; error: string; checking: boolean; acting: boolean };
-type Action = "select_existing" | "install" | "prepare" | "driver";
+type Snapshot = { environment?: ComfyEnvironment; error: string; checking: boolean; acting: boolean; canCancel: boolean; cancelling: boolean };
+type Action = "select_existing" | "install" | "prepare" | "driver" | "cancel";
 type Listener = () => void;
-const initial: Snapshot = { error: "", checking: true, acting: false };
+const initial: Snapshot = { error: "", checking: true, acting: false, canCancel: false, cancelling: false };
 const refreshInterval = 5000;
 const checks = new Map<string, EnvironmentCheck>();
 let focusTimer: number | undefined;
@@ -49,6 +50,7 @@ function finishOperation(check: EnvironmentCheck) {
   operationVersion++;
   check.wasPreparing = false;
   check.selectionChanged = false;
+  check.cancelling = false;
   publishOperation();
   if (refreshRelated && accountScope(useStore.getState()) === check.scope) for (const other of checks.values()) {
     if (other !== check && other.family === check.family && other.scope === check.scope) {
@@ -83,6 +85,7 @@ class EnvironmentCheck {
   checkedAt = -Infinity;
   wasPreparing = false;
   selectionChanged = false;
+  cancelling = false;
   private revision = 0;
   private state = initial;
   private snapshot = initial;
@@ -113,10 +116,13 @@ class EnvironmentCheck {
       error: progress ? related?.state.error ?? "" : this.state.error,
       checking: !related && this.state.checking,
       acting: !!active && !progress,
+      canCancel: !!related && preparing(related.state.environment),
+      cancelling: related?.cancelling ?? false,
     };
     const previous = this.snapshot;
     if (previous.environment === snapshot.environment && previous.error === snapshot.error &&
-        previous.checking === snapshot.checking && previous.acting === snapshot.acting) return;
+        previous.checking === snapshot.checking && previous.acting === snapshot.acting &&
+        previous.canCancel === snapshot.canCancel && previous.cancelling === snapshot.cancelling) return;
     this.snapshot = snapshot;
     for (const listener of this.listeners) listener();
   }
@@ -149,6 +155,23 @@ class EnvironmentCheck {
   };
 
   async run(action: Action, existingDirectory?: string, openDriver?: (url: string) => Promise<void>) {
+    if (action === "cancel") {
+      const owner = operation;
+      if (!owner || owner.scope !== this.scope || owner.family !== this.family || owner.cancelling
+        || accountScope(useStore.getState()) !== this.scope || !preparing(owner.state.environment)) return;
+      const version = operationVersion;
+      owner.cancelling = true;
+      owner.update({ error: "" });
+      try {
+        // Different modes can show the same progress. Native cancellation belongs to the mode that started it.
+        await comfyEnvironment("cancel", owner.endpoint, owner.directory, undefined, owner.mode);
+      } catch (error) {
+        if (version !== operationVersion) return;
+        owner.cancelling = false;
+        owner.update({ error: userErrorMessage(error, "暂时无法取消本机环境操作，请重试。") });
+      }
+      return;
+    }
     if (operation || accountScope(useStore.getState()) !== this.scope) return;
     const version = beginOperation(this);
     ++this.revision;

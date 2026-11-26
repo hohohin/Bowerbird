@@ -17,12 +17,17 @@ try {
   await page.evaluate(async () => {
     const invoke = window.__TAURI_INTERNALS__.invoke;
     window.envCalls = [];
+    let phase = 'missing', attempts = 0, installed = false;
     window.__TAURI_INTERNALS__.invoke = async (command,args) => {
       if (command !== 'comfy_video_environment') return invoke(command,args);
       window.envCalls.push([args.action,args.mode]);
-      if (args.action === 'install') window.prepared = true;
-      return { mode:args.mode,phase:window.prepared?'ready':'missing',message:window.prepared?'本机环境已就绪':'请准备图片环境',
-        endpoint:'http://127.0.0.1:18190',directory:'D:/test/Bowerbird-ComfyUI-Image',canInstall:true,installed:!!window.prepared,
+      if (args.action === 'install') {
+        installed = ++attempts > 1;
+        phase = installed ? 'starting' : 'installing';
+      } else if (args.action === 'cancel') phase = 'cancelled';
+      else if (args.action === 'prepare') phase = 'ready';
+      return { mode:args.mode,phase,message:phase==='ready'?'本机环境已就绪':'请准备图片环境',
+        endpoint:'http://127.0.0.1:18190',directory:'D:/test/Bowerbird-ComfyUI-Image',canInstall:true,installed,
         downloadBytes:51360641689,requiredBytes:64245543577,completedBytes:0,totalBytes:51360641689 };
     };
     window.store.setState({codexHealth:null,dreaminaHealth:null,activeGenProvider:'codex',cloudAuth:{logged_in:true,user_id:'test'},
@@ -44,8 +49,15 @@ try {
   const settings=page.getByRole('dialog',{name:'本地部署工作流环境设置'});
   await settings.getByText(/下载 51.4 GB/).waitFor();
   await settings.getByRole('button',{name:'安装',exact:true}).click();
+  await settings.getByRole('button',{name:'暂停安装',exact:true}).press('Enter');
+  await settings.getByRole('button',{name:'继续安装',exact:true}).click();
+  // A downloaded runtime can still be starting. The settings stay open until it is ready.
+  await settings.getByRole('button',{name:'取消启动',exact:true}).click();
+  await settings.getByRole('button',{name:'启动',exact:true}).click();
   await settings.waitFor({state:'hidden'});
   await card.getByRole('button',{name:/环境就绪/}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.envCalls.filter(([action])=>action==='cancel')),
+    [['cancel','image'],['cancel','image']]);
 
   async function checkModelStatusPosition(surface) {
     const group = surface.locator('.h3-image-model-controls');
