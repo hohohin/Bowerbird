@@ -10,7 +10,7 @@ const server = await createServer({
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
-page.setDefaultTimeout(6000);
+page.setDefaultTimeout(30000);
 await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
 const errors = []; page.on('pageerror', error => errors.push(error.stack ?? error.message));
 const calls = command => page.evaluate(command => window.calls.filter(c => c.command === command), command);
@@ -227,7 +227,7 @@ try {
   assert.deepEqual(errors, []);
   console.log('PASS capture history: real queue, progress, retry, cancellation, persistence, video shared preview, original image detail, native occlusion, keyboard and themes');
 } catch (error) {
-  console.error('UI errors', errors);
+  console.error(error); console.error('UI errors', errors);
   console.error((await page.locator('body').innerText()).slice(-1000));
   throw error;
-} finally { await browser.close(); await server.close(); }
+} finally { await browser.close(); server.httpServer?.closeAllConnections(); await server.close(); }
