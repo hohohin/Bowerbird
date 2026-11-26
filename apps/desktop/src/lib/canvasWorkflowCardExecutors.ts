@@ -439,11 +439,13 @@ export async function executeGenerationCard(host: WorkflowCardExecution, input: 
     }
     const identity = { jobId: crypto.randomUUID(), turnKey: crypto.randomUUID() };
     const sessionNodeId = `gen-prompt:${identity.jobId}:${identity.turnKey}:0`;
-    await host.save({ ...host.document, nodes: host.document.nodes.map(candidate => candidate.id === id
-      ? { ...candidate, activeSessionNodeId: sessionNodeId, sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate) });
-    await host.step(runId, id, { status: "running", jobId: identity.jobId, turnKey: identity.turnKey, generationRunInput });
+    const run = host.run(runId);
+    await host.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "running", ...identity, generationRunInput } } },
+      host.document.nodes.map(candidate => candidate.id === id
+        ? { ...candidate, activeSessionNodeId: sessionNodeId, sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate));
+    if (halted()) return;
     const result = await host.desktop.getState().startGeneration(prompt, orderedAssets, ratio, provider, prompt,
-      undefined, undefined, undefined, visualProfileId, { projectId: host.projectId, threadId: host.run(runId).threadId }, false, generation, identity);
+      undefined, undefined, undefined, visualProfileId, { projectId: host.projectId, threadId: run.threadId }, false, generation, identity);
     if (!result.accepted) throw new Error(result.error || "生成未完成");
     const turns = host.desktop.getState().genJobs[identity.jobId]?.turns ?? [];
     paths = (turns.find(turn => turn.turnKey === identity.turnKey) ?? (turns.length === 1 && !turns[0].turnKey ? turns[0] : undefined))?.images ?? [];

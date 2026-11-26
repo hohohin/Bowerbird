@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use ulid::Ulid;
 
-use super::jimeng::dreamina_command;
+use super::jimeng::{dreamina_command, dreamina_reference_arg};
 use super::types::{Chunk, CodexRequest, GenOutcome, VideoOptions};
 use crate::error::{AppError, AppResult};
 
@@ -82,14 +82,14 @@ pub(crate) fn arguments(req: &CodexRequest, options: &VideoOptions) -> AppResult
     match options.kind.as_str() {
         "text2video" if refs.is_empty() => {}
         "image2video" if images == 1 && videos == 0 && audios == 0 => {
-            args.extend(["--image".into(), refs[0].as_os_str().to_owned()]);
+            args.extend(["--image".into(), dreamina_reference_arg(&refs[0])]);
         }
         "frames2video" if images == 2 && videos == 0 && audios == 0 => {
-            args.extend(["--first".into(), refs[0].as_os_str().to_owned(), "--last".into(), refs[1].as_os_str().to_owned()]);
+            args.extend(["--first".into(), dreamina_reference_arg(&refs[0]), "--last".into(), dreamina_reference_arg(&refs[1])]);
         }
         "multimodal2video" if !refs.is_empty() && images <= max_images && videos <= max_videos && audios <= max_videos && refs.len() <= if options.model_version == "seedance2.5" { 50 } else { 12 } => {
             for path in refs {
-                args.extend([if reference_is_video(path) { "--video" } else if reference_is_audio(path) { "--audio" } else { "--image" }.into(), path.as_os_str().to_owned()]);
+                args.extend([if reference_is_video(path) { "--video" } else if reference_is_audio(path) { "--audio" } else { "--image" }.into(), dreamina_reference_arg(path)]);
             }
         }
         _ => return Err(error(&format!("视频模式与参考素材不匹配：文生无参考，图生一图，首尾帧两图，多参考最多 {max_images} 图 / {max_videos} 视频 / {max_videos} 音频"))),
@@ -424,6 +424,27 @@ mod tests {
             model_version: "seedance2.5".into(),
             duration: 5,
             video_resolution: "720p".into(),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn video_cli_arguments_use_ordinary_windows_paths() {
+        let image = r"\\?\K:\Godot\IT32R\foo.jpg";
+        let end = r"\\?\UNC\server\share\末帧.png";
+        let video = r"\\?\UNC\server\share\foo.mp4";
+        let audio = r"\\?\K:\Godot\声音 参考.wav";
+        let cases: [(&str, &[&str], &[&str]); 3] = [
+            ("image2video", &[image], &["--image", r"K:\Godot\IT32R\foo.jpg"]),
+            ("frames2video", &[image, end], &["--first", r"K:\Godot\IT32R\foo.jpg", "--last", r"\\server\share\末帧.png"]),
+            ("multimodal2video", &[image, video, audio], &[
+                "--image", r"K:\Godot\IT32R\foo.jpg", "--video", r"\\server\share\foo.mp4", "--audio", r"K:\Godot\声音 参考.wav",
+            ]),
+        ];
+        for (mode, refs, expected) in cases {
+            let args = arguments(&req(refs), &options(mode)).unwrap();
+            let input_args = args.iter().skip(1).take(expected.len()).map(OsString::as_os_str).collect::<Vec<_>>();
+            assert_eq!(input_args, expected, "{mode}");
         }
     }
     #[test]

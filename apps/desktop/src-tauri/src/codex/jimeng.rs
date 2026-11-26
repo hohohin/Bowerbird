@@ -6,6 +6,7 @@
 //!
 //! 依赖：`dreamina` CLI 已登录（`dreamina login`）且在 PATH（或 `%USERPROFILE%\bin`）。
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime};
@@ -26,6 +27,25 @@ use crate::error::AppError;
 const POLL_SECS: u64 = 1;
 /// 单次子进程（提交 / 查询）整体超时上限。
 const CMD_TIMEOUT_SECS: u64 = 180;
+
+/// Convert the CLI argument while internal filesystem reads keep the original path.
+pub(super) fn dreamina_reference_arg(path: &Path) -> OsString {
+    #[cfg(target_os = "windows")]
+    {
+        crate::windows_shell::shell_path(path).into_os_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        path.as_os_str().to_owned()
+    }
+}
+
+fn add_image_references(command: &mut Command, images: &[PathBuf]) {
+    command.arg(if images.is_empty() { "text2image" } else { "image2image" });
+    for image in images {
+        command.arg("--images").arg(dreamina_reference_arg(image));
+    }
+}
 
 /// Explicit new selections are checked before submission; omitted values preserve
 /// old settings, including older CLI model versions saved by existing users.
@@ -107,14 +127,7 @@ impl GenProvider for DreaminaCliProvider {
 
         // ① 提交生成任务：无参考图走 text2image，有则 image2image（参考图作 --images）。
         let mut submit = dreamina_command(&self.binary);
-        if req.reference_images.is_empty() {
-            submit.arg("text2image");
-        } else {
-            submit.arg("image2image");
-            for img in &req.reference_images {
-                submit.arg("--images").arg(img);
-            }
-        }
+        add_image_references(&mut submit, &req.reference_images);
         // 透明图层：dreamina CLI 的 text2image/image2image 均未暴露背景参数
         // （--background 实测 unknown flag），用「透明背景」提示词注入近似请求
         // （Seedream 系模型对该提示词有较好遵循）；Cloud 路径才走结构化
@@ -505,6 +518,21 @@ fn collect_task_objects(value: &serde_json::Value, out: &mut Vec<RemoteJimengTas
 #[cfg(test)]
 mod tests {
     use super::{collect_task_objects, image_model_version};
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn image_cli_arguments_use_ordinary_windows_paths() {
+        use super::{add_image_references, Command, PathBuf};
+
+        let mut command = Command::new("dreamina");
+        add_image_references(&mut command, &[
+            PathBuf::from(r"\\?\K:\Godot\IT32R\foo.jpg"),
+            PathBuf::from(r"\\?\UNC\server\share\参考 图.png"),
+        ]);
+        assert_eq!(command.as_std().get_args().collect::<Vec<_>>(), [
+            "image2image", "--images", r"K:\Godot\IT32R\foo.jpg", "--images", r"\\server\share\参考 图.png",
+        ]);
+    }
 
     #[test]
     fn image_model_selection_is_explicit_and_keeps_legacy_settings() {

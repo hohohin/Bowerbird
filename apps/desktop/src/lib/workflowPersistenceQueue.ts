@@ -121,7 +121,12 @@ export class WorkflowPersistenceQueue {
         const published = mergeWorkflowChanges(publishedBase, this.host.document, merged);
         this.host.document = deferPublication && !sameWorkflowValue(published.nodes, merged.nodes)
           ? this.host.reconcileRuns(published, merged) : published;
-        if (this.queuedDocument === (deferPublication ? base : snapshot)) this.queuedDocument = merged;
+        // Earlier commits can replace the queued snapshot while a deferred write awaits its turn.
+        const queuedBase = deferPublication ? base : snapshot;
+        const queued = this.queuedDocument === queuedBase ? merged
+          : mergeWorkflowChanges(queuedBase, this.queuedDocument, merged, this.host.liveGenerationCheckpoint);
+        this.queuedDocument = deferPublication && queued !== merged && !sameWorkflowValue(queued.nodes, merged.nodes)
+          ? this.host.reconcileRuns(queued, merged) : queued;
         this.failedWrite = undefined;
         this.host.saved(previous, merged);
       } catch (error) {
