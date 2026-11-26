@@ -417,7 +417,7 @@ try {
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const controller = canvasWorkflowController('p');
-    const run = { id: 'waiting-fixture', startId: 'b', threadId: 't', order: ['b'], status: 'waiting', steps: { b: { status: 'waiting' } }, lockedNodeIds: ['b'], writeNodeIds: ['b'] };
+    const run = { id: 'running-fixture', startId: 'b', threadId: 't', order: ['b'], status: 'running', steps: { b: { status: 'running' } }, lockedNodeIds: ['b'], writeNodeIds: ['b'] };
     await controller.save({ ...controller.document, run, runs: [run] });
   });
   beforeRejected = await state();

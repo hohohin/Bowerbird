@@ -719,6 +719,72 @@ async function activeFixture(kind = 'generation') {
   return f;
 }
 
+const seedanceCard = { ...node('video', '镜头缓慢推进'), provider: 'jimeng', generation: {
+  media: 'video', videoChannel: 'jimeng', ratio: '16:9', videoOptions: { kind: 'text2video', model_version: 'seedance2.5', duration: 4, video_resolution: '480p' },
+} };
+const pendingVideoRun = () => ({ ...running(seedanceCard.id), steps: { [seedanceCard.id]: { status: 'pending' } } });
+
+function executeSeedanceCard(f) {
+  const c = f.controller, run = c.document.run, video = c.document.nodes.find(node => node.id === seedanceCard.id);
+  const { executeGenerationCard } = f.load(resolve(lib, 'canvasWorkflowCardExecutors.ts'));
+  const halted = () => false;
+  c.progress(run.id, video.id, '生成视频，等待会话结果');
+  return executeGenerationCard(c.cardExecution(run.id, halted), {
+    runId: run.id, node: video, step: run.steps[video.id], halted, connectedNode: video, canvas: null,
+    values: {}, video: true, orderedAssets: [], assetIds: [], prompt: video.prompt, visualProfileId: null, generated: null,
+    generationRunInput: { prompt: video.prompt, references: [[]] },
+  });
+}
+
+test('video submits after a deferred run queued behind an ordinary save', async () => {
+  const other = node('other');
+  const f = fixture(doc([seedanceCard, other])), c = f.controller;
+  await c.load();
+  const release = f.hold();
+  const edit = c.edit([c.document.nodes[0], { ...c.document.nodes[1], x: 80 }]);
+  const checkpoint = c.saveRun(pendingVideoRun());
+  assert.equal(c.document.run, null);
+  release();
+  await Promise.all([edit, checkpoint]);
+  await executeSeedanceCard(f);
+  assert.equal(c.error, '');
+  assert.equal(f.generationRequests.length, 1);
+  assert.equal(f.saved().document.nodes.find(node => node.id === other.id).x, 80);
+  assert.equal(f.saved().document.run.steps.video.jobId, f.generationRequests[0].jobId);
+});
+
+test('a video commits its session and running step in the same write before submission', async () => {
+  const f = fixture(doc([seedanceCard])), c = f.controller;
+  await c.load();
+  await c.saveRun(pendingVideoRun());
+  const before = f.writes.length;
+  await executeSeedanceCard(f);
+  const submitted = f.writes.slice(before).filter(document => document.run.steps.video.status !== 'waiting');
+  assert.equal(submitted.length, 1);
+  const [checkpoint] = submitted;
+  const { jobId, turnKey } = f.generationRequests[0];
+  const session = `gen-prompt:${jobId}:${turnKey}:0`;
+  assert.equal(checkpoint.nodes[0].activeSessionNodeId, session);
+  assert.deepEqual(checkpoint.nodes[0].sessionNodeIds, [session]);
+  assert.deepEqual(plain(checkpoint.run.steps.video), { status: 'running', detail: '生成视频，等待会话结果', jobId, turnKey,
+    generationRunInput: { prompt: seedanceCard.prompt, references: [[]] } });
+});
+
+test('rebasing a deferred checkpoint retains an edit queued while the checkpoint is in flight', async () => {
+  const f = fixture(doc([seedanceCard, node('other')])), c = f.controller;
+  await c.load();
+  const release = f.hold();
+  const checkpoint = c.saveRun(pendingVideoRun());
+  await new Promise(setImmediate);
+  const edit = c.edit([c.document.nodes[0], { ...c.document.nodes[1], prompt: '编辑仍需保存' }]);
+  release();
+  await Promise.all([checkpoint, edit]);
+  await executeSeedanceCard(f);
+  assert.equal(c.error, '');
+  assert.equal(f.saved().document.nodes[1].prompt, '编辑仍需保存');
+  assert.equal(f.saved().document.run.steps.video.jobId, f.generationRequests[0].jobId);
+});
+
 test('only adjacent draft edits coalesce across CAS and every run checkpoint reaches disk in order', async () => {
   const f = await activeFixture(), c = f.controller;
   await c.edit([...c.document.nodes, node('draft')]);

@@ -293,7 +293,7 @@ try {
     let upstreamStarted;const queued=new Promise(resolve=>{upstreamStarted=resolve;});let releaseUpstream;
     useStore.setState({startGeneration:async()=>{upstreamStarted();await new Promise(resolve=>{releaseUpstream=resolve;});throw new Error('intentional failure');}});
     const upstreamRun=upstream.start('b',true);await queued;
-    check(upstream.isLocked('a')&&upstream.isLocked('b')&&!upstream.isLocked('free'),'dependency ancestors lock without locking unrelated cards');
+    check(!upstream.isLocked('a')&&upstream.isLocked('b')&&!upstream.isLocked('free'),'the running receiver is locked while its cached producer stays editable');
     let overlap=false;try {await upstream.start('a',true);}catch {overlap=true;}
     check(overlap,'overlapping run rejected');releaseUpstream();await upstreamRun;
     check(!upstream.isLocked('a'),'failure releases only its locks');
@@ -310,8 +310,8 @@ try {
     }});
     const first=shared.start('r1',true),second=shared.start('r2',true);await both;
     check(shared.document.runs.every(run=>run.status==='running'),'readers run concurrently, including startup reservations');
-    let refused=false;try{await shared.edit(shared.document.nodes.map(n=>n.id==='profile'?{...n,profileId:'changed'}:n));}catch{refused=true;}
-    check(refused,'shared source cannot be changed during consumption');
+    await shared.edit(shared.document.nodes.map(n=>n.id==='profile'?{...n,profileId:'changed'}:n));
+    check(shared.document.nodes.find(n=>n.id==='profile').profileId==='changed','accepted readers keep their input while the shared source stays editable');
     let rerun=false;try{await shared.start('profile',true);}catch{rerun=true;}
     check(rerun,'source recomputation conflicts with active readers');
     const snapshot=structuredClone(shared.document);

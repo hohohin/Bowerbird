@@ -1,4 +1,4 @@
-import { workflowNodeRun, workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowRun } from "./canvasWorkflow";
+import { workflowNodeRun, workflowRunActive, workflowRuns, type CanvasWorkflow, type WorkflowNode, type WorkflowRun } from "./canvasWorkflow";
 import { generationPromptNodeId } from "./projectNodeIds";
 
 function same(a: unknown, b: unknown): boolean {
@@ -21,6 +21,12 @@ function mergeValue<T>(before: T, local: T, remote: T): T {
   throw new Error("同一卡片已有其他修改，请保留当前内容并重新打开项目后核对。");
 }
 
+function beforeStepPreparation(node: WorkflowNode) {
+  return { ...node, outputs: undefined, activeSessionNodeId: undefined, layoutSize: undefined,
+    inputs: Object.fromEntries(Object.entries(node.inputs).map(([port, bindings]) =>
+      [port, bindings.map(input => input.groupId ? { ...input, assetIds: undefined } : input)])) };
+}
+
 /** Merge additions/removals from chat without dropping queued edits or execution state. */
 export function mergeWorkflowChanges(before: CanvasWorkflow, local: CanvasWorkflow, remote: CanvasWorkflow,
   liveGeneration?: (nodeId: string, run: WorkflowRun) => boolean): CanvasWorkflow {
@@ -32,6 +38,14 @@ export function mergeWorkflowChanges(before: CanvasWorkflow, local: CanvasWorkfl
   const remoteRuns = new Map(workflowRuns(remote).map(run => [run.id, run]));
   const staleSteps = new Map<string, Set<string>>();
   const staleLoopRuns = new Set<string>();
+  const preparedNodes = (runs: Map<string, WorkflowRun>) => new Set([...runs.values()]
+    .filter(run => !baseRuns.has(run.id) && workflowRunActive(run))
+    .flatMap(run => run.order.filter(id => {
+      const step = run.steps[id];
+      return id !== run.startId && step?.status === "pending" && !step.jobId && !step.chatInput
+        && !step.agentRunId && !step.localDsRequestId && !step.voiceRequest;
+    })));
+  const localPreparation = preparedNodes(localRuns), remotePreparation = preparedNodes(remoteRuns);
   for (const node of liveGeneration ? local.nodes : []) {
     if (node.kind !== "generation" && node.kind !== "comfy-video") continue;
     const run = workflowNodeRun(local, node.id), step = run?.steps[node.id];
@@ -65,6 +79,24 @@ export function mergeWorkflowChanges(before: CanvasWorkflow, local: CanvasWorkfl
   }
   const nodes = [...new Set([...localNodes.keys(), ...remoteNodes.keys()])].flatMap(id => {
     const base = baseNodes.get(id), localNode = localNodes.get(id), remoteNode = remoteNodes.get(id);
+    // A first checkpoint can clear old outputs and freeze unchanged groups
+    // while a still-idle downstream card is edited or deleted in the UI.
+    if (base && localPreparation.has(id) !== remotePreparation.has(id) && !same(base, localNode) && !same(base, remoteNode)) {
+      const prepared = localPreparation.has(id) ? localNode : remoteNode;
+      const edited = localPreparation.has(id) ? remoteNode : localNode;
+      if (prepared && (!Object.keys(prepared.outputs).length || same(base.outputs, prepared.outputs))
+        && (prepared.activeSessionNodeId === null || prepared.activeSessionNodeId === base.activeSessionNodeId)
+        && same(beforeStepPreparation(base), beforeStepPreparation(prepared))) {
+        if (!edited) return [];
+        const inputs = Object.fromEntries(Object.entries(edited.inputs).map(([port, bindings]) => [port, bindings.map(input => {
+          const index = input.groupId ? base.inputs[port]?.findIndex(older => same(input, older)) ?? -1 : -1;
+          return index >= 0 ? prepared.inputs[port][index] : input;
+        })]));
+        return [{ ...edited, inputs, outputs: mergeValue(base.outputs, edited.outputs, prepared.outputs),
+          activeSessionNodeId: mergeValue(base.activeSessionNodeId, edited.activeSessionNodeId, prepared.activeSessionNodeId),
+          layoutSize: edited.layoutSize ?? prepared.layoutSize }];
+      }
+    }
     // A drag and a native execution checkpoint can update the same card concurrently.
     // Treat x/y as one position, so conflicting moves cannot merge into a third location.
     if (base && localNode && remoteNode && (localNode.x !== remoteNode.x || localNode.y !== remoteNode.y)

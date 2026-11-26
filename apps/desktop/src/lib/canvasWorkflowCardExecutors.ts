@@ -127,7 +127,7 @@ export async function executeVoiceCard(host: WorkflowCardExecution, runId: strin
       if (!request.previewKey) {
         try { await host.deliverMediaAsset(host.run(runId), node, asset, halted, `workflow-voice:${job.id}`); }
         catch (error) {
-          if (!halted()) await host.step(runId, node.id, { status: "waiting", error: `配音已保存，点击继续添加到画板。${String(error)}` });
+          if (!halted()) await host.step(runId, node.id, { status: "waiting", voiceJobActive: false, error: `配音已保存，点击继续添加到画板。${String(error)}` });
           return;
         }
       }
@@ -138,7 +138,7 @@ export async function executeVoiceCard(host: WorkflowCardExecution, runId: strin
     }
     if (job.recoverable) {
       if (retrySave) { retrySave = false; await voiceApi.recover(job.id); continue; }
-      await host.step(runId, node.id, { status: "waiting", error: "音频已生成，点击继续以重试保存" });
+      await host.step(runId, node.id, { status: "waiting", voiceJobActive: false, error: "音频已生成，点击继续以重试保存" });
       return;
     }
     if (job.status !== "running") throw new Error(job.message);
@@ -154,6 +154,7 @@ export async function runWorkflowComfyVideo(host: WorkflowCardExecution, runId: 
   let result: ComfyVideoStatus;
   let terminalFailure = false;
   const pollStarted = Date.now();
+  let deliveryPending = false;
   const prepare = async (endpoint: string, mode: ComfyVideoMode, recovery?: { installation?: string | null }) => {
     let environment = await comfyEnvironment(recovery ? "recover" : "prepare", endpoint, undefined, recovery?.installation ?? undefined, mode);
     while (!halted()) {
@@ -224,6 +225,7 @@ export async function runWorkflowComfyVideo(host: WorkflowCardExecution, runId: 
         continue;
       }
       if (result.status === "done" && result.asset) {
+        deliveryPending = true;
         await host.deliverMediaAsset(host.run(runId), node, result.asset, halted);
         if (halted()) return;
         await host.step(runId, id, { detail: comfyVideoElapsed(result.elapsedMs) ? `视频已生成 · 用时 ${comfyVideoElapsed(result.elapsedMs)}` : "视频已生成", error: undefined, comfyProgress: undefined });
@@ -248,22 +250,24 @@ export async function runWorkflowComfyVideo(host: WorkflowCardExecution, runId: 
     }
     if (terminalFailure || !jobId) throw error;
     // Preserve the durable identity on all transport errors. Continue never submits anew.
-    await host.step(runId, id, { status: "waiting", comfyProgress: undefined, error: `${String(error)}。可继续查询原任务，或点击停止取消本机生成。` });
+    await host.step(runId, id, { status: "waiting", ...(deliveryPending ? { videoJobActive: false } : {}), comfyProgress: undefined,
+      error: deliveryPending ? `${String(error)}。视频已生成，可继续写入画板。` : `${String(error)}。可继续查询原任务，或点击停止取消本机生成。` });
   }
 }
 
 export async function executeLoopCard(host: WorkflowCardExecution, input: CardRun & {
   accountId: WorkflowRun["accountId"]; canvas: ProjectCanvasSnapshot | null;
+  readNodes: WorkflowNode[];
   readCell: NonNullable<Parameters<typeof workflowInputValues>[2]>;
   prepareMediaInputs(node: WorkflowNode, inputs: WorkflowNode["inputs"], values: Inputs): Promise<void>;
 }) {
-  const { runId, node, halted, accountId, canvas, readCell, prepareMediaInputs } = input;
+  const { runId, node, halted, accountId, canvas, readNodes, readCell, prepareMediaInputs } = input;
   const id = node.id;
   const run = host.run(runId), loop = run.loop;
   if (!loop || loop.nodeId !== id) throw new WorkflowNodeError("请从循环卡片启动完整流程", node);
   let sourceItems = loop.items;
   if (!sourceItems && node.loopMode !== "rows" && node.loopMode !== "count") {
-    const values = structuredClone(workflowInputValues(host.document.nodes, node, readCell));
+    const values = structuredClone(workflowInputValues(readNodes, node, readCell));
     const pending = values.image.filter(value => value.nodeIds?.length);
     if (pending.length && !await host.resolveInputGenerations(runId, node, pending, halted)) return;
     if (pending.length && accountId !== undefined && accountId !== (host.desktop.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
@@ -273,7 +277,7 @@ export async function executeLoopCard(host: WorkflowCardExecution, input: CardRu
     if (halted()) return;
     sourceItems = validateLoopItems(values.image.flatMap(value => value.assetIds ?? []).map(assetId => ({ text: "", assetIds: [assetId] })), node);
   }
-  const items = validateLoopStart(sourceItems ?? workflowLoopItems(node, host.document.nodes, canvas?.nodes ?? [], readCell), loop.index, node);
+  const items = validateLoopStart(sourceItems ?? workflowLoopItems(node, readNodes, canvas?.nodes ?? [], readCell), loop.index, node);
   const current = host.run(runId);
   await host.saveRun({ ...current, loop: { ...loop, items }, steps: { ...current.steps, [id]: { status: "done", detail: `第 ${loop.index + 1} / ${items.length} 项` } } },
     host.document.nodes.map(candidate => candidate.id === id ? { ...candidate, outputs: workflowLoopOutputs(items[loop.index], loop.index) } : candidate));
@@ -323,7 +327,7 @@ export async function executeAgentCard(host: WorkflowCardExecution, input: CardR
     outputs = { text: agentResultValue(payload.text) };
   }
   outputs = routeAgentOutputs(outputs, outputTargets, orderedAssets.map(asset => asset.id));
-  const writers = agentTextWriters(node, host.document.nodes);
+  const writers = agentTextWriters(node, host.document.nodes).filter(writer => host.run(runId).order.includes(writer.id));
   if (!outputTargets.length) {
     // A wired content card is the result's home: write it now so an early stop still
     // leaves the text on the board, and never add a second "Agent 结果" card beside it.
@@ -435,11 +439,13 @@ export async function executeGenerationCard(host: WorkflowCardExecution, input: 
     }
     const identity = { jobId: crypto.randomUUID(), turnKey: crypto.randomUUID() };
     const sessionNodeId = `gen-prompt:${identity.jobId}:${identity.turnKey}:0`;
-    await host.save({ ...host.document, nodes: host.document.nodes.map(candidate => candidate.id === id
-      ? { ...candidate, activeSessionNodeId: sessionNodeId, sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate) });
-    await host.step(runId, id, { status: "running", jobId: identity.jobId, turnKey: identity.turnKey, generationRunInput });
+    const run = host.run(runId);
+    await host.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "running", ...identity, generationRunInput } } },
+      host.document.nodes.map(candidate => candidate.id === id
+        ? { ...candidate, activeSessionNodeId: sessionNodeId, sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate));
+    if (halted()) return;
     const result = await host.desktop.getState().startGeneration(prompt, orderedAssets, ratio, provider, prompt,
-      undefined, undefined, undefined, visualProfileId, { projectId: host.projectId, threadId: host.run(runId).threadId }, false, generation, identity);
+      undefined, undefined, undefined, visualProfileId, { projectId: host.projectId, threadId: run.threadId }, false, generation, identity);
     if (!result.accepted) throw new Error(result.error || "生成未完成");
     const turns = host.desktop.getState().genJobs[identity.jobId]?.turns ?? [];
     paths = (turns.find(turn => turn.turnKey === identity.turnKey) ?? (turns.length === 1 && !turns[0].turnKey ? turns[0] : undefined))?.images ?? [];

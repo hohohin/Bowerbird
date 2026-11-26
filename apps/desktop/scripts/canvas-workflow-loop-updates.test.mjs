@@ -58,6 +58,8 @@ try {
   await page.evaluate(async () => {
     const { localChat } = await import('/src/lib/localChat.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    window.store.setState({ codexHealth: { ok: true }, cloudAuth: { logged_in: true, cloud_available: true, user_id: 'loop-test' },
+      cloudEntitlement: { user_id: 'loop-test', policy: { can_use_byo: true }, balances: { daily: 10, sub: 0, topup: 0 } } });
     const requests = [];
     localChat.list = async () => [];
     localChat.getByRequest = async () => null;

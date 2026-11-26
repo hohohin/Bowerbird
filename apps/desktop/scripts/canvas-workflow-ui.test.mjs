@@ -247,7 +247,7 @@ try {
   assert.match(await page.getByRole('tooltip').innerText(),/生成图片，等待会话结果/);
   assert.equal(await left.locator('.workflow-key svg').evaluate(el=>getComputedStyle(el).animationName),'workflow-wind');
   assert.equal(await promptField(left).getAttribute('contenteditable'),'false');
-  assert.equal(await shared.getByRole('combobox',{name:'视觉规范来源',exact:true}).isDisabled(),true);
+  assert.equal(await shared.getByRole('combobox',{name:'视觉规范来源',exact:true}).isDisabled(),false);
   assert.equal(await promptField(right).getAttribute('contenteditable'),'false');
   await promptField(editable).fill('并发时仍可编辑');
   await placeWorkflowCard(page, '新增指令卡片');

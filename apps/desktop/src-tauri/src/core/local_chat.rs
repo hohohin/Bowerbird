@@ -529,9 +529,16 @@ impl Database {
             [project], |row| row.get(0),
         ).optional()?.ok_or_else(|| error("请重新打开卡片所属的项目"))?;
         let mut document: serde_json::Value = serde_json::from_str(&source)?;
-        let runs = document["runs"].as_array().into_iter().flatten().chain(std::iter::once(&document["run"]));
-        if runs.filter(|run| matches!(run["status"].as_str(), Some("running" | "waiting")))
-            .any(|run| run.get("lockedNodeIds").unwrap_or(&run["order"]).as_array().is_some_and(|ids| ids.iter().any(|id| id == node_id))) {
+        let runs = document["runs"].as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&document["run"]));
+        if runs.iter().any(|run| {
+            if !matches!(run["status"].as_str(), Some("running" | "waiting"))
+                || !run["order"].as_array().is_some_and(|ids| ids.iter().any(|id| id == node_id)) { return false; }
+            let step = &run["steps"][node_id];
+            // A waiting request without a recorded turn may still be accepted by the host.
+            step["status"] == "running" || step["status"] == "waiting" && (
+                step["chatInput"].is_object() && !step["chatTurnId"].is_string()
+                    || step["localDsRequestId"].is_string() || step["agentRunId"].is_string())
+        }) {
             return Err(error("此卡片关联的工作流正在运行，请先停止对应流程"));
         }
         let node = document["nodes"].as_array_mut().and_then(|nodes| nodes.iter_mut().find(|n| n["kind"] == "agent" && n["id"] == node_id))

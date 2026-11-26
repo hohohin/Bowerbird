@@ -89,8 +89,9 @@ try {
     const waiting = c.document.runs.find(run => run.id === lateRunId);
     check(waiting.status === 'waiting' && waiting.triggerQueue.join() === 'repeat' && c.document.nodes[0].triggerCount === 1 && calls.length === 0,
       'new downstream conflict preserves the completion event and count without submitting');
-    check(waiting.startId === 'repeat' && !waiting.order.length && !c.isLocked('h3') && c.isLocked('busy-target'),
-      'only the independent running target stays locked while the trigger waits');
+    check(waiting.startId === 'repeat' && !waiting.order.length && !c.isLocked('h3') && !c.isLocked('busy-target')
+      && c.document.runs.find(run => run.id === 'busy-run').writeNodeIds.includes('busy-target'),
+      'an idle waiting target remains editable while its run prevents a second writer');
     await c.edit(c.document.nodes.map(node => node.id === 'h3' ? { ...node, prompt: '下次生成' } : node));
     await c.stop('busy-run'); await c.continue(lateRunId);
     check(c.document.runs.find(run => run.id === lateRunId).status === 'done' && calls.length === 2 && c.document.nodes[0].triggerCount === 0,
@@ -116,7 +117,8 @@ try {
     await api.canvasWorkflowSave('p', c.revision, committed);
     c = new CanvasWorkflowController('p'); await c.load(); calls = [];
     check(c.document.nodes[0].triggerCount === 1, 'committed counter survives restart');
-    check(!c.isLocked('prior-source') && c.isLocked('h3'), 'restart releases the previous completion source while retaining the current generation lock');
+    check(!c.isLocked('prior-source') && !c.isLocked('h3') && !c.document.run.writeNodeIds.includes('prior-source')
+      && c.document.run.writeNodeIds.includes('h3'), 'restart reserves the pending generation while allowing edits and releasing the previous completion source');
     await c.continue(); check(calls.length === 2 && c.document.nodes[0].triggerCount === 0, 'resume does not double-decrement committed event');
 
     calls = []; mode = 'hold'; hold = null; await c.edit(make(2)); const running = c.start('h3', true);
