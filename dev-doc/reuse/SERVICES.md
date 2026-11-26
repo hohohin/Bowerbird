@@ -97,6 +97,8 @@ H3 图片文生图／编辑共用直接提示词图谱，`h3_image::reference_pr
 
 卡片与创作框使用 [comfyEnvironmentState.ts](../../apps/desktop/src/lib/comfyEnvironmentState.ts) 共用检测快照、窗口聚焦刷新和安装状态轮询。已有 ComfyUI 的可用模型与节点随模式和端口变化，快照按账号及实际检查参数复用。图片或视频同类控件共用当前安装进度，并在安装结束后重新检查各模式。
 
+H3 和配音安装器通过 [local_install.rs](../../apps/desktop/src-tauri/src/commands/local_install.rs) 共用 Windows 托管进程、磁盘预检、账号变更取消、日志尾部和文件校验缓存，通过 [install_download.rs](../../apps/desktop/src-tauri/src/commands/install_download.rs) 共用 Range 下载、落盘及重试。各安装器管理自己的清单、状态与应用数据。
+
 普通 H3 视频生成使用现有 `prepare` 启动已选择的环境。取回已提交任务使用 `recover`，绑定原端口、模式与已记录的安装路径，并复用原请求 UUID 和入库记录。进程识别及崩溃恢复统一由 `comfy_setup.rs` 管理。[环境恢复](../COMFYUI-LOCAL-VIDEO.md#h3-视频环境自行恢复桌面源码)
 
 H3 视频卡、音频端口和创作框复用 `comfyAudioLabel(mode)` 与 `comfyAudioHint(mode)` 区分录音用途。首尾帧与文生从第 0 帧按录音内容和节奏引导，单图与多素材参考可借用指定录音的音色和语调朗读新台词。录音通过本机解码校验后送入 ComfyUI。[H3 视频参考录音](../COMFYUI-LOCAL-VIDEO.md#2026-11-20-h3-视频参考录音桌面源码)
@@ -223,7 +225,7 @@ VPS 的 Agent、生成、理解和视觉提炼消费循环复用 [ControlTranspo
 ## 本机角色声音与配音
 
 - `commands/voice.rs` 提供 voice_configure／snapshot／save／start／cancel／recover／manage／export；前端 `lib/voice.ts` 是类型化入口。参考裁剪复用音频解码与 media::tools 的 FFmpeg，发布复用 ingest_generated、LibraryPaths 与素材变更事件；持久化运行身份及回执属于声音模块，不跨模块复用其内部 JSON 文件。
-- `commands/voice_setup.rs` 提供 voice_environment 的 status／check／install／pause，专用目录托管 Python、依赖与固定模型，复用库内原子 JSON 写入；不要向其他模块暴露其安装状态全局锁。模型／uv 下载清单在 voice-downloads.json。Windows x64 + NVIDIA，保留高级手动连接，不新增 Cloud 或 Agent 执行器。
+- `commands/voice_setup.rs` 提供 voice_environment 的 status／check／recheck／install／pause。专用目录托管 Python、依赖与固定模型，复用库内原子 JSON 写入。模型／uv 下载清单在 voice-downloads.json。Windows x64 + NVIDIA 支持托管安装和手动连接。
 - `VoiceCard` 的生成由 `CanvasWorkflowController.runVoice` 执行。voiceApi.start 接收独立恢复标识，原生回执保存 request_key。工作流步骤保存输入对应的试听身份、原任务和产物，复用与 H3 共用的媒体落点逻辑。配音通过已有媒体端口传递音频；克隆试听在卡内播放。旧项目草稿通过 readVoiceDraft 接续，卡片字段写入画板工作流。见 [声音卡片](../VOICE-STUDIO.md)。
 
 ## 重复候选与覆盖边界

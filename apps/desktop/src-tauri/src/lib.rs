@@ -922,6 +922,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, _event| {
             if matches!(&_event, tauri::RunEvent::Exit) {
+                commands::voice_setup::shutdown();
                 commands::comfy_setup::shutdown();
                 tauri::async_runtime::block_on(async {
                     commands::local_chat::stop_dsh_host().await;

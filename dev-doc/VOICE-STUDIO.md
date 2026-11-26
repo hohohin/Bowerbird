@@ -4,7 +4,7 @@
 
 ## 卡片流程
 
-从画板工具箱选择「角色声音」，点击画板放置。卡片标题栏的圆点显示本机环境状态，放置卡片或返回窗口会检测。点击圆点可查看检测结果、选安装位置、准备／暂停环境或连接已有环境。
+从画板工具箱选择「角色声音」，点击画板放置。卡片标题栏的圆点显示本机环境状态。多张卡共用检测，窗口聚焦触发的检查至少间隔 5 秒。环境就绪且弹窗关闭时，切回窗口无需再次检测。点击圆点可查看检测结果、选安装位置、准备／暂停环境或连接已有环境。
 
 未选声音时，卡片接收一段参考录音。可以从画板连线、拖入音频、选择本地文件或从项目素材库选择。在真实波形上裁剪 1–30 秒，输入试听台词即可生成并在卡内播放。本次试听绑定音频、选区、可选原文和试听文字。名称独立于试听，点击「保存并使用」后以保存的 WAV 作为音色参考。
 
@@ -16,7 +16,9 @@
 
 安装目录默认应用 local data 下的 `Bowerbird-Voice`，可选其他目录（仍新建该专用子目录）。非空且没有本版本 owner 标记的目录拒绝接管。固定 uv 0.13.7、Python 3.12.13、VoxCPM 2.0.3、torch／torchaudio 2.11.0 CUDA 12.8、torchcodec 0.14.0 和 transformers 5.13.0；其余传递依赖由 uv 解析。模型冻结 OpenBMB/VoxCPM2 revision `7936080b41163874f38610f46f438e2c0757f9fd`，文件大小、SHA-256 与来源在 `voice-downloads.json`。模型／uv 下载使用 `.part`、Range 校验和散列后发布；Python 和依赖下载复用私有 uv 缓存。模型需要约 5 GB，安装器额外预留 12 GB 空间；实际检查以所在磁盘剩余空间为准。
 
-CUDA 索引只用于 torch／torchaudio；其余依赖从 PyPI 安装，避免 Windows TorchCodec 在 CUDA 索引上没有 wheel 的解析失败。参考：[uv Python](https://docs.astral.sh/uv/guides/install-python/)、[uv PyTorch](https://docs.astral.sh/uv/guides/integration/pytorch/)、[TorchCodec](https://github.com/meta-pytorch/torchcodec)、[VoxCPM](https://github.com/OpenBMB/VoxCPM)。下载可达性取决于用户网络，当前没有第三方镜像回退。
+CUDA 索引用于固定版本的 torch／torchaudio。其余依赖优先从 PyPI 安装，官方索引遇到网络或超时错误时尝试腾讯云 PyPI 镜像。VoxCPM2 模型文件可以从固定版本的 ModelScope 回退获取，发布前校验相同的大小与 SHA-256。安装会分别显示依赖安装、模型校验和 CUDA 检测阶段。[uv PyTorch](https://docs.astral.sh/uv/guides/integration/pytorch/)
+
+配音预检复用 NVIDIA 驱动检测，Windows CUDA 12.x 兼容性下限为 528.33，最后仍执行 Python/CUDA 实测。成功的探测可复用 5 分钟，Python 或关键模型文件变化时失效。点击「重新检测」或连接已有环境会立即执行完整校验。[NVIDIA CUDA 兼容表](https://docs.nvidia.com/cuda/archive/12.8.0/cuda-toolkit-release-notes/)
 
 当前验证机 Python：`D:/Tools/miniconda3/envs/voxcpm/python.exe`；模型：`D:/H/Project/Bowerbird/.tmp/voxcpm-local/model`。这只是验证机路径，正式代码不硬编码。该临时模型目录若清理，需要重新选择模型。
 

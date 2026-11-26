@@ -1,81 +1,114 @@
 //! App-owned Python and VoxCPM installation. Never changes PATH or a user's Python.
-use std::{path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
+use std::{path::{Path, PathBuf}, process::{Command, ExitStatus}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant, SystemTime}};
 use serde::{Serialize, Deserialize};
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
-use tokio::io::AsyncReadExt;
 use crate::{cloud::{AuthClient, EntitlementService}, core::paths::LibraryPaths, error::{AppError, AppResult}};
-use super::install_download::{transfer, TransferProgress};
+use super::{
+    comfy_driver,
+    install_download::{transfer, wait_cancel, TransferProgress},
+    local_install::{command, free_bytes, hash, log_tail, remember_verified, spawn_managed, verification_stamp, verified, watch_install_account, ManagedChild},
+};
 use super::voice::{self, Config};
 
 const VERSION: &str = "voxcpm2-2026-11-10";
+const VERIFIED_FOR: Duration = Duration::from_secs(300);
+const PYPI: &str = "https://pypi.org/simple";
+const PYPI_MIRROR: &str = "https://mirrors.cloud.tencent.com/pypi/simple/";
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Environment {
     pub phase: String, pub message: String, pub directory: String, pub gpu: String,
     pub free_bytes: u64, pub required_bytes: u64, pub completed_bytes: u64, pub total_bytes: u64, pub can_install: bool,
 }
 #[derive(Deserialize)]
-struct Download { file: String, url: String, size: u64, sha256: String }
+struct Download { file: String, url: String, mirror_url: Option<String>, size: u64, sha256: String }
 struct Install { state: Environment, cancel: Arc<AtomicBool>, owner: Option<String> }
 static INSTALL: Mutex<Option<Install>> = Mutex::new(None);
+type FileStamps = Vec<(PathBuf, u64, SystemTime)>;
+struct Verification {
+    files: FileStamps,
+    at: Instant,
+}
+static VERIFICATION: tokio::sync::Mutex<Option<Verification>> = tokio::sync::Mutex::const_new(None);
 fn err(text: impl Into<String>) -> AppError { AppError::Other(text.into()) }
 fn files() -> Vec<Download> { serde_json::from_str(include_str!("voice-downloads.json").trim_start_matches('\u{feff}')).expect("bundled voice manifest") }
 fn progress(message: &str, bytes: u64) { if let Some(job) = INSTALL.lock().unwrap().as_mut() { job.state.message = message.into(); job.state.completed_bytes = bytes; } }
 fn check_cancel(cancel: &AtomicBool) -> AppResult<()> { if cancel.load(Ordering::Relaxed) { Err(err("准备已暂停，已下载的文件保留，稍后可继续")) } else { Ok(()) } }
+pub fn shutdown() {
+    if let Some(job) = INSTALL.lock().unwrap().as_ref() {
+        job.cancel.store(true, Ordering::Relaxed);
+    }
+}
 fn active_state(job: &Install, owner: Option<&str>) -> Environment {
     let mut state = job.state.clone();
     if job.owner.as_deref() != owner { state.message = "另一个账号的配音环境准备正在停止，请稍后重新检测".into(); }
     state
 }
-async fn watch_install_account(auth: AuthClient, owner: String, cancel: Arc<AtomicBool>) {
-    while !cancel.load(Ordering::Relaxed) {
-        let login = auth.snapshot();
-        if !login.logged_in || login.user_id.as_deref() != Some(owner.as_str()) {
-            cancel.store(true, Ordering::Relaxed);
-            return;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-}
-fn command(path: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new(path); cmd.kill_on_drop(true);
-    #[cfg(windows)] cmd.creation_flags(0x08000000);
-    cmd
-}
-fn free_bytes(path: &Path) -> AppResult<u64> {
-    #[cfg(windows)] {
-        use std::os::windows::ffi::OsStrExt;
-        let mut ancestor = path; while !ancestor.exists() { ancestor = ancestor.parent().ok_or_else(|| err("安装磁盘不可用"))?; }
-        let wide: Vec<u16> = ancestor.as_os_str().encode_wide().chain(Some(0)).collect(); let mut available = 0;
-        unsafe { windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(windows::core::PCWSTR(wide.as_ptr()), Some(&mut available), None, None) }.map_err(|e| err(e.to_string()))?;
-        Ok(available)
-    }
-    #[cfg(not(windows))] { let _ = path; Ok(0) }
-}
-async fn verify(config: &Config) -> AppResult<()> {
+async fn verify(config: &Config, cancel: &AtomicBool) -> AppResult<()> {
     voice::validate_config(config)?;
-    let output = tokio::time::timeout(Duration::from_secs(45), command(&config.python).args(["-c", "import torch; from voxcpm import VoxCPM; import soundfile; assert torch.cuda.is_available(), 'CUDA unavailable'; assert torch.ones(1,device='cuda').sum().item()==1; assert hasattr(VoxCPM, 'generate')"])
-        .env("HF_HUB_OFFLINE", "1").env("PYTHONUTF8", "1").output())
+    check_cancel(cancel)?;
+    let mut probe = command(&config.python);
+    probe.args(["-c", "import torch; from voxcpm import VoxCPM; import soundfile; assert torch.cuda.is_available(), 'CUDA unavailable'; assert torch.ones(1,device='cuda').sum().item()==1; assert hasattr(VoxCPM, 'generate')"])
+        .env("HF_HUB_OFFLINE", "1").env("PYTHONUTF8", "1");
+    let log = tempfile::NamedTempFile::new()?;
+    let child = spawn_managed(&mut probe, Some(log.as_file()))?;
+    let status = tokio::time::timeout(Duration::from_secs(45), wait_child(child, cancel))
         .await.map_err(|_| err("配音运行环境检查超时，请稍后继续准备"))??;
-    if output.status.success() { return Ok(()); }
-    let detail = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+    if status.success() { return Ok(()); }
+    let detail = log_tail(log.path(), 16 * 1024, 0).to_ascii_lowercase();
     if ["cuda unavailable", "nvidia driver", "cuda driver", "cuda initialization", "cuda error"].iter().any(|reason| detail.contains(reason)) {
         return Err(err("配音环境无法使用 NVIDIA CUDA，请更新显卡驱动后继续准备"));
     }
     Err(err("配音运行组件校验未通过，请继续准备以修复配音运行环境"))
 }
-async fn inspect(directory: PathBuf, paths: &LibraryPaths) -> AppResult<Environment> {
+fn verification_files(config: &Config) -> Option<FileStamps> {
+    let model = Path::new(&config.model);
+    [PathBuf::from(&config.python), model.join("config.json"), model.join("model.safetensors"), model.join("audiovae.pth")]
+        .into_iter().map(|path| {
+            let meta = std::fs::metadata(&path).ok().filter(|meta| meta.is_file())?;
+            Some((path, meta.len(), meta.modified().ok()?))
+        }).collect()
+}
+async fn verify_with_cache(
+    cache: &mut Option<Verification>, config: &Config, refresh: bool,
+    run: impl std::future::Future<Output = AppResult<()>> + Send,
+) -> AppResult<()> {
+    let files = verification_files(config);
+    if !refresh && cache.as_ref().is_some_and(|cached| {
+        cached.at.elapsed() < VERIFIED_FOR && files.as_ref() == Some(&cached.files)
+    }) { return Ok(()); }
+    *cache = None;
+    run.await?;
+    if verification_files(config) != files {
+        return Err(err("配音环境文件已变更，请重新检测"));
+    }
+    *cache = files.map(|files| Verification { files, at: Instant::now() });
+    Ok(())
+}
+async fn verify_cached(config: &Config, refresh: bool, cancel: &AtomicBool) -> AppResult<()> {
+    let mut cache = tokio::select! {
+        guard = VERIFICATION.lock() => guard,
+        _ = wait_cancel(cancel) => return check_cancel(cancel),
+    };
+    check_cancel(cancel)?;
+    verify_with_cache(&mut cache, config, refresh, verify(config, cancel)).await
+}
+async fn inspect(directory: PathBuf, paths: &LibraryPaths, refresh: bool) -> AppResult<Environment> {
     let downloads = files(); let total: u64 = downloads.iter().map(|d| d.size).sum();
     let completed = downloads.iter().map(|d| std::fs::metadata(directory.join(&d.file)).or_else(|_| std::fs::metadata(directory.join(&d.file).with_extension("part"))).map(|m| m.len().min(d.size)).unwrap_or(0)).sum::<u64>();
     let mut state = Environment { phase: "missing".into(), message: "应用会下载并配置本机配音组件".into(), directory: directory.to_string_lossy().into(), gpu: String::new(),
-        free_bytes: free_bytes(&directory)?, required_bytes: total.saturating_sub(completed) + 12_000_000_000, completed_bytes: completed, total_bytes: total, can_install: false };
+        free_bytes: if cfg!(windows) { free_bytes(&directory)? } else { 0 }, required_bytes: total.saturating_sub(completed) + 12_000_000_000, completed_bytes: completed, total_bytes: total, can_install: false };
     if !cfg!(all(windows, target_arch = "x86_64")) { state.phase="unsupported".into(); state.message="本机配音安装目前支持 Windows x64 与 NVIDIA 显卡".into(); return Ok(state); }
-    if let Ok(Ok(output)) = tokio::time::timeout(Duration::from_secs(10), command("nvidia-smi").args(["--query-gpu=name", "--format=csv,noheader"]).output()).await {
-        if output.status.success() { state.gpu=String::from_utf8_lossy(&output.stdout).trim().into(); }
-    }
+    let hardware = if refresh { comfy_driver::detect_with_refresh(true).await } else { comfy_driver::detect().await };
+    state.gpu = hardware.gpus.iter().map(|gpu| gpu.name.as_str()).collect::<Vec<_>>().join("\n");
     if state.gpu.is_empty() { state.phase="unsupported".into(); state.message="未检测到可用的 NVIDIA 显卡，请确认驱动安装后重新检测".into(); return Ok(state); }
     if let Ok(config) = voice::read::<Config>(&voice::root(paths).join("config.json")) {
-        if verify(&config).await.is_ok() { state.phase="ready".into(); state.message="本机配音已就绪".into(); return Ok(state); }
+        if verify_cached(&config, refresh, &AtomicBool::new(false)).await.is_ok() { state.phase="ready".into(); state.message="本机配音已就绪".into(); return Ok(state); }
+    }
+    // CUDA 12.x's published Windows floor for minor-version compatibility.
+    if comfy_driver::drivers_below(&hardware, (528, 33)) {
+        state.phase = "unsupported".into();
+        state.message = "请将 NVIDIA 驱动更新至 528.33 或更新版本，再准备本机配音环境".into();
+        return Ok(state);
     }
     state.can_install = state.free_bytes >= state.required_bytes;
     if !state.can_install { state.message="安装磁盘空间不足，请更换安装位置或清理空间".into(); }
@@ -94,6 +127,82 @@ async fn inspect(directory: PathBuf, paths: &LibraryPaths) -> AppResult<Environm
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::AtomicUsize;
+    #[tokio::test]
+    async fn successful_probe_reuses_only_current_files_until_forced_or_expired() {
+        let root = tempfile::tempdir().unwrap();
+        let python = root.path().join("python.exe");
+        let model = root.path().join("model");
+        std::fs::create_dir(&model).unwrap();
+        std::fs::write(&python, b"first").unwrap();
+        for file in ["config.json", "model.safetensors", "audiovae.pth"] {
+            std::fs::write(model.join(file), b"model").unwrap();
+        }
+        let config = Config { python: python.to_string_lossy().into(), model: model.to_string_lossy().into() };
+        let count = AtomicUsize::new(0);
+        let probe = || async { count.fetch_add(1, Ordering::Relaxed); Ok(()) };
+        let mut cache = None;
+        verify_with_cache(&mut cache, &config, false, probe()).await.unwrap();
+        verify_with_cache(&mut cache, &config, false, probe()).await.unwrap();
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+        verify_with_cache(&mut cache, &config, true, probe()).await.unwrap();
+        cache.as_mut().unwrap().at -= VERIFIED_FOR;
+        verify_with_cache(&mut cache, &config, false, probe()).await.unwrap();
+        assert_eq!(count.load(Ordering::Relaxed), 3);
+        std::fs::write(&python, b"updated Python").unwrap();
+        verify_with_cache(&mut cache, &config, false, probe()).await.unwrap();
+        std::fs::remove_file(model.join("config.json")).unwrap();
+        let reject = async { count.fetch_add(1, Ordering::Relaxed); Err(err("missing config")) };
+        assert!(verify_with_cache(&mut cache, &config, false, reject).await.is_err());
+        assert!(cache.is_none());
+        assert_eq!(count.load(Ordering::Relaxed), 5);
+        std::fs::write(model.join("config.json"), b"restored").unwrap();
+        verify_with_cache(&mut cache, &config, false, probe()).await.unwrap();
+        let other = root.path().join("other-python.exe");
+        std::fs::copy(python, &other).unwrap();
+        let config = Config { python: other.to_string_lossy().into(), ..config };
+        verify_with_cache(&mut cache, &config, false, probe()).await.unwrap();
+        assert_eq!(count.load(Ordering::Relaxed), 7);
+    }
+    #[test]
+    fn pypi_mirror_requires_an_official_index_network_failure() {
+        assert!(pypi_network_failure("failed to fetch: `https://pypi.org/simple/example/`\n  client error (connect)\n  dns error"));
+        assert!(pypi_network_failure("failed to fetch: https://files.pythonhosted.org/packages/a.whl\n  503 service unavailable"));
+        for detail in [
+            "failed to fetch: https://download.pytorch.org/whl/cu128/\n timed out",
+            "https://pypi.org/simple/example/\n no solution found",
+            "https://pypi.org/simple/example/\n client error (connect)\n invalid certificate",
+            "https://files.pythonhosted.org/packages/a.whl\n hash mismatch",
+            "https://files.pythonhosted.org/packages/a.whl\n permission denied",
+        ] { assert!(!pypi_network_failure(detail), "{detail}"); }
+    }
+    #[tokio::test]
+    async fn download_falls_back_and_reuses_only_the_verified_mirror_file() {
+        use axum::{Router, routing::get, http::StatusCode};
+        let server = Router::new().route("/missing", get(|| async { StatusCode::NOT_FOUND }))
+            .route("/mirror", get(|| async { "abcdef" }))
+            .route("/corrupt", get(|| async { "xxxxxx" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap(); });
+        let root = tempfile::tempdir().unwrap();
+        let mut item = Download { file: "model.bin".into(), url: format!("http://{address}/missing"),
+            mirror_url: Some(format!("http://{address}/mirror")), size: 6, sha256: format!("{:x}", Sha256::digest(b"abcdef")) };
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let cancel = AtomicBool::new(false);
+        download(&http, root.path(), &item, &cancel, 0).await.unwrap();
+        let path = root.path().join(&item.file);
+        assert_eq!(std::fs::read(&path).unwrap(), b"abcdef");
+        assert!(verified(&path, item.size, &item.sha256));
+        item.mirror_url = Some(format!("http://{address}/corrupt"));
+        download(&http, root.path(), &item, &cancel, 0).await.unwrap();
+        std::fs::write(&path, b"tampered").unwrap();
+        assert!(download(&http, root.path(), &item, &cancel, 0).await.unwrap_err().to_string().contains("校验未通过"));
+        assert!(!verified(&path, item.size, &item.sha256));
+        assert!(!path.with_extension("part").exists());
+        task.abort();
+    }
     #[tokio::test]
     async fn download_resumes_checks_hash_and_keeps_partial_on_pause() {
         use axum::{Router, routing::get, http::{HeaderMap, StatusCode}};
@@ -105,7 +214,7 @@ mod tests {
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let address=listener.local_addr().unwrap();
         let task=tokio::spawn(async move { axum::serve(listener,server).await.unwrap(); });
         let root=tempfile::tempdir().unwrap(); std::fs::write(root.path().join("model.part"),"abc").unwrap();
-        let mut item=Download { file:"model.bin".into(), url:format!("http://{address}/file"),size:6,sha256:format!("{:x}",Sha256::digest(b"abcdef")) };
+        let mut item=Download { file:"model.bin".into(), url:format!("http://{address}/file"),mirror_url:None,size:6,sha256:format!("{:x}",Sha256::digest(b"abcdef")) };
         let http=reqwest::Client::new(); let cancel=AtomicBool::new(false);
         download(&http,root.path(),&item,&cancel,0).await.unwrap(); assert_eq!(std::fs::read(root.path().join("model.bin")).unwrap(),b"abcdef");
         item.file="bad.bin".into(); item.url=format!("http://{address}/bad"); assert!(download(&http,root.path(),&item,&cancel,0).await.is_err()); assert!(!root.path().join("bad.bin").exists());
@@ -136,7 +245,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap(); });
         let root = tempfile::tempdir().unwrap();
-        let item = Download { file: "model.bin".into(), url: format!("http://{address}/file"), size: 6, sha256: format!("{:x}", Sha256::digest(b"abcdef")) };
+        let item = Download { file: "model.bin".into(), url: format!("http://{address}/file"), mirror_url: None, size: 6, sha256: format!("{:x}", Sha256::digest(b"abcdef")) };
         let http = reqwest::Client::builder().no_proxy().build().unwrap();
         let result = download(&http, root.path(), &item, &AtomicBool::new(false), 0).await;
         task.abort();
@@ -164,7 +273,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let part = root.path().join("model.part");
         std::fs::write(&part, b"abc").unwrap();
-        let item = Download { file: "model.bin".into(), url: format!("http://{address}/file"), size: 6, sha256: format!("{:x}", Sha256::digest(b"abcdef")) };
+        let item = Download { file: "model.bin".into(), url: format!("http://{address}/file"), mirror_url: None, size: 6, sha256: format!("{:x}", Sha256::digest(b"abcdef")) };
         let http = reqwest::Client::builder().no_proxy().build().unwrap();
         let cancel = Arc::new(AtomicBool::new(false));
         let watcher = tokio::spawn(watch_install_account(auth.clone(), "test-user".into(), cancel.clone()));
@@ -181,6 +290,26 @@ mod tests {
         assert_eq!(std::fs::read(&part).unwrap(), b"abc");
         assert!(!root.path().join(&item.file).exists());
     }
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "read-only verification of an existing managed CUDA environment"]
+    async fn existing_managed_environment_reuses_verified_cuda_probe() {
+        let directory = PathBuf::from(std::env::var("VOICE_INSTALL_TEST_DIRECTORY").unwrap());
+        let config = Config { python: directory.join("runtime/Scripts/python.exe").display().to_string(),
+            model: directory.join("model").display().to_string() };
+        let hardware = comfy_driver::detect_with_refresh(true).await;
+        assert!(!hardware.gpus.is_empty(), "{hardware:?}");
+        assert!(!comfy_driver::drivers_below(&hardware, (528, 33)), "{hardware:?}");
+        let cancel = AtomicBool::new(false);
+        let start = Instant::now();
+        verify_cached(&config, true, &cancel).await.unwrap();
+        let elapsed = start.elapsed();
+        let start = Instant::now();
+        verify_cached(&config, false, &cancel).await.unwrap();
+        let cached = start.elapsed();
+        assert!(cached < Duration::from_millis(500), "cache hit took {cached:?}");
+        println!("{hardware:?}; verified in {elapsed:?}; cache hit in {cached:?}");
+    }
     #[tokio::test]
     #[ignore = "explicit isolated local installation; downloads runtime and dependencies"]
     async fn real_managed_installation_verifies_python_and_cuda() {
@@ -189,43 +318,68 @@ mod tests {
         let config = install(&directory, &AtomicBool::new(false)).await.unwrap();
         voice::write(&voice::root(&paths).join("config.json"), &config).unwrap();
         let config: Config=voice::read(&voice::root(&paths).join("config.json")).unwrap();
-        verify(&config).await.unwrap();
+        verify(&config, &AtomicBool::new(false)).await.unwrap();
         println!("verified managed Python: {}",config.python);
     }
 }
-async fn checksum(path: &Path, expected: &str, cancel: &AtomicBool) -> AppResult<bool> {
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut hash = Sha256::new();
-    let mut buffer = vec![0; 1024 * 1024];
-    loop {
-        check_cancel(cancel)?;
-        let read = file.read(&mut buffer).await?;
-        if read == 0 { break; }
-        hash.update(&buffer[..read]);
-    }
-    Ok(format!("{:x}", hash.finalize()) == expected)
+async fn checksum(path: &Path, item: &Download, cancel: &AtomicBool, done: u64) -> AppResult<bool> {
+    let size = item.size;
+    let name = match item.file.as_str() {
+        "uv.whl" => "配音安装组件",
+        "model/model.safetensors" => "配音主模型",
+        "model/audiovae.pth" => "音频编码模型",
+        _ => "配音模型文件",
+    };
+    let update = move |read: u64| {
+        let percent = read.min(size).saturating_mul(100) / size.max(1);
+        progress(&format!("正在校验{name}（{percent}%）"), done);
+    };
+    update(0);
+    Ok(hash(path, cancel, update).await? == item.sha256)
 }
 async fn download(http: &reqwest::Client, root: &Path, item: &Download, cancel: &AtomicBool, done: u64) -> AppResult<()> {
     check_cancel(cancel)?;
     let path = root.join(&item.file); let part = path.with_extension("part");
-    if path.is_file() { progress("正在校验已下载文件", done); if checksum(&path, &item.sha256, cancel).await? { return Ok(()); } }
+    if verified(&path, item.size, &item.sha256) { return Ok(()); }
+    if tokio::fs::metadata(&path).await.is_ok_and(|metadata| metadata.is_file() && metadata.len() == item.size) {
+        let stamp = verification_stamp(&path, &item.sha256);
+        if checksum(&path, item, cancel, done).await? {
+            remember_verified(&path, stamp);
+            return Ok(());
+        }
+    }
     tokio::fs::create_dir_all(path.parent().unwrap()).await?;
     if tokio::fs::metadata(&part).await.is_ok_and(|metadata| metadata.len() > item.size) {
         // This temporary file is inside the app-owned setup directory.
         tokio::fs::remove_file(&part).await?;
     }
     let label = if item.file == "uv.whl" { "正在下载配音组件" } else { "正在下载声音模型" };
-    transfer(http, &part, item.size, cancel, || std::future::ready(Ok(item.url.clone())), |state| match state {
-        TransferProgress::Downloading(offset) => progress(label, done + offset),
-        TransferProgress::Reconnecting(offset) => progress("连接中断，正在继续下载配音资源", done + offset),
-    }).await?;
-    progress("正在校验下载文件", done + item.size);
-    if !checksum(&part, &item.sha256, cancel).await? {
-        tokio::fs::remove_file(&part).await?;
-        return Err(err("配音下载文件校验未通过，请继续准备以重新下载"));
+    let sources = [Some(item.url.clone()), item.mirror_url.clone()];
+    for (attempt, url) in sources.into_iter().enumerate() {
+        let Some(url) = url else { break; };
+        let transfer = transfer(http, &part, item.size, cancel, move || std::future::ready(Ok(url.clone())), move |state| match state {
+            TransferProgress::Downloading(offset) => progress(label, done + offset),
+            TransferProgress::Reconnecting(offset) => progress("连接中断，正在继续下载配音资源", done + offset),
+        }).await;
+        if let Err(error) = transfer {
+            if attempt != 0 || item.mirror_url.is_none() || cancel.load(Ordering::Relaxed) || matches!(error, AppError::Io(_)) {
+                return Err(error);
+            }
+            tracing::warn!(file = %item.file, "switching voice download to mirror");
+            continue;
+        }
+        let stamp = verification_stamp(&part, &item.sha256);
+        if !checksum(&part, item, cancel, done + item.size).await? {
+            tokio::fs::remove_file(&part).await?;
+            continue;
+        }
+        check_cancel(cancel)?;
+        if path.exists() { tokio::fs::remove_file(&path).await?; }
+        tokio::fs::rename(part, &path).await?;
+        remember_verified(&path, stamp);
+        return Ok(());
     }
-    check_cancel(cancel)?;
-    if path.exists() { tokio::fs::remove_file(&path).await?; } tokio::fs::rename(part, path).await?; Ok(())
+    Err(err("配音下载文件校验未通过，请继续准备以重新下载"))
 }
 fn setup_failure(error: &AppError) -> String {
     match error {
@@ -237,16 +391,22 @@ fn setup_failure(error: &AppError) -> String {
         other => other.to_string(),
     }
 }
-fn command_failure(stage: &str, status: std::process::ExitStatus, path: &Path, start: u64) -> AppError {
-    use std::io::{Read, Seek, SeekFrom};
-    let read_tail = || -> std::io::Result<String> {
-        let mut file = std::fs::File::open(path)?;
-        file.seek(SeekFrom::Start(start.max(file.metadata()?.len().saturating_sub(16 * 1024))))?;
-        let mut bytes = Vec::new();
-        file.take(16 * 1024).read_to_end(&mut bytes)?;
-        Ok(String::from_utf8_lossy(&bytes).to_ascii_lowercase())
-    };
-    let tail = read_tail().unwrap_or_default();
+struct CommandFailure { status: ExitStatus, tail: String }
+fn pypi_network_failure(tail: &str) -> bool {
+    const PYPI_HOSTS: &[&str] = &["https://pypi.org/", "https://files.pythonhosted.org/"];
+    const NETWORK_ERRORS: &[&str] = &[
+        "timed out", "timeout", "deadline exceeded", "client error (connect)", "dns error",
+        "network is unreachable", "connection refused", "connection reset", "temporary failure",
+        "429 too many requests", "500 internal server error", "502 bad gateway", "503 service unavailable", "504 gateway timeout",
+    ];
+    if ["hash mismatch", "hashes do not match", "certificate", "not enough space", "no space left", "disk full", "os error 112", "permission denied", "access is denied"]
+        .iter().any(|reason| tail.contains(reason)) { return false; }
+    let lines = tail.lines().collect::<Vec<_>>();
+    lines.iter().enumerate().any(|(line, text)| PYPI_HOSTS.iter().any(|host| text.contains(host))
+        && lines[line..(line + 5).min(lines.len())].iter().any(|next| NETWORK_ERRORS.iter().any(|error| next.contains(error))))
+}
+fn command_failure(stage: &str, failure: CommandFailure) -> AppError {
+    let CommandFailure { status, tail } = failure;
     // Classify the tool's diagnostics without returning its raw URLs or output.
     if ["no space left", "disk full", "not enough space", "os error 112"].iter().any(|reason| tail.contains(reason)) {
         return err("安装磁盘空间不足，请清理空间后继续准备");
@@ -259,26 +419,45 @@ fn command_failure(stage: &str, status: std::process::ExitStatus, path: &Path, s
     }
     err(format!("{stage}失败（{status}），可继续准备，详情见安装目录的 setup.log"))
 }
-async fn run_command(mut cmd: tokio::process::Command, root: &Path, cancel: &AtomicBool, stage: &str) -> AppResult<()> {
+async fn wait_child(mut child: ManagedChild, cancel: &AtomicBool) -> AppResult<ExitStatus> {
+    check_cancel(cancel)?;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            child.kill_and_wait()?;
+            check_cancel(cancel)?;
+        }
+        if let Some(status) = child.try_wait()? { return Ok(status); }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+async fn run_command(mut cmd: Command, root: &Path, cancel: &AtomicBool) -> AppResult<Option<CommandFailure>> {
     check_cancel(cancel)?;
     let path = root.join("setup.log");
     let log = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
     let start = log.metadata()?.len();
-    cmd.stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log);
-    let mut child = cmd.spawn()?;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            #[cfg(windows)] if let Some(id) = child.id() { let _ = command("taskkill.exe").args(["/PID", &id.to_string(), "/T", "/F"]).output().await; }
-            let _=child.kill().await; let _=child.wait().await; return check_cancel(cancel);
-        }
-        if let Some(status)=child.try_wait()? { return if status.success() { Ok(()) } else { Err(command_failure(stage, status, &path, start)) }; }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    }
+    let status = wait_child(spawn_managed(&mut cmd, Some(&log))?, cancel).await?;
+    Ok((!status.success()).then(|| CommandFailure { status, tail: log_tail(&path, 16 * 1024, start).to_ascii_lowercase() }))
 }
-fn uv(root: &Path) -> tokio::process::Command {
+fn uv(root: &Path) -> Command {
     let mut cmd = command(root.join("uv.exe")); cmd.arg("--no-config")
         .env("UV_CACHE_DIR", root.join("cache")).env("UV_PYTHON_INSTALL_DIR", root.join("python"))
         .env("UV_NO_PROGRESS", "1").env("PYTHONUTF8", "1").env_remove("UV_TORCH_BACKEND"); cmd
+}
+fn wheel_command(root: &Path, python: &Path, index: &str, packages: &[&str]) -> Command {
+    let mut cmd = uv(root);
+    cmd.args(["pip", "install", "--python"]).arg(python).args(["--default-index", index]).args(packages);
+    cmd
+}
+async fn install_wheels(root: &Path, python: &Path, cancel: &AtomicBool, done: u64, stage: &'static str, packages: &'static [&'static str]) -> AppResult<()> {
+    progress(&format!("正在{stage}…"), done);
+    let Some(error) = run_command(wheel_command(root, python, PYPI, packages), root, cancel).await? else { return Ok(()); };
+    if !pypi_network_failure(&error.tail) { return Err(command_failure(stage, error)); }
+    progress(&format!("正在通过国内镜像{stage}…"), done);
+    tracing::warn!(%stage, "official PyPI unreachable; retrying voice setup with mirror");
+    if let Some(error) = run_command(wheel_command(root, python, PYPI_MIRROR, packages), root, cancel).await? {
+        return Err(command_failure(stage, error));
+    }
+    Ok(())
 }
 fn unpack_uv(root: &Path) -> AppResult<()> {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(root.join("uv.whl"))?)
@@ -302,16 +481,20 @@ async fn install(root: &Path, cancel: &AtomicBool) -> AppResult<Config> {
     check_cancel(cancel)?;
     let python=root.join("runtime/Scripts/python.exe");
     progress("正在准备独立运行环境，可关闭窗口", done);
-    if !python.is_file() { let mut cmd=uv(root); cmd.args(["venv", "--python", "3.12.13", "--managed-python"]).arg(root.join("runtime")); run_command(cmd, root, cancel, "准备 Python 环境").await?; }
-    progress("正在安装配音组件，首次准备可能需要较长时间", done);
+    if !python.is_file() {
+        let mut cmd=uv(root);
+        cmd.args(["venv", "--python", "3.12.13", "--managed-python"]).arg(root.join("runtime"));
+        if let Some(error) = run_command(cmd, root, cancel).await? { return Err(command_failure("准备 Python 环境", error)); }
+    }
     // Only torch/torchaudio use the CUDA index. TorchCodec's Windows wheel lives on PyPI.
-    let mut cmd=uv(root); cmd.args(["pip", "install", "--python"]).arg(&python).args(["--default-index", "https://pypi.org/simple", "--torch-backend", "cu128", "torch==2.11.0", "torchaudio==2.11.0"]);
-    run_command(cmd, root, cancel, "安装 PyTorch CUDA 组件").await?;
-    let mut cmd=uv(root); cmd.args(["pip", "install", "--python"]).arg(&python).args(["--default-index", "https://pypi.org/simple", "voxcpm==2.0.3", "torch==2.11.0", "torchaudio==2.11.0", "torchcodec==0.14.0", "transformers==5.13.0"]);
-    run_command(cmd, root, cancel, "安装 VoxCPM 配音组件").await?; check_cancel(cancel)?;
+    install_wheels(root, &python, cancel, done, "安装 PyTorch CUDA 组件",
+        &["--torch-backend", "cu128", "torch==2.11.0+cu128", "torchaudio==2.11.0+cu128"]).await?;
+    install_wheels(root, &python, cancel, done, "安装 VoxCPM 组件",
+        &["voxcpm==2.0.3", "torch==2.11.0+cu128", "torchaudio==2.11.0+cu128", "torchcodec==0.14.0", "transformers==5.13.0"]).await?;
+    check_cancel(cancel)?;
     progress("正在检查配音环境", done);
     let config=Config { python: python.to_string_lossy().into(), model: root.join("model").to_string_lossy().into() };
-    verify(&config).await?;
+    verify_cached(&config, true, cancel).await?;
     check_cancel(cancel)?;
     Ok(config)
 }
@@ -326,12 +509,13 @@ pub async fn voice_environment(app: AppHandle, paths: State<'_, Arc<LibraryPaths
             }
             return Ok(active_state(job, owner.as_deref()));
         }
-        if matches!(action.as_str(), "pause" | "status") && (job.owner.is_none() || job.owner == owner) { return Ok(job.state.clone()); }
+        if action == "pause" && (job.owner.is_none() || job.owner == owner) { return Ok(job.state.clone()); }
     } }
     let location=voice::root(&paths).join("setup-location.json");
+    let selected = directory.is_some();
     let root=if let Some(directory)=directory { let parent=PathBuf::from(directory).canonicalize()?; if !parent.is_dir() { return Err(err("请选择安装文件夹")); } parent.join("Bowerbird-Voice") }
         else { voice::read::<PathBuf>(&location).unwrap_or(app.path().app_local_data_dir().map_err(|e| err(e.to_string()))?.join("Bowerbird-Voice")) };
-    let mut state=inspect(root.clone(), &paths).await?;
+    let mut state=inspect(root.clone(), &paths, action == "recheck").await?;
     if action=="install" && state.phase!="ready" {
         voice::access(&auth, &entitlement).await?;
         let owner = owner.ok_or_else(|| err("账号已切换，请重新准备配音环境"))?;
@@ -378,7 +562,10 @@ pub async fn voice_environment(app: AppHandle, paths: State<'_, Arc<LibraryPaths
         if let Some(job)=current.as_ref().filter(|job| job.state.phase=="installing") {
             return Ok(active_state(job, owner.as_deref()));
         }
-        voice::write(&location,&root)?; *current=Some(Install{state:state.clone(),cancel:Arc::new(AtomicBool::new(false)),owner:None});
+        if selected {
+            voice::write(&location,&root)?;
+            *current = None;
+        }
     }
     Ok(state)
 }

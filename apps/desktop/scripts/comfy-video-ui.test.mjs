@@ -112,7 +112,8 @@ try {
   assert.equal(await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='detect').length),detectsBeforeInstallFocus,'focus must not replace an in-flight installation with another detection');
   await page.evaluate(()=>{window.holdInstall=false;window.finishInstall();delete window.finishInstall;});
   await panel.getByLabel('环境下载进度',{exact:true}).waitFor();
-  assert.deepEqual(await panel.getByRole('button').allTextContents(),['选择已有 ComfyUI','安装位置','安装中…']);
+  assert.deepEqual(await panel.getByRole('button').allTextContents(),['选择已有 ComfyUI','安装位置','安装中…','暂停安装']);
+  assert.equal(await panel.getByRole('button',{name:'暂停安装',exact:true}).isEnabled(),true);
   assert.equal((await page.evaluate(()=>window.environmentCalls)).find(call=>call.action==='install').directory,'D:\\Local-Workflows');
   assert.equal(await panel.getByRole('button',{name:'安装中…',exact:true}).isDisabled(),true);
   assert.equal(await panel.getByRole('button',{name:'安装位置',exact:true}).isDisabled(),true);

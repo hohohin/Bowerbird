@@ -387,8 +387,10 @@ async fn submit_prompt(http: &reqwest::Client, path: &Path, record: &mut Record,
     let base = endpoint(&record.input.endpoint)?;
     let weights = model_names_for_mode(record.input.mode)[0];
     owner()?;
+    check_original_for_submit(&base, record)?;
     let mut cache = comfy_memory::before_submit(http, &base, weights).await;
     owner()?;
+    check_original_for_submit(&base, record)?;
     record.submitted = true; save(path,record)?;
     cache.submitted(weights);
     let response = http.post(format!("{base}/prompt")).json(&json!({"prompt":prompt,"client_id":request,"extra_data":{"bowerbird_request_id":request,"workflow":record.input.mode.workflow()}}))
@@ -419,6 +421,14 @@ fn execution_elapsed(result: &Value, prompt_id: &str) -> Option<u64> {
         .and_then(|m| m[1]["timestamp"].as_u64());
     timestamp("execution_success")?.checked_sub(timestamp("execution_start")?)
 }
+fn original_service_available(base: &str, record: &Record) -> bool {
+    record.installation.as_deref()
+        .is_none_or(|path| super::comfy_setup::running_original_service(base, path))
+}
+fn check_original_for_submit(base: &str, record: &Record) -> AppResult<()> {
+    if original_service_available(base, record) { return Ok(()); }
+    Err(error("本机 ComfyUI 已停止或切换，尚未提交生成。请重新运行卡片。"))
+}
 async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<Status> {
     owner()?;
     if let Some(id) = &record.asset_id { return Ok(Status { original_service: None, status:"done",message:"视频已生成".into(),asset:Some(db.get_asset(id)?.ok_or_else(|| error("生成的视频已被删除"))?),progress:None,elapsed_ms:record.elapsed_ms }); }
@@ -429,11 +439,12 @@ async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path:
     let query = |url: String| http.get(url).timeout(Duration::from_secs(18));
     let offline = || {
         let mut result = status("offline", "本机视频服务已断开。");
-        if matches!(base.as_str(), "http://127.0.0.1:18188" | "http://127.0.0.1:18189") {
+        if super::comfy_setup::owned_video_port(&base) && record.installation.is_some() {
             result.original_service = Some((base.clone(), record.input.mode, record.installation.clone()));
         }
         result
     };
+    if !original_service_available(&base, record) { return Ok(offline()); }
     let response = match query(format!("{base}/queue")).send().await {
         Ok(response) => response,
         Err(e) if e.is_connect() || super::comfy_setup::video_abort_detected(&base) => return Ok(offline()),
@@ -545,6 +556,9 @@ async fn confirm_cancel(http: &reqwest::Client, path: &Path, record: &mut Record
     let mut acknowledged_this_attempt = false;
     loop {
         owner()?;
+        if !original_service_available(&base, record) {
+            return Err(error("请先恢复原 ComfyUI 实例，再尝试停止原任务。"));
+        }
         let queue = json_response(http.get(format!("{base}/queue")).timeout(Duration::from_secs(5))).await?;
         if !queue["queue_running"].is_array() || !queue["queue_pending"].is_array() {
             return Err(error("本机视频队列响应无效，尚未确认停止"));
@@ -639,7 +653,7 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
         if action != "start" { return Ok(status("unknown","未找到本地提交记录；请核对本机队列，不会重新提交")); }
         let input = input.clone().ok_or_else(|| error("缺少视频参数"))?;
         endpoint(&input.endpoint)?; validate_input(&input)?;
-        Record { installation: super::comfy_setup::video_installation(&endpoint(&input.endpoint)?), account:account.clone(),project:project_id.clone(),input,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,cancel_acknowledged:false,elapsed_ms:None }
+        Record { installation: super::comfy_setup::registered_installation(&endpoint(&input.endpoint)?), account:account.clone(),project:project_id.clone(),input,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,cancel_acknowledged:false,elapsed_ms:None }
     };
     if record.account != account || record.project != project_id || input.as_ref().is_some_and(|i| i != &record.input) { return Err(error("任务归属或参数不匹配")); }
     let http = client()?;
@@ -656,7 +670,9 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
             biased;
             _ = stop.changed() => return Ok(interrupted()),
             prompt = async {
-                progress::watch(&request,&endpoint(&record.input.endpoint)?).await;
+                let base = endpoint(&record.input.endpoint)?;
+                check_original_for_submit(&base, &record)?;
+                progress::watch(&request,&base).await;
                 prepare_prompt(&http,&db,&record,&request).await
             } => prompt?,
         };
@@ -668,8 +684,9 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
         biased;
         _ = stop.changed() => return Ok(interrupted()),
         result = async {
-            if !record.cancelled && record.asset_id.is_none() && record.failure.is_none() {
-                progress::watch(&request,&endpoint(&record.input.endpoint)?).await;
+            let base = endpoint(&record.input.endpoint)?;
+            if !record.cancelled && record.asset_id.is_none() && record.failure.is_none() && original_service_available(&base, &record) {
+                progress::watch(&request,&base).await;
             }
             poll(&http,&db,&paths,&path,&mut record,&request,&owner).await
         } => result?,
@@ -683,6 +700,35 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn cannot_query_or_stop_owned_run_until_original_installation_returns() {
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = LibraryPaths::init(temporary.path().to_owned()).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        let request = uuid::Uuid::new_v4().to_string();
+        let path = temporary.path().join("request.json");
+        let base = "http://127.0.0.1:18192";
+        let mut input = input();
+        input.endpoint = base.into();
+        let installation = temporary.path().join("the-original-installation");
+        let mut record: Record = serde_json::from_value(json!({
+            "account":"owner", "project":"project", "input":input, "submitted":true, "prompt_id":"saved-prompt"
+        })).unwrap();
+        assert!(original_service_available(base, &record), "legacy records still query their saved address");
+        record.installation = Some(installation.clone());
+        let http = client().unwrap();
+        let result = poll(&http, &db, &paths, &path, &mut record, &request, &|| Ok(())).await.unwrap();
+        assert_eq!(result.status, "offline");
+        assert_eq!(result.original_service, Some((base.into(), Mode::Frames, Some(installation))));
+        let error = confirm_cancel(&http, &path, &mut record, &request, &|| Ok(())).await.err().expect("original installation is not running");
+        assert!(error.to_string().contains("原 ComfyUI 实例"));
+        assert!(!record.cancelled && !path.exists());
+        record.submitted = false;
+        let error = submit_prompt(&http, &path, &mut record, &request, json!({}), &|| Ok(())).await.unwrap_err();
+        assert!(error.to_string().contains("尚未提交生成"));
+        assert!(!record.submitted && !path.exists());
+    }
+
     #[tokio::test]
     async fn h3_stop_signal_is_scoped_to_one_request() {
         let first = request_io("stop-test-first", "owner", "project").unwrap();

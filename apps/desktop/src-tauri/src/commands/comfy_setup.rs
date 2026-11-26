@@ -1,20 +1,20 @@
 //! Opt-in, isolated Windows portable setup. Detection never installs or starts a process.
 use std::{path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
-use tokio::io::AsyncReadExt;
 use crate::{cloud::{AuthClient, EntitlementService}, error::{AppError, AppResult}};
 use super::comfy_video;
 use super::comfy_video::Mode as VideoMode;
 use crate::codex::h3_image;
 use super::comfy_discovery::{self, Installation};
 use super::install_download::{transfer, wait_cancel, TransferProgress};
-#[path = "comfy_driver.rs"]
-mod driver;
+use super::local_install::{command, free_bytes, hash, log_tail, metadata_stamp, remember_verified,
+    spawn_managed, verification_stamp, verified, watch_install_account, ManagedChild};
+use super::comfy_driver as driver;
 
 const MANAGED_ENDPOINT: &str = "http://127.0.0.1:18188";
 const VERSION: &str = "h3-v1-comfy-0.42.1";
+const FALLBACK_PORTS: std::ops::RangeInclusive<u16> = 18192..=18199;
 #[derive(Clone, Copy, Debug, serde::Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode { #[default] Frames, Reference, Text, R2v, Image, Edit }
@@ -30,8 +30,15 @@ impl Mode {
         if self.image() { ("18191", "http://127.0.0.1:18191") } else { ("18189", "http://127.0.0.1:18189") }
     }
     fn version(self) -> &'static str { if self.image() { "h3-image-comfy-0.45.0" } else { VERSION } }
-    fn port(self) -> &'static str { if self.image() { "18190" } else { "18188" } }
     fn endpoint(self) -> &'static str { if self.image() { "http://127.0.0.1:18190" } else { MANAGED_ENDPOINT } }
+    fn default_port(self, existing: bool) -> u16 {
+        match (self.image(), existing) {
+            (false, false) => 18188,
+            (false, true) => 18189,
+            (true, false) => 18190,
+            (true, true) => 18191,
+        }
+    }
     async fn check(self, http: &reqwest::Client, base: &str) -> AppResult<()> {
         match self.video() { Some(video) => comfy_video::check_for_mode(http, base, video).await, None => h3_image::check(http, base, self == Self::Edit).await }
     }
@@ -111,9 +118,9 @@ pub struct Environment {
     hardware: Option<driver::Hardware>,
     driver_download: Option<driver::DriverDownload>,
 }
-struct Job { owner: String, state: Environment, cancel: Arc<AtomicBool>, resumed_bytes: u64 }
+struct Job { owner: String, state: Environment, cancel: Arc<AtomicBool>, resumed_bytes: u64, recovery: Option<(String, PathBuf)> }
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
-struct VideoProcess { child: std::process::Child, log: PathBuf, installation: PathBuf }
+struct VideoProcess { child: ManagedChild, log: PathBuf, installation: PathBuf, default_port: u16 }
 static VIDEO_PROCESSES: Mutex<Option<std::collections::HashMap<String, VideoProcess>>> = Mutex::new(None);
 fn err(message: impl Into<String>) -> AppError { AppError::Other(message.into()) }
 fn active(state: &Environment) -> bool { matches!(state.phase.as_str(), "installing" | "starting") }
@@ -128,11 +135,105 @@ fn retain_setup_outcome(state: &mut Environment, previous: Option<&Environment>)
     }
 }
 fn progress(message: String, bytes: u64) {
-    if let Some(job) = JOB.lock().unwrap().as_mut() { job.state.message = message; job.state.completed_bytes = bytes.saturating_sub(job.resumed_bytes).min(job.state.download_bytes); }
+    if let Some(job) = JOB.lock().unwrap().as_mut() { update_progress(job, message, bytes); }
+}
+fn update_progress(job: &mut Job, message: String, bytes: u64) {
+    job.state.message = message;
+    job.state.completed_bytes = job.state.completed_bytes.max(bytes.saturating_sub(job.resumed_bytes).min(job.state.download_bytes));
+}
+fn installation_stage(message: &str, starting: bool) {
+    if let Some(job) = JOB.lock().unwrap().as_mut() {
+        job.resumed_bytes = 0;
+        if starting { job.state.phase = "starting".into(); }
+        let bytes = job.state.download_bytes;
+        update_progress(job, message.into(), bytes);
+    }
 }
 fn cancelled(cancel: &AtomicBool) -> AppResult<()> {
     if cancel.load(Ordering::Relaxed) { Err(err("已取消，保留已下载文件，下次可继续")) } else { Ok(()) }
 }
+fn endpoint_port(endpoint: &str) -> Option<u16> {
+    endpoint.strip_prefix("http://127.0.0.1:")?.parse().ok()
+}
+pub(super) fn owned_video_port(endpoint: &str) -> bool {
+    endpoint_port(endpoint).is_some_and(|port| matches!(port, 18188 | 18189) || FALLBACK_PORTS.contains(&port))
+}
+fn same_installation(one: &Path, two: &Path) -> bool {
+    one == two || one.canonicalize().ok().zip(two.canonicalize().ok()).is_some_and(|(one, two)| one == two)
+}
+pub(super) fn running_original_service(endpoint: &str, installation: &Path) -> bool {
+    video_installation(endpoint).is_some_and(|path| same_installation(&path, installation))
+}
+fn running_endpoint(installation: &Path, default_port: u16) -> Option<String> {
+    let matches: Vec<_> = {
+        let mut registry = VIDEO_PROCESSES.lock().unwrap();
+        registry.as_mut()?.iter_mut().filter(|(_, process)| process.default_port == default_port)
+            .filter_map(|(endpoint, process)| matches!(process.child.try_wait(), Ok(None))
+                .then(|| (endpoint.clone(), process.installation.clone()))).collect()
+    };
+    matches.into_iter().find(|(_, path)| same_installation(path, installation)).map(|(endpoint, _)| endpoint)
+}
+
+fn may_probe_endpoint(endpoint: &str) -> bool {
+    let mut registry = VIDEO_PROCESSES.lock().unwrap();
+    registry.as_mut().and_then(|entries| entries.get_mut(endpoint))
+        .is_none_or(|process| matches!(process.child.try_wait(), Ok(None)))
+}
+
+#[derive(serde::Deserialize, Serialize)]
+struct PortAssignment { installation: PathBuf, port: u16 }
+
+fn remembered_port(file: &Path, installation: &Path) -> Option<u16> {
+    if !std::fs::metadata(file).is_ok_and(|meta| meta.len() < 16 * 1024) { return None; }
+    let assignment: PortAssignment = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
+    (FALLBACK_PORTS.contains(&assignment.port) && same_installation(&assignment.installation, installation))
+        .then_some(assignment.port)
+}
+
+fn write_port_assignment(file: &Path, installation: &Path, port: u16) -> AppResult<()> {
+    let temp = file.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    std::fs::write(&temp, serde_json::to_vec(&PortAssignment { installation: installation.to_owned(), port })?)?;
+    if let Err(error) = std::fs::rename(&temp, file) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+fn select_launch_port(default: u16, remembered: Option<u16>, exact: Option<u16>, mut occupied: impl FnMut(u16) -> bool) -> AppResult<u16> {
+    if let Some(port) = exact {
+        return if occupied(port) { Err(err("原 ComfyUI 启动端口已被占用，请恢复原实例后继续取回任务")) } else { Ok(port) };
+    }
+    let candidates = remembered.into_iter().chain([default]).chain(FALLBACK_PORTS);
+    for port in candidates { if !occupied(port) { return Ok(port); } }
+    Err(err("本机 ComfyUI 默认启动端口和备用端口均被占用，请释放其中一个端口后重试"))
+}
+
+fn launch_endpoint(app: &AppHandle, installation: &Path, default: u16, exact: Option<&str>) -> AppResult<String> {
+    let file = assignment_file(app, default)?;
+    let exact = exact.map(|endpoint| endpoint_port(endpoint).ok_or_else(|| err("原任务端口无效"))).transpose()?;
+    let port = select_launch_port(default, remembered_port(&file, installation), exact, |port| {
+        // Binding tests the listener directly and does not depend on Windows loopback connect timeouts.
+        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_err()
+    })?;
+    Ok(format!("http://127.0.0.1:{port}"))
+}
+
+fn assignment_file(app: &AppHandle, default: u16) -> AppResult<PathBuf> {
+    Ok(app.path().app_local_data_dir().map_err(|error| err(error.to_string()))?.join(format!("comfy-port-{default}.json")))
+}
+
+struct LaunchPorts { managed: String, existing: String }
+impl LaunchPorts {
+    fn new(root: &Path, existing: &[Installation], mode: Mode) -> Self {
+        Self {
+            managed: running_endpoint(root, mode.default_port(false)).unwrap_or_else(|| mode.endpoint().into()),
+            existing: existing.first().and_then(|instance| running_endpoint(&instance.path, mode.default_port(true)))
+                .unwrap_or_else(|| mode.existing_service().1.into()),
+        }
+    }
+}
+
 fn config(app: &AppHandle, mode: Mode) -> AppResult<PathBuf> { Ok(app.path().app_local_data_dir().map_err(|e| err(e.to_string()))?.join(if mode.image() { "comfy-image-install-location.json" } else { "comfy-install-location.json" })) }
 fn location(app: &AppHandle, directory: Option<String>, mode: Mode) -> AppResult<PathBuf> {
     if let Some(directory) = directory {
@@ -155,27 +256,15 @@ fn runtime_installed(root: &Path, mode: Mode) -> bool {
 fn installed(root: &Path, mode: Mode) -> bool {
     runtime_installed(root, mode) && downloads(mode).iter().filter(|item| item.file != "portable.7z").all(|item| std::fs::metadata(root.join(item.file)).is_ok_and(|m| m.len() == item.size))
 }
-fn command(name: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
-    let mut cmd = std::process::Command::new(name);
-    #[cfg(windows)] { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
-    cmd
+fn installed_for_original_mode(root: &Path, mode: Mode) -> bool {
+    runtime_installed(root, mode) && mode.names().iter().all(|name| {
+        downloads(mode).into_iter().find(|item| item.file.rsplit('/').next() == Some(*name)).is_some_and(|item| {
+            std::fs::metadata(root.join(item.file)).is_ok_and(|meta| meta.is_file() && meta.len() == item.size)
+        })
+    })
 }
-fn kill_process_tree(child: &mut std::process::Child) -> std::io::Result<()> {
-    if child.try_wait()?.is_some() { return Ok(()); }
-    #[cfg(windows)]
-    {
-        // A venv launcher may leave the Python process holding the listening socket.
-        let _ = command("taskkill.exe").args(["/PID", &child.id().to_string(), "/T", "/F"]).output();
-    }
-    if child.try_wait()?.is_none() {
-        if let Err(error) = child.kill() {
-            if child.try_wait()?.is_none() { return Err(error); }
-        }
-    }
-    child.wait().map(|_| ())
-}
-fn stop_process_tree(child: &mut std::process::Child) {
-    if let Err(error) = kill_process_tree(child) {
+fn stop_process_tree(child: &mut ManagedChild) {
+    if let Err(error) = child.kill_and_wait() {
         tracing::warn!(pid = child.id(), %error, "ComfyUI owned process cleanup failed");
     }
 }
@@ -183,18 +272,6 @@ fn prerequisites(hardware: &driver::Hardware) -> Result<(), String> {
     if let Some(issue) = &hardware.issue { return Err(issue.clone()); }
     if !command("tar.exe").arg("--version").output().is_ok_and(|out| out.status.success()) { return Err("未找到 Windows tar 解压工具，请更新 Windows 或连接已有 ComfyUI".into()); }
     Ok(())
-}
-fn free_bytes(path: &Path) -> AppResult<u64> {
-    #[cfg(windows)] {
-        use std::os::windows::ffi::OsStrExt;
-        let mut ancestor = path;
-        while !ancestor.exists() { ancestor = ancestor.parent().ok_or_else(|| err("安装磁盘不可用"))?; }
-        let wide: Vec<u16> = ancestor.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut available = 0;
-        unsafe { windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(windows::core::PCWSTR(wide.as_ptr()), Some(&mut available), None, None) }.map_err(|e| err(e.to_string()))?;
-        Ok(available)
-    }
-    #[cfg(not(windows))] { let _ = path; Err(err("此平台暂不支持一键安装")) }
 }
 // Read-only preflight: report directory conflicts before enabling installation.
 fn check_destination(root: &Path) -> AppResult<()> {
@@ -218,65 +295,81 @@ fn check_disk_space(available: u64, required: u64) -> AppResult<()> {
 fn supplement_message(state: &Environment) -> String {
     format!("补充缺失模型（约 {:.1} GB），已有环境与模型直接复用", state.download_bytes as f64 / 1e9)
 }
+fn downloaded_bytes(root: &Path, item: &Download) -> u64 {
+    let path = root.join(item.file);
+    std::fs::metadata(&path).or_else(|_| std::fs::metadata(path.with_extension("part")))
+        .ok().filter(|metadata| metadata.is_file() && metadata.len() <= item.size)
+        .map_or(0, |metadata| metadata.len())
+}
 fn plan(root: &Path, mode: Mode) -> Environment {
     let download_bytes = downloads(mode).iter().map(|item| {
         if item.file == "portable.7z" && runtime_installed(root, mode) { return 0; }
-        let path = root.join(item.file);
-        let bytes = std::fs::metadata(&path).or_else(|_| std::fs::metadata(path.with_extension("part"))).map(|m| m.len()).unwrap_or(0);
-        item.size.saturating_sub(bytes.min(item.size))
+        item.size - downloaded_bytes(root, item)
     }).sum();
     Environment { mode, models_required: mode.names().len(), phase: "missing".into(), message: "未发现运行中的 ComfyUI，也未找到已登记的安装".into(), endpoint: mode.endpoint().into(), directory: root.to_string_lossy().into(), can_install: false, can_add_models: false, installed: installed(root, mode), download_bytes, required_bytes: download_bytes + RESERVE, completed_bytes: 0, total_bytes: downloads(mode).iter().map(|d| d.size).sum(), existing: Vec::new(), hardware: None, driver_download: None }
 }
-async fn probe(http: &reqwest::Client, base: &str, mode: Mode) -> Option<AppResult<()>> {
+struct Probe { result: AppResult<()>, identified: bool }
+async fn probe(http: &reqwest::Client, base: &str, mode: Mode) -> Option<Probe> {
     let response = match http.get(format!("{base}/system_stats")).timeout(Duration::from_secs(8)).send().await {
         Ok(response) => response,
         // Windows may report an unopened loopback port as a connect timeout instead of refused.
         // No HTTP connection was established; filesystem discovery still identifies stopped installs.
         Err(error) if error.is_connect() => return None,
-        Err(_) => return Some(Err(err("本机服务检查超时或连接异常，请稍后重新检测；不能据此判断未安装"))),
+        Err(_) => return Some(Probe { result: Err(err("本机服务检查超时或连接异常，请稍后重新检测；不能据此判断未安装")), identified: false }),
     };
-    let system = response.json::<serde_json::Value>().await;
-    if !system.as_ref().is_ok_and(|v| v["system"].is_object()) {
+    let Ok(stats) = response.json::<serde_json::Value>().await else { return None; };
+    let version = stats["system"]["comfyui_version"].as_str()?;
+    let mut parts = version.trim_start_matches('v').split('.');
+    let numbers = parts.next()?.parse::<u32>().ok().zip(parts.next()?.parse::<u32>().ok());
+    let Some(version_number) = numbers else {
         // Common ports can belong to unrelated apps. A generic HTTP response is not a ComfyUI installation.
         return None;
+    };
+    if mode.image() && version_number < (0, 45) {
+        return Some(Probe { result: Err(err(format!("ComfyUI {version} 需要更新到 0.45.0 或更高版本"))), identified: true });
     }
-    if mode.image() {
-        let version = system.as_ref().ok().and_then(|stats| stats["system"]["comfyui_version"].as_str()).unwrap_or("");
-        let mut parts = version.trim_start_matches('v').split('.');
-        let major = parts.next().and_then(|v|v.parse::<u32>().ok()).unwrap_or(0);
-        let minor = parts.next().and_then(|v|v.parse::<u32>().ok()).unwrap_or(0);
-        if (major, minor) < (0, 45) { return Some(Err(err(format!("ComfyUI {version} 需要更新到 0.45.0 或更高版本")))); }
-    }
-    Some(mode.check(http, base).await)
+    Some(Probe { result: mode.check(http, base).await, identified: true })
 }
 #[cfg(test)]
 async fn detect(root: &Path, preferred: &str, existing: Vec<Installation>, mode: Mode) -> AppResult<Environment> {
-    detect_scoped(root, preferred, existing, mode, false, false).await
+    let ports = LaunchPorts::new(root, &existing, mode);
+    detect_scoped(root, preferred, existing, mode, false, false, &ports).await
 }
-async fn detect_scoped(root: &Path, preferred: &str, existing: Vec<Installation>, mode: Mode, exact: bool, pinned: bool) -> AppResult<Environment> {
+async fn detect_scoped(root: &Path, preferred: &str, existing: Vec<Installation>, mode: Mode, exact: bool, pinned: bool, ports: &LaunchPorts) -> AppResult<Environment> {
     let preferred = comfy_video::endpoint(preferred)?;
     let mut state = plan(root, mode);
     state.existing = existing;
     let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(2)).timeout(Duration::from_secs(45)).build().map_err(|e| err(e.to_string()))?;
-    let mut endpoints = vec![preferred, mode.endpoint().into(), "http://127.0.0.1:18189".into(), "http://127.0.0.1:8000".into(), "http://127.0.0.1:8188".into()];
-    if mode.image() { endpoints.extend([MANAGED_ENDPOINT.into(),mode.existing_service().1.into()]); }
+    let preferred = if !exact && endpoint_port(&preferred).is_some_and(|port| FALLBACK_PORTS.contains(&port)) &&
+        preferred != ports.managed && preferred != ports.existing { ports.managed.clone() } else { preferred };
+    let mut endpoints = vec![preferred, ports.managed.clone(), ports.existing.clone(), "http://127.0.0.1:8000".into(), "http://127.0.0.1:8188".into()];
+    if mode.image() { endpoints.extend([MANAGED_ENDPOINT.into(), "http://127.0.0.1:18189".into()]); }
     endpoints.extend(state.existing.iter().map(|i| i.endpoint.clone()));
     if exact { endpoints.truncate(1); }
     else if pinned {
-        endpoints = vec![mode.existing_service().1.into()];
+        endpoints = vec![ports.existing.clone()];
         endpoints.extend(state.existing.iter().map(|i| i.endpoint.clone()));
     }
-    let mut seen = std::collections::HashSet::new(); endpoints.retain(|value| seen.insert(value.clone()));
+    let mut seen = std::collections::HashSet::new();
+    endpoints.retain(|value| seen.insert(value.clone()) && (exact || may_probe_endpoint(value)));
     use futures_util::StreamExt;
     let mut pending: futures_util::stream::FuturesOrdered<_> = endpoints.iter().map(|base| probe(&http, base, mode)).collect();
     let mut results = Vec::with_capacity(endpoints.len());
     for base in &endpoints {
         let result = pending.next().await.expect("one probe per endpoint");
-        if matches!(result, Some(Ok(()))) { state.phase = "ready".into(); state.endpoint = base.clone(); state.message = "本机环境已就绪 · 模型与节点可用".into(); return Ok(state); }
+        if result.as_ref().is_some_and(|probe| probe.result.is_ok()) && (exact || may_probe_endpoint(base)) {
+            state.phase = "ready".into(); state.endpoint = base.clone(); state.message = "本机环境已就绪 · 模型与节点可用".into();
+            return Ok(state);
+        }
         results.push(result);
     }
-    if let Some((base, Some(Err(error)))) = endpoints.iter().zip(&results).find(|(base, r)| {
-        r.is_some() && if mode.image() { base.as_str() == mode.endpoint() } else {
+    if let Some((base, Some(Probe { result: Err(error), .. }))) = endpoints.iter().zip(&results).find(|(base, result)| {
+        let Some(probe) = result else { return false; };
+        // An unidentified listener on an automatic launch port can be bypassed.
+        // A previously confirmed Bowerbird instance or an exact recovery cannot.
+        if !exact && !probe.identified && [ports.managed.as_str(), ports.existing.as_str()].contains(&base.as_str())
+            && video_installation(base).is_none() { return false; }
+        if mode.image() { base.as_str() == ports.managed.as_str() } else {
             // The dedicated image service may be up while the independently startable video service is stopped.
             ![Mode::Image.endpoint(), Mode::Image.existing_service().1].contains(&base.as_str())
         }
@@ -284,30 +377,29 @@ async fn detect_scoped(root: &Path, preferred: &str, existing: Vec<Installation>
         state.phase = "unavailable".into(); state.endpoint = base.clone();
         state.message = format!("服务尚未通过检查（{base}）：{error}");
         // An owned running installation can add this mode's missing model without replacing its runtime.
-        if base == mode.endpoint() && runtime_installed(root, mode) && !state.installed {
+        if base == &ports.managed && runtime_installed(root, mode) && !state.installed {
             match free_bytes(root).and_then(|bytes| check_disk_space(bytes, state.required_bytes)) {
                 Ok(()) => { state.can_install = true; state.can_add_models = true; state.message = supplement_message(&state); }
                 Err(error) => state.message = error.to_string(),
             }
             state.existing.clear();
         }
-        if !mode.image() && !state.can_add_models && [mode.endpoint(), mode.existing_service().1].contains(&base.as_str()) {
+        if !mode.image() && !state.can_add_models && [ports.managed.as_str(), ports.existing.as_str()].contains(&base.as_str()) {
             state.message.push_str("。若视频服务一直无响应，请在 ComfyUI Desktop 或任务管理器中结束该实例，再重新检测。");
         }
         return Ok(state);
     }
-    let launch_endpoint = if !state.existing.is_empty() { mode.existing_service().1 } else { mode.endpoint() };
-    if !mode.image() && (!exact || launch_endpoint == endpoints[0])
-        && video_port_occupied(launch_endpoint).await {
+    if exact && video_port_occupied(&endpoints[0]).await {
         state.phase = "unavailable".into();
-        state.endpoint = launch_endpoint.into();
-        state.message = format!("视频启动端口 {launch_endpoint} 已被占用，服务未通过检查。请在 ComfyUI Desktop 或任务管理器中确认占用程序，关闭后点击重新检测。");
+        state.endpoint = endpoints[0].clone();
+        state.message = "原视频端口已被占用，请恢复原 ComfyUI 实例后继续取回。".into();
         return Ok(state);
     }
     if mode.image() {
         // Prefer the isolated runtime when an older or incomplete Desktop is already responding.
         state.existing.retain(|instance| !endpoints.iter().zip(&results).any(|(base, result)| base == &instance.endpoint && result.is_some()));
-        if let Some((base, Some(Err(issue)))) = endpoints.iter().zip(&results).find(|(_,v)|matches!(v, Some(Err(_)))) {
+        if let Some((base, Some(Probe { result: Err(issue), .. }))) = endpoints.iter().zip(&results)
+            .find(|(_,v)|matches!(v, Some(Probe { result: Err(_), .. }))) {
             state.message = format!("已检测到 {base}：{issue}。可准备独立的 H3 图片环境。");
         } else if !state.existing.is_empty() {
             state.message = "已找到 ComfyUI 安装。若已配置图片模型可先启动并重新检测，或安装独立图片环境。".into();
@@ -349,12 +441,6 @@ async fn detect_scoped(root: &Path, preferred: &str, existing: Vec<Installation>
     }
     Ok(state)
 }
-async fn hash(path: &Path, cancel: &AtomicBool) -> AppResult<String> {
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut sha = Sha256::new(); let mut buf = vec![0; 1024 * 1024];
-    loop { cancelled(cancel)?; let read = file.read(&mut buf).await?; if read == 0 { break; } sha.update(&buf[..read]); }
-    Ok(format!("{:x}", sha.finalize()))
-}
 #[derive(serde::Deserialize)]
 struct DownloadGrant { url: String, file: String, size: u64, sha256: String }
 fn validate_grant(grant: DownloadGrant, item: &Download) -> AppResult<String> {
@@ -394,16 +480,18 @@ fn migrate_frame_receipt(path: &Path, item: &Download, verified_at: std::time::S
     if cache.exists() { return; }
     let Ok(meta) = std::fs::metadata(path) else { return; };
     if meta.len() != item.size || ![meta.modified(), meta.created()].into_iter().all(|t| t.is_ok_and(|time| time <= verified_at)) { return; }
-    if let Some(stamp) = metadata_stamp(&meta, item) { let _ = std::fs::write(cache, stamp); }
+    remember_verified(path, metadata_stamp(&meta, item.sha));
 }
 
-fn verification_stamp(path: &Path, item: &Download) -> Option<String> {
-    let metadata = std::fs::metadata(path).ok()?;
-    metadata_stamp(&metadata, item)
-}
-fn metadata_stamp(metadata: &std::fs::Metadata, item: &Download) -> Option<String> {
-    let modified = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
-    Some(format!("{}:{}:{}", metadata.len(), modified.as_nanos(), item.sha))
+async fn verify_download(path: &Path, item: &Download, cancel: &AtomicBool, done: u64) -> AppResult<bool> {
+    let name = label(item);
+    let total = item.size;
+    progress(format!("正在校验{name}…"), done);
+    let digest = hash(path, cancel, move |bytes| {
+        let percent = (bytes.saturating_mul(100) / total.max(1)).min(100);
+        progress(format!("正在校验{name}（{percent}%）…"), done);
+    }).await?;
+    Ok(digest == item.sha)
 }
 async fn download<F, Fut>(http: &reqwest::Client, item: &Download, root: &Path, cancel: &AtomicBool, done: u64, grant: F) -> AppResult<()>
 where F: FnMut() -> Fut, Fut: std::future::Future<Output = AppResult<String>> {
@@ -411,27 +499,27 @@ where F: FnMut() -> Fut, Fut: std::future::Future<Output = AppResult<String>> {
     let target = root.join(item.file); let part = target.with_extension("part");
     tokio::fs::create_dir_all(target.parent().unwrap()).await?;
     if target.is_file() {
-        progress(format!("正在校验{}…", label(item)), done);
+        if verified(&target, item.size, item.sha) { return Ok(()); }
         if tokio::fs::metadata(&target).await?.len() == item.size {
-            let stamp = verification_stamp(&target, item);
-            let cache = target.with_extension("verified");
-            if stamp.as_ref().is_some_and(|s| std::fs::read_to_string(&cache).ok().as_ref() == Some(s)) { return Ok(()); }
-            if hash(&target, cancel).await? == item.sha {
-                if let Some(s) = stamp { let _ = std::fs::write(cache, s); }
+            let stamp = verification_stamp(&target, item.sha);
+            if verify_download(&target, item, cancel, done).await? {
+                remember_verified(&target, stamp);
                 return Ok(());
             }
         }
         return Err(err(format!("已存在的文件校验失败：{}。请移走该文件后重试", target.display())));
+    }
+    if tokio::fs::metadata(&part).await.is_ok_and(|m| m.is_file() && m.len() > item.size) {
+        tokio::fs::remove_file(&part).await?;
     }
     // TOS re-signs on each attempt. Public mirrors resolve the same pinned revision.
     transfer(http, &part, item.size, cancel, grant, |state| match state {
         TransferProgress::Downloading(offset) => progress(format!("正在下载{}…", label(item)), done + offset),
         TransferProgress::Reconnecting(offset) => progress(format!("正在恢复{}下载…", label(item)), done + offset),
     }).await?;
-    progress(format!("正在校验{}…", label(item)), done + item.size);
-    if hash(&part, cancel).await? != item.sha { tokio::fs::remove_file(&part).await?; return Err(err("下载校验失败，损坏的临时文件已清除，请重试")); }
+    if !verify_download(&part, item, cancel, done + item.size).await? { tokio::fs::remove_file(&part).await?; return Err(err("下载校验失败，损坏的临时文件已清除，请重试")); }
     tokio::fs::rename(part, &target).await?;
-    if let Some(s) = verification_stamp(&target, item) { let _ = std::fs::write(target.with_extension("verified"), s); }
+    remember_verified(&target, verification_stamp(&target, item.sha));
     Ok(())
 }
 async fn download_resource<F, Fut>(http: &reqwest::Client, mirror: Option<(&reqwest::Client, &str)>, item: &Download, root: &Path, cancel: &AtomicBool, done: u64, grant: F) -> AppResult<()>
@@ -464,26 +552,32 @@ async fn write_licenses(root: &Path) -> AppResult<()> {
     ] { tokio::fs::write(directory.join(name), content).await?; }
     Ok(())
 }
-async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str, mode: Mode, allow_download: bool) -> AppResult<()> {
+async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str, mode: Mode, allow_download: bool, exact: Option<&str>) -> AppResult<String> {
+    let check_owner = || -> AppResult<()> {
+        cancelled(cancel)?;
+        let login = app.state::<AuthClient>().snapshot();
+        if !login.logged_in || login.user_id.as_deref() != Some(owner) { return Err(err("账号已切换，安装已停止")); }
+        Ok(())
+    };
+    check_owner()?;
     let state = plan(root, mode);
-    if !allow_download && !state.installed { return Err(err("已安装环境的文件有变动，请重新检测并补齐缺失的文件。")); }
-    if !state.installed {
+    let ready = state.installed || exact.is_some() && installed_for_original_mode(root, mode);
+    if !allow_download && !ready { return Err(err("已安装环境的文件有变动，请重新检测并补齐缺失的文件。")); }
+    if !ready {
         prerequisites(&driver::detect().await).map_err(err)?;
         check_disk_space(free_bytes(root)?, state.required_bytes)?;
     }
+    check_owner()?;
     let marker = root.join("bowerbird-setup.txt");
     check_destination(root)?;
     tokio::fs::create_dir_all(root).await?;
     tokio::fs::write(&marker, mode.version()).await?;
-    let location = config(app, mode)?;
-    tokio::fs::create_dir_all(location.parent().unwrap()).await?;
-    tokio::fs::write(location, serde_json::to_vec(root)?).await?;
-    let check_owner = || -> AppResult<()> {
-        cancelled(cancel)?;
-        if app.state::<AuthClient>().snapshot().user_id.as_deref() != Some(owner) { return Err(err("账号已切换，安装已停止")); }
-        Ok(())
-    };
-    if !state.installed {
+    if exact.is_none() {
+        let location = config(app, mode)?;
+        tokio::fs::create_dir_all(location.parent().unwrap()).await?;
+        tokio::fs::write(location, serde_json::to_vec(root)?).await?;
+    }
+    if !ready {
         let http = reqwest::Client::builder().no_proxy().https_only(true).redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(30)).read_timeout(Duration::from_secs(60)).build().map_err(|e| err(e.to_string()))?;
         // Separate unauthenticated client: only ModelScope downloads may follow its CDN redirects.
         let mirror_http = modelscope_client()?;
@@ -507,9 +601,9 @@ async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str,
             if let Some(at) = legacy_receipt.filter(|_| DOWNLOADS[1..6].iter().any(|old| old.file == item.file)) {
                 migrate_frame_receipt(&target, item, at);
             }
-            let already = std::fs::metadata(&target).or_else(|_| std::fs::metadata(target.with_extension("part")))
-                .map(|m| m.len().min(item.size)).unwrap_or(0);
-            if let Some(job) = JOB.lock().unwrap().as_mut() { job.resumed_bytes = if target.is_file() { 0 } else { already }; }
+            let already = downloaded_bytes(root, item);
+            let resumed = if target.is_file() { 0 } else { already };
+            if let Some(job) = JOB.lock().unwrap().as_mut() { job.resumed_bytes = resumed; }
             let mirror_url = modelscope_url(item);
             if let Some(public) = &public {
                 let url = match item.file.strip_prefix("models/") {
@@ -532,42 +626,102 @@ async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str,
             done += item.size - already;
         }
         if !runtime_installed(root, mode) {
-            check_owner()?; progress("正在解压 ComfyUI 与 Python 环境…".into(), done);
-            let mut child = command("tar.exe").arg("-xf").arg(root.join("portable.7z")).arg("-C").arg(root).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?;
-            loop {
-                if let Err(error) = check_owner() { stop_process_tree(&mut child); return Err(error); }
-                if let Some(status) = child.try_wait()? { if !status.success() { return Err(err("解压失败，请检查磁盘空间与 Windows tar 版本后重试")); } break; }
-                tokio::time::sleep(Duration::from_millis(250)).await;
-            }
-            // JSON is valid YAML; a separate configuration never overwrites an existing user's config.
-            let model_config = serde_json::json!({"bowerbird": {"base_path":root.join("models"),"diffusion_models":"diffusion_models","text_encoders":"text_encoders","vae":"vae","loras":"loras"}});
-            tokio::fs::write(root.join("models.yaml"), serde_json::to_vec_pretty(&model_config)?).await?;
-            tokio::fs::write(root.join("ready.txt"), mode.version()).await?;
+            installation_stage("正在解压 ComfyUI 与 Python 环境…", false);
+            extract_portable(root, mode, cancel, &check_owner).await?;
         }
     }
+    cleanup_archive(root).await;
     check_owner()?;
-    // Never start over an occupied port, even if it belongs to another ComfyUI.
-    if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", mode.port())).await.is_ok() {
+    let default = mode.default_port(false);
+    if let Some(endpoint) = running_endpoint(root, default).filter(|endpoint| exact.is_none_or(|expected| endpoint.as_str() == expected)) {
         let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(45)).build().map_err(|e| err(e.to_string()))?;
-        return mode.check(&http, mode.endpoint()).await;
+        mode.check(&http, &endpoint).await?;
+        check_owner()?;
+        return Ok(endpoint);
     }
-    progress("正在启动本机环境并检查模型…".into(), state.total_bytes);
+    installation_stage("正在启动本机环境并检查模型…", true);
+    let endpoint = launch_endpoint(app, root, default, exact)?;
+    let port = endpoint_port(&endpoint).expect("selected loopback port").to_string();
     let mut cmd = command(portable(root).join("python_embeded/python.exe"));
-    cmd.current_dir(portable(root)).args(["-s", "ComfyUI/main.py", "--windows-standalone-build", "--listen", "127.0.0.1", "--port", mode.port(), "--disable-auto-launch", "--extra-model-paths-config"])
+    cmd.current_dir(portable(root)).args(["-s", "ComfyUI/main.py", "--windows-standalone-build", "--listen", "127.0.0.1", "--port", &port, "--disable-auto-launch", "--extra-model-paths-config"])
         .arg(root.join("models.yaml"))
         .args(comfy_memory_args(&portable(root).join("ComfyUI/main.py"), &[]));
-    launch(app, cmd, mode.endpoint(), root, &root.join("startup.log"), cancel, owner, mode).await
+    launch(app, cmd, &endpoint, root, &root.join("startup.log"), cancel, owner, mode, default).await?;
+    Ok(endpoint)
 }
-fn startup_log_tail(path: &Path) -> String {
-    use std::io::{Read, Seek, SeekFrom};
-    let read = || -> std::io::Result<String> {
-        let mut file = std::fs::File::open(path)?;
-        file.seek(SeekFrom::End(-(file.metadata()?.len().min(65536) as i64)))?;
-        let mut bytes = Vec::new();
-        file.take(65536).read_to_end(&mut bytes)?;
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
+
+fn owned_portable(root: &Path, mode: Mode) -> AppResult<Option<PathBuf>> {
+    let runtime = portable(root);
+    let meta = match std::fs::symlink_metadata(&runtime) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
     };
-    read().unwrap_or_default()
+    let canonical_root = root.canonicalize()?;
+    if std::fs::read_to_string(root.join("bowerbird-setup.txt")).ok().as_deref() != Some(mode.version())
+        || !meta.is_dir() || meta.file_type().is_symlink()
+        || runtime.canonicalize()? != portable(&canonical_root) {
+        return Err(err("无法安全清理残缺的托管 ComfyUI，请检查安装路径或选择空文件夹"));
+    }
+    Ok(Some(runtime))
+}
+
+async fn cleanup_archive(root: &Path) {
+    let archive = root.join("portable.7z");
+    for path in [&archive, &archive.with_extension("verified")] {
+        if let Err(error) = tokio::fs::remove_file(path).await {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(%error, path = %path.display(), "verified ComfyUI runtime archive cleanup failed");
+            }
+        }
+    }
+}
+
+async fn extract_portable(
+    root: &Path, mode: Mode, cancel: &AtomicBool, check_owner: impl Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    check_owner()?;
+    let stale = owned_portable(root, mode)?;
+    if let Err(error) = tokio::fs::remove_file(root.join("ready.txt")).await {
+        if error.kind() != std::io::ErrorKind::NotFound { return Err(error.into()); }
+    }
+    if let Some(runtime) = stale { tokio::fs::remove_dir_all(runtime).await?; }
+    check_owner()?;
+    let log_path = root.join("extract.log");
+    let log = std::fs::File::create(&log_path)?;
+    let mut cmd = command("tar.exe");
+    cmd.arg("-xf").arg(root.join("portable.7z")).arg("-C").arg(root);
+    let mut child = spawn_managed(&mut cmd, Some(&log))?;
+    drop(log);
+    let status = loop {
+        if let Err(error) = check_owner() { stop_process_tree(&mut child); return Err(error); }
+        if let Some(status) = child.try_wait()? { break status; }
+        tokio::select! {
+            _ = wait_cancel(cancel) => {
+                stop_process_tree(&mut child);
+                return cancelled(cancel);
+            }
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+        }
+    };
+    let output = portable(root);
+    if !status.success() || !output.join("python_embeded/python.exe").is_file() || !output.join("ComfyUI/main.py").is_file() {
+        let tail = startup_log_tail(&log_path);
+        let last_line = tail.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("解压包未提供完整的 ComfyUI 与 Python");
+        let detail: String = last_line.chars().take(512).collect();
+        return Err(err(format!("解压失败：{detail}。请检查磁盘空间与 Windows tar 版本。日志：{}", log_path.display())));
+    }
+    check_owner()?;
+    // JSON is valid YAML; a separate configuration never overwrites an existing user's config.
+    let model_config = serde_json::json!({"bowerbird": {"base_path":root.join("models"),"diffusion_models":"diffusion_models","text_encoders":"text_encoders","vae":"vae","loras":"loras"}});
+    tokio::fs::write(root.join("models.yaml"), serde_json::to_vec_pretty(&model_config)?).await?;
+    tokio::fs::write(root.join("ready.txt"), mode.version()).await?;
+    cleanup_archive(root).await;
+    Ok(())
+}
+
+fn startup_log_tail(path: &Path) -> String {
+    log_tail(path, 65536, 0)
 }
 #[tauri::command]
 pub fn comfy_video_log_tail(app: AppHandle) -> AppResult<String> {
@@ -577,14 +731,18 @@ pub fn comfy_video_log_tail(app: AppHandle) -> AppResult<String> {
         ("图片 · 已有安装", local.join("comfy-existing/image-startup.log")),
     ];
     for (mode, title) in [(Mode::Frames, "视频 · 托管安装"), (Mode::Image, "图片 · 托管安装")] {
-        if let Ok(root) = location(&app, None, mode) { paths.push((title, root.join("startup.log"))); }
+        if let Ok(root) = location(&app, None, mode) {
+            paths.push((title, root.join("startup.log")));
+            paths.push((if mode.image() { "图片 · 托管解压" } else { "视频 · 托管解压" }, root.join("extract.log")));
+        }
     }
     Ok(setup_log_report(&paths))
 }
 fn setup_log_report(paths: &[(&str, PathBuf)]) -> String {
     let mut report = String::new();
     for (title, path) in paths {
-        for log in [path.with_extension("prev.log"), path.clone()] {
+        let logs = [path.with_extension("prev.log"), path.clone()].into_iter().chain(latest_startup_fallback(path));
+        for log in logs {
             let tail = startup_log_tail(&log);
             if tail.is_empty() { continue; }
             let lines: Vec<_> = tail.lines().rev().take(12).collect();
@@ -593,6 +751,42 @@ fn setup_log_report(paths: &[(&str, PathBuf)]) -> String {
         }
     }
     report
+}
+fn latest_startup_fallback(path: &Path) -> Option<PathBuf> {
+    let prefix = format!("{}.fallback.", path.file_stem()?.to_string_lossy());
+    std::fs::read_dir(path.parent()?).ok()?.filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .map(|entry| entry.path())
+        .filter(|entry| entry.file_name().is_some_and(|name| {
+            let name = name.to_string_lossy();
+            name.starts_with(&prefix) && name.ends_with(".log")
+        }))
+        .max()
+}
+fn open_startup_log(path: &Path) -> AppResult<(PathBuf, std::fs::File)> {
+    let mut primary_available = true;
+    for (source, destination) in [
+        (path.with_extension("prev.2.log"), path.with_extension("prev.3.log")),
+        (path.with_extension("prev.log"), path.with_extension("prev.2.log")),
+        (path.to_owned(), path.with_extension("prev.log")),
+    ] {
+        if let Err(error) = std::fs::rename(&source, destination) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                if source == path { primary_available = false; }
+                tracing::warn!(%error, path = %source.display(), "ComfyUI startup log rotation failed");
+            }
+        }
+    }
+    if primary_available {
+        match std::fs::File::create(path) {
+            Ok(file) => return Ok((path.to_owned(), file)),
+            Err(error) => tracing::warn!(%error, path = %path.display(), "ComfyUI startup log is not writable"),
+        }
+    }
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
+    let fallback = path.with_extension(format!("fallback.{timestamp}.{}.log", uuid::Uuid::new_v4()));
+    let file = std::fs::File::create(&fallback)?;
+    Ok((fallback, file))
 }
 fn startup_failure(log: &str, path: &Path) -> AppError {
     let detail = log.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("进程已退出，未提供错误详情");
@@ -619,8 +813,11 @@ fn fatal_video_log(log: &str) -> bool {
 }
 
 pub(super) fn video_abort_detected(endpoint: &str) -> bool {
-    VIDEO_PROCESSES.lock().unwrap().as_mut().and_then(|processes| processes.get_mut(endpoint))
-        .is_some_and(|process| process.child.try_wait().ok().flatten().is_some_and(|s| !s.success()) || fatal_video_log(&startup_log_tail(&process.log)))
+    let Some((aborted, log)) = ({
+        VIDEO_PROCESSES.lock().unwrap().as_mut().and_then(|processes| processes.get_mut(endpoint))
+            .map(|process| (process.child.try_wait().ok().flatten().is_some_and(|status| !status.success()), process.log.clone()))
+    }) else { return false; };
+    aborted || fatal_video_log(&startup_log_tail(&log))
 }
 
 pub(super) fn video_installation(endpoint: &str) -> Option<PathBuf> {
@@ -629,23 +826,27 @@ pub(super) fn video_installation(endpoint: &str) -> Option<PathBuf> {
     if !matches!(process.child.try_wait(), Ok(None)) { return None; }
     Some(process.installation.clone())
 }
+pub(super) fn registered_installation(endpoint: &str) -> Option<PathBuf> {
+    let registry = VIDEO_PROCESSES.lock().unwrap();
+    Some(registry.as_ref()?.get(endpoint)?.installation.clone())
+}
 
 fn watch_video_exit(endpoint: String, pid: u32) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
-            let mut registry = VIDEO_PROCESSES.lock().unwrap();
-            let Some(processes) = registry.as_mut() else { return; };
-            let Some(process) = processes.get_mut(&endpoint).filter(|p| p.child.id() == pid) else { return; };
-            match process.child.try_wait() {
-                Ok(None) => continue,
-                Ok(Some(exit)) => {
-                    use std::io::Write;
-                    if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&process.log) {
-                        let _ = writeln!(file, "\n[Bowerbird] ComfyUI process exited: {exit}");
-                    }
+            let (exit, log) = {
+                let mut registry = VIDEO_PROCESSES.lock().unwrap();
+                let Some(process) = registry.as_mut().and_then(|entries| entries.get_mut(&endpoint)).filter(|p| p.child.id() == pid) else { return; };
+                match process.child.try_wait() {
+                    Ok(None) => continue,
+                    Ok(Some(exit)) => (exit, process.log.clone()),
+                    Err(_) => return,
                 }
-                Err(_) => return,
+            };
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(log) {
+                let _ = writeln!(file, "\n[Bowerbird] ComfyUI process exited: {exit}");
             }
             return; // Keep the exit status and log until recovery or shutdown.
         }
@@ -654,36 +855,36 @@ fn watch_video_exit(endpoint: String, pid: u32) {
 
 // Reap only a process launched by this application and conclusively aborted by Python.
 fn reap_aborted_video(endpoint: &str) -> AppResult<bool> {
-    let mut registry = VIDEO_PROCESSES.lock().unwrap();
-    let Some(processes) = registry.as_mut() else { return Ok(false); };
-    let Some(process) = processes.get_mut(endpoint) else { return Ok(false); };
-    if process.child.try_wait()?.is_some() {
-        processes.remove(endpoint);
-        return Ok(false);
+    let (pid, log, exited) = {
+        let mut registry = VIDEO_PROCESSES.lock().unwrap();
+        let Some(process) = registry.as_mut().and_then(|entries| entries.get_mut(endpoint)) else { return Ok(false); };
+        (process.child.id(), process.log.clone(), process.child.try_wait()?.is_some())
+    };
+    if !exited && !fatal_video_log(&startup_log_tail(&log)) { return Ok(false); }
+    let child = {
+        let mut registry = VIDEO_PROCESSES.lock().unwrap();
+        let Some(processes) = registry.as_mut() else { return Ok(false); };
+        if !processes.get(endpoint).is_some_and(|process| process.child.id() == pid) { return Ok(false); }
+        processes.remove(endpoint)
+    };
+    if let Some(mut process) = child {
+        process.child.kill_and_wait()?;
     }
-    if !fatal_video_log(&startup_log_tail(&process.log)) { return Ok(false); }
-    kill_process_tree(&mut process.child)?;
-    processes.remove(endpoint);
     Ok(true)
 }
 pub fn shutdown() {
+    if let Some(job) = JOB.lock().unwrap().as_ref() { job.cancel.store(true, Ordering::Relaxed); }
     let processes = VIDEO_PROCESSES.lock().unwrap().take().unwrap_or_default();
     for (_, mut process) in processes {
         stop_process_tree(&mut process.child);
     }
 }
-async fn launch(app: &AppHandle, mut cmd: std::process::Command, endpoint: &str, installation: &Path, log_path: &Path, cancel: &AtomicBool, owner: &str, mode: Mode) -> AppResult<()> {
+async fn launch(app: &AppHandle, mut cmd: std::process::Command, endpoint: &str, installation: &Path, log_path: &Path, cancel: &AtomicBool, owner: &str, mode: Mode, default_port: u16) -> AppResult<()> {
     cancelled(cancel)?;
     let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(30)).build().map_err(|e| err(e.to_string()))?;
-    for (source, destination) in [
-        (log_path.with_extension("prev.2.log"), log_path.with_extension("prev.3.log")),
-        (log_path.with_extension("prev.log"), log_path.with_extension("prev.2.log")),
-        (log_path.to_owned(), log_path.with_extension("prev.log")),
-    ] {
-        if source.exists() { std::fs::rename(source, destination)?; }
-    }
-    let log = std::fs::File::create(log_path)?;
-    let mut child = cmd.stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log).spawn()?;
+    let (log_path, log) = open_startup_log(log_path)?;
+    let mut child = spawn_managed(&mut cmd, Some(&log))?;
+    drop(log);
     let mut reason = String::new();
     let check_owner = || {
         if cancel.load(Ordering::Relaxed) || app.state::<AuthClient>().snapshot().user_id.as_deref() != Some(owner) {
@@ -692,12 +893,20 @@ async fn launch(app: &AppHandle, mut cmd: std::process::Command, endpoint: &str,
         Ok(())
     };
     let readiness = async {
+        let acknowledgement = format!("To see the GUI go to: {endpoint}");
+        let mut bound = false;
         loop {
             check_owner()?;
-            if child.try_wait()?.is_some() { return Err(startup_failure(&startup_log_tail(log_path), log_path)); }
-            match mode.check(&http, endpoint).await {
-                Ok(()) => return check_owner(),
-                Err(error) => reason = error.to_string(),
+            if child.try_wait()?.is_some() { return Err(startup_failure(&startup_log_tail(&log_path), &log_path)); }
+            // ComfyUI logs the address only after it binds successfully. Until then a
+            // successful HTTP response could belong to another process that won the port.
+            bound |= startup_log_tail(&log_path).contains(&acknowledgement);
+            if bound {
+                match mode.check(&http, endpoint).await {
+                    Ok(()) if child.try_wait()?.is_none() => return check_owner(),
+                    Ok(()) => return Err(startup_failure(&startup_log_tail(&log_path), &log_path)),
+                    Err(error) => reason = error.to_string(),
+                }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
@@ -713,24 +922,36 @@ async fn launch(app: &AppHandle, mut cmd: std::process::Command, endpoint: &str,
         return Err(error);
     }
     let pid = child.id();
-    VIDEO_PROCESSES.lock().unwrap().get_or_insert_with(Default::default)
-        .insert(endpoint.into(), VideoProcess { child, log: log_path.to_path_buf(), installation: installation.to_path_buf() });
+    let previous = {
+        let mut registry = VIDEO_PROCESSES.lock().unwrap();
+        check_owner()?;
+        registry.get_or_insert_with(Default::default)
+            .insert(endpoint.into(), VideoProcess { child, log: log_path, installation: installation.to_path_buf(), default_port })
+    };
+    drop(previous);
+    if let Some(port) = endpoint_port(endpoint) {
+        if let Err(error) = assignment_file(app, default_port).and_then(|file| write_port_assignment(&file, installation, port)) {
+            tracing::warn!(%error, "could not save the current ComfyUI port");
+        }
+    }
     watch_video_exit(endpoint.into(), pid);
     Ok(())
 }
-async fn start_existing(app: &AppHandle, instance: &Installation, cancel: &AtomicBool, owner: &str, mode: Mode) -> AppResult<()> {
+async fn start_existing(app: &AppHandle, instance: &Installation, cancel: &AtomicBool, owner: &str, mode: Mode, exact: Option<&str>) -> AppResult<String> {
     let python = instance.python.as_ref().ok_or_else(|| err("未找到此安装的 Python，请在 ComfyUI Desktop 中启动"))?;
-    let (port, endpoint) = mode.existing_service();
-    if tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await.is_ok() { return Err(err(format!("已有环境启动端口 {port} 被占用，请重新检测"))); }
+    let default = mode.default_port(true);
+    let endpoint = launch_endpoint(app, &instance.path, default, exact)?;
+    let port = endpoint_port(&endpoint).expect("selected loopback port").to_string();
     let logs = app.path().app_local_data_dir().map_err(|e| err(e.to_string()))?.join("comfy-existing");
     tokio::fs::create_dir_all(&logs).await?;
     let mut cmd = command(python);
     cmd.current_dir(instance.main.parent().unwrap()).arg("-s").arg(&instance.main)
-        .args(["--listen", "127.0.0.1", "--port", port, "--disable-auto-launch"])
+        .args(["--listen", "127.0.0.1", "--port", &port, "--disable-auto-launch"])
         .args(existing_launch_args(&instance.launch_args, mode))
         .args(comfy_memory_args(&instance.main, &instance.launch_args));
     if !instance.model_configs.is_empty() { cmd.arg("--extra-model-paths-config").args(&instance.model_configs); }
-    launch(app, cmd, endpoint, &instance.path, &logs.join(if mode.image() { "image-startup.log" } else { "startup.log" }), cancel, owner, mode).await
+    launch(app, cmd, &endpoint, &instance.path, &logs.join(if mode.image() { "image-startup.log" } else { "startup.log" }), cancel, owner, mode, default).await?;
+    Ok(endpoint)
 }
 
 fn comfy_memory_args(main: &Path, args: &[String]) -> Option<&'static str> {
@@ -773,6 +994,18 @@ fn preparation_target(state: &Environment, action: &str) -> AppResult<Option<Ins
     }
 }
 
+fn recovering_managed(mode: Mode, endpoint: &str, installation: &Path) -> bool {
+    endpoint == mode.endpoint() || endpoint != mode.existing_service().1 && runtime_installed(installation, mode)
+}
+
+fn same_recovery(job: &Job, endpoint: &str, installation: &Path) -> AppResult<()> {
+    if job.recovery.as_ref().is_some_and(|(running, root)| running == endpoint && root == installation) {
+        Ok(())
+    } else {
+        Err(err("另一套 ComfyUI 环境正在准备，请完成后再取回原任务"))
+    }
+}
+
 #[tauri::command]
 pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, action: String, endpoint: String, directory: Option<String>, existing_directory: Option<String>, mode: Option<Mode>) -> AppResult<Environment> {
     let owner = comfy_video::account(&auth, &entitlement).await?;
@@ -780,15 +1013,19 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
     if !matches!(action.as_str(), "detect" | "status" | "prepare" | "recover" | "install" | "cancel" | "select_existing" | "start_existing" | "driver") { return Err(err("不支持的环境操作")); }
     let recovering = action == "recover";
     let endpoint = comfy_video::endpoint(&endpoint)?;
-    if recovering && (mode.image() || ![mode.endpoint(), mode.existing_service().1].contains(&endpoint.as_str())) {
-        return Err(err("请在原 ComfyUI 中恢复此任务使用的服务，再继续取回。"));
-    }
+    let requested = existing_directory.map(PathBuf::from);
+    let original = if recovering {
+        if mode.image() || !owned_video_port(&endpoint) { return Err(err("请在原 ComfyUI 中恢复此任务使用的服务，再继续取回。")); }
+        Some(requested.as_ref().filter(|path| path.is_absolute()).cloned()
+            .ok_or_else(|| err("未找到原任务的本机安装记录，请启动原 ComfyUI 后继续取回。"))?)
+    } else { None };
     let previous = {
         let job = JOB.lock().unwrap();
         if let Some(job) = job.as_ref() {
             if active(&job.state) && (job.state.mode == mode || !matches!(action.as_str(), "detect" | "status")) {
                 if job.owner != owner { return Err(err("另一个账号的环境安装正在进行")); }
                 if job.state.mode != mode { return Err(err("另一个工作流的环境准备正在进行，请完成后重新检测")); }
+                if let Some(original) = &original { same_recovery(job, &endpoint, original)?; }
                 if action == "cancel" { job.cancel.store(true, Ordering::Relaxed); }
                 return Ok(job.state.clone());
             }
@@ -796,14 +1033,27 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
         }
         job.as_ref().filter(|job| job.owner == owner && job.state.mode == mode).map(|job| job.state.clone())
     };
+    if let Some(original) = &original {
+        let expected = registered_installation(&endpoint).is_some_and(|path| same_installation(&path, original));
+        if expected && video_abort_detected(&endpoint) {
+            let target = endpoint.clone();
+            tokio::task::spawn_blocking(move || reap_aborted_video(&target)).await.map_err(|e| err(e.to_string()))??;
+        }
+        if !running_original_service(&endpoint, original) && video_port_occupied(&endpoint).await {
+            return Err(err("原 ComfyUI 端口已有其他程序监听，请关闭占用程序并恢复原实例后取回任务"));
+        }
+    }
     let selection_file = config(&app, mode)?.with_file_name(if mode.image() { "comfy-image-existing-location.json" } else { "comfy-existing-location.json" });
     let saved: Option<PathBuf> = std::fs::read(&selection_file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok());
-    let requested = existing_directory.map(PathBuf::from);
     let selected = requested.clone().or(saved);
     let config_dirs = comfy_discovery::desktop_config_dirs();
     let names = mode.names();
-    let mut existing = comfy_discovery::discover(&config_dirs, selected.as_deref(), names);
+    let original_managed = original.as_ref().is_some_and(|path| recovering_managed(mode, &endpoint, path));
+    let mut existing = if original_managed { Vec::new() } else { comfy_discovery::discover(&config_dirs, selected.as_deref(), names) };
     existing.sort_by_key(|item| item.models_found < names.len());
+    if let Some(original) = original.as_ref().filter(|_| !original_managed) {
+        existing.retain(|instance| same_installation(&instance.path, original));
+    }
     if matches!(action.as_str(), "select_existing" | "start_existing") {
         let first = existing.first().ok_or_else(|| err("所选文件夹未找到 ComfyUI。请选择 Desktop 安装总目录、具体实例目录或便携版目录"))?;
         std::fs::create_dir_all(selection_file.parent().unwrap())?;
@@ -819,11 +1069,8 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
             existing = located;
         }
     }
-    let pinned = !mode.image() && selected.is_some() && (directory.is_none() || matches!(action.as_str(), "prepare" | "recover"))
-        && !(recovering && endpoint == mode.endpoint());
-    let root = if recovering && endpoint == mode.endpoint() && requested.is_some() {
-        requested.unwrap()
-    } else { location(&app, directory, mode)? };
+    let pinned = !mode.image() && selected.is_some() && (directory.is_none() || action == "prepare") && !original_managed;
+    let root = if original_managed { original.clone().unwrap() } else { location(&app, directory, mode)? };
     if pinned && existing.is_empty() {
         let path = selected.as_deref().unwrap();
         let mut state = plan(&root, mode);
@@ -832,25 +1079,31 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
         state.message = format!("无法访问已选择的 ComfyUI：{}。请连接原磁盘，或点击「选择已有 ComfyUI」重新定位。", path.display());
         return Ok(state);
     }
-    if recovering && endpoint == mode.endpoint() { existing.clear(); }
-    let mut state = detect_scoped(&root, &endpoint, existing.clone(), mode, recovering, pinned).await?;
-    if state.phase == "ready" && (pinned || recovering) {
-        let expected = if recovering && endpoint == mode.endpoint() { Some(root.as_path()) }
-            else if state.endpoint == mode.existing_service().1 { existing.first().map(|instance| instance.path.as_path()) }
-            else { None };
+    let ports = LaunchPorts::new(&root, &existing, mode);
+    let mut state = detect_scoped(&root, &endpoint, existing.clone(), mode, recovering, pinned, &ports).await?;
+    if pinned && !recovering && state.phase == "ready" {
+        let expected = if state.endpoint == ports.existing { existing.first().map(|instance| instance.path.as_path()) } else { None };
         if let (Some(process_path), Some(expected)) = (video_installation(&state.endpoint), expected) {
-            if process_path != expected && process_path.canonicalize().ok() != expected.canonicalize().ok() {
+            if !same_installation(&process_path, expected) {
                 state.phase = "unavailable".into();
                 state.message = format!("视频端口正由另一套 ComfyUI 使用（{}）。请关闭该实例后重新检测，或重新选择这套环境。", process_path.display());
             }
         }
     }
-    if !mode.image() && matches!(action.as_str(), "prepare" | "recover") && state.phase == "unavailable" {
+    if recovering && state.phase == "ready" && !running_original_service(&endpoint, original.as_deref().unwrap()) {
+        return Err(err("原 ComfyUI 端口已有其他程序监听，请恢复原实例后取回任务"));
+    }
+    if original_managed && state.phase == "missing" && installed_for_original_mode(&root, mode) {
+        state.can_install = true;
+        state.installed = true;
+    }
+    if !mode.image() && action == "prepare" && state.phase == "unavailable" {
         if auth.snapshot().user_id.as_deref() != Some(owner.as_str()) { return Err(err("账号已切换，请重新检测环境")); }
-        let target = if existing.is_empty() { mode.endpoint() } else { mode.existing_service().1 };
-        if state.endpoint == target && (!recovering || endpoint == target)
-            && tokio::task::spawn_blocking(move || reap_aborted_video(target)).await.map_err(|e| err(e.to_string()))?? {
-            state = detect_scoped(&root, &endpoint, existing, mode, recovering, pinned).await?;
+        let target = if existing.is_empty() { ports.managed.clone() } else { ports.existing.clone() };
+        if state.endpoint == target
+            && tokio::task::spawn_blocking(move || reap_aborted_video(&target)).await.map_err(|e| err(e.to_string()))?? {
+            let ports = LaunchPorts::new(&root, &existing, mode);
+            state = detect_scoped(&root, &endpoint, existing, mode, false, pinned, &ports).await?;
         }
     }
     if action == "driver" {
@@ -867,8 +1120,9 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
         retain_setup_outcome(&mut state, previous.as_ref());
         if !mode.image() && state.phase == "unavailable" && video_abort_detected(&state.endpoint) {
             state.phase = "recoverable".into();
-            if let Some(process) = VIDEO_PROCESSES.lock().unwrap().as_ref().and_then(|processes| processes.get(&state.endpoint)) {
-                state.message = video_exit_message(&startup_log_tail(&process.log)).into();
+            let log = VIDEO_PROCESSES.lock().unwrap().as_ref().and_then(|entries| entries.get(&state.endpoint)).map(|p| p.log.clone());
+            if let Some(log) = log {
+                state.message = video_exit_message(&startup_log_tail(&log)).into();
             }
         }
         return Ok(state);
@@ -878,41 +1132,42 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
     // instead of converting it into an IPC error that invites another detection-only click.
     if action == "install" && !state.can_install && state.existing.is_empty() { return Ok(state); }
     let start = preparation_target(&state, if recovering { "prepare" } else { &action })?;
-    if recovering && if start.is_some() { endpoint != mode.existing_service().1 } else { endpoint != mode.endpoint() } {
+    if recovering && start.is_some() == original_managed {
         return Err(err("原任务使用的视频环境暂时不可启动，请核对已登记的 ComfyUI。"));
     }
     let cancel = Arc::new(AtomicBool::new(false));
+    if recovering { state.endpoint = endpoint.clone(); }
     state.phase = if start.is_some() || state.installed { "starting" } else { "installing" }.into();
     state.message = if state.phase == "starting" { "正在启动已有 ComfyUI 并检查模型…" } else { "正在准备本机环境…" }.into();
     {
         let mut job = JOB.lock().unwrap();
         if let Some(job) = job.as_ref().filter(|job| active(&job.state)) {
-            if job.owner == owner && job.state.mode == mode { return Ok(job.state.clone()); }
+            if job.owner == owner && job.state.mode == mode {
+                if let Some(original) = &original { same_recovery(job, &endpoint, original)?; }
+                return Ok(job.state.clone());
+            }
             if job.owner == owner { return Err(err("另一个工作流的环境准备正在进行，请完成后重新检测")); }
             return Err(err("另一个账号的环境准备正在进行"));
         }
-        *job = Some(Job { owner: owner.clone(), state: state.clone(), cancel: cancel.clone(), resumed_bytes: 0 });
+        *job = Some(Job { owner: owner.clone(), state: state.clone(), cancel: cancel.clone(), resumed_bytes: 0,
+            recovery: original.map(|path| (endpoint.clone(), path)) });
     }
     let allow_download = action == "install";
     tauri::async_runtime::spawn(async move {
         // Downloads may take hours. Stop promptly on logout/account switch, including mid-file.
-        let watcher_app = app.clone(); let watcher_owner = owner.clone(); let watcher_cancel = cancel.clone();
-        let watcher = tauri::async_runtime::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                let login = watcher_app.state::<AuthClient>().snapshot();
-                if !login.logged_in || login.user_id.as_deref() != Some(watcher_owner.as_str()) { watcher_cancel.store(true, Ordering::Relaxed); break; }
-            }
-        });
-        let result = if let Some(instance) = &start { start_existing(&app, instance, &cancel, &owner, mode).await } else { install(&app, &root, &cancel, &owner, mode, allow_download).await };
+        let watcher = tauri::async_runtime::spawn(watch_install_account(
+            app.state::<AuthClient>().inner().clone(), owner.clone(), cancel.clone()));
+        let exact = recovering.then_some(endpoint.as_str());
+        let result = if let Some(instance) = &start { start_existing(&app, instance, &cancel, &owner, mode, exact).await }
+            else { install(&app, &root, &cancel, &owner, mode, allow_download, exact).await };
         watcher.abort();
+        let remaining = plan(&root, mode);
         if let Some(job) = JOB.lock().unwrap().as_mut() {
-            let remaining = plan(&root, mode);
             job.state.download_bytes = remaining.download_bytes;
             job.state.required_bytes = remaining.required_bytes;
             job.state.installed = remaining.installed;
             match result {
-                Ok(()) => { job.state.phase = "ready".into(); job.state.endpoint = if start.is_some() { mode.existing_service().1 } else { mode.endpoint() }.into(); job.state.message = "本机环境已就绪".into(); job.state.installed = start.is_none(); }
+                Ok(endpoint) => { job.state.phase = "ready".into(); job.state.endpoint = endpoint; job.state.message = "本机环境已就绪".into(); job.state.installed = start.is_none(); }
                 Err(error) => {
                     job.state.phase = if cancel.load(Ordering::Relaxed) { "cancelled" } else { "failed" }.into();
                     job.state.message = match error {
@@ -928,24 +1183,181 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
 
 pub(crate) async fn prepare_image(app: &AppHandle, edit: bool) -> AppResult<String> {
     let mode = if edit { Mode::Edit } else { Mode::Image };
-    let mut action = "prepare";
-    loop {
-        let state = comfy_video_environment(app.clone(), app.state(), app.state(), action.into(), mode.endpoint().into(), None, None, Some(mode)).await?;
-        match state.phase.as_str() {
-            "ready" => return Ok(state.endpoint),
-            "installing" | "starting" => {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                action = "status";
-            }
-            _ => return Err(err(format!("{}。请在 MiniMax-H3-Image 旁打开环境设置", state.message))),
+    let auth = app.state::<AuthClient>();
+    let owner = auth.snapshot().user_id.ok_or_else(|| err("请登录后使用 H3 图片"))?;
+    let check_owner = || {
+        let login = auth.snapshot();
+        if !login.logged_in || login.user_id.as_deref() != Some(owner.as_str()) {
+            return Err(err("账号已切换，请重新检测环境"));
         }
-    }
+        Ok(())
+    };
+    tokio::time::timeout(Duration::from_secs(150), async {
+        let mut action = "prepare";
+        loop {
+            check_owner()?;
+            let state = comfy_video_environment(app.clone(), app.state(), app.state(), action.into(), mode.endpoint().into(), None, None, Some(mode)).await?;
+            check_owner()?;
+            match state.phase.as_str() {
+                "ready" => return Ok(state.endpoint),
+                "installing" | "starting" => {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    action = "status";
+                }
+                _ => return Err(err(format!("{}。请在 MiniMax-H3-Image 旁打开环境设置", state.message))),
+            }
+        }
+    }).await.map_err(|_| err("等待本机 H3 图片环境超时，请在环境设置中查看准备状态"))?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::{Router, routing::get, http::{HeaderMap, StatusCode}, response::IntoResponse};
+    use sha2::{Digest, Sha256};
+    #[tokio::test]
+    async fn h3_setup_oversized_partial_restarts_without_a_range() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("tiny.part"), b"more than six").unwrap();
+        let item = Download { file: "tiny.bin", size: 6, sha: "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721" };
+        assert_eq!(downloaded_bytes(root.path(), &item), 0);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/", get(|headers: HeaderMap| async move {
+                assert!(!headers.contains_key("range"));
+                "abcdef"
+            }))).await.unwrap();
+        });
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        download(&http, &item, root.path(), &AtomicBool::new(false), 0,
+            || std::future::ready(Ok(url.clone()))).await.unwrap();
+        assert_eq!(std::fs::read(root.path().join(item.file)).unwrap(), b"abcdef");
+        server.abort();
+    }
+
+    #[test]
+    fn h3_setup_archive_progress_stays_at_download_completion_after_resume() {
+        let root = tempfile::tempdir().unwrap();
+        let mut job = Job { owner: String::new(), state: plan(root.path(), Mode::Frames),
+            cancel: Arc::new(AtomicBool::new(false)), resumed_bytes: 7, recovery: None };
+        job.state.download_bytes = 15;
+        update_progress(&mut job, "正在下载最后一项".into(), 22);
+        assert_eq!(job.state.completed_bytes, 15);
+        job.resumed_bytes = 0;
+        update_progress(&mut job, "正在解压".into(), 15);
+        assert_eq!(job.state.completed_bytes, 15);
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn h3_setup_extraction_failure_keeps_archive_and_includes_log() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::write(root.join("bowerbird-setup.txt"), VERSION).unwrap();
+        std::fs::create_dir(portable(root)).unwrap();
+        std::fs::write(portable(root).join("stale.txt"), "incomplete").unwrap();
+        std::fs::write(root.join("portable.7z"), "invalid archive").unwrap();
+        let error = extract_portable(root, Mode::Frames, &AtomicBool::new(false), || Ok(())).await.unwrap_err().to_string();
+        assert!(error.contains("extract.log") && error.contains("解压失败"), "{error}");
+        assert!(!portable(root).join("stale.txt").exists());
+        assert!(root.join("portable.7z").exists());
+        assert!(!runtime_installed(root, Mode::Frames));
+        assert!(!setup_log_report(&[("托管解压", root.join("extract.log"))]).is_empty());
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn h3_setup_valid_archive_leaves_only_usable_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        let fixtures = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::write(root.join("bowerbird-setup.txt"), VERSION).unwrap();
+        let fixture = portable(fixtures.path());
+        std::fs::create_dir_all(fixture.join("python_embeded")).unwrap();
+        std::fs::create_dir_all(fixture.join("ComfyUI")).unwrap();
+        std::fs::write(fixture.join("python_embeded/python.exe"), "fixture").unwrap();
+        std::fs::write(fixture.join("ComfyUI/main.py"), "fixture").unwrap();
+        let archive = root.join("portable.7z");
+        assert!(command("tar.exe").args(["--format=7zip", "-cf"]).arg(&archive)
+            .arg("-C").arg(fixtures.path()).arg("ComfyUI_windows_portable").status().unwrap().success());
+        std::fs::write(archive.with_extension("verified"), "fixture").unwrap();
+        extract_portable(root, Mode::Frames, &AtomicBool::new(false), || Ok(())).await.unwrap();
+        assert!(runtime_installed(root, Mode::Frames));
+        assert!(!archive.exists());
+        assert!(!archive.with_extension("verified").exists());
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn h3_setup_cancels_spawned_tar_and_keeps_its_archive() {
+        use std::sync::atomic::AtomicUsize;
+        let root = tempfile::tempdir().unwrap();
+        let fixtures = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::write(root.join("bowerbird-setup.txt"), VERSION).unwrap();
+        std::fs::write(fixtures.path().join("fixture.bin"), vec![17_u8; 4 * 1024 * 1024]).unwrap();
+        let archive = root.join("portable.7z");
+        assert!(command("tar.exe").args(["--format=7zip", "-cf"]).arg(&archive)
+            .arg("-C").arg(fixtures.path()).arg("fixture.bin").status().unwrap().success());
+        let checks = AtomicUsize::new(0);
+        let cancel = AtomicBool::new(false);
+        let result = extract_portable(root, Mode::Frames, &cancel, || {
+            // First owner check after the actual managed tar child has been launched.
+            if checks.fetch_add(1, Ordering::Relaxed) == 2 { cancel.store(true, Ordering::Relaxed); }
+            cancelled(&cancel)
+        }).await.unwrap_err();
+        assert!(result.to_string().contains("已取消"));
+        assert!(archive.exists());
+        assert!(root.join("extract.log").is_file());
+        assert!(!root.join("ready.txt").exists());
+    }
+
+    #[test]
+    fn h3_setup_blocked_rotation_falls_back_to_diagnostic_log() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let startup = root.path().join("startup.log");
+        std::fs::write(&startup, "old log").unwrap();
+        for extension in ["prev.log", "prev.2.log", "prev.3.log"] {
+            let blocker = startup.with_extension(extension);
+            std::fs::create_dir(&blocker).unwrap();
+            std::fs::write(blocker.join("marker"), "keep").unwrap();
+        }
+        let (path, mut file) = open_startup_log(&startup).unwrap();
+        assert_ne!(path, startup);
+        file.write_all(b"diagnostic fallback").unwrap();
+        drop(file);
+        let report = setup_log_report(&[("测试", startup)]);
+        assert!(report.contains("old log") && report.contains("diagnostic fallback"), "{report}");
+    }
+    #[test]
+    fn h3_setup_launch_ports_fall_back_but_recovery_keeps_the_original_port() {
+        let mut visited = Vec::new();
+        let port = select_launch_port(18188, None, None, |port| {
+            visited.push(port);
+            port != 18194
+        }).unwrap();
+        assert_eq!(port, 18194);
+        assert_eq!(visited, [18188, 18192, 18193, 18194]);
+        assert_eq!(select_launch_port(18188, Some(18194), None, |_| false).unwrap(), 18194);
+        assert!(select_launch_port(18188, None, Some(18194), |port| port == 18194).is_err());
+        assert_eq!(select_launch_port(18188, None, Some(18194), |_| false).unwrap(), 18194);
+        assert!(select_launch_port(18188, None, None, |_| true).is_err());
+    }
+
+    #[test]
+    fn h3_setup_remembered_port_is_scoped_to_the_installation_path() {
+        let root = tempfile::tempdir().unwrap();
+        let assignment = root.path().join("port.json");
+        let initial = root.path().join("initial");
+        let another = root.path().join("another");
+        write_port_assignment(&assignment, &initial, 18194).unwrap();
+        assert_eq!(remembered_port(&assignment, &initial), Some(18194));
+        assert_eq!(remembered_port(&assignment, &another), None);
+        write_port_assignment(&assignment, &initial, 8188).unwrap();
+        assert_eq!(remembered_port(&assignment, &initial), None);
+    }
     fn scratch() -> PathBuf {
         let root = std::env::temp_dir().join(format!("bowerbird-h3-setup-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap(); root
@@ -1000,9 +1412,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let log = root.path().join("startup.log");
         let endpoint = "http://127.0.0.1:0";
-        let child = command("cmd.exe").args(["/D", "/C", "ping -n 30 127.0.0.1 >NUL"]).spawn().unwrap();
+        let child = spawn_managed(command("cmd.exe").args(["/D", "/C", "ping -n 30 127.0.0.1 >NUL"]), None).unwrap();
         VIDEO_PROCESSES.lock().unwrap().get_or_insert_with(Default::default)
-            .insert(endpoint.into(), VideoProcess { child, log: log.clone(), installation: root.path().into() });
+            .insert(endpoint.into(), VideoProcess { child, log: log.clone(), installation: root.path().into(), default_port: 18188 });
         std::fs::write(&log, "CUDA out of memory; retrying").unwrap();
         assert!(!reap_aborted_video(endpoint).unwrap());
         assert!(video_installation(endpoint).is_some());
@@ -1016,7 +1428,9 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let base = format!("http://{address}");
         let server = tokio::spawn(async move {
-            axum::serve(listener, Router::new().route("/system_stats", get(|| async { "other application" }))).await.unwrap();
+            axum::serve(listener, Router::new().route("/system_stats", get(|| async {
+                axum::Json(serde_json::json!({"system":{"version":"1.0"}}))
+            }))).await.unwrap();
         });
         let http = reqwest::Client::builder().no_proxy().build().unwrap();
         assert!(probe(&http, &base, Mode::Frames).await.is_none());
@@ -1025,6 +1439,41 @@ mod tests {
         server.abort();
         let _ = server.await;
         assert!(!video_port_occupied(&base).await);
+    }
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn h3_setup_does_not_probe_listener_that_replaced_an_exited_owned_process() {
+        use std::sync::atomic::AtomicUsize;
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let probes = Arc::new(AtomicUsize::new(0));
+        let counted = probes.clone();
+        let server = tokio::spawn(async move {
+            let app = Router::new().route("/system_stats", get(move || {
+                counted.fetch_add(1, Ordering::Relaxed);
+                async { axum::Json(serde_json::json!({"system":{"comfyui_version":"0.42.1"}})) }
+            }));
+            axum::serve(listener, app).await.unwrap();
+        });
+        let mut child = spawn_managed(command("cmd.exe").args(["/D", "/C", "exit", "0"]), None).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while child.try_wait().unwrap().is_none() { tokio::time::sleep(Duration::from_millis(20)).await; }
+        }).await.unwrap();
+        {
+            VIDEO_PROCESSES.lock().unwrap().get_or_insert_with(Default::default).insert(base.clone(), VideoProcess {
+                child, log: root.path().join("startup.log"), installation: root.path().into(), default_port: 18189,
+            });
+        }
+        let instance = Installation { path: root.path().into(), endpoint: base.clone(), name: "原实例".into(),
+            can_start: true, models_found: 5, python: None, main: root.path().join("main.py"), model_configs: vec![], launch_args: vec![] };
+        let ports = LaunchPorts { managed: Mode::Frames.endpoint().into(), existing: base.clone() };
+        let result = detect_scoped(root.path(), &base, vec![instance], Mode::Frames, false, true, &ports).await;
+        let removed = VIDEO_PROCESSES.lock().unwrap().as_mut().unwrap().remove(&base);
+        drop(removed);
+        server.abort();
+        assert_eq!(result.unwrap().phase, "stopped");
+        assert_eq!(probes.load(Ordering::Relaxed), 0);
     }
     #[test]
     fn h3_setup_startup_failure_reports_actual_error_from_bounded_log_tail() {
@@ -1139,15 +1588,16 @@ mod tests {
         let server = Router::new()
             .route("/system_stats", get(|| async {
                 tokio::time::sleep(Duration::from_millis(4200)).await;
-                axum::Json(serde_json::json!({"system":{"comfyui_version":"fixture"}}))
+                axum::Json(serde_json::json!({"system":{"comfyui_version":"0.42.1"}}))
             }))
             .route("/object_info", get(|| async { axum::Json(serde_json::json!({})) }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
         let http = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(10)).build().unwrap();
         let result = probe(&http, &format!("http://{address}"), Mode::Frames).await;
-        assert!(matches!(result, Some(Err(_))), "slow live server is recognized even if H3 nodes are unavailable");
-        assert!(result.unwrap().unwrap_err().to_string().contains("H3"));
+        let result = result.expect("slow live server is recognized even if H3 nodes are unavailable");
+        assert!(result.identified);
+        assert!(result.result.unwrap_err().to_string().contains("H3"));
         task.abort();
     }
     #[tokio::test]
@@ -1169,7 +1619,7 @@ mod tests {
         let cache = path.with_extension("verified");
         assert!(!cache.exists());
         migrate_frame_receipt(&path, &item, std::time::SystemTime::now());
-        assert_eq!(std::fs::read_to_string(&cache).unwrap(), verification_stamp(&path, &item).unwrap());
+        assert_eq!(std::fs::read_to_string(&cache).unwrap(), verification_stamp(&path, item.sha).unwrap());
         std::fs::write(&cache, "outdated").unwrap();
         migrate_frame_receipt(&path, &item, std::time::SystemTime::now());
         assert_eq!(std::fs::read_to_string(cache).unwrap(), "outdated");
@@ -1362,9 +1812,10 @@ mod tests {
         }};
         let root = tempfile::tempdir().unwrap();
         let pid_path = root.path().join("descendant.pid");
-        let mut parent = command("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command",
+        let parent = spawn_managed(command("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command",
             "$leaf = Start-Process powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 12' -WindowStyle Hidden -PassThru; Set-Content -LiteralPath $env:BOWERBIRD_SETUP_TEST_PID $leaf.Id; Wait-Process -Id $leaf.Id",
-        ]).env("BOWERBIRD_SETUP_TEST_PID", &pid_path).spawn().unwrap();
+        ]).env("BOWERBIRD_SETUP_TEST_PID", &pid_path), None).unwrap();
+        let mut parent = parent;
         let deadline = std::time::Instant::now() + Duration::from_secs(8);
         let leaf_pid = loop {
             if let Some(pid) = std::fs::read_to_string(&pid_path).ok().and_then(|pid| pid.trim().parse::<u32>().ok()) { break Some(pid); }
@@ -1372,15 +1823,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         };
         let leaf = leaf_pid.and_then(|pid| unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid).ok() });
-        kill_process_tree(&mut parent).unwrap();
         let leaf = leaf.expect("test child must be alive before tree cleanup");
+        drop(parent);
         let exit = unsafe {
             let result = WaitForSingleObject(leaf, 2000);
             let _ = CloseHandle(leaf);
             result
         };
         assert_eq!(exit.0, 0, "descendant remained alive");
-        assert!(parent.try_wait().unwrap().is_some());
     }
     #[test]
     fn h3_setup_diagnostics_include_managed_and_existing_image_logs() {

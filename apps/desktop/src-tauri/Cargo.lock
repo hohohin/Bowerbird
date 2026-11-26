@@ -541,6 +541,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "heic-rs",
+ "httpdate",
  "if-addrs",
  "image",
  "keyring",

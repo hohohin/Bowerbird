@@ -1,7 +1,7 @@
 //! Read-only GPU detection and NVIDIA's public driver catalog. Never executes installers.
 use serde::{Serialize, Deserialize};
 use serde_json::{json, Value};
-use std::time::Duration;
+use std::{ffi::OsStr, time::Duration};
 
 const DRIVER_SITE: &str = "https://www.nvidia.cn/drivers/";
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -19,6 +19,15 @@ pub struct DriverDownload { pub url: String, pub message: String }
 fn modern(driver: &str) -> bool {
     driver.split('.').next().and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v >= 580)
 }
+pub(super) fn drivers_below(hardware: &Hardware, minimum: (u32, u32)) -> bool {
+    !hardware.gpus.is_empty() && hardware.gpus.iter().all(|gpu| {
+        let version = gpu.driver.as_deref().and_then(|version| {
+            let (major, minor) = version.split_once('.')?;
+            Some((major.parse::<u32>().ok()?, minor.parse::<u32>().ok()?))
+        });
+        version.is_some_and(|version| version < minimum)
+    })
+}
 fn parse_smi(text: &str) -> Vec<Gpu> {
     text.lines().filter_map(|line| {
         let fields: Vec<_> = line.split(',').map(str::trim).collect();
@@ -33,31 +42,61 @@ fn classify(gpus: Vec<Gpu>, os_id: Option<u32>) -> Hardware {
         else { None };
     Hardware { gpus, driver_required, issue, os_id }
 }
-async fn output(name: &str, args: &[&str]) -> Option<String> {
+async fn output(name: &OsStr, args: &[&str]) -> Option<String> {
     let mut command = tokio::process::Command::new(name);
     command.args(args).kill_on_drop(true);
     #[cfg(windows)] command.creation_flags(0x08000000);
     let result = tokio::time::timeout(Duration::from_secs(10), command.output()).await.ok()?.ok()?;
     result.status.success().then(|| String::from_utf8_lossy(&result.stdout).trim_start_matches('\u{feff}').trim().to_owned())
 }
+fn wmi_nvidia_version(version: &str) -> Option<String> {
+    let parts = version.split('.').map(str::parse::<u32>).collect::<Result<Vec<_>, _>>().ok()?;
+    let [_, _, series, build] = parts.as_slice() else { return None; };
+    if *build >= 10_000 { return None; }
+    let release = (series % 10) * 10_000 + build;
+    (release >= 10_000).then(|| format!("{}.{:02}", release / 100, release % 100))
+}
+fn wmi_gpus(system: &Value) -> Vec<Gpu> {
+    system["gpus"].as_array().into_iter().flatten().filter_map(|entry| {
+        let name = entry["Name"].as_str()?;
+        let driver = entry["DriverVersion"].as_str().and_then(wmi_nvidia_version);
+        Some(Gpu { name: name.into(), driver, memory_mib: None })
+    }).collect()
+}
+async fn smi_gpus() -> Vec<Gpu> {
+    let args = ["--query-gpu=name,driver_version,memory.total", "--format=csv,noheader,nounits"];
+    let candidates = [
+        ("SystemRoot", "System32/nvidia-smi.exe"),
+        ("ProgramFiles", "NVIDIA Corporation/NVSMI/nvidia-smi.exe"),
+    ];
+    for (base, executable) in candidates {
+        let Some(directory) = std::env::var_os(base) else { continue; };
+        let path = std::path::PathBuf::from(directory).join(executable);
+        if !path.is_file() { continue; }
+        let gpus = output(path.as_os_str(), &args).await.as_deref().map(parse_smi).unwrap_or_default();
+        if !gpus.is_empty() { return gpus; }
+    }
+    output(OsStr::new("nvidia-smi"), &args).await.as_deref().map(parse_smi).unwrap_or_default()
+}
 pub async fn detect() -> Hardware {
+    detect_with_refresh(false).await
+}
+pub(super) async fn detect_with_refresh(force: bool) -> Hardware {
     if !cfg!(all(windows, target_arch = "x86_64")) {
         return Hardware { gpus: vec![], driver_required: false, os_id: None, issue: Some("一键安装目前支持 Windows x64 + NVIDIA；其他系统请连接已有 ComfyUI".into()) };
     }
     static CACHE: tokio::sync::Mutex<Option<(std::time::Instant, Hardware)>> = tokio::sync::Mutex::const_new(None);
     let mut cache = CACHE.lock().await;
     if let Some((at, hardware)) = cache.as_ref() {
-        if at.elapsed() < Duration::from_secs(15) { return hardware.clone(); }
+        if !force && at.elapsed() < Duration::from_secs(15) { return hardware.clone(); }
     }
-    let (smi, system) = tokio::join!(
-        output("nvidia-smi", &["--query-gpu=name,driver_version,memory.total", "--format=csv,noheader,nounits"]),
-        output("powershell.exe", &["-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); $os=Get-CimInstance Win32_OperatingSystem; $gpu=@(Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -match 'VEN_10DE' } | ForEach-Object { $_.Name }); @{build=$os.BuildNumber;version=$os.Version;productType=$os.ProductType;gpus=$gpu} | ConvertTo-Json -Compress"])
+    let (mut gpus, system) = tokio::join!(
+        smi_gpus(),
+        output(OsStr::new("powershell.exe"), &["-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); $os=Get-CimInstance Win32_OperatingSystem; $gpu=@(Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -match 'VEN_10DE' } | Select-Object Name,DriverVersion); @{build=$os.BuildNumber;version=$os.Version;productType=$os.ProductType;gpus=$gpu} | ConvertTo-Json -Compress"])
     );
     let system: Value = system.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or(Value::Null);
-    let mut gpus = smi.as_deref().map(parse_smi).unwrap_or_default();
     if gpus.is_empty() {
-        gpus = system["gpus"].as_array().into_iter().flatten().filter_map(|v| v.as_str())
-            .map(|name| Gpu { name: name.into(), driver: None, memory_mib: None }).collect();
+        gpus = wmi_gpus(&system);
     }
     let os_id = if system["productType"].as_u64() == Some(1) && system["version"].as_str().is_some_and(|v| v.starts_with("10.")) {
         system["build"].as_str().and_then(|v| v.parse::<u32>().ok()).map(|build| if build >= 22000 { 135 } else { 57 })
@@ -123,6 +162,21 @@ pub async fn lookup(hardware: &Hardware) -> DriverDownload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wmi_driver_can_satisfy_h3_and_voice_requirements_without_smi() {
+        let system = json!({"gpus":[{"Name":"NVIDIA GeForce RTX 4070 Ti SUPER","DriverVersion":"32.0.15.8180"}]});
+        let hardware = classify(wmi_gpus(&system), Some(135));
+        assert_eq!(hardware.gpus[0].driver.as_deref(), Some("581.80"));
+        assert!(!hardware.driver_required);
+        assert!(!drivers_below(&hardware, (528, 33)));
+        let old = classify(parse_smi("NVIDIA GPU, 528.32, 16376"), Some(135));
+        assert!(drivers_below(&old, (528, 33)));
+        let minimum = classify(parse_smi("NVIDIA GPU, 528.33, 16376"), Some(135));
+        assert!(!drivers_below(&minimum, (528, 33)));
+        let unknown = classify(parse_smi("NVIDIA GPU, N/A, 16376"), Some(135));
+        assert!(!drivers_below(&unknown, (528, 33)));
+        assert_eq!(wmi_nvidia_version("32.0.16.1742").as_deref(), Some("617.42"));
+    }
     #[test]
     fn h3_gpu_driver_detection_and_exact_product_match() {
         let gpus=parse_smi("NVIDIA GeForce RTX 3060, 576.80, 12288\nNVIDIA GeForce RTX 3060, 576.80, N/A");

@@ -4,16 +4,32 @@ use std::{
     future::Future,
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use reqwest::{header, StatusCode};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufWriter};
 
 use crate::error::{AppError, AppResult};
 
 const MAX_FAILURES: u32 = 4;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
+
+struct Retry {
+    reason: String,
+    after: Option<Duration>,
+}
+
+fn retry_after(headers: &header::HeaderMap, now: SystemTime) -> Option<Duration> {
+    let raw = headers.get(header::RETRY_AFTER)?.to_str().ok()?.trim();
+    let wait = if !raw.is_empty() && raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        Duration::from_secs(raw.parse::<u64>().unwrap_or(u64::MAX))
+    } else {
+        httpdate::parse_http_date(raw).ok()?.duration_since(now).unwrap_or_default()
+    };
+    Some(wait.min(MAX_RETRY_AFTER))
+}
 
 pub(super) enum TransferProgress {
     Downloading(u64),
@@ -71,7 +87,7 @@ where
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
-        let failure = download_attempt(
+        let retry = download_attempt(
             http,
             part,
             size,
@@ -93,12 +109,13 @@ where
             failures += 1;
         }
         if failures >= MAX_FAILURES {
-            return Err(fail(format!("{failure}，已保留下载进度，请稍后重试")));
+            return Err(fail(format!("{}，已保留下载进度，请稍后重试", retry.reason)));
         }
         progress(TransferProgress::Reconnecting(offset));
+        let delay = retry.after.unwrap_or_else(|| Duration::from_secs(2_u64.pow(failures.max(1))));
         tokio::select! {
             _ = wait_cancel(cancel) => return Err(cancelled()),
-            _ = tokio::time::sleep(Duration::from_secs(u64::from(failures.max(1)))) => {}
+            _ = tokio::time::sleep(delay) => {}
         }
     }
     Ok(())
@@ -112,7 +129,7 @@ async fn download_attempt(
     cancel: &AtomicBool,
     source: impl Future<Output = AppResult<String>>,
     progress: &mut impl FnMut(TransferProgress),
-) -> AppResult<String> {
+) -> AppResult<Retry> {
     let url = tokio::select! {
         _ = wait_cancel(cancel) => return Err(cancelled()),
         result = source => result?,
@@ -125,10 +142,11 @@ async fn download_attempt(
         _ = wait_cancel(cancel) => return Err(cancelled()),
         result = request.send() => match result {
             Ok(response) => response,
-            Err(error) => return Ok(network_error(&error).into()),
+            Err(error) => return Ok(Retry { reason: network_error(&error).into(), after: None }),
         },
     };
     let status = response.status();
+    let after = retry_after(response.headers(), SystemTime::now());
     match status {
         StatusCode::PARTIAL_CONTENT => {
             let expected = format!("bytes {offset}-{}/{}", size - 1, size);
@@ -142,8 +160,13 @@ async fn download_attempt(
             }
         }
         StatusCode::OK => *offset = 0,
+        StatusCode::RANGE_NOT_SATISFIABLE if *offset > 0 => {
+            tokio::fs::OpenOptions::new().write(true).truncate(true).open(part).await?.sync_all().await?;
+            *offset = 0;
+            return Ok(Retry { reason: "下载服务器已拒绝旧断点".into(), after });
+        }
         status if matches!(status.as_u16(), 401 | 403 | 408 | 429 | 500..=599) => {
-            return Ok(format!("下载服务返回 HTTP {}", status.as_u16()));
+            return Ok(Retry { reason: format!("下载服务返回 HTTP {}", status.as_u16()), after });
         }
         _ => {
             return Err(fail(format!(
@@ -152,45 +175,143 @@ async fn download_attempt(
             )))
         }
     }
-    let mut file = tokio::fs::OpenOptions::new()
+    let file = tokio::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(*offset == 0)
         .append(*offset > 0)
         .open(part)
         .await?;
+    let mut writer = BufWriter::with_capacity(1024 * 1024, file);
     let mut published = Instant::now();
-    let reason = loop {
+    let result = loop {
         let next = tokio::select! {
-            _ = wait_cancel(cancel) => { file.sync_all().await?; return Err(cancelled()); },
+            biased;
+            _ = wait_cancel(cancel) => break Err(cancelled()),
             result = response.chunk() => result,
         };
         match next {
             Ok(Some(chunk)) => {
                 if chunk.len() as u64 > size - *offset {
-                    return Err(fail("下载文件超过已知大小"));
+                    break Err(fail("下载文件超过已知大小"));
                 }
-                file.write_all(&chunk).await?;
+                if let Err(error) = writer.write_all(&chunk).await {
+                    break Err(error.into());
+                }
                 *offset += chunk.len() as u64;
                 if published.elapsed() >= PROGRESS_INTERVAL {
                     progress(TransferProgress::Downloading(*offset));
                     published = Instant::now();
                 }
             }
-            Ok(None) => break "下载连接提前关闭",
-            Err(error) => break network_error(&error),
+            Ok(None) => break Ok(Retry { reason: "下载连接提前关闭".into(), after: None }),
+            Err(error) => break Ok(Retry { reason: network_error(&error).into(), after: None }),
         }
     };
-    file.sync_all().await?;
-    Ok(reason.into())
+    // Nothing can claim a resumable offset until buffered data has reached disk.
+    writer.flush().await?;
+    writer.get_ref().sync_all().await?;
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{routing::get, Router};
+    use axum::{body::Body, response::Response, routing::get, Router};
+    use futures_util::{stream, StreamExt};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
+
+    async fn serve(router: Router) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/file?signature=test-secret", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
+        (url, server)
+    }
+
+    #[test]
+    fn retry_after_accepts_both_http_forms_and_bounds_the_delay() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000_000);
+        let mut headers = header::HeaderMap::new();
+        headers.insert(header::RETRY_AFTER, "1000000000000000000000".parse().unwrap());
+        assert_eq!(retry_after(&headers, now), Some(Duration::from_secs(30)));
+        headers.insert(header::RETRY_AFTER, httpdate::fmt_http_date(now + Duration::from_secs(8)).parse().unwrap());
+        assert_eq!(retry_after(&headers, now), Some(Duration::from_secs(8)));
+        headers.insert(header::RETRY_AFTER, "invalid".parse().unwrap());
+        assert_eq!(retry_after(&headers, now), None);
+    }
+
+    #[tokio::test]
+    async fn rejected_range_restarts_with_a_truncated_partial() {
+        let ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server = Router::new().route("/file", get({
+            let ranges = ranges.clone();
+            move |headers: header::HeaderMap| async move {
+                let range = headers.get(header::RANGE).and_then(|value| value.to_str().ok()).map(str::to_owned);
+                let status = if range.is_some() { StatusCode::RANGE_NOT_SATISFIABLE } else { StatusCode::OK };
+                ranges.lock().unwrap().push(range);
+                (status, "fresh-data")
+            }
+        }));
+        let (url, server) = serve(server).await;
+        let root = tempfile::tempdir().unwrap();
+        let part = root.path().join("fixture.part");
+        std::fs::write(&part, b"stale").unwrap();
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let result = transfer(&http, &part, 10, &AtomicBool::new(false), || std::future::ready(Ok(url.clone())), |_| {}).await;
+        server.abort();
+        result.unwrap();
+        assert_eq!(*ranges.lock().unwrap(), [Some("bytes=5-".into()), None]);
+        assert_eq!(std::fs::read(part).unwrap(), b"fresh-data");
+    }
+
+    #[tokio::test]
+    async fn download_retries_throttling_and_service_failure_with_retry_after() {
+        let server = Router::new().route("/file", get({
+            let count = Arc::new(AtomicUsize::new(0));
+            move || async move {
+                let status = match count.fetch_add(1, Ordering::Relaxed) {
+                    0 => StatusCode::TOO_MANY_REQUESTS,
+                    1 => StatusCode::SERVICE_UNAVAILABLE,
+                    _ => StatusCode::OK,
+                };
+                (status, [(header::RETRY_AFTER, "0")], "abc")
+            }
+        }));
+        let (url, server) = serve(server).await;
+        let root = tempfile::tempdir().unwrap();
+        let part = root.path().join("fixture.part");
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        // The default two successive retry delays exceed this budget.
+        let result = tokio::time::timeout(Duration::from_millis(2500),
+            transfer(&http, &part, 3, &AtomicBool::new(false), || std::future::ready(Ok(url.clone())), |_| {})).await;
+        server.abort();
+        result.expect("server Retry-After takes precedence").unwrap();
+        assert_eq!(std::fs::read(part).unwrap(), b"abc");
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_stream_flushes_the_received_bytes() {
+        let server = Router::new().route("/file", get(|| async {
+            let chunks = stream::once(async {
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"abc"))
+            }).chain(stream::pending());
+            Response::new(Body::from_stream(chunks))
+        }));
+        let (url, server) = serve(server).await;
+        let root = tempfile::tempdir().unwrap();
+        let part = root.path().join("fixture.part");
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let cancel = AtomicBool::new(false);
+        let result = tokio::time::timeout(Duration::from_secs(5),
+            transfer(&http, &part, 6, &cancel, || std::future::ready(Ok(url.clone())), |state| {
+                if matches!(state, TransferProgress::Downloading(3)) { cancel.store(true, Ordering::Relaxed); }
+            })).await;
+        server.abort();
+        assert!(result.unwrap().unwrap_err().to_string().contains("下载已暂停"));
+        assert_eq!(std::fs::read(part).unwrap(), b"abc");
+    }
 
     #[tokio::test]
     async fn alternating_short_whole_responses_cannot_reset_failure_budget() {
@@ -220,7 +341,7 @@ mod tests {
         std::fs::write(&part, b"abcd").unwrap();
         let http = reqwest::Client::builder().no_proxy().build().unwrap();
         let result = tokio::time::timeout(
-            Duration::from_secs(10),
+            Duration::from_secs(25),
             transfer(
                 &http,
                 &part,

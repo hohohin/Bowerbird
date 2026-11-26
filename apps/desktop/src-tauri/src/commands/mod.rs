@@ -91,7 +91,9 @@ pub mod video_transcript;
 pub mod comfy_video;
 pub(crate) mod comfy_memory;
 pub mod comfy_setup;
+mod comfy_driver;
 mod install_download;
+mod local_install;
 mod comfy_discovery;
 pub mod video_replication;
 

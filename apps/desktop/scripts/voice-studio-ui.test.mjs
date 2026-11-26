@@ -30,11 +30,17 @@ try {
         const s=read();
         if(command==='project_canvas_node_create' && window.failVoiceDelivery) { window.failVoiceDelivery=false;throw new Error('模拟画板写入失败'); }
         if(command==='voice_environment'){
+          (window.voiceEnvironmentCalls??=[]).push(args.action);
+          if(args.action==='check' && window.delayNextVoiceCheck) {
+            window.delayNextVoiceCheck=false;
+            return await new Promise(resolve=>{window.releaseVoiceCheck=resolve;});
+          }
           if(args.action==='install') sessionStorage.setItem('voice-ready','yes');
-          const ready=!!sessionStorage.getItem('voice-ready');
+          const ready=!!sessionStorage.getItem('voice-ready') && !window.voiceLibraryMissing;
           return {phase:ready?'ready':'missing',message:ready?'环境已就绪':'需要安装配音环境',can_install:!ready,total_bytes:1,completed_bytes:0};
         }
         if(command==='voice_snapshot') return {...s,config:{python:'',model:''}};
+        if(command==='voice_configure'){window.connectedVoiceConfig=args.config;return;}
         if(command==='plugin:dialog|open') return 'C:/sample.wav';
         if(command==='import_files'){s.assets=[source];save(s);return [source];}
         if(command==='get_assets_by_ids')return [...await original.invoke(command,args),...s.assets.filter(a=>args.assetIds.includes(a.id))];
@@ -56,9 +62,35 @@ try {
   const card=page.locator('.workflow-card.is-voice');
   await card.waitFor();
   assert.equal(await page.getByRole('dialog').count(),0);
+  await page.waitForFunction(()=>window.voiceEnvironmentCalls?.includes('check'));
+  const focusChecks=await page.evaluate(async()=>{
+    const start=window.voiceEnvironmentCalls.length;
+    for(let i=0;i<3;i++){
+      window.dispatchEvent(new Event('focus'));
+      await new Promise(resolve=>setTimeout(resolve,40));
+    }
+    return window.voiceEnvironmentCalls.length-start;
+  });
+  assert.ok(focusChecks<=1,`only one probe per focus burst, saw ${focusChecks}`);
+  await page.evaluate(()=>{window.delayNextVoiceCheck=true;});
   await card.getByRole('button',{name:'配音环境',exact:true}).click();
+  await page.waitForFunction(()=>typeof window.releaseVoiceCheck==='function');
   await page.getByRole('button',{name:'下载并启用'}).click();
   await page.getByRole('dialog',{name:'本机配音环境'}).waitFor({state:'hidden'});
+  await page.evaluate(()=>window.releaseVoiceCheck({phase:'missing',message:'迟到的未安装状态',can_install:true}));
+  await page.waitForTimeout(50);
+  assert.ok(await card.getByRole('button',{name:'配音环境',exact:true}).evaluate(element=>element.classList.contains('is-ready')));
+  const readyChecks=await page.evaluate(async()=>{
+    const start=window.voiceEnvironmentCalls.length;
+    window.dispatchEvent(new Event('focus'));
+    await new Promise(resolve=>setTimeout(resolve,40));
+    return window.voiceEnvironmentCalls.length-start;
+  });
+  assert.equal(readyChecks,0,'a ready environment ignores passive window focus while the dialog is closed');
+  await card.getByRole('button',{name:'配音环境',exact:true}).click();
+  await page.getByRole('button',{name:'重新检测',exact:true}).click();
+  await page.waitForFunction(()=>window.voiceEnvironmentCalls.includes('recheck'));
+  await page.getByRole('button',{name:'关闭',exact:true}).click();
   await card.getByRole('button',{name:'选择文件'}).click();
   await card.getByRole('textbox',{name:'试听台词'}).fill('这是编辑后的试听句。');
   await card.getByRole('spinbutton',{name:'入点秒数'}).fill('1');
@@ -103,8 +135,40 @@ try {
   });
   await second.getByRole('textbox',{name:'试听台词'}).waitFor();
   assert.equal(await page.locator('.workflow-card.is-voice').first().getByRole('textbox',{name:'配音台词'}).inputValue(),'欢迎来到这里。');
+  await second.getByRole('button',{name:'配音环境',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'本机配音环境'});
+  await dialog.getByRole('button',{name:'重新检测',exact:true}).waitFor();
+  await page.waitForTimeout(5050);
+  const sharedChecks=await page.evaluate(async()=>{
+    const start=window.voiceEnvironmentCalls.length;
+    for(let i=0;i<3;i++){
+      window.dispatchEvent(new Event('focus'));
+      await new Promise(resolve=>setTimeout(resolve,40));
+    }
+    return window.voiceEnvironmentCalls.slice(start);
+  });
+  assert.deepEqual(sharedChecks,['check'],'an open dialog refreshes through one shared focus check even with two cards');
+  await dialog.getByText('连接已有环境',{exact:true}).click();
+  await dialog.getByRole('button',{name:'选择 Python',exact:true}).click();
+  await dialog.getByRole('button',{name:'选择模型目录',exact:true}).click();
+  const explicit=await page.evaluate(()=>window.voiceEnvironmentCalls.filter(action=>action==='recheck').length);
+  await dialog.getByRole('button',{name:'连接并检查',exact:true}).click();
+  await page.waitForFunction(count=>window.voiceEnvironmentCalls.filter(action=>action==='recheck').length===count+1, explicit);
+  assert.deepEqual(await page.evaluate(()=>window.connectedVoiceConfig),{python:'C:/sample.wav',model:'C:/sample.wav'});
+  await dialog.getByRole('button',{name:'关闭',exact:true}).click();
+  await page.evaluate(()=>{window.releaseVoiceCheck=undefined;window.delayNextVoiceCheck=true;});
+  await second.getByRole('button',{name:'配音环境',exact:true}).click();
+  await page.waitForFunction(()=>typeof window.releaseVoiceCheck==='function');
+  await page.evaluate(()=>{
+    window.voiceLibraryMissing=true;
+    window.store.setState(state=>({settings:{...state.settings,library_root:'D:/voice-fixture-other'}}));
+  });
+  await page.waitForFunction(()=>[...document.querySelectorAll('.workflow-card.is-voice [aria-label="配音环境"]')].every(button=>!button.classList.contains('is-ready')));
+  await page.evaluate(()=>window.releaseVoiceCheck({phase:'ready',message:'旧资料库的迟到结果'}));
+  await page.waitForTimeout(50);
+  assert.equal(await page.locator('.workflow-card.is-voice .comfy-environment-dot.is-ready').count(),0);
   assert.deepEqual(errors,[]);
-  console.log('PASS toolbox placement, environment, edited audition and crop, inline audio, voice selection, spoken output and card persistence');
+  console.log('PASS toolbox placement, shared focus checks, explicit CUDA recheck, environment setup, edited audition and crop, inline audio, voice selection, spoken output and card persistence');
 } catch(e) {
   console.error(await page.locator('.workflow-card.is-voice').allTextContents(),errors,await page.evaluate(()=>({run: JSON.parse(sessionStorage.getItem('workflow-p')||'{}').document?.run, recent:window.calls.slice(-12).map(c=>c.command), alerts:document.body.innerText.slice(-650), voice:sessionStorage.getItem('voice-fixture')})));
   throw e;
