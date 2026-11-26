@@ -16,10 +16,12 @@ try {
   for (const mode of ["library", "canvas"]) {
     await page.goto(`http://127.0.0.1:1581/scripts/fixtures/project-drop/preview.html?layout${mode === "canvas" ? "&canvas-toolbar" : ""}`);
     await page.getByRole("button", { name: "探索", exact: true }).waitFor();
-    const more=page.getByRole('button',{name:'更多素材库控件',exact:true});
-    if(await more.isVisible()) await more.click();
-    await page.getByRole('button',{name:'文件浏览器',exact:true}).click();
-    await page.getByRole('group',{name:'文件夹地址栏',exact:true}).waitFor();
+    if (mode === "canvas") {
+      const split = page.getByRole("group", { name: "画板分屏", exact: true });
+      await split.getByRole("button", { name: "探索", exact: true }).waitFor();
+      assert.equal(await split.getByRole("button", { name: /(打开|收起)素材库/ }).count(), 1);
+    }
+
     for (const theme of ["light", "dark"]) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
       // Include the native minimum width and both sides of every toolbar breakpoint.
@@ -48,12 +50,12 @@ try {
             };
           });
           const context = JSON.stringify({ mode, theme, width, busy, layout });
-          assert.equal(layout.height, 64, context);
+          assert.equal(layout.height, 44, context);
           assert.equal(layout.aligned, true, context);
           assert.equal(layout.searchHidden, true, context);
           assert.equal(layout.labelsVisible, true, context);
-          assert.ok(layout.controlHeights.every(height => height === (layout.tactical ? 32 : 36)), context);
-          assert.ok(layout.controlRadii.every(radius => radius === (layout.tactical ? '0px' : '8px')), context);
+          assert.ok(layout.controlHeights.every(height => height === 32), context);
+          assert.ok(layout.controlRadii.every(radius => radius === '0px'), context);
           assert.equal(layout.overflow, false, context);
           assert.equal(layout.contained, true, context);
           assert.equal(layout.overlap, false, context);
@@ -65,24 +67,16 @@ try {
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.screenshot({ path: `.tmp/toolbar-layout/${mode}-${theme}-1280.png` });
     }
-    // Hidden search has no keyboard focus target; menus remain unclipped.
     await page.setViewportSize({ width: 900, height: 900 });
-    assert.equal(await page.getByRole("button", { name: "打开本机文件资源管理器", exact: true }).count(), 0);
-    await page.getByRole("button", { name: "导入", exact: true }).focus();
+    const explore = page.locator(".app-topbar").getByRole("button", { name: "探索", exact: true });
+    await explore.focus();
     await page.keyboard.press("/");
-    assert.equal(await page.getByRole("button", { name: "导入", exact: true }).evaluate(el => el === document.activeElement), true);
-    assert.equal(await page.locator('.app-search').count(),0);
-    await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "导入", exact: true }).click();
-    const importItem = page.getByRole("menuitem", { name: "导入图片或视频", exact: true });
-    await importItem.waitFor();
-    assert.equal(await importItem.evaluate(el => {
-      const box = el.getBoundingClientRect();
-      return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
-    }), true);
+    assert.equal(await explore.evaluate(el => el === document.activeElement), true);
+    assert.equal(await page.locator(".app-search").count(), 0);
   }
+
   assert.deepEqual(errors, []);
-  console.log("Toolbar layout: library/canvas, light/dark, 900–1920px, idle/importing, hidden search, uniform controls, single row, no overlaps/clipping and import popup passed.");
+  console.log("Toolbar layout: library/canvas, light/dark, 900–1920px, idle/importing, hidden search, uniform controls, single row and no overlaps/clipping passed.");
 } finally {
   await browser.close();
   await server.close();

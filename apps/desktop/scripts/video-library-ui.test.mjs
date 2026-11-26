@@ -32,7 +32,7 @@ try {
   });
   await page.getByRole('button', { name: '展开画板素材库', exact: true }).click();
   const library = page.getByRole('complementary', { name: '画板素材库' });
-  await library.getByRole('tablist', { name: '素材库来源', exact: true }).locator('[data-tab-value="project"]').click();
+  await library.getByRole('navigation', { name: '项目', exact: true }).locator('.library-sidebar-project').click();
   await page.getByRole('group', { name: '素材类型', exact: true }).getByRole('button', { name: '视频', exact: true }).click();
   await library.locator('[data-asset-id="clip"]').click();
   const preview = page.getByRole('dialog', { name: '视频与生成记录预览', exact: true });

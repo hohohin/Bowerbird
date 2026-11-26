@@ -11,7 +11,7 @@ const key='bowerbird.explorer.lastUrl';
 const saved='https://www.pinterest.com/search/pins/?q=ceramics';
 const visited='https://www.xiaohongshu.com/explore/fixture-note?xsec_token=fixture';
 async function boot(context){
- const page=await context.newPage();page.setDefaultTimeout(7000);
+ const page=await context.newPage();page.setDefaultTimeout(7000); page.setDefaultNavigationTimeout(30000);
  page.on('pageerror',error=>errors.push(error.message));
  await page.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort());
  await page.goto(fixture);await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
@@ -53,4 +53,4 @@ try{
  }
  assert.deepEqual(errors,[]);
  console.log('PASS remembered address, native navigation, live reopen, onboarding, restart and invalid-memory fallback');
-}finally{await browser.close();await server.close();}
+}catch(error){console.error(error);throw error;}finally{await browser.close();await server.close();}

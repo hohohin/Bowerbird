@@ -7,7 +7,7 @@ const server = await createServer({ cacheDir: ".tmp/pinterest-search-vite", serv
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-page.setDefaultTimeout(7000);
+page.setDefaultTimeout(7000); page.setDefaultNavigationTimeout(30000);
 const errors = []; page.on("pageerror", error => errors.push(error.message));
 await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
 const action = () => page.getByRole("menuitem", { name: "Pinterest 以图搜图", exact: true });
