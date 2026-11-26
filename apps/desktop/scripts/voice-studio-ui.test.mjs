@@ -1,4 +1,3 @@
-import { enableCanvasToolbarPro, selectCanvasTool } from './fixtures/canvas-reference/place-card.mjs';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -25,9 +24,32 @@ try {
     const source={id:'clip',name:'参考录音',ext:'wav',store_path:'/.tmp/voice-card-ui/reference.wav',duration:4,created_at:1};
     const read=()=>JSON.parse(sessionStorage.getItem('voice-fixture')||'{"voices":[],"jobs":[],"assets":[]}');
     const save=s=>sessionStorage.setItem('voice-fixture',JSON.stringify(s));
+    const emitJob=job=>ipc.invoke('plugin:event|emit',{event:'voice://job-updated',payload:{
+      project:job.project,id:job.id,request_key:job.request_key,purpose:job.purpose,status:job.status,
+    }});
+    window.updateVoiceJob=async patch=>{
+      const s=read(),job=s.jobs[0];
+      Object.assign(job,patch);
+      if(job.status==='succeeded' && !job.asset_id) {
+        job.asset_id='audio-'+job.id;
+        s.assets.push({...source,id:job.asset_id});
+      }
+      save(s);
+      await emitJob(job);
+    };
+    window.addVoiceHistory=async count=>{
+      const s=read();
+      for(let index=count;index>0;index--) s.jobs.push({
+        id:'history-'+index,project:'p',voice_id:'saved',purpose:'speech',status:'succeeded',message:'已保存',
+        text:'历史配音 '+index,asset_id:null,
+      });
+      save(s);
+      await emitJob(s.jobs[0]);
+    };
     Object.defineProperty(window,'__TAURI_INTERNALS__',{configurable:true,get:()=>ipc,set:original=>{
       ipc={...original,invoke:async(command,args)=>{
         const s=read();
+        if(command.startsWith('voice_')) (window.voiceCalls??=[]).push({command,args});
         if(command==='project_canvas_node_create' && window.failVoiceDelivery) { window.failVoiceDelivery=false;throw new Error('模拟画板写入失败'); }
         if(command==='voice_environment'){
           (window.voiceEnvironmentCalls??=[]).push(args.action);
@@ -35,11 +57,25 @@ try {
             window.delayNextVoiceCheck=false;
             return await new Promise(resolve=>{window.releaseVoiceCheck=resolve;});
           }
+          if(window.showVoiceInstallProgress) return {phase:'installing',message:'正在准备 PyTorch CUDA 安装包',
+            install_step:'pytorch',progress_percent:72,active_seconds:9,completed_bytes:123,total_bytes:123};
           if(args.action==='install') sessionStorage.setItem('voice-ready','yes');
           const ready=!!sessionStorage.getItem('voice-ready') && !window.voiceLibraryMissing;
           return {phase:ready?'ready':'missing',message:ready?'环境已就绪':'需要安装配音环境',can_install:!ready,total_bytes:1,completed_bytes:0};
         }
-        if(command==='voice_snapshot') return {...s,config:{python:'',model:''}};
+        if(command==='voice_snapshot'){
+          const history=s.jobs.filter(job=>job.project===args.project&&job.purpose!=='preview');
+          const start=args.before?history.findIndex(job=>job.id===args.before)+1:0;
+          const limit=args.historyLimit??30;
+          const jobs=history.slice(start,start+limit);
+          return {...s,jobs,assets:s.assets.filter(asset=>jobs.some(job=>job.asset_id===asset.id)),
+            config:{python:'',model:''},has_history:history.length>0,has_more:start+limit<history.length};
+        }
+        if(command==='voice_job'){
+          const job=s.jobs.find(job=>job.project===args.project&&(args.id?job.id===args.id:job.request_key===args.requestKey));
+          return job?{job,asset:s.assets.find(asset=>asset.id===job.asset_id)??null}:null;
+        }
+        if(command==='voice_diagnostic'){window.openVoiceDiagnostic=args;return;}
         if(command==='voice_configure'){window.connectedVoiceConfig=args.config;return;}
         if(command==='plugin:dialog|open') return 'C:/sample.wav';
         if(command==='import_files'){s.assets=[source];save(s);return [source];}
@@ -48,7 +84,18 @@ try {
         if(command==='voice_save'){const voice={id:'saved',name:args.name,asset_id:args.assetId,reference:source.store_path,duration:4};s.voices.push(voice);save(s);return voice;}
         if(command==='voice_start'){
           const id='job-'+(s.jobs.length+1), asset={...source,id:'audio-'+id};
-          s.assets.push(asset);s.jobs.unshift({id,project:args.project,text:args.text,voice_id:args.voiceId,purpose:args.preview?'preview':'speech',request_key:args.requestKey,draft_key:args.preview?.draftKey,asset_id:asset.id,status:'succeeded',message:'已保存',preview:args.preview});save(s);if(window.loseVoiceReceipt){window.loseVoiceReceipt=false;throw new Error('模拟提交回执丢失');}return id;
+          const hold=!!window.holdNextVoice;
+          window.holdNextVoice=false;
+          const job={id,project:args.project,text:args.text,voice_id:args.voiceId,purpose:args.preview?'preview':'speech',
+            request_key:args.requestKey,draft_key:args.preview?.draftKey,asset_id:hold?null:asset.id,
+            status:hold?'running':'succeeded',stage:hold?'loading_model':null,
+            message:hold?'推理处理中':'已保存',preview:args.preview,seed:args.seed};
+          if(!hold) s.assets.push(asset);
+          s.jobs.unshift(job);
+          save(s);
+          await emitJob(job);
+          if(window.loseVoiceReceipt){window.loseVoiceReceipt=false;throw new Error('模拟提交回执丢失');}
+          return id;
         }
         return original.invoke(command,args);
       }};
@@ -57,7 +104,8 @@ try {
   await page.goto('http://127.0.0.1:17996/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:true,user_id:'tester'},cloudEntitlement:{user_id:'tester',tier:'pro',offline_state:'fresh',is_test_account:true,balances:{daily:0,sub:0,topup:0},generation_services:[],policy:{can_use_byo:true,can_use_cloud:true}}}));
-  await selectCanvasTool(page, '角色声音');
+  await page.getByRole('button',{name:'工具箱',exact:true}).click();
+  await page.getByRole('menuitem',{name:/角色声音/}).click();
   await page.mouse.click(890,180);
   const card=page.locator('.workflow-card.is-voice');
   await card.waitFor();
@@ -75,7 +123,13 @@ try {
   await page.evaluate(()=>{window.delayNextVoiceCheck=true;});
   await card.getByRole('button',{name:'配音环境',exact:true}).click();
   await page.waitForFunction(()=>typeof window.releaseVoiceCheck==='function');
+  await page.evaluate(()=>{window.showVoiceInstallProgress=true;});
   await page.getByRole('button',{name:'下载并启用'}).click();
+  const installing=page.getByRole('dialog',{name:'本机配音环境'});
+  await installing.getByRole('status').filter({hasText:'第 3 步，共 5 步'}).waitFor();
+  assert.deepEqual(await installing.getByRole('progressbar',{name:'安装进度'}).evaluate(bar=>[bar.value,bar.max]),[72,100]);
+  await installing.getByText('72% · 当前安装进程已运行 9 秒',{exact:true}).waitFor();
+  await page.evaluate(()=>{window.showVoiceInstallProgress=false;sessionStorage.setItem('voice-ready','yes');});
   await page.getByRole('dialog',{name:'本机配音环境'}).waitFor({state:'hidden'});
   await page.evaluate(()=>window.releaseVoiceCheck({phase:'missing',message:'迟到的未安装状态',can_install:true}));
   await page.waitForTimeout(50);
@@ -94,10 +148,25 @@ try {
   await card.getByRole('button',{name:'选择文件'}).click();
   await card.getByRole('textbox',{name:'试听台词'}).fill('这是编辑后的试听句。');
   await card.getByRole('spinbutton',{name:'入点秒数'}).fill('1');
+  await card.getByText('高级设置',{exact:true}).click();
+  await card.getByRole('spinbutton',{name:'随机种子'}).fill('321');
+  await card.getByText('高级设置',{exact:true}).click();
+  await page.evaluate(()=>{window.holdNextVoice=true;});
   await card.getByRole('button',{name:'生成试听'}).click();
+  await card.getByRole('status').filter({hasText:'正在加载模型'}).waitFor();
+  const voiceReads=await page.evaluate(()=>window.voiceCalls.filter(call=>call.command==='voice_snapshot').length);
+  const jobReads=await page.evaluate(()=>window.voiceCalls.filter(call=>call.command==='voice_job').length);
+  await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'voice://job-updated',
+    payload:{project:'other-project',id:'job-1',purpose:'preview',status:'running'}}));
+  await page.waitForTimeout(1200);
+  assert.equal(await page.evaluate(()=>window.voiceCalls.filter(call=>call.command==='voice_job').length),jobReads);
+  await page.evaluate(()=>window.updateVoiceJob({stage:'synthesizing',progress:42}));
+  await card.getByRole('status').filter({hasText:'正在合成音频 · 42%'}).waitFor({timeout:1500});
+  assert.equal(await page.evaluate(()=>window.voiceCalls.filter(call=>call.command==='voice_snapshot').length),voiceReads);
+  await page.evaluate(()=>window.updateVoiceJob({status:'succeeded',stage:'saving',progress:100,message:'已保存'}));
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='done');
   const preview=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('voice-fixture')).jobs[0]);
-  assert.equal(preview.text,'这是编辑后的试听句。');assert.equal(preview.preview.start,1);assert.equal(preview.preview.assetId,'clip');
+  assert.equal(preview.text,'这是编辑后的试听句。');assert.equal(preview.preview.start,1);assert.equal(preview.preview.assetId,'clip');assert.equal(preview.seed,321);
   await card.locator('.voice-card > .audio-waveform').waitFor();
   const player = card.locator('.voice-card > .audio-waveform .audio-waveform-play');
   await player.click();
@@ -116,13 +185,34 @@ try {
   await page.waitForFunction(()=>window.snapshot().nodes.some(n=>n.id==='workflow-voice:job-2'&&n.assetId==='audio-job-2'));
   const speech=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('voice-fixture')).jobs[0]);
   assert.equal(speech.text,'欢迎来到这里。');assert.equal(speech.voice_id,'saved');
+  assert.ok(await page.evaluate(key=>window.voiceCalls.some(call=>call.command==='voice_job'&&call.args.requestKey===key),speech.request_key));
   await card.screenshot({path:resolve(output,'speech.png')});
+  await page.evaluate(()=>{window.holdNextVoice=true;});
+  await card.getByRole('button',{name:'生成配音'}).click();
+  await card.getByRole('status').filter({hasText:'正在加载模型'}).waitFor();
+  await page.evaluate(()=>window.updateVoiceJob({
+    status:'failed',stage:'failed',message:'显存不足，请关闭占用显存的程序后重试',error_code:'cuda_oom',has_diagnostic:true,
+  }));
+  await card.getByRole('alert').filter({hasText:'显存不足，请关闭占用显存的程序后重试'}).waitFor({timeout:1500});
+  await card.getByRole('button',{name:'查看诊断日志',exact:true}).click();
+  assert.deepEqual(await page.evaluate(()=>window.openVoiceDiagnostic),{project:'p',id:'job-3'});
+  await card.screenshot({path:resolve(output,'speech-error.png')});
   await page.reload();
   await card.getByRole('textbox',{name:'配音台词'}).waitFor();
   assert.equal(await card.getByRole('textbox',{name:'配音台词'}).inputValue(),'欢迎来到这里。');
-  assert.equal(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('voice-fixture')).jobs.length),2);
-  await enableCanvasToolbarPro(page);
-  await selectCanvasTool(page, '角色声音');
+  assert.equal(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('voice-fixture')).jobs.length),3);
+  await card.getByText('高级设置',{exact:true}).click();
+  assert.equal(await card.getByRole('spinbutton',{name:'随机种子'}).inputValue(),'321');
+  await card.getByText('高级设置',{exact:true}).click();
+  assert.ok(await page.evaluate(()=>window.voiceCalls.filter(call=>call.command==='voice_snapshot').every(call=>call.args.historyLimit===0)));
+  await page.evaluate(()=>window.addVoiceHistory(32));
+  await card.getByText('项目配音',{exact:true}).click();
+  await card.getByRole('button',{name:'更多配音'}).click();
+  await card.getByText('历史配音 1',{exact:true}).waitFor();
+  assert.ok(await page.evaluate(()=>window.voiceCalls.some(call=>call.command==='voice_snapshot'&&call.args.historyLimit===30&&call.args.before)));
+  await card.getByText('项目配音',{exact:true}).click();
+  await page.getByRole('button',{name:'工具箱',exact:true}).click();
+  await page.getByRole('menuitem',{name:/角色声音/}).click();
   await page.mouse.click(700,700);
   const second=page.locator('.workflow-card.is-voice').nth(1);
   await second.waitFor();
@@ -168,7 +258,7 @@ try {
   await page.waitForTimeout(50);
   assert.equal(await page.locator('.workflow-card.is-voice .comfy-environment-dot.is-ready').count(),0);
   assert.deepEqual(errors,[]);
-  console.log('PASS toolbox placement, shared focus checks, explicit CUDA recheck, environment setup, edited audition and crop, inline audio, voice selection, spoken output and card persistence');
+  console.log('PASS role voice setup, audition and crop, seeded requests, event updates, idempotent recovery, diagnostics, paginated history and card persistence');
 } catch(e) {
   console.error(await page.locator('.workflow-card.is-voice').allTextContents(),errors,await page.evaluate(()=>({run: JSON.parse(sessionStorage.getItem('workflow-p')||'{}').document?.run, recent:window.calls.slice(-12).map(c=>c.command), alerts:document.body.innerText.slice(-650), voice:sessionStorage.getItem('voice-fixture')})));
   throw e;

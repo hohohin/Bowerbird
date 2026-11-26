@@ -12,6 +12,10 @@
 .voice-card-list { display: grid; gap: 6px; max-height: 180px; overflow: auto; }
 .voice-card-list > button, .voice-card-list > div { text-align: left; overflow-wrap: anywhere; }
 .voice-card summary { cursor: pointer; font-size: 11px; color: var(--bb-muted); }
+.voice-card-seed { margin-top: 6px; }
+.voice-card-warning { color: var(--bb-warning); }
+.voice-card-history-status { display: block; color: var(--bb-muted); }
+.voice-card-diagnostic { justify-self: start; }
 .voice-card [role=alert], .voice-environment-dialog [role=alert] { color: var(--bb-danger); }
 .voice-card :is(.audio-waveform,.audio-waveform-track) { max-height: 64px; }
 .voice-environment-dialog .app-modal-body > div, .voice-environment-dialog details[open] { display: grid; gap: 12px; }

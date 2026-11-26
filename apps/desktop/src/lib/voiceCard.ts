@@ -3,6 +3,7 @@ import type { Asset } from "./types";
 export interface VoiceCardSettings {
   id?: string;
   sampleText?: string;
+  seed?: number;
   clip?: { assetId: string; start: number; end: number; name: string; transcript: string };
 }
 export interface VoiceCardRequest {
@@ -11,6 +12,8 @@ export interface VoiceCardRequest {
   previewKey?: string;
   videoAudio?: { sourceAssetId: string; assetId: string };
   assetId?: string;
+  warning?: string;
+  hasDiagnostic?: boolean;
 }
 export const defaultVoiceSample = "欢迎回来，我们可以开始今天的创作了。";
 export function voiceCardClip(settings: VoiceCardSettings, asset: Asset) {
@@ -21,5 +24,7 @@ export function voiceCardClip(settings: VoiceCardSettings, asset: Asset) {
 }
 export function voiceCardPreviewKey(settings: VoiceCardSettings, asset: Asset) {
   const { start, end, transcript } = voiceCardClip(settings, asset);
-  return JSON.stringify([asset.id, start, end, transcript, (settings.sampleText ?? defaultVoiceSample).trim()]);
+  const fields = [asset.id, start, end, transcript, (settings.sampleText ?? defaultVoiceSample).trim()];
+  if (settings.seed !== undefined) fields.push(settings.seed);
+  return JSON.stringify(fields);
 }

@@ -206,7 +206,8 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
   const imageRunning = imageActivity.running;
   const statusText = stopping ? "正在停止" : starting ? "准备运行"
     : step?.detail === "连线已断开，本次未执行" ? step.detail
-      : node.kind === "agent" && run?.status === "stopped" && !chatBusy && step?.status !== "done" ? "已停止" : undefined;
+      : node.kind === "voice" && step?.status === "running" && step.detail ? step.detail
+        : node.kind === "agent" && run?.status === "stopped" && !chatBusy && step?.status !== "done" ? "已停止" : undefined;
   const queuedTrigger = node.kind === "trigger" && run?.status === "waiting" && !run.order.length && run.triggerQueue?.[0] === node.id;
   const triggerExecuting = node.kind === "trigger" && (run?.status === "running" || run?.status === "waiting") && run.order.includes(node.id);
   const activeWorkflow = run && (queuedTrigger || triggerExecuting || workflowExecuting

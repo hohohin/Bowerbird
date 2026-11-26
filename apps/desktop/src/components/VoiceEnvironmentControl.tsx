@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ModalShell } from "./ModalShell";
-import { voiceApi, type VoiceConfig, type VoiceEnvironment } from "../lib/voice";
+import { voiceApi, voiceScope, type VoiceConfig, type VoiceEnvironment } from "../lib/voice";
 import { userErrorMessage } from "../lib/userError";
 import { useStore } from "../store";
 import "./ComfyVideoCard.css";
@@ -15,9 +15,8 @@ let revision = 0;
 let lastFocusCheck = -Infinity;
 const focusInterval = 5000;
 const listeners = new Set<() => void>();
-const scopeOf = ({ settings, cloudAuth }: ReturnType<typeof useStore.getState>) =>
-  JSON.stringify([settings?.library_root ?? "", cloudAuth?.logged_in ? cloudAuth.user_id : null]);
-const currentScope = (scope: string) => scopeOf(useStore.getState()) === scope;
+const currentScope = (scope: string) => voiceScope(useStore.getState()) === scope;
+const installSteps = { resources: 1, python: 2, pytorch: 3, voxcpm: 4, cuda_check: 5 };
 function publish(next: Snapshot) {
   snapshot = next;
   listeners.forEach(listener => listener());
@@ -69,7 +68,7 @@ async function changeEnvironment(scope: string, work: () => Promise<VoiceEnviron
   return action;
 }
 export function VoiceEnvironmentControl({ projectId, onStatusChange }: { projectId: string; onStatusChange?: (message: string | null) => void }) {
-  const scope = useStore(scopeOf);
+  const scope = useStore(voiceScope);
   const { environment: state, acting } = useSyncExternalStore(subscribe, () => snapshot.scope === scope ? snapshot : empty);
   const [show, setShow] = useState(false), [localBusy, setBusy] = useState(false), [error, setError] = useState("");
   const [config, setConfig] = useState<VoiceConfig>({ python: "", model: "" });
@@ -77,7 +76,11 @@ export function VoiceEnvironmentControl({ projectId, onStatusChange }: { project
   const dot = useRef<HTMLButtonElement>(null);
   const busy = localBusy || acting;
   const ready = state?.phase === "ready", installing = state?.phase === "installing";
-  useEffect(() => { onStatusChange?.(ready ? null : error || state?.message || "正在检查本机配音环境…"); }, [ready, error, state, onStatusChange]);
+  const message = state?.message;
+  const step = state?.install_step && installSteps[state.install_step];
+  const percent = state?.progress_percent ?? undefined;
+  const seconds = state?.active_seconds;
+  useEffect(() => { onStatusChange?.(ready ? null : error || message || "正在检查本机配音环境…"); }, [ready, error, message, onStatusChange]);
   const close = () => { setShow(false); dot.current?.focus(); };
   useEffect(() => { setShow(false); setConfig({ python: "", model: "" }); setError(""); setBusy(false); setAdvanced(false); }, [scope]);
   useEffect(() => {
@@ -117,10 +120,14 @@ export function VoiceEnvironmentControl({ projectId, onStatusChange }: { project
       }}><span aria-hidden="true" /></button>
     {show && <ModalShell title="本机配音环境" onClose={close} width="sm" className="voice-environment-dialog">
       <div onPointerDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
-        <p role="status">{state?.message || "正在检测…"}</p>
+        <p role="status">{step ? `第 ${step} 步，共 5 步 · ` : ""}{message || "正在检测…"}</p>
         {state?.gpu && <small>{state.gpu}</small>}
-        {installing && <progress aria-label="安装进度"
-          value={state.completed_bytes < state.total_bytes ? state.completed_bytes : undefined} max={state.total_bytes || 1} />}
+        {installing && <>
+          <progress aria-label="安装进度"
+            value={percent ?? (state.completed_bytes < state.total_bytes ? state.completed_bytes : undefined)}
+            max={percent === undefined ? state.total_bytes || 1 : 100} />
+          {percent !== undefined && <small>{percent}%{seconds ? ` · 当前安装进程已运行 ${seconds} 秒` : ""}</small>}
+        </>}
         <div className="voice-card-actions">
           <button disabled={busy || installing} title={state?.directory} onClick={() => void act(() => changeEnvironment(scope, async () => {
             const path = await open({ directory: true, multiple: false });
@@ -133,7 +140,7 @@ export function VoiceEnvironmentControl({ projectId, onStatusChange }: { project
         {!installing && <details open={advanced} onToggle={e => {
           const expanded = e.currentTarget.open; setAdvanced(expanded);
           if (expanded) void act(async () => {
-            const saved = (await voiceApi.snapshot(projectId)).config;
+            const saved = (await voiceApi.snapshot(projectId, { historyLimit: 0 })).config;
             if (currentScope(scope)) setConfig(saved);
           });
         }}><summary>连接已有环境</summary>{(["python", "model"] as const).map(field => <button key={field} disabled={busy} title={config[field]} onClick={() => void act(async () => {

@@ -12,11 +12,17 @@ export function VoiceReferenceTrim({ asset, start, end, onChange, disabled }: { 
   const [duration, setDuration] = useState(asset.duration ?? 0), [version, setVersion] = useState(""), [error, setError] = useState("");
   const [time, setTime] = useState(start), [playing, setPlaying] = useState(false); const owner = useRef({});
   const path = asset.store_path ?? "", key = audioPreviewKey({ assetId: asset.id, path, sourceVersion: version });
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   useEffect(() => requestAudioWaveform({ key: JSON.stringify([asset.id, path, asset.file_mtime ?? asset.created_at ?? 0, undefined]), assetId: asset.id }, result => {
     if (result.data) { setDuration(result.data.duration); setVersion(result.data.sourceVersion); }
     else setError(userErrorMessage(result.error, "录音读取失败，请重新选择"));
   }), [asset.id, path]);
-  useEffect(() => { if (duration >= 1 && (!end || end > duration)) onChange({ start: 0, end: Math.min(duration, 12) }); }, [duration, end, onChange]);
+  useEffect(() => {
+    if (duration >= 1 && (!end || end > duration)) {
+      onChangeRef.current({ start: 0, end: Math.min(duration, 12) });
+    }
+  }, [duration, end]);
   useEffect(() => () => stopAudioPreview(asset.id), [asset.id]);
   useEffect(() => subscribeAudioPreview(key, () => { const state = audioPreviewSnapshot(key); setPlaying(state.phase === "playing" || state.phase === "loading"); if (state.phase === "error") setError(state.error); }), [key]);
   useEffect(() => { stopAudioPreview(asset.id); setPlaying(false); setTime(start); }, [start, end, asset.id]);

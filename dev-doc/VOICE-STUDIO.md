@@ -1,6 +1,6 @@
 # 本机角色声音
 
-2026-11-11 桌面源码已将录音克隆接入画板卡片，本轮变更待发布。
+2026-11-11 桌面源码已将录音克隆接入画板卡片。2026-11-26 源码加入常驻推理、任务诊断、长文本和安装优化，待发布。前端与 Tauri 后端需配套构建。
 
 ## 卡片流程
 
@@ -12,28 +12,50 @@
 
 卡片保存于 `CanvasWorkflow.nodes`，类型为 `voice`。每张卡分别保存声音、录音连接、选区、试听文字和正式台词。首次放置接续该项目旧面板的草稿。已有声音档案与历史 WAV 沿用原生声音库。
 
-环境状态点自动检测 NVIDIA 与磁盘，下载专用 Python、依赖和模型，校验后启用；支持后台继续、暂停、失败继续与重新检测。路径和手动连接已有环境收进详情。当前自动安装支持 Windows x64 + NVIDIA CUDA；不支持 CPU／Mac 自动安装。推理关闭 torch.compile 和降噪，模型加载离线，不修改系统 Python／PATH。新建安装和生成沿现有有效 Pro／Studio 本机权益，测试账号可用；无 Bcoin 计费、无 Cloud 协议变更。
+## 安装与检测
 
-安装目录默认应用 local data 下的 `Bowerbird-Voice`，可选其他目录（仍新建该专用子目录）。非空且没有本版本 owner 标记的目录拒绝接管。固定 uv 0.13.7、Python 3.12.13、VoxCPM 2.0.3、torch／torchaudio 2.11.0 CUDA 12.8、torchcodec 0.14.0 和 transformers 5.13.0；其余传递依赖由 uv 解析。模型冻结 OpenBMB/VoxCPM2 revision `7936080b41163874f38610f46f438e2c0757f9fd`，文件大小、SHA-256 与来源在 `voice-downloads.json`。模型／uv 下载使用 `.part`、Range 校验和散列后发布；Python 和依赖下载复用私有 uv 缓存。模型需要约 5 GB，安装器额外预留 12 GB 空间；实际检查以所在磁盘剩余空间为准。
+环境状态点自动检测 NVIDIA 与磁盘，下载专用 Python、依赖和模型，校验后启用。可后台继续、暂停、失败后继续、重新检测或手动连接已有环境。自动安装适用于 Windows x64 和 NVIDIA CUDA，使用专用 Python 与 uv 缓存。安装和生成沿有效 Pro／Studio 本机权益，测试账号可用，配音在本机完成。
 
-CUDA 索引用于固定版本的 torch／torchaudio。其余依赖优先从 PyPI 安装，官方索引遇到网络或超时错误时尝试腾讯云 PyPI 镜像。VoxCPM2 模型文件可以从固定版本的 ModelScope 回退获取，发布前校验相同的大小与 SHA-256。安装会分别显示依赖安装、模型校验和 CUDA 检测阶段。[uv PyTorch](https://docs.astral.sh/uv/guides/integration/pytorch/)
+默认安装在应用 local data 下的 `Bowerbird-Voice`，选择其他磁盘时同样使用专用子目录。非空且没有本版本 owner 标记的目录拒绝接管。固定 uv 0.13.7、Python 3.12.13、VoxCPM 2.0.3、torch／torchaudio 2.11.0 CUDA 12.8、torchcodec 0.14.0 和 transformers 5.13.0，传递依赖由 uv 解析。空间预检计算待下载的模型、uv 和 CUDA wheel 字节，再预留 12 GB 给解包、运行环境与缓存，以覆盖压缩包和安装文件共存时的峰值。
+
+`voice-downloads.json` 固定文件大小、SHA-256 和下载端点。VoxCPM2 模型固定 OpenBMB/VoxCPM2 revision `7936080b41163874f38610f46f438e2c0757f9fd`，备用源为固定版本的 ModelScope。Windows x64、CPython 3.12 的 torch／torchaudio CUDA wheel 首选 PyTorch 官方源，失败可切阿里云镜像。模型和 wheel 支持 `.part` 与 Range 续传，发布前校验大小和 SHA-256。续装会重新校验已落盘的 CUDA wheel，uv 使用该路径安装，配置成功后回收压缩包。其余依赖优先走 PyPI，遇到符合条件的官方索引网络错误时回退到腾讯云 PyPI。 [PyTorch 官方 CUDA 索引](https://download.pytorch.org/whl/cu128/torch/) · [TorchAudio 官方 CUDA 索引](https://download.pytorch.org/whl/cu128/torchaudio/) · [阿里云镜像](https://mirrors.aliyun.com/pytorch-wheels/cu128/)
+
+弹窗显示资源下载、Python、PyTorch CUDA、VoxCPM、CUDA 校验五个阶段。总进度按完成步骤和下载字节加权。运行安装命令期间显示子进程的实际运行时间。
 
 配音预检复用 NVIDIA 驱动检测，Windows CUDA 12.x 兼容性下限为 528.33，最后仍执行 Python/CUDA 实测。成功的探测可复用 5 分钟，Python 或关键模型文件变化时失效。点击「重新检测」或连接已有环境会立即执行完整校验。[NVIDIA CUDA 兼容表](https://docs.nvidia.com/cuda/archive/12.8.0/cuda-toolkit-release-notes/)
 
-当前验证机 Python：`D:/Tools/miniconda3/envs/voxcpm/python.exe`；模型：`D:/H/Project/Bowerbird/.tmp/voxcpm-local/model`。这只是验证机路径，正式代码不硬编码。该临时模型目录若清理，需要重新选择模型。
+本轮验证使用 `.tmp/voice-managed-install/runtime/Scripts/python.exe` 和 `.tmp/voxcpm-local/model`。首版验证使用过 `D:/Tools/miniconda3/envs/voxcpm/python.exe`。这些均为验证路径。
+
+## 运行与任务回执
+
+- 同时执行一个声音任务，关闭面板后任务继续。Worker 首次推理离线加载模型，后续同一资料库及 Python／模型配置复用实例，空闲 5 分钟后释放。Rust 通过受管本地文件传送请求，标准输入保持关闭。脚本按内容哈希在 `voice-studio/` 下复用，模型关闭 torch.compile 和降噪。
+- 推理复用 `ManagedChild`。Windows 使用 Job Object 管理子进程树，桌面正常退出时主动取消和回收。取消、CUDA 显存不足、推理超时会回收 Worker，下一次任务重新启动。合成时限以 3 分钟为基础，随台词长度放宽至最多 30 分钟。Python／模型路径变更后按新配置启动。崩溃时没有活跃执行器的 `running` 回执会恢复为 `interrupted`，保留原任务身份。
+- `voice_start` 按同一项目的 `request_key` 幂等返回原任务。项目历史默认取 30 条正式配音，按游标继续加载。试听按原任务取回。原生发送 `voice://job-updated` 通知，`voice_job` 按项目和任务 ID 或请求键查询状态及关联素材，供运行更新和通知丢失后的补查。
+- 任务状态包含参考录音准备、模型加载、分段合成和保存。失败回执优先保留结构化原因，显存不足、Windows 页面文件不足、依赖失败、无有效音频和单段过长分别提示。存在日志的任务可通过 `voice_diagnostic` 定位本机原始诊断，并校验项目归属。
+- 试听采用 `quick` 预设，正式配音采用 `quality`。长文本优先按中英文句末及换行分段，超长句再按分隔符和长度切分。每段完成后更新进度，统一 WAV 的片段边界加入短暂停顿和淡入淡出。参考录音仅在推理副本上去除首尾长静音、调节过低电平并提示低音量或削波。底层启动接口可传入固定 `seed`，省略时由任务 ID 派生。Python、NumPy、torch 和 CUDA 在合成前设置种子。
 
 ## 复用与存储
 
 - VoiceCard 复用 TacticalSelect、AudioWaveform、VoiceReferenceTrim、原生文件选择、api.importFiles、materialCatalog 与公共音频播放器。选择工具放置时先固化目标项目。音频源通过已有媒体通道传递，并按实际音频类型核对。
-- canvasWorkflowRuntime 在调用生成前保存请求标识。原生 Job.request_key 可用于恢复丢失的提交回执。继续工作流读取原任务；完整文件保存失败与画板落点失败可分别重试，正式配音按 job ID 固定画板落点身份。
-- 资料库 `voice-studio/` 保存 config.json、voices/*.json、references/、jobs/*.json、runs/<id>/request.json／output.wav／diagnostic.log、安装位置与 Numba 缓存。角色参考保留独立副本，声音列表试听使用此副本，原素材移除后仍可生成及试听。配置包含本机绝对路径，换电脑需重新配置。安装状态与 setup.log 位于专用安装目录。
+- 工作流在调用生成前保存请求标识。提交回执丢失后按原请求键取回。完整文件保存失败与画板落点失败可分别重试，正式配音按 job ID 固定画板落点身份。
+- 资料库 `voice-studio/` 保存 `config.json`、角色档案、参考录音、任务回执、运行目录、安装位置与 Numba 缓存。每次运行在 `runs/<id>/` 保存 `request.json`、`status.json` 和阶段产物。角色参考保留独立副本，原素材移除后仍可生成及试听。配置包含本机绝对路径，换电脑需重新配置。安装状态与 `setup.log` 位于专用安装目录。
 - 工作流卡片使用 node.prompt 保存正式台词，node.voice 保存选中的声音、试听台词和裁剪资料。完成的试听结果保存在步骤回执中，更新试听文字或更换参考后隐藏旧试听。首次放置读取旧版 localStorage 草稿。
-- JSON 用同目录临时文件持久化替换。每次运行冻结 Python、模型目录、台词、参考音频路径、原文与项目。新请求必须有已保存声音或录音素材；旧客户端携带非空 description 的请求也明确拒绝。历史 Job.description 保留可读，但不参与新推理。runner 同样要求有效参考录音，不再拼接描述。模型文件升级可能影响后续结果，不宣称模型路径即不可变版本。
-- 同时一个声音任务，关闭面板不取消；取消只终止本任务子进程。Python 守护线程监视父进程退出，终止推理，避免留下 GPU 任务。应用重开将无活动执行器的 running 标记 interrupted，绝不自动重发。
-- 完整输出先写临时 WAV 再替换。取回只入库已存在完整 WAV，不重跑推理。`analyses` 中 `voice:<jobId>` 保证重复取回复用原资产；中途资产插入用 source=voxcpm 与唯一运行输出 origin_path 找回，元数据事务失败回滚资产。取消任务不可取回残留文件。
-- 运行文件和历史当前保留供恢复与诊断，不自动清理；长文本分段、批量配音、CPU／Mac 自动安装不在本次实现范围。新前端与 Tauri 后端须配套重建。
+- JSON 用同目录临时文件持久化替换。任务冻结 Python、模型目录、台词、参考音频路径、原文与项目。新请求要求已保存声音或录音素材，非空 `description` 会被拒绝。历史字段继续可读。模型文件升级可能影响后续结果。
+- 完整输出先写临时 WAV 再替换。取回按原任务入库已完成的 WAV，或复用原入库记录。`analyses` 中 `voice:<jobId>` 保证重复取回复用原资产。事务中断时可按 `source=voxcpm` 与唯一的运行输出 `origin_path` 找回资产，元数据事务失败会回滚资产。
+- 成功入库或取消后回收运行目录里的临时音频，已入库素材和历史回执继续保留。尚未入库的完整输出保留 30 天供取回。启动时及每 30 分钟后台巡检，跳过活跃任务，诊断保留 7 天内最近 30 条。仅在角色和活跃或可恢复任务均无引用时回收专用目录内的孤儿参考录音。
 
 ## 验证
+
+### 2026-11-26 优化
+
+- 最终 Windows Rust 定向回归 21 项通过，含真实 GPU 推理和入库、现有 CUDA 环境检测、超时、取消、强杀测试宿主后的进程树回收，以及同键并发仅创建一条回执。真实 GPU 的 Rust 夹具测得冷运行 18.63 秒、热运行 2.72 秒，计时含 Rust Worker 请求往返，入库另行验证。热运行复用同一进程且跳过模型加载。夹具模拟超过空闲阈值并触发回收，整轮显存占用由测试前的 2673 MiB 降至 2604 MiB。
+- 600 条任务的隔离夹具中，索引初始化为 25.69 毫秒，有界分页和单任务查询合计 3.07 毫秒。Python 的 6 项定向回归通过。
+- RTX 4070 Ti SUPER 上的最终 Python Worker 探针测得冷运行 20.78 秒。在中间插入自动种子任务后，以同一固定种子 321 热运行用时 2.44 秒。两次固定种子的 WAV SHA-256 一致，自动种子的输出有差异。此前的冷暖差异由 TorchScript 优化图缓存改变参考特征引起，最终 Worker 统一了执行图。
+- 同一探针用正式配音预设生成 666 字中英混合文本，4 段合成用时 100.88 秒，WAV 长 96.34 秒。Worker 退出后，显存占用从测试前的 2673 MiB 回到 2672 MiB。长文本的实际听感仍待人工验收。
+- TypeScript 全量检查、Vite 生产构建和两项浏览器回归通过。
+- 官方与阿里云两条 CUDA wheel 的响应尺寸一致。完整下载的 torchaudio 镜像 SHA-256 与官方一致。Torch 镜像已查验响应头，完整下载、弱网切换和空环境安装待实测。
+
+### 角色声音首版
 
 - TypeScript 全量检查、Vite 独立生产构建通过；沙箱依赖目录解析不完整时在正常权限下运行。
 - `scripts/voice-studio-ui.test.mjs` 从正式画板工具箱放置卡片，用隔离 IPC 验证环境准备、参考音频、编辑试听、卡内播放、保存选用、配音输出、丢失提交回执与落点重试、重开恢复和多卡输入隔离。截图在 `apps/desktop/.tmp/voice-card-ui/`。
@@ -56,7 +78,7 @@ Python 退出监视不能阻塞读取标准输入：缓冲读取和 Windows CRT 
 
 并行 Rust 编译与模型加载曾触发 Windows 1455（页面文件太小）；未修改系统设置，编译结束后串行真实生成通过。
 
-PyPI VoxCPM 2.0.3 不支持 Git 测试版的 `generate(seed=...)` 参数；runner 在调用前设置 Python／NumPy／torch 的种子，保持每个显式新任务产生新的试听变化。uv 的 `--torch-backend cu128` 会影响 TorchCodec 的索引，因此只在安装 torch／torchaudio 时使用，其他依赖回到 PyPI 的 Windows wheel。
+PyPI VoxCPM 2.0.3 不支持 Git 测试版的 `generate(seed=...)` 参数，调用前设置随机状态。首版用任务 ID 派生 Python、NumPy 和 torch 的种子。首版也遇到 uv 的 `--torch-backend cu128` 影响 TorchCodec 索引，现用经过校验的本地 CUDA wheel，TorchCodec 保持从 PyPI 解析。
 
 ## 画板实装记录
 

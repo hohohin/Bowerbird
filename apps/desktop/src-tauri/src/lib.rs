@@ -441,6 +441,7 @@ pub fn run() {
                 Ok(())
             })));
             commands::screenshot::initialize(app.handle());
+            commands::voice::start_maintenance(paths.clone());
             app.manage(cloud_client);
             app.manage(auth_client);
             app.manage(entitlement_service);
@@ -487,6 +488,8 @@ pub fn run() {
             commands::external_files::external_files_media,
             commands::audio::audio_waveform,
             commands::voice::voice_snapshot,
+            commands::voice::voice_job,
+            commands::voice::voice_diagnostic,
             commands::voice::voice_configure,
             commands::voice::voice_save,
             commands::voice::voice_start,
@@ -922,6 +925,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, _event| {
             if matches!(&_event, tauri::RunEvent::Exit) {
+                commands::voice::shutdown();
                 commands::voice_setup::shutdown();
                 commands::comfy_setup::shutdown();
                 tauri::async_runtime::block_on(async {

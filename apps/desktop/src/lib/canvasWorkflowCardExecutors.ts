@@ -9,7 +9,7 @@ import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, 
   DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, h3R2VInputError, type ComfyVideoInput, type ComfyVideoStatus, type ComfyVideoMode } from "./comfyVideo";
 import { h3OptimizationInstruction } from "./h3PromptOptimization";
 import type { Asset, CanvasNode, ProjectCanvasSnapshot } from "./types";
-import { voiceApi } from "./voice";
+import { voiceApi, voiceJobDetail, voiceScope } from "./voice";
 import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey, type VoiceCardRequest } from "./voiceCard";
 import { DEFAULT_VIDEO_OPTIONS, resolveVideoOptions, videoInputError } from "./videoGeneration";
 import { agentResultValue } from "./workflowAgentResult";
@@ -60,8 +60,15 @@ export async function executeVoiceCard(host: WorkflowCardExecution, runId: strin
   values?: Inputs, sourceVideoId?: string) {
   const run = host.run(runId);
   const voice = node.voice ?? {};
+  const origin = host.desktop.getState();
+  const scope = voiceScope(origin);
+  let scopeChanged = false;
+  const matchesScope = (state: typeof origin) => voiceScope(state) === scope
+    && (run.accountId === undefined || run.accountId === (state.cloudAuth?.user_id ?? null));
+  const inScope = () => !scopeChanged && matchesScope(host.desktop.getState());
   let request: VoiceCardRequest | undefined = run.steps[node.id].voiceRequest;
   const recovering = !!request;
+  let submission: { text: string; preview?: Parameters<typeof voiceApi.start>[3] } | undefined;
   if (!request) {
     const environment = await voiceApi.environment();
     if (environment.phase !== "ready") throw new Error(environment.message);
@@ -84,65 +91,114 @@ export async function executeVoiceCard(host: WorkflowCardExecution, runId: strin
       preview = { assetId: asset.id, start: clip.start, end: clip.end, transcript: clip.transcript, draftKey: request.previewKey };
     }
     if (!text) throw new Error(voice.id ? "请输入配音台词" : "请输入试听台词");
-    if (halted()) return;
+    if (halted() || !inScope()) return;
     await host.step(runId, node.id, { status: "running", voiceRequest: request, detail: voice.id ? "正在生成配音" : "正在生成试听" });
-    if (halted()) return;
-    let jobId: string;
-    try { jobId = await voiceApi.start(host.projectId, text, voice.id ?? null, preview, key); }
-    catch (error) {
-      const snapshot = await voiceApi.snapshot(host.projectId).catch(() => null);
-      if (!snapshot) {
-        if (!halted()) await host.step(runId, node.id, { status: "waiting", error: "提交状态待确认，点击继续以查询原任务" });
-        return;
-      }
-      const original = snapshot.jobs.find(item => item.request_key === key);
-      if (!original) throw error;
-      jobId = original.id;
-    }
-    if (halted()) { await voiceApi.cancel(jobId); return; }
-    request = { ...request, jobId };
-    await host.step(runId, node.id, { voiceRequest: request });
+    submission = { text, preview };
   }
-  let retrySave = recovering;
-  const pollStarted = Date.now();
-  while (!halted()) {
-    if (run.accountId !== (host.desktop.getState().cloudAuth?.user_id ?? null)) throw new Error("请登录原账号后继续取回配音");
-    let snapshot: Awaited<ReturnType<typeof voiceApi.snapshot>>;
-    try { snapshot = await voiceApi.snapshot(host.projectId); }
-    catch (error) {
-      if (!halted()) await host.step(runId, node.id, { status: "waiting", error: `配音查询中断，可继续查询原任务。${String(error)}` });
-      return;
+  const requestKey = request.key;
+  let revision = 0;
+  let wake: (() => void) | undefined;
+  const changed = () => { revision++; wake?.(); };
+  const stopListening = await voiceApi.onJobUpdated(update => {
+    if (update.project === host.projectId && (update.id === request?.jobId || update.request_key === requestKey)) changed();
+  }).catch(() => undefined);
+  const stopWatchingScope = host.desktop.subscribe?.(state => {
+    if (!matchesScope(state)) { scopeChanged = true; changed(); }
+  });
+  const waitForChange = (observedRevision: number) => {
+    if (revision !== observedRevision || halted() || !inScope()) return;
+    // A low-frequency single-job read covers a dropped event or disconnected listener.
+    return new Promise<void>(resolve => {
+      const timer = setTimeout(() => wake?.(), 5000);
+      wake = () => { clearTimeout(timer); wake = undefined; resolve(); };
+    });
+  };
+  const pause = (error: string, patch?: Partial<WorkflowStep>) => host.step(runId, node.id, { status: "waiting", error, ...patch });
+  const current = async () => {
+    if (halted()) return false;
+    if (inScope()) return true;
+    if (origin.settings?.library_root === host.desktop.getState().settings?.library_root) {
+      await pause("账号已切换，请登录原账号后继续取回配音");
     }
-    if (halted()) return;
-    const identity: VoiceCardRequest = request;
-    const job = snapshot.jobs.find(item => item.id === identity.jobId || item.request_key === identity.key);
-    if (!job) { await host.step(runId, node.id, { status: "waiting", error: "尚未找到原配音任务，可继续查询" }); return; }
-    if (!request.jobId) {
-      request = { ...request, jobId: job.id };
-      await host.step(runId, node.id, { voiceRequest: request });
-    }
-    if (job.status === "succeeded") {
-      const asset = snapshot.assets.find(item => item.id === job.asset_id);
-      if (!asset) throw new Error("配音素材已移除");
-      if (!request.previewKey) {
-        try { await host.deliverMediaAsset(host.run(runId), node, asset, halted, `workflow-voice:${job.id}`); }
-        catch (error) {
-          if (!halted()) await host.step(runId, node.id, { status: "waiting", voiceJobActive: false, error: `配音已保存，点击继续添加到画板。${String(error)}` });
+    return false;
+  };
+  try {
+    if (!await current()) return;
+    if (submission) {
+      let jobId: string;
+      try { jobId = await voiceApi.start(host.projectId, submission.text, voice.id ?? null, submission.preview, requestKey, voice.seed); }
+      catch (error) {
+        if (!inScope()) { await current(); return; }
+        let original: Awaited<ReturnType<typeof voiceApi.job>>;
+        try { original = await voiceApi.job(host.projectId, { requestKey }); }
+        catch {
+          if (await current()) await pause("提交状态待确认，点击继续以查询原任务");
           return;
         }
+        if (!original) {
+          if (!await current()) return;
+          if (typeof error === "string" && !/超时|断开|timeout|IPC|transport/i.test(error)) throw error;
+          await pause("提交状态待确认，点击继续以查询原任务");
+          return;
+        }
+        jobId = original.job.id;
       }
-      if (halted()) return;
-      await host.step(runId, node.id, { voiceRequest: { ...request, assetId: asset.id } });
-      await host.finish(runId, node, request.previewKey ? {} : { image: { type: "image", assetIds: [asset.id] } });
-      return;
+      if (halted() && inScope()) { await voiceApi.cancel(jobId); return; }
+      if (!await current()) return;
+      request = { ...request, jobId };
+      await host.step(runId, node.id, { voiceRequest: request });
     }
-    if (job.recoverable) {
-      if (retrySave) { retrySave = false; await voiceApi.recover(job.id); continue; }
-      await host.step(runId, node.id, { status: "waiting", voiceJobActive: false, error: "音频已生成，点击继续以重试保存" });
-      return;
+    let retrySave = recovering;
+    let detail = "";
+    while (await current()) {
+      const observedRevision = revision;
+      let result: Awaited<ReturnType<typeof voiceApi.job>>;
+      try { result = await voiceApi.job(host.projectId, request.jobId ? { id: request.jobId } : { requestKey }); }
+      catch {
+        if (await current()) await pause("配音查询中断，点击继续以查询原任务");
+        return;
+      }
+      if (!await current()) return;
+      if (!result) { await pause("尚未找到原配音任务，可继续查询"); return; }
+      const { job, asset } = result;
+      if (!request.jobId) {
+        request = { ...request, jobId: job.id };
+        await host.step(runId, node.id, { voiceRequest: request });
+      }
+      if (job.status === "running") {
+        const progress = [voiceJobDetail(job), job.warning].filter(Boolean).join("。");
+        if (progress !== detail) { detail = progress; host.progress(runId, node.id, detail); }
+        await waitForChange(observedRevision);
+        continue;
+      }
+      request = { ...request, hasDiagnostic: job.has_diagnostic, warning: job.warning ?? undefined };
+      if (job.status === "succeeded") {
+        if (!asset) throw new Error("配音素材已移除");
+        if (!request.previewKey) {
+          try { await host.deliverMediaAsset(host.run(runId), node, asset, () => halted() || !inScope(), `workflow-voice:${job.id}`); }
+          catch (error) {
+            if (await current()) await pause(`配音已保存，点击继续添加到画板。${String(error)}`, { voiceJobActive: false });
+            return;
+          }
+        }
+        if (!await current()) return;
+        await host.step(runId, node.id, { voiceRequest: { ...request, assetId: asset.id }, detail: job.message });
+        await host.finish(runId, node, request.previewKey ? {} : { image: { type: "image", assetIds: [asset.id] } });
+        return;
+      }
+      await host.step(runId, node.id, { voiceRequest: request, detail: job.message });
+      if (!await current()) return;
+      if (job.recoverable) {
+        if (retrySave) { retrySave = false; await voiceApi.recover(job.id); continue; }
+        await pause("音频已生成，点击继续以重试保存", { voiceJobActive: false });
+        return;
+      }
+      throw new Error(job.message);
     }
-    if (job.status !== "running") throw new Error(job.message);
-    if (!await host.waitForPoll(runId, node.id, pollStarted, 1000, halted)) return;
+  } finally {
+    stopWatchingScope?.();
+    stopListening?.();
+    wake?.();
   }
 }
 

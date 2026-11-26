@@ -14,13 +14,39 @@ const VERSION: &str = "voxcpm2-2026-11-10";
 const VERIFIED_FOR: Duration = Duration::from_secs(300);
 const PYPI: &str = "https://pypi.org/simple";
 const PYPI_MIRROR: &str = "https://mirrors.cloud.tencent.com/pypi/simple/";
+// Includes space for the expanded environment and uv cache. Missing wheel
+// archives are counted separately because they coexist with the installed files.
+const INSTALL_RESERVE: u64 = 12_000_000_000;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum InstallStep { Resources, Python, Pytorch, Voxcpm, CudaCheck }
+impl InstallStep {
+    fn start_percent(self) -> u8 {
+        match self {
+            Self::Resources => 0,
+            Self::Python => 57,
+            Self::Pytorch => 62,
+            Self::Voxcpm => 91,
+            Self::CudaCheck => 97,
+        }
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Environment {
     pub phase: String, pub message: String, pub directory: String, pub gpu: String,
     pub free_bytes: u64, pub required_bytes: u64, pub completed_bytes: u64, pub total_bytes: u64, pub can_install: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    install_step: Option<InstallStep>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    progress_percent: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_seconds: Option<u64>,
 }
 #[derive(Deserialize)]
 struct Download { file: String, url: String, mirror_url: Option<String>, size: u64, sha256: String }
+impl Download {
+    fn cuda_wheel(&self) -> bool { self.file.starts_with("cuda-wheels/") }
+}
 struct Install { state: Environment, cancel: Arc<AtomicBool>, owner: Option<String> }
 static INSTALL: Mutex<Option<Install>> = Mutex::new(None);
 type FileStamps = Vec<(PathBuf, u64, SystemTime)>;
@@ -31,7 +57,25 @@ struct Verification {
 static VERIFICATION: tokio::sync::Mutex<Option<Verification>> = tokio::sync::Mutex::const_new(None);
 fn err(text: impl Into<String>) -> AppError { AppError::Other(text.into()) }
 fn files() -> Vec<Download> { serde_json::from_str(include_str!("voice-downloads.json").trim_start_matches('\u{feff}')).expect("bundled voice manifest") }
-fn progress(message: &str, bytes: u64) { if let Some(job) = INSTALL.lock().unwrap().as_mut() { job.state.message = message.into(); job.state.completed_bytes = bytes; } }
+fn update_install(update: impl FnOnce(&mut Environment)) {
+    if let Some(job) = INSTALL.lock().unwrap().as_mut()
+        .filter(|job| job.state.phase == "installing" && !job.cancel.load(Ordering::Relaxed)) {
+        update(&mut job.state);
+    }
+}
+fn set_install_step(state: &mut Environment, step: InstallStep, message: &str) {
+    state.install_step = Some(step);
+    state.message = message.into();
+    state.progress_percent = Some(step.start_percent());
+    state.active_seconds = None;
+}
+fn install_step(step: InstallStep, message: &str) {
+    update_install(|state| set_install_step(state, step, message));
+}
+fn transfer_percent(step: InstallStep, end: u8, bytes: u64, total: u64) -> u8 {
+    let start = step.start_percent();
+    start + ((end - start) as u64 * bytes.min(total) / total.max(1)) as u8
+}
 fn check_cancel(cancel: &AtomicBool) -> AppResult<()> { if cancel.load(Ordering::Relaxed) { Err(err("准备已暂停，已下载的文件保留，稍后可继续")) } else { Ok(()) } }
 pub fn shutdown() {
     if let Some(job) = INSTALL.lock().unwrap().as_ref() {
@@ -40,7 +84,12 @@ pub fn shutdown() {
 }
 fn active_state(job: &Install, owner: Option<&str>) -> Environment {
     let mut state = job.state.clone();
-    if job.owner.as_deref() != owner { state.message = "另一个账号的配音环境准备正在停止，请稍后重新检测".into(); }
+    if job.owner.as_deref() != owner {
+        state.message = "另一个账号的配音环境准备正在停止，请稍后重新检测".into();
+        state.install_step = None;
+        state.progress_percent = None;
+        state.active_seconds = None;
+    }
     state
 }
 async fn verify(config: &Config, cancel: &AtomicBool) -> AppResult<()> {
@@ -51,7 +100,7 @@ async fn verify(config: &Config, cancel: &AtomicBool) -> AppResult<()> {
         .env("HF_HUB_OFFLINE", "1").env("PYTHONUTF8", "1");
     let log = tempfile::NamedTempFile::new()?;
     let child = spawn_managed(&mut probe, Some(log.as_file()))?;
-    let status = tokio::time::timeout(Duration::from_secs(45), wait_child(child, cancel))
+    let status = tokio::time::timeout(Duration::from_secs(45), wait_child(child, cancel, |_| {}))
         .await.map_err(|_| err("配音运行环境检查超时，请稍后继续准备"))??;
     if status.success() { return Ok(()); }
     let detail = log_tail(log.path(), 16 * 1024, 0).to_ascii_lowercase();
@@ -96,7 +145,8 @@ async fn inspect(directory: PathBuf, paths: &LibraryPaths, refresh: bool) -> App
     let downloads = files(); let total: u64 = downloads.iter().map(|d| d.size).sum();
     let completed = downloads.iter().map(|d| std::fs::metadata(directory.join(&d.file)).or_else(|_| std::fs::metadata(directory.join(&d.file).with_extension("part"))).map(|m| m.len().min(d.size)).unwrap_or(0)).sum::<u64>();
     let mut state = Environment { phase: "missing".into(), message: "应用会下载并配置本机配音组件".into(), directory: directory.to_string_lossy().into(), gpu: String::new(),
-        free_bytes: if cfg!(windows) { free_bytes(&directory)? } else { 0 }, required_bytes: total.saturating_sub(completed) + 12_000_000_000, completed_bytes: completed, total_bytes: total, can_install: false };
+        free_bytes: if cfg!(windows) { free_bytes(&directory)? } else { 0 }, required_bytes: total.saturating_sub(completed) + INSTALL_RESERVE,
+        completed_bytes: completed, total_bytes: total, can_install: false, install_step: None, progress_percent: None, active_seconds: None };
     if !cfg!(all(windows, target_arch = "x86_64")) { state.phase="unsupported".into(); state.message="本机配音安装目前支持 Windows x64 与 NVIDIA 显卡".into(); return Ok(state); }
     let hardware = if refresh { comfy_driver::detect_with_refresh(true).await } else { comfy_driver::detect().await };
     state.gpu = hardware.gpus.iter().map(|gpu| gpu.name.as_str()).collect::<Vec<_>>().join("\n");
@@ -177,6 +227,34 @@ mod tests {
             "https://files.pythonhosted.org/packages/a.whl\n permission denied",
         ] { assert!(!pypi_network_failure(detail), "{detail}"); }
     }
+    #[test]
+    fn installation_progress_tracks_bytes_within_each_real_step() {
+        assert_eq!(transfer_percent(InstallStep::Resources, 56, 0, 200), 0);
+        assert_eq!(transfer_percent(InstallStep::Resources, 56, 100, 200), 28);
+        assert_eq!(transfer_percent(InstallStep::Resources, 56, 200, 200), 56);
+        assert_eq!(InstallStep::Python.start_percent(), 57);
+        assert_eq!(transfer_percent(InstallStep::Pytorch, 87, 40, 100), 72);
+        assert_eq!(transfer_percent(InstallStep::Pytorch, 87, 100, 100), 87);
+        assert!(InstallStep::Voxcpm.start_percent() > 87);
+        assert!(InstallStep::CudaCheck.start_percent() > InstallStep::Voxcpm.start_percent());
+    }
+    #[test]
+    fn cuda_wheels_are_exact_local_install_inputs_on_both_pypi_indexes() {
+        let root = Path::new("managed voice");
+        let python = root.join("runtime/Scripts/python.exe");
+        let cuda: Vec<_> = files().into_iter().filter(Download::cuda_wheel).collect();
+        assert_eq!(cuda.len(), 2);
+        let paths: Vec<_> = cuda.iter().map(|item| root.join(&item.file)).collect();
+        for filename in ["torch-2.11.0+cu128-cp312-cp312-win_amd64.whl", "torchaudio-2.11.0+cu128-cp312-cp312-win_amd64.whl"] {
+            assert!(paths.iter().any(|path| path.ends_with(filename)));
+        }
+        for index in [PYPI, PYPI_MIRROR] {
+            let command = wheel_command(root, &python, index, &["voxcpm==2.0.3"], &paths);
+            let args: Vec<_> = command.get_args().collect();
+            assert!(args.contains(&std::ffi::OsStr::new(index)));
+            assert!(args.ends_with(&[paths[0].as_os_str(), paths[1].as_os_str()]));
+        }
+    }
     #[tokio::test]
     async fn download_falls_back_and_reuses_only_the_verified_mirror_file() {
         use axum::{Router, routing::get, http::StatusCode};
@@ -191,15 +269,39 @@ mod tests {
             mirror_url: Some(format!("http://{address}/mirror")), size: 6, sha256: format!("{:x}", Sha256::digest(b"abcdef")) };
         let http = reqwest::Client::builder().no_proxy().build().unwrap();
         let cancel = AtomicBool::new(false);
-        download(&http, root.path(), &item, &cancel, 0).await.unwrap();
+        download(&http, root.path(), &item, &cancel, |_, _| {}).await.unwrap();
         let path = root.path().join(&item.file);
         assert_eq!(std::fs::read(&path).unwrap(), b"abcdef");
         assert!(verified(&path, item.size, &item.sha256));
         item.mirror_url = Some(format!("http://{address}/corrupt"));
-        download(&http, root.path(), &item, &cancel, 0).await.unwrap();
+        download(&http, root.path(), &item, &cancel, |_, _| {}).await.unwrap();
         std::fs::write(&path, b"tampered").unwrap();
-        assert!(download(&http, root.path(), &item, &cancel, 0).await.unwrap_err().to_string().contains("校验未通过"));
+        assert!(download(&http, root.path(), &item, &cancel, |_, _| {}).await.unwrap_err().to_string().contains("校验未通过"));
         assert!(!verified(&path, item.size, &item.sha256));
+        assert!(!path.with_extension("part").exists());
+        task.abort();
+    }
+    #[tokio::test]
+    async fn cuda_wheel_rejects_a_tampered_archive_even_with_a_verification_stamp() {
+        use axum::{Router, routing::get, http::StatusCode};
+        let server = Router::new().route("/official", get(|| async { StatusCode::NOT_FOUND }))
+            .route("/mirror", get(|| async { "xxxxxx" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap(); });
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("cuda-wheels")).unwrap();
+        let item = Download { file: "cuda-wheels/example-1.0.0-py3-none-any.whl".into(),
+            url: format!("http://{address}/official"), mirror_url: Some(format!("http://{address}/mirror")),
+            size: 6, sha256: format!("{:x}", Sha256::digest(b"abcdef")) };
+        let path = root.path().join(&item.file);
+        std::fs::write(&path, b"zzzzzz").unwrap();
+        remember_verified(&path, verification_stamp(&path, &item.sha256));
+        assert!(verified(&path, item.size, &item.sha256));
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let error = download(&http, root.path(), &item, &AtomicBool::new(false), |_, _| {}).await.unwrap_err();
+        assert!(error.to_string().contains("校验未通过"));
+        assert!(!path.exists());
         assert!(!path.with_extension("part").exists());
         task.abort();
     }
@@ -216,10 +318,10 @@ mod tests {
         let root=tempfile::tempdir().unwrap(); std::fs::write(root.path().join("model.part"),"abc").unwrap();
         let mut item=Download { file:"model.bin".into(), url:format!("http://{address}/file"),mirror_url:None,size:6,sha256:format!("{:x}",Sha256::digest(b"abcdef")) };
         let http=reqwest::Client::new(); let cancel=AtomicBool::new(false);
-        download(&http,root.path(),&item,&cancel,0).await.unwrap(); assert_eq!(std::fs::read(root.path().join("model.bin")).unwrap(),b"abcdef");
-        item.file="bad.bin".into(); item.url=format!("http://{address}/bad"); assert!(download(&http,root.path(),&item,&cancel,0).await.is_err()); assert!(!root.path().join("bad.bin").exists());
+        download(&http,root.path(),&item,&cancel,|_, _| {}).await.unwrap(); assert_eq!(std::fs::read(root.path().join("model.bin")).unwrap(),b"abcdef");
+        item.file="bad.bin".into(); item.url=format!("http://{address}/bad"); assert!(download(&http,root.path(),&item,&cancel,|_, _| {}).await.is_err()); assert!(!root.path().join("bad.bin").exists());
         std::fs::write(root.path().join("pause.part"),"abc").unwrap(); item.file="pause.bin".into(); cancel.store(true,Ordering::Relaxed);
-        assert!(download(&http,root.path(),&item,&cancel,0).await.is_err()); assert_eq!(std::fs::read(root.path().join("pause.part")).unwrap(),b"abc");
+        assert!(download(&http,root.path(),&item,&cancel,|_, _| {}).await.is_err()); assert_eq!(std::fs::read(root.path().join("pause.part")).unwrap(),b"abc");
         assert!(files().iter().all(|f| f.sha256.len()==64 && f.url.starts_with("https://") && !f.file.contains("..")));
         task.abort();
     }
@@ -247,7 +349,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let item = Download { file: "model.bin".into(), url: format!("http://{address}/file"), mirror_url: None, size: 6, sha256: format!("{:x}", Sha256::digest(b"abcdef")) };
         let http = reqwest::Client::builder().no_proxy().build().unwrap();
-        let result = download(&http, root.path(), &item, &AtomicBool::new(false), 0).await;
+        let result = download(&http, root.path(), &item, &AtomicBool::new(false), |_, _| {}).await;
         task.abort();
         result.unwrap();
         assert_eq!(request_count.load(Ordering::Relaxed), 3);
@@ -282,7 +384,7 @@ mod tests {
             auth.set_test_user("other-user");
         };
         let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(download(&http, root.path(), &item, &cancel, 0), switch)
+            tokio::join!(download(&http, root.path(), &item, &cancel, |_, _| {}), switch)
         }).await.unwrap();
         watcher.await.unwrap();
         server.abort();
@@ -322,44 +424,60 @@ mod tests {
         println!("verified managed Python: {}",config.python);
     }
 }
-async fn checksum(path: &Path, item: &Download, cancel: &AtomicBool, done: u64) -> AppResult<bool> {
-    let size = item.size;
-    let name = match item.file.as_str() {
+fn download_name(item: &Download) -> &'static str {
+    match item.file.as_str() {
         "uv.whl" => "配音安装组件",
         "model/model.safetensors" => "配音主模型",
         "model/audiovae.pth" => "音频编码模型",
+        file if file.starts_with("cuda-wheels/torch-") => "PyTorch CUDA",
+        file if file.starts_with("cuda-wheels/torchaudio-") => "TorchAudio CUDA",
         _ => "配音模型文件",
-    };
-    let update = move |read: u64| {
-        let percent = read.min(size).saturating_mul(100) / size.max(1);
-        progress(&format!("正在校验{name}（{percent}%）"), done);
-    };
-    update(0);
-    Ok(hash(path, cancel, update).await? == item.sha256)
+    }
 }
-async fn download(http: &reqwest::Client, root: &Path, item: &Download, cancel: &AtomicBool, done: u64) -> AppResult<()> {
+async fn checksum(path: &Path, item: &Download, cancel: &AtomicBool, report: impl Fn(u64) + Send + 'static) -> AppResult<bool> {
+    let size = item.size;
+    let before = verification_stamp(path, &item.sha256);
+    report(0);
+    Ok(hash(path, cancel, report).await? == item.sha256
+        && before.is_some() && verification_stamp(path, &item.sha256) == before
+        && tokio::fs::metadata(path).await.is_ok_and(|metadata| metadata.len() == size))
+}
+async fn download(
+    http: &reqwest::Client, root: &Path, item: &Download, cancel: &AtomicBool,
+    report: impl Fn(&str, u64) + Send + Copy + 'static,
+) -> AppResult<()> {
     check_cancel(cancel)?;
     let path = root.join(&item.file); let part = path.with_extension("part");
-    if verified(&path, item.size, &item.sha256) { return Ok(()); }
+    // Executable wheels are rehashed before every install attempt, including resume.
+    if !item.cuda_wheel() && verified(&path, item.size, &item.sha256) { return Ok(()); }
+    let name = download_name(item);
+    let size = item.size;
+    let report_checksum = move |read: u64| {
+        let percent = read.min(size).saturating_mul(100) / size.max(1);
+        report(&format!("正在校验{name}（{percent}%）"), size);
+    };
     if tokio::fs::metadata(&path).await.is_ok_and(|metadata| metadata.is_file() && metadata.len() == item.size) {
         let stamp = verification_stamp(&path, &item.sha256);
-        if checksum(&path, item, cancel, done).await? {
-            remember_verified(&path, stamp);
+        if checksum(&path, item, cancel, report_checksum).await? {
+            if !item.cuda_wheel() { remember_verified(&path, stamp); }
             return Ok(());
         }
     }
+    if item.cuda_wheel() && path.exists() { tokio::fs::remove_file(&path).await?; }
     tokio::fs::create_dir_all(path.parent().unwrap()).await?;
     if tokio::fs::metadata(&part).await.is_ok_and(|metadata| metadata.len() > item.size) {
         // This temporary file is inside the app-owned setup directory.
         tokio::fs::remove_file(&part).await?;
     }
-    let label = if item.file == "uv.whl" { "正在下载配音组件" } else { "正在下载声音模型" };
     let sources = [Some(item.url.clone()), item.mirror_url.clone()];
     for (attempt, url) in sources.into_iter().enumerate() {
         let Some(url) = url else { break; };
+        let label = if attempt == 0 { format!("正在下载{name}") } else { format!("正在通过备用源下载{name}") };
+        let offset = tokio::fs::metadata(&part).await.map(|metadata| metadata.len()).unwrap_or(0);
+        report(&label, offset);
         let transfer = transfer(http, &part, item.size, cancel, move || std::future::ready(Ok(url.clone())), move |state| match state {
-            TransferProgress::Downloading(offset) => progress(label, done + offset),
-            TransferProgress::Reconnecting(offset) => progress("连接中断，正在继续下载配音资源", done + offset),
+            TransferProgress::Downloading(offset) => report(&label, offset),
+            TransferProgress::Reconnecting(offset) => report(&format!("连接中断，正在继续下载{name}"), offset),
         }).await;
         if let Err(error) = transfer {
             if attempt != 0 || item.mirror_url.is_none() || cancel.load(Ordering::Relaxed) || matches!(error, AppError::Io(_)) {
@@ -369,17 +487,37 @@ async fn download(http: &reqwest::Client, root: &Path, item: &Download, cancel: 
             continue;
         }
         let stamp = verification_stamp(&part, &item.sha256);
-        if !checksum(&part, item, cancel, done + item.size).await? {
+        if !checksum(&part, item, cancel, report_checksum).await? {
             tokio::fs::remove_file(&part).await?;
             continue;
         }
         check_cancel(cancel)?;
         if path.exists() { tokio::fs::remove_file(&path).await?; }
         tokio::fs::rename(part, &path).await?;
-        remember_verified(&path, stamp);
+        if !item.cuda_wheel() { remember_verified(&path, stamp); }
         return Ok(());
     }
     Err(err("配音下载文件校验未通过，请继续准备以重新下载"))
+}
+async fn download_group(
+    http: &reqwest::Client, root: &Path, items: &[Download], cancel: &AtomicBool,
+    step: InstallStep, end_percent: u8, earlier_bytes: u64,
+) -> AppResult<u64> {
+    let total = items.iter().map(|item| item.size).sum();
+    let mut done = 0;
+    for item in items {
+        let report = move |message: &str, offset| update_install(|state| {
+            if state.install_step == Some(step) {
+                state.message = message.into();
+                state.completed_bytes = earlier_bytes + done + offset;
+                state.progress_percent = Some(transfer_percent(step, end_percent, done + offset, total));
+            }
+        });
+        download(http, root, item, cancel, report).await?;
+        report(&format!("已校验{}", download_name(item)), item.size);
+        done += item.size;
+    }
+    Ok(done)
 }
 fn setup_failure(error: &AppError) -> String {
     match error {
@@ -419,14 +557,21 @@ fn command_failure(stage: &str, failure: CommandFailure) -> AppError {
     }
     err(format!("{stage}失败（{status}），可继续准备，详情见安装目录的 setup.log"))
 }
-async fn wait_child(mut child: ManagedChild, cancel: &AtomicBool) -> AppResult<ExitStatus> {
+async fn wait_child(mut child: ManagedChild, cancel: &AtomicBool, mut on_alive: impl FnMut(u64)) -> AppResult<ExitStatus> {
     check_cancel(cancel)?;
+    let started = Instant::now();
+    let mut last_report = 0;
     loop {
         if cancel.load(Ordering::Relaxed) {
             child.kill_and_wait()?;
             check_cancel(cancel)?;
         }
         if let Some(status) = child.try_wait()? { return Ok(status); }
+        let elapsed = started.elapsed().as_secs();
+        if elapsed > last_report {
+            on_alive(elapsed);
+            last_report = elapsed;
+        }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
 }
@@ -435,7 +580,11 @@ async fn run_command(mut cmd: Command, root: &Path, cancel: &AtomicBool) -> AppR
     let path = root.join("setup.log");
     let log = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
     let start = log.metadata()?.len();
-    let status = wait_child(spawn_managed(&mut cmd, Some(&log))?, cancel).await?;
+    update_install(|state| state.active_seconds = None);
+    let status = wait_child(spawn_managed(&mut cmd, Some(&log))?, cancel, |elapsed| {
+        update_install(|state| state.active_seconds = Some(elapsed));
+    }).await?;
+    update_install(|state| state.active_seconds = None);
     Ok((!status.success()).then(|| CommandFailure { status, tail: log_tail(&path, 16 * 1024, start).to_ascii_lowercase() }))
 }
 fn uv(root: &Path) -> Command {
@@ -443,18 +592,21 @@ fn uv(root: &Path) -> Command {
         .env("UV_CACHE_DIR", root.join("cache")).env("UV_PYTHON_INSTALL_DIR", root.join("python"))
         .env("UV_NO_PROGRESS", "1").env("PYTHONUTF8", "1").env_remove("UV_TORCH_BACKEND"); cmd
 }
-fn wheel_command(root: &Path, python: &Path, index: &str, packages: &[&str]) -> Command {
+fn wheel_command(root: &Path, python: &Path, index: &str, packages: &[&str], cuda_wheels: &[PathBuf]) -> Command {
     let mut cmd = uv(root);
-    cmd.args(["pip", "install", "--python"]).arg(python).args(["--default-index", index]).args(packages);
+    // CUDA wheels are explicit verified file paths, so either PyPI index can
+    // resolve their usual dependencies without resolving torch on that index.
+    cmd.args(["pip", "install", "--python"]).arg(python).args(["--default-index", index])
+        .args(packages).args(cuda_wheels);
     cmd
 }
-async fn install_wheels(root: &Path, python: &Path, cancel: &AtomicBool, done: u64, stage: &'static str, packages: &'static [&'static str]) -> AppResult<()> {
-    progress(&format!("正在{stage}…"), done);
-    let Some(error) = run_command(wheel_command(root, python, PYPI, packages), root, cancel).await? else { return Ok(()); };
+async fn install_wheels(root: &Path, python: &Path, cancel: &AtomicBool, stage: &str, packages: &[&str], cuda_wheels: &[PathBuf]) -> AppResult<()> {
+    update_install(|state| state.message = format!("正在{stage}"));
+    let Some(error) = run_command(wheel_command(root, python, PYPI, packages, cuda_wheels), root, cancel).await? else { return Ok(()); };
     if !pypi_network_failure(&error.tail) { return Err(command_failure(stage, error)); }
-    progress(&format!("正在通过国内镜像{stage}…"), done);
+    update_install(|state| state.message = format!("正在通过国内 PyPI 镜像{stage}所需的依赖"));
     tracing::warn!(%stage, "official PyPI unreachable; retrying voice setup with mirror");
-    if let Some(error) = run_command(wheel_command(root, python, PYPI_MIRROR, packages), root, cancel).await? {
+    if let Some(error) = run_command(wheel_command(root, python, PYPI_MIRROR, packages, cuda_wheels), root, cancel).await? {
         return Err(command_failure(stage, error));
     }
     Ok(())
@@ -473,30 +625,45 @@ async fn install(root: &Path, cancel: &AtomicBool) -> AppResult<Config> {
     std::fs::create_dir_all(root)?; std::fs::write(root.join("owner.txt"), VERSION)?;
     let http = reqwest::Client::builder().https_only(true).connect_timeout(Duration::from_secs(20))
         .read_timeout(Duration::from_secs(45)).build().map_err(|_| err("无法初始化配音安装下载"))?;
-    let items=files(); let mut done=0;
-    for item in &items { download(&http, root, item, cancel, done).await?; done+=item.size; }
+    let (cuda, resources): (Vec<_>, Vec<_>) = files().into_iter().partition(Download::cuda_wheel);
+    let resource_bytes = download_group(&http, root, &resources, cancel, InstallStep::Resources, 56, 0).await?;
     check_cancel(cancel)?;
+    install_step(InstallStep::Python, "正在解压配音安装组件");
     let unpack_root = root.to_path_buf();
     tokio::task::spawn_blocking(move || unpack_uv(&unpack_root)).await.map_err(|_| err("解压配音组件的任务未完成"))??;
     check_cancel(cancel)?;
     let python=root.join("runtime/Scripts/python.exe");
-    progress("正在准备独立运行环境，可关闭窗口", done);
+    install_step(InstallStep::Python, "正在准备独立 Python 环境");
     if !python.is_file() {
         let mut cmd=uv(root);
         cmd.args(["venv", "--python", "3.12.13", "--managed-python"]).arg(root.join("runtime"));
         if let Some(error) = run_command(cmd, root, cancel).await? { return Err(command_failure("准备 Python 环境", error)); }
     }
-    // Only torch/torchaudio use the CUDA index. TorchCodec's Windows wheel lives on PyPI.
-    install_wheels(root, &python, cancel, done, "安装 PyTorch CUDA 组件",
-        &["--torch-backend", "cu128", "torch==2.11.0+cu128", "torchaudio==2.11.0+cu128"]).await?;
-    install_wheels(root, &python, cancel, done, "安装 VoxCPM 组件",
-        &["voxcpm==2.0.3", "torch==2.11.0+cu128", "torchaudio==2.11.0+cu128", "torchcodec==0.14.0", "transformers==5.13.0"]).await?;
+    install_step(InstallStep::Pytorch, "正在准备 PyTorch CUDA 安装包");
+    download_group(&http, root, &cuda, cancel, InstallStep::Pytorch, 87, resource_bytes).await?;
+    let cuda_paths: Vec<_> = cuda.iter().map(|item| root.join(&item.file)).collect();
+    install_wheels(root, &python, cancel, "安装 PyTorch CUDA 组件", &[], &cuda_paths).await?;
+    install_step(InstallStep::Voxcpm, "正在安装 VoxCPM 组件");
+    install_wheels(root, &python, cancel, "安装 VoxCPM 组件",
+        &["voxcpm==2.0.3", "torchcodec==0.14.0", "transformers==5.13.0"], &cuda_paths).await?;
     check_cancel(cancel)?;
-    progress("正在检查配音环境", done);
+    install_step(InstallStep::CudaCheck, "正在校验 NVIDIA CUDA");
     let config=Config { python: python.to_string_lossy().into(), model: root.join("model").to_string_lossy().into() };
     verify_cached(&config, true, cancel).await?;
     check_cancel(cancel)?;
     Ok(config)
+}
+async fn remove_cuda_wheels(root: &Path) {
+    for item in files().into_iter().filter(Download::cuda_wheel) {
+        let path = root.join(&item.file);
+        for staged in [path.with_extension("part"), path] {
+            if let Err(error) = tokio::fs::remove_file(staged).await {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(file = %item.file, %error, "could not remove installed CUDA wheel archive");
+                }
+            }
+        }
+    }
 }
 #[tauri::command]
 pub async fn voice_environment(app: AppHandle, paths: State<'_, Arc<LibraryPaths>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, action: String, directory: Option<String>) -> AppResult<Environment> {
@@ -521,7 +688,9 @@ pub async fn voice_environment(app: AppHandle, paths: State<'_, Arc<LibraryPaths
         let owner = owner.ok_or_else(|| err("账号已切换，请重新准备配音环境"))?;
         if !state.can_install { return Err(err(state.message)); }
         if root.exists() && std::fs::read_dir(&root)?.next().is_some() && std::fs::read_to_string(root.join("owner.txt")).ok().as_deref()!=Some(VERSION) { return Err(err("该目录已有其他文件，请更换安装位置")); }
-        let cancel=Arc::new(AtomicBool::new(false)); state.phase="installing".into(); state.message="正在准备下载".into();
+        let cancel=Arc::new(AtomicBool::new(false));
+        state.phase="installing".into();
+        set_install_step(&mut state, InstallStep::Resources, "正在准备下载配音资源");
         let started = auth.with_current_user(&owner, || {
             let mut current=INSTALL.lock().unwrap();
             if let Some(job) = current.as_ref().filter(|job| job.state.phase == "installing") {
@@ -542,6 +711,7 @@ pub async fn voice_environment(app: AppHandle, paths: State<'_, Arc<LibraryPaths
                 voice::write(&config, &ready)
             }));
             watcher.abort();
+            if result.is_ok() { remove_cuda_wheels(&root).await; }
             let account_changed = auth.snapshot().user_id.as_deref() != Some(owner.as_str());
             if let Some(job)=INSTALL.lock().unwrap().as_mut().filter(|job| Arc::ptr_eq(&job.cancel, &cancel)) {
                 (job.state.phase, job.state.message) = match result {
@@ -554,6 +724,11 @@ pub async fn voice_environment(app: AppHandle, paths: State<'_, Arc<LibraryPaths
                         ("failed".into(), message)
                     }
                 };
+                job.state.active_seconds = None;
+                if job.state.phase == "ready" {
+                    job.state.progress_percent = Some(100);
+                    job.state.install_step = None;
+                }
                 let _=voice::write(&root.join("setup.json"),&job.state);
             }
         });

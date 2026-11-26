@@ -224,9 +224,10 @@ VPS 的 Agent、生成、理解和视觉提炼消费循环复用 [ControlTranspo
 
 ## 本机角色声音与配音
 
-- `commands/voice.rs` 提供 voice_configure／snapshot／save／start／cancel／recover／manage／export；前端 `lib/voice.ts` 是类型化入口。参考裁剪复用音频解码与 media::tools 的 FFmpeg，发布复用 ingest_generated、LibraryPaths 与素材变更事件；持久化运行身份及回执属于声音模块，不跨模块复用其内部 JSON 文件。
-- `commands/voice_setup.rs` 提供 voice_environment 的 status／check／recheck／install／pause。专用目录托管 Python、依赖与固定模型，复用库内原子 JSON 写入。模型／uv 下载清单在 voice-downloads.json。Windows x64 + NVIDIA 支持托管安装和手动连接。
-- `VoiceCard` 的生成由 `CanvasWorkflowController.runVoice` 执行。voiceApi.start 接收独立恢复标识，原生回执保存 request_key。工作流步骤保存输入对应的试听身份、原任务和产物，复用与 H3 共用的媒体落点逻辑。配音通过已有媒体端口传递音频；克隆试听在卡内播放。旧项目草稿通过 readVoiceDraft 接续，卡片字段写入画板工作流。见 [声音卡片](../VOICE-STUDIO.md)。
+- 原生声音命令经前端 `voiceApi` 调用。项目正式配音历史用 `voice_snapshot` 分页，单任务、试听和原请求查询用 `voice_job`。订阅 `voice://job-updated` 后按原任务查询详情。存在日志时，`voice_diagnostic` 按项目和任务定位诊断。参考裁剪复用音频解码与 `media::tools` 的 FFmpeg，入库复用 `ingest_generated`、`LibraryPaths` 与素材变更事件。 [原生声音命令](../../apps/desktop/src-tauri/src/commands/voice.rs) · [前端接口](../../apps/desktop/src/lib/voice.ts)
+- `voice/worker.rs` 复用 `local_install::ManagedChild` 与日志尾部读取，管理本机推理、超时和空闲释放。模型实例、文件传递协议、任务索引与保留策略由声音模块维护。 [Worker 运行](../../apps/desktop/src-tauri/src/commands/voice/worker.rs) · [任务索引与清理](../../apps/desktop/src-tauri/src/commands/voice/store.rs)
+- `voice_environment` 提供 status／check／recheck／install／pause，复用库内原子 JSON 写入。Windows x64 和 NVIDIA 支持托管安装和手动连接。托管安装用同一清单校验模型、uv 与固定 CUDA wheel，按步骤与下载字节报告进度。 [安装命令](../../apps/desktop/src-tauri/src/commands/voice_setup.rs) · [下载清单](../../apps/desktop/src-tauri/src/commands/voice-downloads.json)
+- `VoiceCard` 的生成由 `CanvasWorkflowController.runVoice` 执行。同一项目的 `request_key` 幂等返回原任务。工作流步骤保存试听身份、原任务和产物，复用与 H3 共用的媒体落点逻辑。配音通过已有媒体端口传递，试听在卡内播放。旧项目草稿通过 `readVoiceDraft` 接续，卡片字段写入画板工作流。 [声音卡片](../VOICE-STUDIO.md)
 
 ## 重复候选与覆盖边界
 

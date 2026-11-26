@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AudioLines, Pause, Play } from "lucide-react";
+import { useStore } from "../store";
 import { api } from "../lib/api";
 import { materialCatalog } from "../lib/materialCatalog";
 import { isAudioPath } from "../lib/audioMedia";
 import { audioPreviewKey, audioPreviewSnapshot, playAudioPreview, stopAudioPreview, subscribeAudioPreview } from "../lib/audioPreview";
 import { saveMediaAssetToCanvas } from "../lib/videoCollectionCanvas";
 import { userErrorMessage } from "../lib/userError";
-import { voiceApi, type VoiceSnapshot } from "../lib/voice";
+import { voiceApi, voiceJobDetail, voiceScope, type VoiceSnapshot } from "../lib/voice";
 import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey } from "../lib/voiceCard";
 import type { Asset } from "../lib/types";
 import type { WorkflowNode, WorkflowStep } from "../lib/canvasWorkflow";
@@ -17,6 +18,8 @@ import { TacticalSelect } from "./TacticalSelect";
 import "./VoiceCard.css";
 
 const voicesChanged = "bowerbird:voices-changed";
+const historyPageSize = 30;
+
 function useVoiceAsset(id: string | undefined, available: Asset[]) {
   const known = available.find(asset => asset.id === id);
   const [loaded, setLoaded] = useState<Asset>();
@@ -31,10 +34,16 @@ function audio(asset?: Asset) {
   return asset?.store_path && <AudioWaveform assetId={asset.id} path={asset.store_path} name={asset.name}
     version={asset.file_mtime ?? asset.created_at ?? 0} duration={asset.duration} />;
 }
-export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetIds, step, busy, runBlocked, patch, run }: {
+type VoiceCardProps = {
   node: WorkflowNode; projectId: string; referenceIds: string[]; assets: Asset[]; step?: WorkflowStep; busy: boolean;
   placedAssetIds: Set<string>; runBlocked: boolean; patch: (changes: Partial<WorkflowNode>) => void; run: () => void;
-}) {
+};
+export function VoiceCard(props: VoiceCardProps) {
+  const scope = useStore(voiceScope);
+  return <VoiceCardView key={JSON.stringify([scope, props.projectId])} {...props} scope={scope} />;
+}
+
+function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, step, busy, runBlocked, patch, run, scope }: VoiceCardProps & { scope: string }) {
   const settings = node.voice ?? {}, selectedId = settings.id;
   const [snapshot, setSnapshot] = useState<VoiceSnapshot>(), [error, setError] = useState("");
   const [acting, setActing] = useState(false), guard = useRef(false);
@@ -42,6 +51,9 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
   const [choices, setChoices] = useState<Asset[]>([]), [history, setHistory] = useState(false);
   const [manage, setManage] = useState(false), [rename, setRename] = useState(""), [confirmDelete, setConfirmDelete] = useState(false);
   const owner = useRef({});
+  const mounted = useRef(false);
+  const currentScope = () => mounted.current && voiceScope(useStore.getState()) === scope;
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const selected = snapshot?.voices.find(v => v.id === selectedId);
   const [playing, setPlaying] = useState(false);
   const sampleKey = selected && audioPreviewKey({ assetId: `voice:${selected.id}`, path: selected.reference, sourceVersion: selected.id });
@@ -63,26 +75,49 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
   const locked = busy || acting;
   useEffect(() => {
     let active = true;
-    const refresh = () => void voiceApi.snapshot(projectId).then(s => { if (active) setSnapshot(s); })
-      .catch(e => { if (active) setError(userErrorMessage(e, "无法读取角色声音")); });
-    refresh();
+    let stopListening: (() => void) | undefined;
+    let latest = 0;
+    const current = () => active && voiceScope(useStore.getState()) === scope;
+    const refresh = () => {
+      const generation = ++latest;
+      void voiceApi.snapshot(projectId, { historyLimit: history ? historyPageSize : 0 }).then(next => {
+        if (current() && generation === latest) setSnapshot(next);
+      }).catch(e => {
+        if (current() && generation === latest) setError(userErrorMessage(e, "无法读取角色声音"));
+      });
+    };
+    void voiceApi.onJobUpdated(update => {
+      if (!current() || update.project !== projectId || update.purpose === "preview" || update.status === "running") return;
+      refresh();
+    }).catch(() => undefined).then(stop => {
+      if (current()) { stopListening = stop; refresh(); }
+      else stop?.();
+    });
     window.addEventListener(voicesChanged, refresh);
-    const timer = history ? setInterval(refresh, 1800) : undefined;
-    return () => { active = false; window.removeEventListener(voicesChanged, refresh); clearInterval(timer); };
-  }, [projectId, history, step?.status]);
+    return () => { active = false; window.removeEventListener(voicesChanged, refresh); stopListening?.(); };
+  }, [projectId, history, scope]);
   useEffect(() => () => { if (selectedId) stopAudioPreview(`voice:${selectedId}`); }, [selectedId]);
   useEffect(() => {
     if (!library) return;
     let active = true;
     void materialCatalog.page({ kind: "all", id: null, projectId, media: "audios", query, generated: null, color: null }, 0, limit)
-      .then(list => { if (active) setChoices(list); }).catch(e => { if (active) setError(userErrorMessage(e, "无法读取项目录音")); });
+      .then(list => { if (active && currentScope()) setChoices(list); }).catch(e => { if (active && currentScope()) setError(userErrorMessage(e, "无法读取项目录音")); });
     return () => { active = false; };
-  }, [library, projectId, query, limit]);
+  }, [library, projectId, query, limit, scope]);
   async function act(work: () => Promise<void>) {
     if (guard.current) return;
     guard.current = true; setActing(true); setError("");
-    try { await work(); } catch (e) { setError(userErrorMessage(e, "声音操作未完成")); }
-    finally { guard.current = false; setActing(false); }
+    try { await work(); } catch (e) { if (currentScope()) setError(userErrorMessage(e, "声音操作未完成")); }
+    finally { guard.current = false; if (currentScope()) setActing(false); }
+  }
+  async function moreHistory() {
+    if (!snapshot?.has_more || !snapshot.jobs.length) return;
+    const before = snapshot.jobs[snapshot.jobs.length - 1].id;
+    const next = await voiceApi.snapshot(projectId, { before, historyLimit: historyPageSize });
+    if (currentScope()) setSnapshot(value => {
+      if (!value || value.jobs[value.jobs.length - 1]?.id !== before) return value;
+      return { ...value, has_more: next.has_more, jobs: [...value.jobs, ...next.jobs], assets: [...value.assets, ...next.assets] };
+    });
   }
   function bind(asset: Asset) {
     if (!isAudioPath(asset.store_path)) throw new Error("请选择音频文件");
@@ -96,6 +131,9 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
     patch({ voice: { ...settings, id: id || undefined }, inputs });
     setManage(false); setConfirmDelete(false); setLibrary(false); setError("");
   }
+  const request = step?.voiceRequest;
+  const showRequestDiagnostic = !!request?.jobId && request.hasDiagnostic
+    && (step?.status === "failed" || step?.status === "waiting");
   return <section className="voice-card" aria-label="角色声音设置" onPointerDown={event => event.stopPropagation()}>
     {(!!snapshot?.voices.length || selectedId) && <div className="voice-card-row">
       <TacticalSelect aria-label="选择角色声音" value={selectedId ?? ""} disabled={locked} onValueChange={select}>
@@ -111,8 +149,14 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
     </div>}
     {manage && selected && <div className="voice-card-row">
       <input aria-label="声音名称" value={rename} onChange={e => setRename(e.target.value)} />
-      <button disabled={locked || !rename.trim()} onClick={() => void act(async () => { await voiceApi.rename(selected.id, rename); window.dispatchEvent(new Event(voicesChanged)); setManage(false); })}>改名</button>
-      <button disabled={locked} onClick={() => { if (!confirmDelete) { setConfirmDelete(true); return; } void act(async () => { await voiceApi.remove(selected.id); select(""); window.dispatchEvent(new Event(voicesChanged)); }); }}>{confirmDelete ? "确认删除" : "删除"}</button>
+      <button disabled={locked || !rename.trim()} onClick={() => void act(async () => {
+        await voiceApi.rename(selected.id, rename);
+        if (currentScope()) { window.dispatchEvent(new Event(voicesChanged)); setManage(false); }
+      })}>改名</button>
+      <button disabled={locked} onClick={() => { if (!confirmDelete) { setConfirmDelete(true); return; } void act(async () => {
+        await voiceApi.remove(selected.id);
+        if (currentScope()) { select(""); window.dispatchEvent(new Event(voicesChanged)); }
+      }); }}>{confirmDelete ? "确认删除" : "删除"}</button>
     </div>}
     {!selectedId && <>
       {recording && clip && <VoiceReferenceTrim key={recording.id} asset={recording} start={clip.start} end={clip.end} disabled={locked}
@@ -121,10 +165,10 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
         {!recording && <><AudioLines size={20} /><span>{waitingForVideoAudio ? "视频音频 · 等待上游素材" : referenceIds.length ? "请选择一段音频" : "拖入参考录音"}</span></>}
         <div className="voice-card-actions"><button disabled={locked} onClick={() => void act(async () => {
           const path = await open({ multiple: false, filters: [{ name: "参考录音", extensions: ["wav","mp3","flac","m4a","ogg"] }] });
-          if (typeof path !== "string") return;
+          if (typeof path !== "string" || !currentScope()) return;
           const [asset] = await api.importFiles([path], projectId, true);
           if (!asset) throw new Error("无法导入录音");
-          bind(asset);
+          if (currentScope()) bind(asset);
         })}>{recording ? "更换录音" : "选择文件"}</button><button disabled={locked} onClick={() => setLibrary(!library)}>素材库</button></div>
       </div>
       {library && <div className="voice-card-list"><input aria-label="搜索项目录音" placeholder="搜索录音" value={query} onChange={e => { setQuery(e.target.value); setLimit(50); }} />
@@ -139,7 +183,7 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
         <div className="voice-card-row"><input aria-label="声音名称" placeholder="声音名称" disabled={locked} value={clip.name} onChange={e => patch({ voice: { ...settings, clip: { ...clip, name: e.target.value } } })} />
           <button disabled={locked || !clip.name.trim() || clip.end - clip.start < .999} onClick={() => void act(async () => {
             const voice = await voiceApi.save(clip.name, recording.id, clip.transcript, clip.start, clip.end);
-            select(voice.id); window.dispatchEvent(new Event(voicesChanged));
+            if (currentScope()) { select(voice.id); window.dispatchEvent(new Event(voicesChanged)); }
           })}>保存并使用</button></div>
       </>}
     </>}
@@ -148,9 +192,23 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
       <button className="voice-card-primary" disabled={locked || runBlocked || !selected || (!node.prompt.trim() && !node.inputs.text?.length)} onClick={run}>生成配音</button>
       {audio(result)}
     </>}
-    {!!snapshot?.jobs.some(j => j.purpose !== "preview") && <details open={history} onToggle={e => setHistory(e.currentTarget.open)}><summary>项目配音</summary>
-      {history && <div className="voice-card-list">{snapshot.jobs.filter(job => job.purpose !== "preview").map(job => <div key={job.id}>
+    {(recording || selectedId) && <details><summary>高级设置</summary>
+      <label className="voice-card-row voice-card-seed">随机种子
+        <input type="number" inputMode="numeric" min={0} max={4294967295} step={1} placeholder="自动" disabled={locked} value={settings.seed ?? ""}
+          onChange={e => {
+            const { value, valueAsNumber } = e.currentTarget;
+            if (value === "" || Number.isInteger(valueAsNumber) && valueAsNumber >= 0 && valueAsNumber <= 4294967295) {
+              patch({ voice: { ...settings, seed: value === "" ? undefined : valueAsNumber } });
+            }
+          }} />
+      </label>
+    </details>}
+    {request?.warning && step?.status === "done" && <small className="voice-card-warning" role="status">{request.warning}</small>}
+    {showRequestDiagnostic && <button className="voice-card-diagnostic" disabled={acting} onClick={() => void act(() => voiceApi.diagnostic(projectId, request.jobId!))}>查看诊断日志</button>}
+    {(snapshot?.has_history ?? snapshot?.jobs.some(j => j.purpose !== "preview")) && <details open={history} onToggle={e => setHistory(e.currentTarget.open)}><summary>项目配音</summary>
+      {history && <div className="voice-card-list">{snapshot?.jobs.filter(job => job.purpose !== "preview").map(job => <div key={job.id}>
         <span>{job.text}</span>{audio(snapshot.assets.find(asset => asset.id === job.asset_id))}
+        {job.status !== "succeeded" && <small className="voice-card-history-status">{job.status === "running" ? voiceJobDetail(job) : userErrorMessage(job.message, "配音未完成")}</small>}
         {job.asset_id && <button disabled={acting} onClick={() => void act(() => voiceApi.export(job.asset_id!))}>导出</button>}
         {job.asset_id && !placedAssetIds.has(job.asset_id) && <button disabled={locked} onClick={() => void act(async () => {
           const asset = snapshot.assets.find(item => item.id === job.asset_id);
@@ -158,12 +216,15 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
           await saveMediaAssetToCanvas(asset, projectId, `voice:${job.id}`);
         })}>添加到画板</button>}
         {job.voice_id && snapshot.voices.some(v => v.id === job.voice_id) && <button disabled={locked} onClick={() => {
-          patch({ voice: { ...settings, id: job.voice_id! }, prompt: job.text, inputs: node.inputs.signal ? { signal: node.inputs.signal } : {} });
+          patch({ voice: { ...settings, id: job.voice_id!, seed: job.seed ?? undefined }, prompt: job.text, inputs: node.inputs.signal ? { signal: node.inputs.signal } : {} });
           setHistory(false);
         }}>复用台词</button>}
         {job.recoverable && <button disabled={acting} onClick={() => void act(() => voiceApi.recover(job.id))}>重试保存</button>}
+        {job.has_diagnostic && job.status === "failed" && <button disabled={acting} onClick={() => void act(() => voiceApi.diagnostic(projectId, job.id))}>查看诊断日志</button>}
         {job.status === "running" && <button disabled={acting} onClick={() => void act(() => voiceApi.cancel(job.id))}>取消</button>}
-      </div>)}</div>}
+      </div>)}
+        {snapshot?.has_more && <button disabled={acting} onClick={() => void act(moreHistory)}>更多配音</button>}
+      </div>}
     </details>}
     {error && <p role="alert">{error}</p>}
   </section>;
