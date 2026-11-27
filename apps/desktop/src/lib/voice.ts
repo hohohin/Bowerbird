@@ -8,7 +8,7 @@ export interface VoiceJob { id: string; project: string; text: string; descripti
   status: "running" | "succeeded" | "cancelled" | "failed" | "interrupted"; message: string; asset_id: string | null;
   recoverable?: boolean; voice_name?: string; purpose?: string; request_key?: string | null; draft_key?: string;
   stage?: string | null; progress?: number | null; error_code?: string | null; has_diagnostic?: boolean;
-  warning?: string | null; seed?: number | null }
+  warning?: string | null; seed?: number | null; language?: string | null }
 export interface VoiceEnvironment { phase: string; message: string; directory: string; gpu: string; free_bytes: number; required_bytes: number; completed_bytes: number; total_bytes: number; can_install: boolean;
   install_step?: "resources" | "python" | "pytorch" | "voxcpm" | "cuda_check" | null; progress_percent?: number | null; active_seconds?: number | null }
 export interface VoiceSnapshot { config: VoiceConfig; voices: VoiceProfile[]; jobs: VoiceJob[]; assets: Asset[];
@@ -40,8 +40,8 @@ export const voiceApi = {
   diagnostic: (project: string, id: string) => invoke<void>("voice_diagnostic", { project, id }),
   configure: (config: VoiceConfig) => invoke<void>("voice_configure", { config }),
   save: (name: string, assetId: string, transcript: string, start: number, end: number) => invoke<VoiceProfile>("voice_save", { name, assetId, transcript, start, end }),
-  start: (project: string, text: string, voiceId: string | null, preview?: { assetId: string; start?: number; end?: number; transcript?: string; draftKey: string }, requestKey?: string, seed?: number) =>
-    invoke<string>("voice_start", { project, text, voiceId, requestKey: requestKey ?? null, preview: preview ?? null, seed: seed ?? null }),
+  start: (project: string, text: string, voiceId: string | null, preview?: { assetId: string; start?: number; end?: number; transcript?: string; draftKey: string }, requestKey?: string, seed?: number, language?: string) =>
+    invoke<string>("voice_start", { project, text, voiceId, requestKey: requestKey ?? null, preview: preview ?? null, seed: seed ?? null, language: language || null }),
   cancel: (id: string) => invoke<void>("voice_cancel", { id }),
   recover: (id: string) => invoke<void>("voice_recover", { id }),
   rename: (id: string, name: string) => invoke<void>("voice_manage", { id, name }),

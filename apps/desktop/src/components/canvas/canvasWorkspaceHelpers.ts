@@ -1,7 +1,8 @@
 import type { CanvasToolboxTool } from "../CanvasToolbox";
 import type { WorkflowInput, WorkflowKind, WorkflowNode } from "../../lib/canvasWorkflow";
-import { countCloudAgentResultImages } from "../../lib/cloudAgentResult";
-import { canvasAssetNodeSize, type CanvasAssetSnapshot, type ProjectCanvasUiNode } from "../../lib/creativeCanvas";
+import { isAudioPath } from "../../lib/audioMedia.ts";
+import { countCloudAgentResultImages } from "../../lib/cloudAgentResult.ts";
+import { canvasAssetNodeSize, type CanvasAssetSnapshot, type ProjectCanvasUiNode } from "../../lib/creativeCanvas.ts";
 import type { CanvasNode as ProjectGraphNode, GenJob, Project, ProjectTitleSource } from "../../lib/types";
 import type { useStore } from "../../store";
 
@@ -71,6 +72,13 @@ export function activeFromProject(
 
 export function assetNodeSize(asset: CanvasAssetSnapshot) {
   return canvasAssetNodeSize(asset, ASSET_WIDTH);
+}
+
+export function canvasAssetShowsName(
+  node: { kind?: string; asset?: { storePath?: string | null } },
+  showAssetNames: boolean | undefined,
+): boolean {
+  return node.kind === "asset" && (!!showAssetNames || isAudioPath(node.asset?.storePath));
 }
 
 export function baseNodeRect(node: { x: number; y: number; width: number; height: number; kind?: string }, showAssetNames: boolean | undefined) {

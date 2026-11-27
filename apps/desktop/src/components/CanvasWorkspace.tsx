@@ -229,7 +229,7 @@ import { useCanvasClipboard } from "./canvas/useCanvasClipboard";
 import { FolderPreview } from "./canvas/CanvasFolderPreview";
 import { CanvasWorkspaceHeader, CanvasWorkspaceLoadFailure } from "./canvas/CanvasWorkspaceHeader";
 import {
-  activeFromProject, agentGroupSummary, assetNodeSize, ASSET_WIDTH, baseNodeRect, canvasGeometryDiffers, canvasId,
+  activeFromProject, agentGroupSummary, assetNodeSize, ASSET_WIDTH, baseNodeRect, canvasAssetShowsName, canvasGeometryDiffers, canvasId,
   containedNodeIds, DEFAULT_TITLE, groupedAssetNode, isCanvasRedoShortcut, isToolbarToolLocked, promptNodeSummary,
   provisionalCanvas, sameCanvasGenerationJob, uniqueSnapshots, workflowToolsAllowed,
   type ActiveCanvasState, type CanvasAssetNode, type CanvasFolderNode, type CanvasNode, type CanvasTool, type CanvasToolbarTool,
@@ -2400,6 +2400,10 @@ export function CanvasWorkspace({
     setPendingProductGroup(null);
   }, [pendingProductGroup, projectId, nodes, graphNodes]);
 
+  function folderRowHeight(node: CanvasFolderNode, showAssetNames: boolean | undefined) {
+    return showAssetNames || node.assets.some(asset => isAudioPath(asset.storePath)) ? 164 : 140;
+  }
+
   function nodeRect(node: CanvasNode | ProjectGraphNode) {
     if (node.kind === "prompt" && imageOnlyConversationIds.has(node.id)) {
       const image = selectedConversationImage(node.id, conversationImages(node.id));
@@ -2419,10 +2423,10 @@ export function CanvasWorkspace({
     }
     if (node.kind === "folder" && expandedFolderIdsRef.current.has(node.id)) {
       const rows = Math.ceil(node.assets.length / 3);
-      const rowHeight = useStore.getState().settings?.canvas_show_asset_names ? 164 : 140;
+      const rowHeight = folderRowHeight(node, useStore.getState().settings?.canvas_show_asset_names);
       return { x: node.x, y: node.y, width: Math.max(548, node.width), height: 82 + rows * rowHeight + Math.max(0, rows - 1) * 12 };
     }
-    return baseNodeRect(node, node.kind === "asset" && useStore.getState().settings?.canvas_show_asset_names);
+    return baseNodeRect(node, canvasAssetShowsName(node, useStore.getState().settings?.canvas_show_asset_names));
   }
 
   function setHover(next: HoverIntent | null) {
@@ -6096,6 +6100,7 @@ export function CanvasWorkspace({
               const gallery = node.kind === "asset" ? conversationImages(node.id) : [];
               const galleryIndex = gallery.findIndex(asset => asset.id === (node.kind === "asset" ? node.asset.id : ""));
               const expanded = node.kind === "folder" && expandedFolderIds.has(node.id);
+              const showsName = canvasAssetShowsName(node, showAssetNames);
               const holding = hoverTargetId === node.id;
               const directFolderTarget = folderDropTargetId === node.id;
               const movingWithSelection = activeDragId === node.id
@@ -6112,7 +6117,7 @@ export function CanvasWorkspace({
                   aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "单击查看，双击添加引用" : isAudioPath(node.asset.storePath) ? "点击查看音频详情" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
                   aria-expanded={node.kind === "folder" ? expanded : undefined}
                   data-canvas-filter={node.kind === "asset" ? materialFilterState(node.asset) : undefined}
-                  className={`canvas-node generation-group is-${node.kind} ${node.kind === "asset" && isVideoPath(node.asset.storePath) ? "is-video" : ""} ${expanded ? "is-expanded" : ""} ${!showAssetNames ? "is-name-hidden" : ""} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
+                  className={`canvas-node generation-group is-${node.kind} ${node.kind === "asset" && isVideoPath(node.asset.storePath) ? "is-video" : ""} ${expanded ? "is-expanded" : ""} ${!(node.kind === "asset" ? showsName : showAssetNames) ? "is-name-hidden" : ""} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
                   style={{
                     width: nodeRect(node).width,
                     height: nodeRect(node).height,
@@ -6173,7 +6178,7 @@ export function CanvasWorkspace({
                         )}
                       </div>
                           {renderGenerationImageActions(node.id, node.asset)}
-                      {showAssetNames && <span className="canvas-node-name">{node.asset.name}</span>}
+                      {showsName && <span className="canvas-node-name" title={node.asset.name}>{node.asset.name}</span>}
                     </>
                   ) : (
                     <>
@@ -6185,10 +6190,11 @@ export function CanvasWorkspace({
                             onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
                             onClick={() => setFolderExpanded(node.id, false)}><ChevronUp size={16} /></button>
                         </header>
-                        <div className="canvas-folder-expanded-grid" style={{ gridAutoRows: showAssetNames ? 164 : 140 }}>
+                        <div className="canvas-folder-expanded-grid" style={{ gridAutoRows: folderRowHeight(node, showAssetNames) }}>
                           {node.assets.map((asset, index) => {
                             const assetPath = canvasAssetMediaPath(asset);
-                            const Member = isAudioPath(asset.storePath) ? "div" : "button";
+                            const isAudio = isAudioPath(asset.storePath);
+                            const Member = isAudio ? "div" : "button";
                             return <Member key={asset.id} role={Member === "div" ? "group" : undefined} tabIndex={0} data-canvas-folder-asset-id={asset.id} data-frequent-asset-id={asset.assetId ?? undefined}
                               data-canvas-filter={materialFilterState(asset)}
                               className="canvas-folder-asset" aria-label={asset.name}
@@ -6196,9 +6202,9 @@ export function CanvasWorkspace({
                               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
                               onClick={(event) => { if (!consumeSuppressedNodeClick(event)) activateCanvasMaterial(groupedAssetNode(asset, node, index)); }}
                               onContextMenu={(event) => openCanvasAssetContextMenu(event, node, asset)}>
-                              {isAudioPath(asset.storePath) && asset.assetId && asset.storePath ? <AudioWaveform className="canvas-audio-waveform" assetId={asset.assetId} path={asset.storePath} name={asset.name} version={videoSourceKey(assetById.get(asset.assetId)) ?? asset.storePath} /> : isVideoPath(asset.storePath) ? <VideoPoster path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} /> : assetPath ? <CanvasImage path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height} alt="" draggable={false} />
+                              {isAudio && asset.assetId && asset.storePath ? <AudioWaveform className="canvas-audio-waveform" assetId={asset.assetId} path={asset.storePath} name={asset.name} version={videoSourceKey(assetById.get(asset.assetId)) ?? asset.storePath} /> : isVideoPath(asset.storePath) ? <VideoPoster path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} /> : assetPath ? <CanvasImage path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height} alt="" draggable={false} />
                                 : <span className="canvas-folder-asset-placeholder">{asset.name.slice(0, 1)}</span>}
-                              {showAssetNames && <span className="canvas-folder-asset-name">{asset.name}</span>}
+                              {(showAssetNames || isAudio) && <span className="canvas-folder-asset-name" title={asset.name}>{asset.name}</span>}
                             </Member>;
                           })}
                         </div>
@@ -6214,13 +6220,13 @@ export function CanvasWorkspace({
                     minimum={{ width: 140, height: 120 }}
                     constrain={node.kind === "asset" ? (start, delta) => {
                       // Preserve the image ratio, excluding the fixed caption and borders.
-                      const ratio = node.asset.width && node.asset.height ? node.asset.height / node.asset.width : (start.height - (showAssetNames ? 32 : 2)) / (start.width - 2);
+                      const ratio = node.asset.width && node.asset.height ? node.asset.height / node.asset.width : (start.height - (showsName ? 32 : 2)) / (start.width - 2);
                       const change = Math.abs(delta.width) >= Math.abs(delta.height / ratio) ? delta.width : delta.height / ratio;
                       const size = canvasAssetNodeSize({ width: 1, height: ratio }, Math.max(96, 2 + 32 / ratio, start.width + change));
-                      return { ...size, height: size.height - (showAssetNames ? 0 : 30) };
+                      return { ...size, height: size.height - (showsName ? 0 : 30) };
                     } : undefined}
                     onResize={(size, finished, cancelled) => resizeCanvasMaterial(node.id, {
-                      ...size, height: size.height + (node.kind === "asset" && !showAssetNames ? 30 : 0),
+                      ...size, height: size.height + (node.kind === "asset" && !showsName ? 30 : 0),
                     }, finished, cancelled)} />}
                 </div>
               );

@@ -4,6 +4,7 @@
 .voice-card-row, .voice-card-actions, .voice-reference-trim .voice-studio-row { display: flex; align-items: center; gap: 8px; }
 .voice-card-actions { flex-wrap: wrap; }
 .voice-card-row > input, .voice-card-row > .tactical-select-trigger { flex: 1; min-width: 0; }
+.voice-card-language > span { white-space: nowrap; }
 .voice-card input { padding: 7px 9px; border: 1px solid var(--bb-line); background: var(--bb-bg); color: var(--bb-ink); font: inherit; user-select: text; }
 .voice-card button, .voice-environment-dialog button { cursor: pointer; }
 .voice-card button:disabled { cursor: default; opacity: .55; }

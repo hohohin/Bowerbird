@@ -23,6 +23,10 @@ try {
   await page.addInitScript(()=>{
     let ipc;
     const source={id:'clip',name:'参考录音',ext:'wav',store_path:'/.tmp/voice-card-ui/reference.wav',duration:4,created_at:1};
+    const assetTitle=text=>{
+      const normalized=Array.from(text.trim().split(/\s+/u).join(' '));
+      return normalized.length>48?normalized.slice(0,47).join('')+'…':normalized.join('');
+    };
     const read=()=>JSON.parse(sessionStorage.getItem('voice-fixture')||'{"voices":[],"jobs":[],"assets":[]}');
     const save=s=>sessionStorage.setItem('voice-fixture',JSON.stringify(s));
     const emitJob=job=>ipc.invoke('plugin:event|emit',{event:'voice://job-updated',payload:{
@@ -33,7 +37,7 @@ try {
       Object.assign(job,patch);
       if(job.status==='succeeded' && !job.asset_id) {
         job.asset_id='audio-'+job.id;
-        s.assets.push({...source,id:job.asset_id});
+        s.assets.push({...source,id:job.asset_id,name:assetTitle(job.text)});
       }
       save(s);
       await emitJob(job);
@@ -84,13 +88,13 @@ try {
         if(command==='audio_waveform')return {sourceVersion:'fixture',duration:4,sampleRate:8000,channels:1,peaks:[[-.5,.5]],framesPerPeak:32000,totalFrames:32000};
         if(command==='voice_save'){const voice={id:'saved',name:args.name,asset_id:args.assetId,reference:source.store_path,duration:4};s.voices.push(voice);save(s);return voice;}
         if(command==='voice_start'){
-          const id='job-'+(s.jobs.length+1), asset={...source,id:'audio-'+id};
+          const id='job-'+(s.jobs.length+1), asset={...source,id:'audio-'+id,name:assetTitle(args.text)};
           const hold=!!window.holdNextVoice;
           window.holdNextVoice=false;
           const job={id,project:args.project,text:args.text,voice_id:args.voiceId,purpose:args.preview?'preview':'speech',
             request_key:args.requestKey,draft_key:args.preview?.draftKey,asset_id:hold?null:asset.id,
             status:hold?'running':'succeeded',stage:hold?'loading_model':null,
-            message:hold?'推理处理中':'已保存',preview:args.preview,seed:args.seed};
+            message:hold?'推理处理中':'已保存',preview:args.preview,seed:args.seed,language:args.language};
           if(!hold) s.assets.push(asset);
           s.jobs.unshift(job);
           save(s);
@@ -146,6 +150,13 @@ try {
   await page.waitForFunction(()=>window.voiceEnvironmentCalls.includes('recheck'));
   await page.getByRole('button',{name:'关闭',exact:true}).click();
   await card.getByRole('button',{name:'选择文件'}).click();
+  const language=card.getByRole('combobox',{name:'配音语种'});
+  const chooseLanguage=async name=>{
+    await language.click();
+    await page.getByRole('listbox',{name:'配音语种'}).getByRole('option',{name,exact:true}).click();
+  };
+  await language.getByText('自动（随台词）',{exact:true}).waitFor();
+  await chooseLanguage('粤语');
   await card.getByRole('textbox',{name:'试听台词'}).fill('这是编辑后的试听句。');
   await card.getByRole('spinbutton',{name:'入点秒数'}).fill('1');
   await card.getByText('高级设置',{exact:true}).click();
@@ -167,12 +178,17 @@ try {
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status==='done');
   const preview=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('voice-fixture')).jobs[0]);
   assert.equal(preview.text,'这是编辑后的试听句。');assert.equal(preview.preview.start,1);assert.equal(preview.preview.assetId,'clip');assert.equal(preview.seed,321);
+  assert.equal(await page.evaluate(()=>window.voiceCalls.find(call=>call.command==='voice_start'&&call.args.preview)?.args.language),'yue');
   await card.locator('.voice-card > .audio-waveform').waitFor();
   const player = card.locator('.voice-card > .audio-waveform .audio-waveform-play');
   await player.click();
   await page.waitForFunction(()=>{const a=document.querySelector('audio[data-audio-preview]');return a && !a.paused;});
   await player.click();
   await card.screenshot({path:resolve(output,'audition.png')});
+  await chooseLanguage('英语');
+  await card.locator('.voice-card > .audio-waveform').waitFor({state:'hidden'});
+  await chooseLanguage('粤语');
+  await card.locator('.voice-card > .audio-waveform').waitFor();
   await card.getByRole('textbox',{name:'试听台词'}).fill('换一条来听。');
   assert.equal(await card.locator('.voice-card > .audio-waveform').count(),0);
   await card.getByRole('textbox',{name:'声音名称'}).fill('林岸');
@@ -185,7 +201,13 @@ try {
   await page.waitForFunction(()=>window.snapshot().nodes.some(n=>n.id==='workflow-voice:job-2'&&n.assetId==='audio-job-2'));
   const speech=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('voice-fixture')).jobs[0]);
   assert.equal(speech.text,'欢迎来到这里。');assert.equal(speech.voice_id,'saved');
+  assert.equal(await page.evaluate(()=>window.voiceCalls.find(call=>call.command==='voice_start'&&!call.args.preview)?.args.language),'yue');
   assert.ok(await page.evaluate(key=>window.voiceCalls.some(call=>call.command==='voice_job'&&call.args.requestKey===key),speech.request_key));
+  assert.equal(await page.evaluate(()=>window.store.getState().settings?.canvas_show_asset_names??false),false);
+  const speechTitle=page.locator('[data-canvas-node-id="workflow-voice:job-2"] .canvas-node-name');
+  await speechTitle.waitFor({state:'visible'});
+  assert.equal(await speechTitle.textContent(),'欢迎来到这里。');
+  assert.equal(await speechTitle.getAttribute('title'),'欢迎来到这里。');
   await card.screenshot({path:resolve(output,'speech.png')});
   await page.evaluate(()=>{window.holdNextVoice=true;});
   await card.getByRole('button',{name:'生成配音'}).click();
@@ -200,6 +222,7 @@ try {
   await page.reload();
   await card.getByRole('textbox',{name:'配音台词'}).waitFor();
   assert.equal(await card.getByRole('textbox',{name:'配音台词'}).inputValue(),'欢迎来到这里。');
+  await language.getByText('粤语',{exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('voice-fixture')).jobs.length),3);
   await card.getByText('高级设置',{exact:true}).click();
   assert.equal(await card.getByRole('spinbutton',{name:'随机种子'}).inputValue(),'321');
@@ -210,7 +233,10 @@ try {
   await card.getByRole('button',{name:'更多配音'}).click();
   await card.getByText('历史配音 1',{exact:true}).waitFor();
   assert.ok(await page.evaluate(()=>window.voiceCalls.some(call=>call.command==='voice_snapshot'&&call.args.historyLimit===30&&call.args.before)));
-  await card.getByText('项目配音',{exact:true}).click();
+  await chooseLanguage('英语');
+  const savedSpeech=card.locator('.voice-card-list > div').filter({hasText:'欢迎来到这里。',has:page.getByRole('button',{name:'导出',exact:true})});
+  await savedSpeech.getByRole('button',{name:'复用台词',exact:true}).click();
+  await language.getByText('粤语',{exact:true}).waitFor();
   const dismissIssue=page.getByRole('button',{name:'关闭工作流问题'});
   if(await dismissIssue.isVisible()) await dismissIssue.click();
   await page.evaluate(async()=>{
@@ -264,7 +290,7 @@ try {
   await page.waitForTimeout(50);
   assert.equal(await page.locator('.workflow-card.is-voice .comfy-environment-dot.is-ready').count(),0);
   assert.deepEqual(errors,[]);
-  console.log('PASS role voice setup, audition and crop, seeded requests, event updates, idempotent recovery, diagnostics, paginated history and card persistence');
+  console.log('PASS role voice setup, audition and crop, seeded language requests, audio asset title, event updates, idempotent recovery, diagnostics, paginated history and card persistence');
 } catch(e) {
   console.error(await page.locator('.workflow-card.is-voice').allTextContents(),errors,await page.evaluate(()=>({run: JSON.parse(sessionStorage.getItem('workflow-p')||'{}').document?.run, recent:window.calls.slice(-12).map(c=>c.command), alerts:document.body.innerText.slice(-650), voice:sessionStorage.getItem('voice-fixture')})));
   throw e;

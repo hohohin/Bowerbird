@@ -126,7 +126,7 @@ export async function executeVoiceCard(host: WorkflowCardExecution, runId: strin
     if (!await current()) return;
     if (submission) {
       let jobId: string;
-      try { jobId = await voiceApi.start(host.projectId, submission.text, voice.id ?? null, submission.preview, requestKey, voice.seed); }
+      try { jobId = await voiceApi.start(host.projectId, submission.text, voice.id ?? null, submission.preview, requestKey, voice.seed, voice.language); }
       catch (error) {
         if (!inScope()) { await current(); return; }
         let original: Awaited<ReturnType<typeof voiceApi.job>>;

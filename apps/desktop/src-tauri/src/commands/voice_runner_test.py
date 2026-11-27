@@ -1,5 +1,5 @@
 """Run with the managed voice Python and -B to keep the source tree clean."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import json
 from pathlib import Path
 import random
@@ -103,6 +103,57 @@ class VoiceRunnerTests(unittest.TestCase):
             quality = model.generate.call_args_list[3 * segments]
             self.assertEqual(quality.kwargs["inference_timesteps"], 12)
             self.assertTrue(quality.kwargs["retry_badcase"])
+
+    def test_language_selects_cloning_mode_and_prefixes_every_chunk(self):
+        rate = 12000
+        tokenizer = Mock(side_effect=list)
+        model = SimpleNamespace(
+            tts_model=SimpleNamespace(sample_rate=rate, text_tokenizer=tokenizer),
+            generate=Mock(return_value=np.full(300, 0.1, dtype=np.float32)),
+        )
+        worker = runner.VoiceWorker()
+        worker.model = model
+        worker.model_path = "fixture"
+        torch = SimpleNamespace(manual_seed=Mock(), cuda=SimpleNamespace(manual_seed_all=Mock()),
+                                jit=SimpleNamespace(optimized_execution=nullcontext))
+        text = "  第一  句。\n " + "長" * runner.MAX_SEGMENT_CHARS + "。  餘句。  "
+        chunks = [" ".join(chunk.split()) for chunk in runner.split_text(text.strip())]
+        self.assertGreater(len(chunks), 1)
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(sys.modules, {"torch": torch}):
+            base = Path(temporary)
+            reference = base / "reference.wav"
+            sf.write(reference, np.full(rate, 0.1), rate)
+            for index, (language, prefix) in enumerate(
+                ((None, ""), ("", ""), ("auto", ""), ("yue", "(粤语)"), ("en", "(English)"))
+            ):
+                with self.subTest(language=language):
+                    directory = base / str(index)
+                    directory.mkdir()
+                    request = {"id": str(index), "config": {"model": "fixture"}, "reference": str(reference),
+                               "text": text, "transcript": " 原文 "}
+                    if language is not None:
+                        request["language"] = language
+                    model.generate.reset_mock()
+                    tokenizer.reset_mock()
+                    worker.synthesize(request, directory, Mock())
+                    expected = [prefix + chunk for chunk in chunks]
+                    calls = [call.kwargs for call in model.generate.call_args_list]
+                    self.assertEqual([call["text"] for call in calls], expected)
+                    self.assertEqual([call.args[0] for call in tokenizer.call_args_list], expected)
+                    for call in calls:
+                        self.assertEqual(call["reference_wav_path"], str(reference))
+                        self.assertEqual(call["prompt_wav_path"], None if prefix else str(reference))
+                        self.assertEqual(call["prompt_text"], None if prefix else "原文")
+                    self.assertEqual(request["text"], text)
+
+    def test_invalid_language_is_reported_in_worker_status(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            request_path = directory / "request.json"
+            request_path.write_text(json.dumps({"language": "unsupported"}), encoding="utf-8")
+            self.assertFalse(runner.VoiceWorker().process(request_path))
+            status = json.loads((directory / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["error_code"], "invalid_language")
 
     def test_reference_preprocessing_leaves_recording_intact(self):
         rate = 16000

@@ -66,6 +66,7 @@ pub struct Job {
     #[serde(default)] pub warning: Option<String>,
     #[serde(default)] pub has_diagnostic: bool,
     #[serde(default)] pub seed: Option<u32>,
+    #[serde(default)] pub language: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -314,6 +315,14 @@ pub async fn voice_export(app: AppHandle, db: State<'_, Arc<Database>>, asset_id
         } Ok(())
     }).await.map_err(|e| error(&e.to_string()))?
 }
+fn voice_asset_title(text: &str) -> String {
+    let title = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.chars().count() <= 48 {
+        return title;
+    }
+    title.chars().take(47).chain(std::iter::once('…')).collect()
+}
+
 fn publish(db: &Database, paths: &LibraryPaths, job: &mut Job) -> AppResult<Asset> {
     // Recover a committed import even if the process stopped before writing its JSON receipt.
     let key = format!("voice:{}", job.id);
@@ -339,7 +348,7 @@ fn publish(db: &Database, paths: &LibraryPaths, job: &mut Job) -> AppResult<Asse
     };
     let saved = (|| -> AppResult<()> {
         let mut conn = lock(&db.conn); let tx = conn.transaction()?;
-        tx.execute("UPDATE assets SET name=?1,origin_path=NULL,duration=?2 WHERE id=?3", params![job.text.chars().take(24).collect::<String>(),audio.duration,asset.id])?;
+        tx.execute("UPDATE assets SET name=?1,origin_path=NULL,duration=?2 WHERE id=?3", params![voice_asset_title(&job.text),audio.duration,asset.id])?;
         tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,strftime('%s','now'))", params![job.project,asset.id])?;
         tx.execute("INSERT INTO analyses(id,asset_id,kind,payload,created_at) VALUES(?1,?2,'voice_generation',?3,strftime('%s','now'))", params![key,asset.id,serde_json::to_string(job)?])?;
         tx.commit()?; Ok(())
@@ -356,18 +365,31 @@ fn validate_clone_request(description: &str, voice_id: Option<&str>, preview: Op
     if !description.trim().is_empty() || !has_source { return Err(error("当前仅支持声音克隆，请选择参考录音或已保存的声音")); }
     Ok(())
 }
+
+fn normalize_language(language: Option<String>) -> AppResult<Option<String>> {
+    match language.as_deref().unwrap_or_default().trim() {
+        "" | "auto" => Ok(None),
+        code @ (
+            "zh" | "yue" | "zh-sc" | "zh-db" | "zh-wu" | "zh-hn" | "zh-sx" | "zh-sd" | "zh-tj" | "zh-mn" |
+            "en" | "ja" | "ko" | "fr" | "de" | "es" | "ru" | "it" | "pt" | "ar" | "th" | "vi" |
+            "id" | "ms" | "hi" | "tr" | "nl" | "pl" | "sv" | "da" | "no" | "fi" | "el" | "he" | "sw" | "km" | "lo" | "my" | "tl"
+        ) => Ok(Some(code.to_owned())),
+        _ => Err(error("不支持的配音语种，请重新选择")),
+    }
+}
+
 #[tauri::command]
 pub async fn voice_start(
     app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>,
     auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project: String,
     text: String, description: Option<String>, voice_id: Option<String>, preview: Option<Preview>,
-    request_key: Option<String>, seed: Option<u32>,
+    request_key: Option<String>, seed: Option<u32>, language: Option<String>,
 ) -> AppResult<String> {
     access(&auth, &entitlement).await?;
     let base = root(&paths);
     let db = db.inner().clone(); let paths = paths.inner().clone();
     blocking(move || {
-        let admission = reserve_job(&base, &db, project, text, description, voice_id, preview.as_ref(), request_key, seed)?;
+        let admission = reserve_job(&base, &db, project, text, description, voice_id, preview.as_ref(), request_key, seed, language)?;
         let (job, task, cancel) = match admission {
             Admission::Existing(id) => return Ok(id),
             Admission::New { job, task, cancel } => (job, task, cancel),
@@ -388,7 +410,7 @@ enum Admission {
 
 fn reserve_job(
     base: &Path, db: &Database, project: String, text: String, description: Option<String>,
-    voice_id: Option<String>, preview: Option<&Preview>, request_key: Option<String>, seed: Option<u32>,
+    voice_id: Option<String>, preview: Option<&Preview>, request_key: Option<String>, seed: Option<u32>, language: Option<String>,
 ) -> AppResult<Admission> {
     let mut files = lock(&FILES);
     let jobs = index(&mut files, base)?;
@@ -397,6 +419,7 @@ fn reserve_job(
     }
     validate_clone_request(description.as_deref().unwrap_or_default(), voice_id.as_deref(), preview)?;
     if text.trim().is_empty() { return Err(error("请填写要生成的台词")); }
+    let language = normalize_language(language)?;
     if db.get_project(&project)?.is_none() { return Err(error("项目已不存在，请重新打开项目")); }
     let mut active = lock(&ACTIVE);
     if active.is_some() { return Err(error("已有声音正在生成，请等待完成或取消后再试")); }
@@ -418,7 +441,7 @@ fn reserve_job(
         draft_key: preview.map(|preview| preview.draft_key.clone()).unwrap_or_default(), request_key,
         config, status: "running".into(), message: "正在生成，可以关闭面板，稍后查看结果".into(),
         stage: Some("preparing_reference".into()), asset_id: None, recoverable: false,
-        progress: None, error_code: None, warning: None, has_diagnostic: false, seed,
+        progress: None, error_code: None, warning: None, has_diagnostic: false, seed, language,
     };
     write(&job_path(base, &job.id), &job)?;
     jobs.insert(base, &job);
@@ -585,6 +608,33 @@ pub(crate) fn start_maintenance(paths: Arc<LibraryPaths>) {
 mod tests {
     use super::*;
     #[test]
+    fn asset_title_collapses_whitespace_and_truncates_by_character() {
+        assert_eq!(voice_asset_title("  欢迎\n\t来到\u{3000}这里。  "), "欢迎 来到 这里。");
+        assert_eq!(voice_asset_title(&"声".repeat(48)), "声".repeat(48));
+        assert_eq!(voice_asset_title(&"声".repeat(49)), format!("{}…", "声".repeat(47)));
+    }
+
+    #[test]
+    fn language_defaults_to_auto_and_validates_explicit_codes() {
+        for value in [None, Some(""), Some(" \t "), Some(" auto ")] {
+            assert_eq!(normalize_language(value.map(str::to_owned)).unwrap(), None);
+        }
+        for (value, code) in [(" yue ", "yue"), ("zh-mn", "zh-mn"), ("en", "en")] {
+            assert_eq!(normalize_language(Some(value.into())).unwrap().as_deref(), Some(code));
+        }
+        assert!(normalize_language(Some("粤语".into())).unwrap_err().to_string().contains("不支持的配音语种，请重新选择"));
+    }
+
+    #[test]
+    fn legacy_job_without_language_loads_as_automatic() {
+        let mut legacy = serde_json::to_value(job()).unwrap();
+        legacy.as_object_mut().unwrap().remove("language");
+        let restored: Job = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.language, None);
+        assert_eq!(restored.text, "测试声音");
+    }
+
+    #[test]
     fn only_reference_based_generation_is_accepted() {
         assert!(validate_clone_request("", Some("voice"), None).is_ok());
         assert!(validate_clone_request("", None, None).is_err());
@@ -601,7 +651,7 @@ mod tests {
         description: String::new(), voice_id: None, reference: None, transcript: None, config: Config::default(),
         status: "running".into(), message: String::new(), asset_id: None,
         purpose: String::new(), draft_key: String::new(), request_key: None, voice_name: String::new(), recoverable: false,
-        stage: None, progress: None, error_code: None, warning: None, has_diagnostic: false, seed: None } }
+        stage: None, progress: None, error_code: None, warning: None, has_diagnostic: false, seed: None, language: None } }
     fn wav(path: &Path) {
         let mut data = Vec::new(); let bytes = 16000u32 * 2;
         data.extend(b"RIFF"); data.extend((36 + bytes).to_le_bytes()); data.extend(b"WAVEfmt ");
@@ -617,9 +667,13 @@ mod tests {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         db.create_project("p", "voice", "blank:p", "blank:p", "blank").unwrap();
         let mut first = job(); let path = root(&paths).join("runs").join(&first.id).join("output.wav"); wav(&path);
+        first.text = "  欢迎来到这里。\n  等你好久了。\t".into();
+        first.language = Some("yue".into());
         let pending = ingest::ingest_generated(&paths, &db, &path, None, "voxcpm").unwrap();
         let asset = publish(&db, &paths, &mut first).unwrap();
         assert_eq!(asset.id, pending.id, "recover asset insert before metadata commit");
+        assert_eq!(db.get_asset(&asset.id).unwrap().unwrap().name, "欢迎来到这里。 等你好久了。");
+        assert_eq!(first.text, "  欢迎来到这里。\n  等你好久了。\t");
         first.asset_id = None; // Simulate crash after DB commit, before writing JSON receipt.
         assert_eq!(publish(&db, &paths, &mut first).unwrap().id, asset.id);
         assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='p'", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
@@ -751,7 +805,7 @@ mod tests {
         let engines = std::sync::Barrier::new(2);
         let reserve = || {
             engines.wait();
-            reserve_job(base, &db, "p".into(), "test".into(), None, None, Some(&preview), Some("same-key".into()), None).unwrap()
+            reserve_job(base, &db, "p".into(), "test".into(), None, None, Some(&preview), Some("same-key".into()), None, Some(" yue ".into())).unwrap()
         };
         let (first, second) = std::thread::scope(|scope| {
             let first = scope.spawn(reserve);
@@ -764,6 +818,7 @@ mod tests {
             _ => panic!("expected one new and one existing admission"),
         };
         assert_eq!(&job.id, existing);
+        assert_eq!(read::<Job>(&job_path(base, &job.id)).unwrap().language.as_deref(), Some("yue"));
         assert!(is_active(existing));
         assert_eq!(fs::read_dir(base.join("jobs")).unwrap().count(), 1);
     }

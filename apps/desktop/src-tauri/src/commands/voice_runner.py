@@ -21,12 +21,70 @@ PRESET_OPTIONS = {
     "quick": (8, False),
     "quality": (12, True),
 }
+LANGUAGE_CONTROLS = {
+    "zh": "普通话",
+    "yue": "粤语",
+    "zh-sc": "四川话",
+    "zh-db": "东北话",
+    "zh-wu": "吴语",
+    "zh-hn": "河南话",
+    "zh-sx": "陕西话",
+    "zh-sd": "山东话",
+    "zh-tj": "天津话",
+    "zh-mn": "闽南话",
+    "en": "English",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "ru": "Russian",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ar": "Arabic",
+    "th": "Thai",
+    "vi": "Vietnamese",
+    "id": "Indonesian",
+    "ms": "Malay",
+    "hi": "Hindi",
+    "tr": "Turkish",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "sv": "Swedish",
+    "da": "Danish",
+    "no": "Norwegian",
+    "fi": "Finnish",
+    "el": "Greek",
+    "he": "Hebrew",
+    "sw": "Swahili",
+    "km": "Khmer",
+    "lo": "Lao",
+    "my": "Burmese",
+    "tl": "Tagalog",
+}
 
 
 class VoiceError(Exception):
     def __init__(self, code, message):
         super().__init__(message)
         self.code = code
+
+
+def resolve_language_control(language):
+    if language is None:
+        return None
+    if isinstance(language, str):
+        code = language.strip()
+        if code in ("", "auto"):
+            return None
+        if code in LANGUAGE_CONTROLS:
+            return LANGUAGE_CONTROLS[code]
+    raise VoiceError("invalid_language", "不支持的配音语种，请重新选择")
+
+
+def format_chunk_text(chunk, control):
+    normalized = " ".join(chunk.split())
+    return f"({control}){normalized}" if control else normalized
 
 
 def classify_error(exc):
@@ -147,6 +205,7 @@ class VoiceWorker:
 
     def synthesize(self, request, directory, status):
         status("preparing_reference")
+        control = resolve_language_control(request.get("language"))
         reference = request.get("reference")
         if not reference or not Path(reference).is_file():
             raise VoiceError("invalid_reference", "请先选择有效的参考录音，再生成克隆配音")
@@ -160,6 +219,8 @@ class VoiceWorker:
 
         reference, warning = prepare_reference(reference, directory / "reference.prepared.wav", np, sf)
         transcript = (request.get("transcript") or "").strip() or None
+        prompt_text = None if control else transcript
+        prompt_wav = str(reference) if prompt_text else None
 
         model_path = request["config"]["model"]
         needs_model = self.model_path != model_path or self.model is None
@@ -201,17 +262,17 @@ class VoiceWorker:
             sf.SoundFile(directory / "output.partial.wav", "w", rate, 1, subtype="PCM_16") as output,
         ):
             for index, chunk in enumerate(chunks):
-                chunk = " ".join(chunk.split())
+                input_text = format_chunk_text(chunk, control)
                 wav = self.model.generate(
-                    text=chunk, reference_wav_path=str(reference),
-                    prompt_wav_path=str(reference) if transcript else None, prompt_text=transcript,
+                    text=input_text, reference_wav_path=str(reference),
+                    prompt_wav_path=prompt_wav, prompt_text=prompt_text,
                     cfg_value=2.0, inference_timesteps=timesteps,
                     retry_badcase=retry, retry_badcase_max_times=2,
                     retry_badcase_ratio_threshold=RETRY_RATIO, max_len=MAX_GENERATION_STEPS,
                 )
                 if not len(wav) or not np.isfinite(wav).all() or np.max(np.abs(wav)) < 1e-6:
                     raise VoiceError("empty_audio", "没有生成有效声音，请调整台词或参考录音")
-                limit = min(MAX_GENERATION_STEPS, int(len(tts.text_tokenizer(chunk)) * RETRY_RATIO + 10))
+                limit = min(MAX_GENERATION_STEPS, int(len(tts.text_tokenizer(input_text)) * RETRY_RATIO + 10))
                 if len(wav) >= limit * patch_samples:
                     raise VoiceError("text_too_long", "部分台词超过单段合成容量，请缩短该句或补充分句标点")
 

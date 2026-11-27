@@ -9,7 +9,7 @@ import { audioPreviewKey, audioPreviewSnapshot, playAudioPreview, stopAudioPrevi
 import { saveMediaAssetToCanvas } from "../lib/videoCollectionCanvas";
 import { userErrorMessage } from "../lib/userError";
 import { voiceApi, voiceJobDetail, voiceScope, type VoiceSnapshot } from "../lib/voice";
-import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey } from "../lib/voiceCard";
+import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey, voiceLanguageLabel, VOICE_LANGUAGE_GROUPS } from "../lib/voiceCard";
 import type { Asset } from "../lib/types";
 import type { WorkflowNode, WorkflowStep } from "../lib/canvasWorkflow";
 import { VoiceReferenceTrim } from "./VoiceReferenceTrim";
@@ -134,6 +134,16 @@ function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, 
   const request = step?.voiceRequest;
   const showRequestDiagnostic = !!request?.jobId && request.hasDiagnostic
     && (step?.status === "failed" || step?.status === "waiting");
+  const languageSelect = (recording || selectedId) && <div className="voice-card-row voice-card-language">
+    <span>语种</span>
+    <TacticalSelect aria-label="配音语种" value={settings.language ?? ""} disabled={locked}
+      onValueChange={value => patch({ voice: { ...settings, language: value || undefined } })}>
+      <option value="">{voiceLanguageLabel()}</option>
+      {VOICE_LANGUAGE_GROUPS.map(group => <optgroup key={group.label} label={group.label}>
+        {group.options.map(({ code, label }) => <option key={code} value={code}>{label}</option>)}
+      </optgroup>)}
+    </TacticalSelect>
+  </div>;
   return <section className="voice-card" aria-label="角色声音设置" onPointerDown={event => event.stopPropagation()}>
     {(!!snapshot?.voices.length || selectedId) && <div className="voice-card-row">
       <TacticalSelect aria-label="选择角色声音" value={selectedId ?? ""} disabled={locked} onValueChange={select}>
@@ -176,6 +186,7 @@ function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, 
         {!choices.length && <small>没有匹配的录音</small>}{choices.length === limit && <button onClick={() => setLimit(limit + 50)}>更多录音</button>}
       </div>}
       {recording && clip && <>
+        {languageSelect}
         <textarea aria-label="试听台词" placeholder="试听台词" disabled={locked} value={sample} onChange={e => patch({ voice: { ...settings, sampleText: e.target.value } })} />
         <button disabled={locked || runBlocked || !sample.trim() || clip.end - clip.start < .999} onClick={run}>生成试听</button>
         {audio(result)}
@@ -188,6 +199,7 @@ function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, 
       </>}
     </>}
     {selectedId && <>
+      {languageSelect}
       <textarea aria-label="配音台词" placeholder="输入角色要说的话…" disabled={locked} value={node.prompt} onChange={e => patch({ prompt: e.target.value })} />
       <button className="voice-card-primary" disabled={locked || runBlocked || !selected || (!node.prompt.trim() && !node.inputs.text?.length)} onClick={run}>生成配音</button>
       {audio(result)}
@@ -216,7 +228,7 @@ function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, 
           await saveMediaAssetToCanvas(asset, projectId, `voice:${job.id}`);
         })}>添加到画板</button>}
         {job.voice_id && snapshot.voices.some(v => v.id === job.voice_id) && <button disabled={locked} onClick={() => {
-          patch({ voice: { ...settings, id: job.voice_id!, seed: job.seed ?? undefined }, prompt: job.text, inputs: node.inputs.signal ? { signal: node.inputs.signal } : {} });
+          patch({ voice: { ...settings, id: job.voice_id!, seed: job.seed ?? undefined, language: job.language ?? undefined }, prompt: job.text, inputs: node.inputs.signal ? { signal: node.inputs.signal } : {} });
           setHistory(false);
         }}>复用台词</button>}
         {job.recoverable && <button disabled={acting} onClick={() => void act(() => voiceApi.recover(job.id))}>重试保存</button>}
