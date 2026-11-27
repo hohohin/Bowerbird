@@ -74,7 +74,7 @@ import { renderCanvasCards, useCanvasEntryCardContext } from "./CanvasEntryCard"
 import { CanvasImage, CanvasMediaProvider } from "./CanvasImage";
 import { useCanvasFrame, useLatestCallback } from "../lib/useCanvasFrame";
 import { useCatalogRevision } from "../lib/useCatalogRevision";
-import { CANVAS_DRAG_Z_LIFT, canvasDragPreview } from "../lib/canvasDragPreview";
+import { CANVAS_DRAG_Z_LIFT, canvasDragPreview, canvasWireHover } from "../lib/canvasDragPreview";
 import { canvasPaintWindow } from "../lib/canvasPaintWindow";
 import { createCanvasCellHitCache } from "../lib/canvasCellHitCache";
 import { lazyModule } from "../lib/lazyModule";
@@ -943,6 +943,11 @@ export function CanvasWorkspace({
     paintWindow.current = window;
     return () => { window.dispose(); paintWindow.current = null; };
   }, [manyCanvasCards, projectId, loading, viewMode]);
+  useLayoutEffect(() => {
+    if (loading || viewMode !== "canvas" || !planeRef.current || !stageRef.current) return;
+    const hover = canvasWireHover(planeRef.current, stageRef.current);
+    return () => hover.dispose();
+  }, [projectId, loading, viewMode]);
   useLayoutEffect(paintCamera, [pan.x, pan.y, zoom, projectId, loading, viewMode, manyCanvasCards, entryCardIds]);
   useEffect(() => () => {
     clearTimeout(cameraSettleRef.current);

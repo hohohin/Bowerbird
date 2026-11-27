@@ -31,7 +31,7 @@ import { useStore } from "../store";
 import { canvasWirePath as path, type DragOffset } from "../lib/canvasDragPreview";
 import { useWorkflowPortGeometry, type WorkflowPortTarget } from "../lib/useWorkflowPortGeometry";
 import { WorkflowCardItem, type WorkflowCardContext } from "./WorkflowCardItem";
-import { WorkflowWiresLayer } from "./WorkflowWiresLayer";
+import { WorkflowWiresLayer, type WirePoint } from "./WorkflowWiresLayer";
 import { WorkflowDisconnectOverlay, WorkflowOverlays } from "./WorkflowOverlays";
 import { renderCanvasCards, useCanvasEntryCardContext } from "./CanvasEntryCard";
 import { singleVideoOutput, useWorkflowConnectionGesture } from "./useWorkflowConnectionGesture";
@@ -1495,7 +1495,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
     const owner = sessionOwners.get(id);
     return owner ? cardPoint(owner.id, "output") : null;
   }, [sessionOwners, cardPoint]);
-  const scopedPoint = useCallback((id: string, side: "input" | "output", scope?: string) => {
+  const scopedPoint = useCallback((id: string, side: "input" | "output", scope?: string): WirePoint | null => {
     const node = nodeById.get(id);
     if (node?.kind === "trigger") return { x: node.x + (side === "output" ? workflowCardWidth(node) : 0),
       y: workflowPortY(node, side, side === "input" ? "completion" : "signal"), owner: id, selected: wireSelected(id) };
@@ -1518,7 +1518,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
       const result = generationResultAnchors.get(node.id);
       const point = result && (!visibleGraphNodeIds || visibleGraphNodeIds.has(result.nodeId) || materialById.has(result.nodeId))
         && scopedPoint(result.nodeId, "output", result.cellId);
-      if (point) return { ...point, selected: point.selected || wireSelected(node.id) };
+      if (point) return { ...point, selected: point.selected || wireSelected(node.id),
+        highlightOwners: [...new Set([...(point.highlightOwners ?? []), node.id])] };
     }
     if (binding.autoConnect) {
       const id = binding.nodeId ?? binding.canvasNodeId ?? binding.assetNodeId ?? binding.groupId;

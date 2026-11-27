@@ -13,6 +13,12 @@ import { memo, type MutableRefObject, type RefObject } from "react";
 import type { WorkflowDiagnostic } from "../lib/workflowDiagnostics";
 import { disconnectKey } from "./WorkflowLayerPresentation";
 import type { AutomaticGesture, Connection, ConnectionMenuState, DisconnectTarget, MaterialAnchor, PendingConnectionCard, WorkflowLayerProps } from "./WorkflowLayerTypes";
+export type WirePoint = { x: number; y: number; owner: string; selected: boolean; highlightOwners?: readonly string[] };
+
+function withHighlightOwner(point: Omit<WirePoint, "selected">, id: string) {
+  return point.owner === id ? point : { ...point, highlightOwners: [...(point.highlightOwners ?? []), id] };
+}
+
 interface WireLayerProps {
   wireElement: RefObject<SVGSVGElement>;
   document: CanvasWorkflow;
@@ -21,10 +27,10 @@ interface WireLayerProps {
   generationResultAnchors: Map<string, { nodeId: string; cellId?: string | undefined; } | undefined>;
   conversationCards: WorkflowLayerProps["conversationCards"];
   graphById: Map<string, CanvasNode>;
-  embeddedPoint: (id: string, input?: boolean) => { x: number; y: number; owner: string; selected: boolean; } | null;
+  embeddedPoint: (id: string, input?: boolean) => WirePoint | null;
   visibleGraphNodeIds: ReadonlySet<string> | undefined;
   materialById: Map<string, MaterialAnchor>;
-  cardPoint: (id: string, side: "output" | "input") => { x: number; y: number; owner: string; selected: boolean; } | null;
+  cardPoint: (id: string, side: "output" | "input") => WirePoint | null;
   cardMounted: (id: string) => boolean;
   wireSelected: (id: string | undefined) => boolean;
   sessionOutputsBySessionId: Map<string, CanvasNode[]>;
@@ -32,10 +38,10 @@ interface WireLayerProps {
   groupById: Map<string, MaterialAnchor>;
   renderedNodes: WorkflowNode[];
   frames: Map<string, { owner: string; x: number; y: number; width: number; height: number; index: number; total: number; }>;
-  sourcePoint: (binding: WorkflowInput, receiver?: WorkflowNode | undefined) => { x: number; y: number; owner: string; selected: boolean; } | null;
+  sourcePoint: (binding: WorkflowInput, receiver?: WorkflowNode | undefined) => WirePoint | null;
   displayPoint: (node: WorkflowNode) => WorkflowNode | { x: number; y: number; };
   portRect: (node: CanvasNode | undefined, kind: "output" | "input" | "cell", port: string, image?: boolean) => { x: number; y: number; width: number; height: number; } | undefined;
-  scopedPoint: (id: string, side: "output" | "input", scope?: string | undefined) => { x: number; y: number; owner: string; selected: boolean; } | null;
+  scopedPoint: (id: string, side: "output" | "input", scope?: string | undefined) => WirePoint | null;
   nodeDiagnostic: (nodeId: string) => WorkflowDiagnostic | undefined;
   chooseDisconnect: (target: DisconnectTarget, point: { x: number; y: number; }, quick?: boolean) => void;
   pending: PendingConnectionCard[];
@@ -66,7 +72,7 @@ export const WorkflowWiresLayer = memo(function WorkflowWiresLayer({
         if (!embedded && (conversationCards?.routedIds.has(id) || visibleGraphNodeIds && !visibleGraphNodeIds.has(anchorId) && !materialById.has(anchorId))) return null;
         const from = cardPoint(node.id, "output"), to = embedded ?? cardPoint(anchorId, "input");
         return session && cardMounted(anchorId) && from && to && <path key={`agent-session-${node.id}-${id}`} className={`is-image${wireSelected(node.id) || wireSelected(anchorId) ? " is-selected" : ""}`} data-workflow-session-link={id}
-          data-workflow-generator={node.id} {...dragWire(from, to)} />;
+          data-workflow-generator={node.id} {...dragWire(from, withHighlightOwner(to, anchorId))} />;
       }))}
       {document.nodes.filter(node => workflowNodeMounted(node) && !collapsedAnchor(node.id) && (node.kind === "generation" || node.kind === "comfy-video")).flatMap(node => {
         const hiddenSessions = hiddenWorkflowSessionIds([node]);
@@ -84,13 +90,13 @@ export const WorkflowWiresLayer = memo(function WorkflowWiresLayer({
       {document.nodes.filter(workflowNodeMounted).map(node => {
         const group = node.resultGroupId && groupById.get(node.resultGroupId);
         const from = cardPoint(node.id, "output");
-        return group && cardMounted(group.id) && from && <path key={`group-${node.id}`} className={`is-image${wireSelected(node.id) || wireSelected(group.id) ? " is-selected" : ""}`} data-workflow-product-link={group.id} {...dragWire(from, { x: group.x, y: group.y + group.height / 2, owner: group.id })} />;
+        return group && cardMounted(group.id) && from && <path key={`group-${node.id}`} className={`is-image${wireSelected(node.id) || wireSelected(group.id) ? " is-selected" : ""}`} data-workflow-product-link={group.id} {...dragWire(withHighlightOwner(from, node.id), { x: group.x, y: group.y + group.height / 2, owner: group.id })} />;
       })}
       {document.nodes.filter(node => workflowNodeMounted(node) && !collapsedAnchor(node.id)).flatMap(node => (node.resultNodeIds ?? []).map(id => {
         const result = graphById.get(id);
         const type = node.kind === "voice" || node.kind === "comfy-video" || node.kind === "generation" || node.action === "layers" ? "image" : "text";
         const from = cardPoint(node.id, "output"), to = result && cardPoint(result.id, "input");
-        return cardMounted(id) && from && to && <path key={id} className={`is-${type}${wireSelected(node.id) || wireSelected(id) ? " is-selected" : ""}`} data-workflow-result-link={id} {...dragWire(from, to, outputPath, true)} />;
+        return cardMounted(id) && from && to && <path key={id} className={`is-${type}${wireSelected(node.id) || wireSelected(id) ? " is-selected" : ""}`} data-workflow-result-link={id} {...dragWire(from, withHighlightOwner(to, id), outputPath, true)} />;
       }))}
       {renderedNodes.filter(workflowNodeMounted).flatMap(node => Object.entries(node.kind === "comfy-video" ? generationInputNode(node).inputs : node.inputs).flatMap(([port, inputs]) => inputs.map((binding, index) => {
         if (node.kind === "trigger" && port === "completion" && workflowTriggerMode(node) !== "completion") return null;
@@ -121,7 +127,8 @@ export const WorkflowWiresLayer = memo(function WorkflowWiresLayer({
         const diagnostic = nodeDiagnostic(node.id);
         const failedWire = diagnostic?.source && (workflowBindingKey(diagnostic.source) === workflowBindingKey(binding)
           || inputs.length === 1 && node.promptReferences?.some(ref => ref.type === port && ref.label === diagnostic.referenceLabel));
-        return <path key={`${node.id}-${port}-${index}`} {...dragWire(from, to)} style={frame && !failedWire ? { stroke: "#66baff", opacity: 1 } : undefined} data-auto-connection={binding.autoConnect} data-workflow-target={node.id} data-workflow-signal-link={port === "signal" ? node.id : undefined} data-workflow-text-link={node.textTarget?.cellId} className={`is-${binding.autoConnect ? "automatic" : port}${failedWire ? " is-error" : ""}${from.selected || wireSelected(collapsedAnchor(node.id)?.id ?? node.id) ? " is-selected" : ""}`}
+        const targetId = collapsedAnchor(node.id)?.id ?? node.id;
+        return <path key={`${node.id}-${port}-${index}`} {...dragWire(from, withHighlightOwner(to, targetId))} style={frame && !failedWire ? { stroke: "#66baff", opacity: 1 } : undefined} data-auto-connection={binding.autoConnect} data-workflow-target={node.id} data-workflow-signal-link={port === "signal" ? node.id : undefined} data-workflow-text-link={node.textTarget?.cellId} className={`is-${binding.autoConnect ? "automatic" : port}${failedWire ? " is-error" : ""}${from.selected || wireSelected(targetId) ? " is-selected" : ""}`}
           onContextMenu={event => {
             if (!binding.autoConnect && port !== "signal") return;
             event.preventDefault(); event.stopPropagation();

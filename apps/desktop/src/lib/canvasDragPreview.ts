@@ -9,15 +9,100 @@ export const canvasWirePath = (from: CanvasPoint, to: CanvasPoint) => curvePath(
 export const graphWirePath = (from: CanvasPoint, to: CanvasPoint) => curvePath(from, to, Math.max(48, Math.abs(to.x - from.x) * .42));
 
 // Endpoint ownership follows the resolved visual socket, which can differ from the saved binding.
-type End = CanvasPoint & { owner?: string };
+type End = CanvasPoint & { owner?: string; highlightOwners?: readonly string[] };
 export type DragOffset = { ids: ReadonlySet<string>; dx: number; dy: number };
 type Draw = (from: CanvasPoint, to: CanvasPoint, drag?: DragOffset) => string;
-interface Wire { from: End; to: End; draw: Draw; obstacles: boolean }
+interface Wire { from: End; to: End; draw: Draw; obstacles: boolean; highlightOwners: readonly string[] }
+interface WireHover { hoveredIds: ReadonlySet<string>; activePaths: Set<SVGPathElement> }
+const wirePaths = ".workflow-wires > path,.canvas-graph-edges > path";
 const wires = new WeakMap<SVGPathElement, Wire>();
+const wireHovers = new WeakMap<HTMLElement, WireHover>();
+const emptyHoveredIds: ReadonlySet<string> = new Set();
+
+function matchesWireHover(element: SVGPathElement, wire: Wire | undefined, hoveredIds: ReadonlySet<string>) {
+  return wire?.highlightOwners.some(id => hoveredIds.has(id)) && !element.classList.contains("is-draft");
+}
+
 export function dragWire(from: End, to: End, draw: Draw = canvasWirePath, obstacles = false) {
+  let registered: { element: SVGPathElement; plane: HTMLElement | null } | undefined;
   return { d: draw(from, to), ref: (element: SVGPathElement | null) => {
-    if (element) wires.set(element, { from, to, draw, obstacles });
+    if (!element) {
+      if (registered?.plane && wireHovers.get(registered.plane)?.activePaths.delete(registered.element)) {
+        registered.element.classList.remove("is-hovered");
+      }
+      registered = undefined;
+      return;
+    }
+    const highlightOwners = [...new Set([from.owner, to.owner, ...(from.highlightOwners ?? []), ...(to.highlightOwners ?? [])]
+      .filter((id): id is string => !!id))];
+    const wire = { from, to, draw, obstacles, highlightOwners };
+    wires.set(element, wire);
+    const plane = element.closest<HTMLElement>(".canvas-plane");
+    registered = { element, plane };
+    const hover = plane && wireHovers.get(plane);
+    if (hover) {
+      const active = !!matchesWireHover(element, wire, hover.hoveredIds);
+      element.classList.toggle("is-hovered", active);
+      if (active) hover.activePaths.add(element);
+      else hover.activePaths.delete(element);
+    }
   } };
+}
+
+function hoveredCardIds(plane: HTMLElement, event: PointerEvent): ReadonlySet<string> {
+  const target = event.target;
+  if (!(target instanceof Element) || !plane.contains(target)) return emptyHoveredIds;
+  // Interactive strokes can sit above cards and change width under the pointer.
+  const hit = target.closest(".workflow-wires")
+    ? document.elementsFromPoint(event.clientX, event.clientY).find(el => plane.contains(el) && !el.closest(".workflow-wires"))
+    : target;
+  const card = hit?.closest<HTMLElement>("[data-workflow-card],[data-canvas-node-id],[data-workflow-material],[data-card-name],[data-workflow-text-key]");
+  if (!card || !plane.contains(card)) return emptyHoveredIds;
+  const { workflowCard, workflowPeekAnchor, canvasNodeId, workflowMaterial, cardName, workflowTextKey } = card.dataset;
+  const peekAnchor = card.closest<HTMLElement>("[data-workflow-peek-anchor]")?.dataset.workflowPeekAnchor;
+  return new Set([workflowCard, workflowPeekAnchor, canvasNodeId, workflowMaterial, cardName, workflowTextKey, peekAnchor]
+    .filter((id): id is string => !!id));
+}
+
+export function canvasWireHover(plane: HTMLElement, stage: HTMLElement) {
+  const hover: WireHover = { hoveredIds: emptyHoveredIds, activePaths: new Set() };
+  wireHovers.set(plane, hover);
+
+  const clear = () => {
+    for (const element of hover.activePaths) element.classList.remove("is-hovered");
+    hover.activePaths.clear();
+    hover.hoveredIds = emptyHoveredIds;
+  };
+  const move = (event: PointerEvent) => {
+    if (event.buttons !== 0) { clear(); return; }
+    const ids = hoveredCardIds(plane, event);
+    if (ids.size === hover.hoveredIds.size && [...ids].every(id => hover.hoveredIds.has(id))) return;
+    clear();
+    hover.hoveredIds = ids;
+    if (!ids.size) return;
+    for (const element of plane.querySelectorAll<SVGPathElement>(wirePaths)) {
+      if (!matchesWireHover(element, wires.get(element), ids)) continue;
+      element.classList.add("is-hovered");
+      hover.activePaths.add(element);
+    }
+  };
+  stage.addEventListener("pointermove", move, true);
+  stage.addEventListener("pointerdown", clear, true);
+  stage.addEventListener("pointercancel", clear, true);
+  stage.addEventListener("pointerleave", clear);
+  window.addEventListener("blur", clear);
+  return {
+    clear,
+    dispose() {
+      stage.removeEventListener("pointermove", move, true);
+      stage.removeEventListener("pointerdown", clear, true);
+      stage.removeEventListener("pointercancel", clear, true);
+      stage.removeEventListener("pointerleave", clear);
+      window.removeEventListener("blur", clear);
+      clear();
+      wireHovers.delete(plane);
+    },
+  };
 }
 
 /** Project a translation onto existing cards, their labels and incident curves until release.
@@ -41,7 +126,7 @@ export function canvasDragPreview(plane: HTMLElement, ids: Set<string>, primary:
   if (found.size !== ids.size) return null;
   const svg = plane.querySelector(".workflow-wires"), graph = plane.querySelector(".canvas-graph-edges");
   const movesMaterial = items.some(el => el.hasAttribute("data-workflow-material"));
-  for (const el of plane.querySelectorAll<SVGPathElement>(".workflow-wires > path,.canvas-graph-edges > path")) {
+  for (const el of plane.querySelectorAll<SVGPathElement>(wirePaths)) {
     if (el.matches(".is-draft")) continue;
     const wire = wires.get(el);
     if ((!wire?.from.owner || !wire.to.owner) && el.hasAttribute("data-workflow-pending")) continue;

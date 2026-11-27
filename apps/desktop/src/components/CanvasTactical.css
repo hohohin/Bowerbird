@@ -104,8 +104,8 @@
 .canvas-tactical .workflow-bindings button:hover {animation:canvas-tactical-contact 160ms steps(1,end);color:var(--cs-ink);}
 .canvas-tactical :where(.canvas-note:not(.is-content-card)) .canvas-text-handle {color:var(--cs-muted);}
 .canvas-tactical :where(.canvas-note:not(.is-content-card)) .canvas-text-cell {border-color:var(--cs-rule);}
-.canvas-tactical .workflow-wires path:not(.is-selected):not(.is-draft):not(.is-error) {stroke:var(--cs-muted);opacity:.42;stroke-width:1.2;}
-.canvas-tactical .workflow-wires path.is-selected:not(.is-error) {stroke-width:1.7;}
+.canvas-tactical .workflow-wires path:not(.is-selected):not(.is-hovered):not(.is-draft):not(.is-error) {stroke:var(--cs-muted);opacity:.42;stroke-width:1.2;}
+.canvas-tactical .workflow-wires path:is(.is-selected,.is-hovered):not(.is-error) {stroke-width:1.7;}
 
 /* Editors and dialogs retain softer, distinct layers and field boundaries. */
 .canvas-tactical :is(.creation-dock.composer-glass,.project-inspector-shell:not(.is-editing)),.canvas-toolbox-menu.canvas-tactical {background:var(--cs-surface);border:1px solid var(--cs-rule);border-radius:12px;box-shadow:var(--cs-lift);color:var(--cs-ink);}

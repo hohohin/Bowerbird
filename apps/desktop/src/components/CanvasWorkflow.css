@@ -229,12 +229,12 @@ html[data-theme] .canvas-tactical .workflow-card footer.workflow-agent-run-foote
 .workflow-profile-name { width:100%; padding:7px 9px; margin-bottom:7px; border:1px solid var(--bb-line); border-radius:6px; background:var(--bb-surface-2); color:var(--bb-ink); font-size:12px; }
 .workflow-profile-summary { font-size:12px; line-height:1.6; max-height:100px; overflow:auto; margin:8px 0; user-select:text; }
 .workflow-wires path.is-draft { stroke:var(--bb-blue); stroke-dasharray:6 4; }
-.workflow-wires path.is-error { stroke:rgb(239 68 68); }
 .workflow-wires path.is-automatic { stroke:var(--bb-blue); pointer-events:stroke; cursor:pointer; }
+.workflow-wires path.is-error { stroke:rgb(239 68 68); }
 .canvas-connection-target { position:absolute; z-index:10002; pointer-events:none; outline:1px solid var(--bb-blue); outline-offset:3px; }
 .canvas-connection-target.is-invalid { outline-color:var(--bb-danger); }
 .canvas-connection-notice { position:fixed; z-index:99999; pointer-events:none; max-width:240px; padding:6px 9px; background:var(--bb-surface); color:var(--bb-ink); border:1px solid var(--bb-line); font-size:12px; }
-.workflow-wires path:not(.is-selected):not(.is-draft) { stroke:var(--bb-line-strong); }
+.workflow-wires path:not(.is-selected):not(.is-hovered):not(.is-draft):not(.is-error) { stroke:var(--bb-line-strong); }
 .workflow-key { position:absolute; right:16px; top:-34px; color:#b9883e; filter:drop-shadow(0 2px 2px #0003); transform:rotate(-18deg); transform-origin:50% 85%; }
 .workflow-key:hover { color:var(--bb-ink); }
 .workflow-key.workflow-gear { transform:none; cursor:default; }
