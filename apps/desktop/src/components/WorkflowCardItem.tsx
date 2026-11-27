@@ -584,7 +584,7 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
         {profiles.map(p => <option key={p.id} value={p.id}>{p.name} · v{p.version}</option>)}
       </TacticalSelect>}
       {node.kind === "voice" && <VoiceCard placedAssetIds={placedAudioAssets} node={node} projectId={projectId} assets={assets} referenceIds={voiceReferenceIds}
-        step={step} busy={busy} runBlocked={!!providerIssue} patch={changes => patch(node.id, changes)} run={() => handle(controller.start(node.id, true))} />}
+        step={step} busy={busy} runBlocked={!!providerIssue || !!activeWorkflow} patch={changes => patch(node.id, changes)} run={() => handle(controller.start(node.id, true))} />}
       {node.kind === "loop" && <WorkflowLoopCard node={node} items={loopItems} notice={loopInputNotice} busy={busy} run={run}
         runs={workflowRuns(document).filter(entry => entry.loop?.nodeId === node.id)} bindings={bindings} nodes={nodeById} assetById={assetById} onOpenAgent={onOpenAgent}
         graphById={graphById} onOpenGeneration={onOpenGeneration}
@@ -691,7 +691,7 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
         onStart={() => handle(controller.start(node.id))} onStop={() => handle(controller.stop(run?.id))}
         onContinue={() => handle(controller.continue(run?.id))} onRestart={() => run && handle(controller.restartLoop(run.id))}
         onRetry={() => run && handle(retryLoop(run.id))} />}
-      {node.kind !== "loop" && node.kind !== "planner" && (node.kind !== "voice" || busy) && (node.kind !== "trigger" || triggerMode === "manual" || queuedTrigger || triggerExecuting || run?.status === "failed")
+      {node.kind !== "loop" && node.kind !== "planner" && (node.kind !== "voice" || busy || activeWorkflow) && (node.kind !== "trigger" || triggerMode === "manual" || queuedTrigger || triggerExecuting || run?.status === "failed")
         && (!hasAgentMessages || (!busy && agentChat?.status !== "idle") || retryDelivery || continueWorkflow) && <footer className={hasAgentMessages ? "workflow-agent-run-footer" : undefined}>
         {h3Status ? <span className="workflow-h3-status" role="status">
           <span className="workflow-h3-status-copy">

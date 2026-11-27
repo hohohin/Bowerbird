@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+import { selectCanvasTool } from './fixtures/canvas-reference/place-card.mjs';
 
 const output = resolve('.tmp/voice-card-ui');
 await mkdir(output, {recursive:true});
@@ -104,8 +105,7 @@ try {
   await page.goto('http://127.0.0.1:17996/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:true,user_id:'tester'},cloudEntitlement:{user_id:'tester',tier:'pro',offline_state:'fresh',is_test_account:true,balances:{daily:0,sub:0,topup:0},generation_services:[],policy:{can_use_byo:true,can_use_cloud:true}}}));
-  await page.getByRole('button',{name:'工具箱',exact:true}).click();
-  await page.getByRole('menuitem',{name:/角色声音/}).click();
+  await selectCanvasTool(page,'角色声音');
   await page.mouse.click(890,180);
   const card=page.locator('.workflow-card.is-voice');
   await card.waitFor();
@@ -211,9 +211,15 @@ try {
   await card.getByText('历史配音 1',{exact:true}).waitFor();
   assert.ok(await page.evaluate(()=>window.voiceCalls.some(call=>call.command==='voice_snapshot'&&call.args.historyLimit===30&&call.args.before)));
   await card.getByText('项目配音',{exact:true}).click();
-  await page.getByRole('button',{name:'工具箱',exact:true}).click();
-  await page.getByRole('menuitem',{name:/角色声音/}).click();
-  await page.mouse.click(700,700);
+  const dismissIssue=page.getByRole('button',{name:'关闭工作流问题'});
+  if(await dismissIssue.isVisible()) await dismissIssue.click();
+  await page.evaluate(async()=>{
+    const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
+    const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
+    const controller=canvasWorkflowController('p');
+    const first=controller.document.nodes.find(node=>node.kind==='voice');
+    await controller.edit([...controller.document.nodes,newWorkflowNode('voice',first.x-490,first.y,'codex')]);
+  });
   const second=page.locator('.workflow-card.is-voice').nth(1);
   await second.waitFor();
   assert.equal(await second.getByRole('textbox',{name:'配音台词'}).count(),0);
