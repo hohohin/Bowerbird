@@ -67,6 +67,14 @@ macOS 的双架构回执单独维护。[macOS 全量发布验收](../macOS/RELEA
 
 自 2026-11-21 起，Windows 官网发布按用户授权在缺少 Authenticode 时继续，保留 Tauri 更新签名和公网安装包完整回读验签。下文可信发布者签名验收用于接入该能力时。
 
+## Windows 26.11.2702 已公开发布（2026-11-27）
+
+北京时间 14:23:04 公网核验通过，发布源码 `d4e06ed32`（`v26.11.2702`，`main` 已 `--ff-only` 同步），SQLite 0065。包含画板拆分与对齐/撤销重做/剪贴板（`0065_canvas_workflow_runs.sql`）、局域网快传目标与状态改进、视频逐镜复刻与画面分析（配套官网网关 `visual-input.mp4` 路由，SHA-256 `83f05052b959cb080fd9004ba6b9a337debe52990495a89f53657046be289d3c` 已在线生效），以及 26.11.2701 候选的本机角色声音与 H3 环境准备增量。
+
+TypeScript、Vite 生产构建、安装器静态校验、官网路由与更新测试（32/32 + 路由健康）、3 组桌面逻辑单测（对齐 11/11、撤销重做 5/5、快传状态 4/4）通过。Rust 原生单元测试在隔离 `APPDATA`（含 `cli-launcher.exe` / `cli-registry.dll`）下累计 **1571 通过、0 失败、73 按配置忽略**。
+
+官网和 Windows 自动更新已切换至 `/opt/bowerbird/website-releases/20261127-windows-26.11.2702`（回滚目标 `/opt/bowerbird/website-releases/20261127-library-shot-gateway`）。CDN 安装包完整回读并通过 Tauri 验签，安装包 `109,357,179` 字节，SHA-256 为 `596c402a9639c16a3386c1ec36afcb3121395d3f8d605d64d9603d42726a0290`。按授权跳过 Authenticode。旧版应用内安装及重启待实机验证。回执见 `.tmp/release-windows-26.11.2702/`。[Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.2702_x64-setup.exe)
+
 ## Windows 26.11.2701 发布候选（2026-11-27）
 
 冻结源码 `3dd8a0fed`，SQLite 0062。候选包含本机角色声音常驻推理和长文本、配音回执恢复、H3 取消环境准备，以及画板粘贴、运行锁定和视频恢复。Cloud 付费和逐镜试用沿现有门控。
