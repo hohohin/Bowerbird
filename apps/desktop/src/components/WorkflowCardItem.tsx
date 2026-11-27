@@ -583,7 +583,7 @@ export const WorkflowCardItem = memo(function WorkflowCardItem({
         {node.profileId && !profiles.some(p => p.id === node.profileId) && <option value={node.profileId}>已选规范不可用</option>}
         {profiles.map(p => <option key={p.id} value={p.id}>{p.name} · v{p.version}</option>)}
       </TacticalSelect>}
-      {node.kind === "voice" && <VoiceCard placedAssetIds={placedAudioAssets} node={node} projectId={projectId} assets={assets} referenceIds={voiceReferenceIds}
+      {node.kind === "voice" && <VoiceCard placedAssetIds={placedAudioAssets} node={node} readCurrentNode={currentNode} projectId={projectId} assets={assets} referenceIds={voiceReferenceIds}
         step={step} busy={busy} runBlocked={!!providerIssue || !!activeWorkflow} patch={changes => patch(node.id, changes)} run={() => handle(controller.start(node.id, true))} />}
       {node.kind === "loop" && <WorkflowLoopCard node={node} items={loopItems} notice={loopInputNotice} busy={busy} run={run}
         runs={workflowRuns(document).filter(entry => entry.loop?.nodeId === node.id)} bindings={bindings} nodes={nodeById} assetById={assetById} onOpenAgent={onOpenAgent}

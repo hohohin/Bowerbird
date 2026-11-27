@@ -14,6 +14,7 @@ import type { Asset } from "../lib/types";
 import type { WorkflowNode, WorkflowStep } from "../lib/canvasWorkflow";
 import { VoiceReferenceTrim } from "./VoiceReferenceTrim";
 import { AudioWaveform } from "./AudioWaveform";
+import { CanvasInput, CanvasTextarea } from "./CanvasTextarea";
 import { TacticalSelect } from "./TacticalSelect";
 import "./VoiceCard.css";
 
@@ -36,6 +37,7 @@ function audio(asset?: Asset) {
 }
 type VoiceCardProps = {
   node: WorkflowNode; projectId: string; referenceIds: string[]; assets: Asset[]; step?: WorkflowStep; busy: boolean;
+  readCurrentNode?: () => WorkflowNode;
   placedAssetIds: Set<string>; runBlocked: boolean; patch: (changes: Partial<WorkflowNode>) => void; run: () => void;
 };
 export function VoiceCard(props: VoiceCardProps) {
@@ -43,7 +45,9 @@ export function VoiceCard(props: VoiceCardProps) {
   return <VoiceCardView key={JSON.stringify([scope, props.projectId])} {...props} scope={scope} />;
 }
 
-function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, step, busy, runBlocked, patch, run, scope }: VoiceCardProps & { scope: string }) {
+function VoiceCardView({ node, readCurrentNode, projectId, referenceIds, assets, placedAssetIds, step, busy, runBlocked, patch, run, scope }: VoiceCardProps & { scope: string }) {
+  const latestNode = () => readCurrentNode ? readCurrentNode() : node;
+  const latestVoice = () => latestNode().voice ?? {};
   const settings = node.voice ?? {}, selectedId = settings.id;
   const [snapshot, setSnapshot] = useState<VoiceSnapshot>(), [error, setError] = useState("");
   const [acting, setActing] = useState(false), guard = useRef(false);
@@ -121,14 +125,14 @@ function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, 
   }
   function bind(asset: Asset) {
     if (!isAudioPath(asset.store_path)) throw new Error("请选择音频文件");
-    patch({ inputs: { ...node.inputs, image: [{ assetId: asset.id }] }, voice: { ...settings, clip: undefined } });
+    patch({ inputs: { ...latestNode().inputs, image: [{ assetId: asset.id }] }, voice: { ...latestVoice(), clip: undefined } });
     setLibrary(false);
   }
   function select(id: string) {
-    const inputs = { ...node.inputs };
+    const inputs = { ...latestNode().inputs };
     if (id) delete inputs.image;
     else delete inputs.text;
-    patch({ voice: { ...settings, id: id || undefined }, inputs });
+    patch({ voice: { ...latestVoice(), id: id || undefined }, inputs });
     setManage(false); setConfirmDelete(false); setLibrary(false); setError("");
   }
   const request = step?.voiceRequest;
@@ -137,7 +141,7 @@ function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, 
   const languageSelect = (recording || selectedId) && <div className="voice-card-row voice-card-language">
     <span>语种</span>
     <TacticalSelect aria-label="配音语种" value={settings.language ?? ""} disabled={locked}
-      onValueChange={value => patch({ voice: { ...settings, language: value || undefined } })}>
+      onValueChange={value => patch({ voice: { ...latestVoice(), language: value || undefined } })}>
       <option value="">{voiceLanguageLabel()}</option>
       {VOICE_LANGUAGE_GROUPS.map(group => <optgroup key={group.label} label={group.label}>
         {group.options.map(({ code, label }) => <option key={code} value={code}>{label}</option>)}
@@ -170,7 +174,10 @@ function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, 
     </div>}
     {!selectedId && <>
       {recording && clip && <VoiceReferenceTrim key={recording.id} asset={recording} start={clip.start} end={clip.end} disabled={locked}
-        onChange={range => patch({ voice: { ...settings, clip: { ...clip, ...range } } })} />}
+        onChange={range => {
+          const current = latestVoice();
+          patch({ voice: { ...current, clip: { ...voiceCardClip(current, recording), ...range } } });
+        }} />}
       <div className={recording ? "voice-card-row" : "voice-card-drop"}>
         {!recording && <><AudioLines size={20} /><span>{waitingForVideoAudio ? "视频音频 · 等待上游素材" : referenceIds.length ? "请选择一段音频" : "拖入参考录音"}</span></>}
         <div className="voice-card-actions"><button disabled={locked} onClick={() => void act(async () => {
@@ -187,20 +194,35 @@ function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, 
       </div>}
       {recording && clip && <>
         {languageSelect}
-        <textarea aria-label="试听台词" placeholder="试听台词" disabled={locked} value={sample} onChange={e => patch({ voice: { ...settings, sampleText: e.target.value } })} />
+        <CanvasTextarea aria-label="试听台词" placeholder="试听台词" disabled={locked} value={sample}
+          readCurrentValue={() => latestVoice().sampleText ?? defaultVoiceSample}
+          onValueChange={sampleText => patch({ voice: { ...latestVoice(), sampleText } })} />
         <button disabled={locked || runBlocked || !sample.trim() || clip.end - clip.start < .999} onClick={run}>生成试听</button>
         {audio(result)}
-        <details><summary>录音原文（可选）</summary><textarea aria-label="录音原文" disabled={locked} value={clip.transcript} onChange={e => patch({ voice: { ...settings, clip: { ...clip, transcript: e.target.value } } })} /></details>
-        <div className="voice-card-row"><input aria-label="声音名称" placeholder="声音名称" disabled={locked} value={clip.name} onChange={e => patch({ voice: { ...settings, clip: { ...clip, name: e.target.value } } })} />
+        <details><summary>录音原文（可选）</summary><CanvasTextarea aria-label="录音原文" disabled={locked} value={clip.transcript}
+          readCurrentValue={() => voiceCardClip(latestVoice(), recording).transcript}
+          onValueChange={transcript => {
+            const current = latestVoice();
+            patch({ voice: { ...current, clip: { ...voiceCardClip(current, recording), transcript } } });
+          }} /></details>
+        <div className="voice-card-row"><CanvasInput aria-label="声音名称" placeholder="声音名称" disabled={locked} value={clip.name}
+          readCurrentValue={() => voiceCardClip(latestVoice(), recording).name}
+          onValueChange={name => {
+            const current = latestVoice();
+            patch({ voice: { ...current, clip: { ...voiceCardClip(current, recording), name } } });
+          }} />
           <button disabled={locked || !clip.name.trim() || clip.end - clip.start < .999} onClick={() => void act(async () => {
-            const voice = await voiceApi.save(clip.name, recording.id, clip.transcript, clip.start, clip.end);
+            const currentClip = voiceCardClip(latestVoice(), recording);
+            const voice = await voiceApi.save(currentClip.name, recording.id, currentClip.transcript, currentClip.start, currentClip.end);
             if (currentScope()) { select(voice.id); window.dispatchEvent(new Event(voicesChanged)); }
           })}>保存并使用</button></div>
       </>}
     </>}
     {selectedId && <>
       {languageSelect}
-      <textarea aria-label="配音台词" placeholder="输入角色要说的话…" disabled={locked} value={node.prompt} onChange={e => patch({ prompt: e.target.value })} />
+      <CanvasTextarea aria-label="配音台词" placeholder="输入角色要说的话…" disabled={locked} value={node.prompt}
+        readCurrentValue={() => latestNode().prompt}
+        onValueChange={prompt => patch({ prompt })} />
       <button className="voice-card-primary" disabled={locked || runBlocked || !selected || (!node.prompt.trim() && !node.inputs.text?.length)} onClick={run}>生成配音</button>
       {audio(result)}
     </>}
@@ -210,7 +232,7 @@ function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, 
           onChange={e => {
             const { value, valueAsNumber } = e.currentTarget;
             if (value === "" || Number.isInteger(valueAsNumber) && valueAsNumber >= 0 && valueAsNumber <= 4294967295) {
-              patch({ voice: { ...settings, seed: value === "" ? undefined : valueAsNumber } });
+              patch({ voice: { ...latestVoice(), seed: value === "" ? undefined : valueAsNumber } });
             }
           }} />
       </label>
@@ -228,7 +250,8 @@ function VoiceCardView({ node, projectId, referenceIds, assets, placedAssetIds, 
           await saveMediaAssetToCanvas(asset, projectId, `voice:${job.id}`);
         })}>添加到画板</button>}
         {job.voice_id && snapshot.voices.some(v => v.id === job.voice_id) && <button disabled={locked} onClick={() => {
-          patch({ voice: { ...settings, id: job.voice_id!, seed: job.seed ?? undefined, language: job.language ?? undefined }, prompt: job.text, inputs: node.inputs.signal ? { signal: node.inputs.signal } : {} });
+          const { signal } = latestNode().inputs;
+          patch({ voice: { ...latestVoice(), id: job.voice_id!, seed: job.seed ?? undefined, language: job.language ?? undefined }, prompt: job.text, inputs: signal ? { signal } : {} });
           setHistory(false);
         }}>复用台词</button>}
         {job.recoverable && <button disabled={acting} onClick={() => void act(() => voiceApi.recover(job.id))}>重试保存</button>}

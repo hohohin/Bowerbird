@@ -19,9 +19,76 @@ const browser=await chromium.launch({channel:'chrome',headless:true});
 const page=await browser.newPage({viewport:{width:1600,height:1100}});
 page.setDefaultTimeout(10000);
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
+
+async function flushWorkflow() {
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    await canvasWorkflowController('p').flush();
+  });
+}
+
+async function checkVoiceIme(cdp, field, original, path) {
+  const label = await field.getAttribute('aria-label');
+  const cardId = await field.evaluate(element => element.closest('[data-workflow-card]').dataset.workflowCard);
+  const offset = 2;
+  const insert = text => original.slice(0, offset) + text + original.slice(offset);
+  async function checkSelection(text, stage) {
+    const caret = offset + text.length;
+    assert.deepEqual(await field.evaluate(element => [element.value, element.selectionStart, element.selectionEnd, document.activeElement === element]),
+      [insert(text), caret, caret, true], `${label}: ${stage}`);
+  }
+  const savedText = () => page.evaluate(({ cardId, path }) => {
+    const node = JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === cardId);
+    return path.reduce((value, key) => value?.[key], node);
+  }, { cardId, path });
+
+  await flushWorkflow();
+  const savesBefore = await page.evaluate(() => {
+    const saves = window.voiceWorkflowSaves;
+    saves.delay = 120;
+    saves.holdNext = true;
+    return saves.started;
+  });
+  await field.fill(original);
+  await page.waitForFunction(() => window.voiceWorkflowSaves.release);
+  await field.evaluate((element, offset) => {
+    const events = window.voiceImeEvents = [];
+    for (const type of ['compositionstart', 'input', 'compositionend']) {
+      element.addEventListener(type, event => events.push({ type, data: event.data, isComposing: event.isComposing }));
+    }
+    element.focus();
+    element.setSelectionRange(offset, offset);
+  }, offset);
+  await cdp.send('Input.imeSetComposition', { text: 'zhong', selectionStart: 5, selectionEnd: 5 });
+  await checkSelection('zhong', 'pinyin stays at the caret');
+  await cdp.send('Input.imeSetComposition', { text: '中文', selectionStart: 2, selectionEnd: 2 });
+  await checkSelection('中文', 'the candidate replaces the pinyin');
+
+  await page.evaluate(() => { window.voiceWorkflowSaves.release(); });
+  await flushWorkflow();
+  assert.equal(await savedText(), original, `${label}: only the earlier edit is saved during composition`);
+  assert.equal(await page.evaluate(() => window.voiceWorkflowSaves.started), savesBefore + 1, `${label}: composing does not start a save`);
+  await checkSelection('中文', 'the earlier save acknowledgement preserves the candidate and caret');
+
+  await cdp.send('Input.insertText', { text: '中文' });
+  await checkSelection('中文', 'committing the candidate preserves the caret');
+  await page.keyboard.type('!');
+  await checkSelection('中文!', 'typing continues at the caret');
+  const events = await page.evaluate(() => window.voiceImeEvents);
+  assert.equal(events.filter(event => event.type === 'compositionstart').length, 1, label);
+  assert.ok(events.some(event => event.type === 'input' && event.isComposing && event.data === 'zhong'), label);
+  assert.deepEqual(events.filter(event => event.type === 'compositionend').map(event => event.data), ['中文'], label);
+  await flushWorkflow();
+  await checkSelection('中文!', 'save acknowledgements preserve the caret after commit');
+  assert.equal(await savedText(), insert('中文!'), `${label}: committed text is persisted`);
+  await page.evaluate(() => { window.voiceWorkflowSaves.delay = 0; });
+  return insert('中文!');
+}
+
 try {
   await page.addInitScript(()=>{
     let ipc;
+    const workflowSaves = window.voiceWorkflowSaves = { started: 0, delay: 0 };
     const source={id:'clip',name:'参考录音',ext:'wav',store_path:'/.tmp/voice-card-ui/reference.wav',duration:4,created_at:1};
     const assetTitle=text=>{
       const normalized=Array.from(text.trim().split(/\s+/u).join(' '));
@@ -54,6 +121,15 @@ try {
     Object.defineProperty(window,'__TAURI_INTERNALS__',{configurable:true,get:()=>ipc,set:original=>{
       ipc={...original,invoke:async(command,args)=>{
         const s=read();
+        if(command==='canvas_workflow_save'){
+          workflowSaves.started++;
+          if(workflowSaves.holdNext) {
+            workflowSaves.holdNext = false;
+            await new Promise(resolve => { workflowSaves.release = resolve; });
+            workflowSaves.release = undefined;
+          }
+          if(workflowSaves.delay) await new Promise(resolve => setTimeout(resolve, workflowSaves.delay));
+        }
         if(command.startsWith('voice_')) (window.voiceCalls??=[]).push({command,args});
         if(command==='project_canvas_node_create' && window.failVoiceDelivery) { window.failVoiceDelivery=false;throw new Error('模拟画板写入失败'); }
         if(command==='voice_environment'){
@@ -157,6 +233,13 @@ try {
   };
   await language.getByText('自动（随台词）',{exact:true}).waitFor();
   await chooseLanguage('粤语');
+  const cdp = await page.context().newCDPSession(page);
+  await checkVoiceIme(cdp, card.getByRole('textbox', { name: '试听台词' }), '试听前后', ['voice', 'sampleText']);
+  const transcriptDetails = card.getByText('录音原文（可选）', { exact: true });
+  await transcriptDetails.click();
+  const transcript = await checkVoiceIme(cdp, card.getByRole('textbox', { name: '录音原文' }), '录音前后', ['voice', 'clip', 'transcript']);
+  await transcriptDetails.click();
+  await checkVoiceIme(cdp, card.getByRole('textbox', { name: '声音名称' }), '角色前后', ['voice', 'clip', 'name']);
   await card.getByRole('textbox',{name:'试听台词'}).fill('这是编辑后的试听句。');
   await card.getByRole('spinbutton',{name:'入点秒数'}).fill('1');
   await card.getByText('高级设置',{exact:true}).click();
@@ -193,6 +276,8 @@ try {
   assert.equal(await card.locator('.voice-card > .audio-waveform').count(),0);
   await card.getByRole('textbox',{name:'声音名称'}).fill('林岸');
   await card.getByRole('button',{name:'保存并使用'}).click();
+  assert.deepEqual(await page.evaluate(() => window.voiceCalls.find(call => call.command === 'voice_save').args),
+    { name: '林岸', assetId: 'clip', transcript, start: 1, end: 4 });
   await card.getByRole('textbox',{name:'配音台词'}).fill('欢迎来到这里。');
   assert.equal(await card.getByRole('textbox',{name:'试听台词'}).count(),0);
   await page.evaluate(()=>{window.failVoiceDelivery=true;window.loseVoiceReceipt=true;});
@@ -289,8 +374,22 @@ try {
   await page.evaluate(()=>window.releaseVoiceCheck({phase:'ready',message:'旧资料库的迟到结果'}));
   await page.waitForTimeout(50);
   assert.equal(await page.locator('.workflow-card.is-voice .comfy-environment-dot.is-ready').count(),0);
+  const firstVoice = card.first();
+  const speechField = firstVoice.getByRole('textbox', { name: '配音台词' });
+  const speechWithIme = await checkVoiceIme(cdp, speechField, '欢迎继续创作。', ['prompt']);
+  await cdp.detach();
+  await page.reload();
+  await speechField.waitFor();
+  assert.equal(await speechField.inputValue(), speechWithIme, 'committed speech survives reload');
+  await page.evaluate(() => { window.voiceWorkflowSaves.delay = 120; });
+  await firstVoice.getByText('项目配音', { exact: true }).click();
+  const historyEntry = firstVoice.getByText('历史配音 32', { exact: true }).locator('..');
+  await historyEntry.getByRole('button', { name: '复用台词', exact: true }).click();
+  assert.equal(await speechField.inputValue(), '历史配音 32', 'reusing history immediately updates the speech field');
+  await flushWorkflow();
   assert.deepEqual(errors,[]);
   console.log('PASS role voice setup, audition and crop, seeded language requests, audio asset title, event updates, idempotent recovery, diagnostics, paginated history and card persistence');
+  console.log('PASS voice card IME in all four fields, delayed save acknowledgements, reload and history reuse');
 } catch(e) {
   console.error(await page.locator('.workflow-card.is-voice').allTextContents(),errors,await page.evaluate(()=>({run: JSON.parse(sessionStorage.getItem('workflow-p')||'{}').document?.run, recent:window.calls.slice(-12).map(c=>c.command), alerts:document.body.innerText.slice(-650), voice:sessionStorage.getItem('voice-fixture')})));
   throw e;

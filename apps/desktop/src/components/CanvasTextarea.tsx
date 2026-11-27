@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useTransition, type TextareaHTMLAttributes } from "react";
+import { useLayoutEffect, useRef, useTransition, type InputHTMLAttributes, type TextareaHTMLAttributes } from "react";
 
 const supportsFieldSizing = typeof CSS !== "undefined" && CSS.supports("field-sizing", "content");
 
@@ -78,6 +78,45 @@ export function CanvasTextarea({ value, fitContent = false, readCurrentValue, on
         }
       }
       if (measure) fitTextarea(input);
+      if (input.value !== current) publish(input.value);
+    }}
+    onChange={event => { if (compositionBase.current === null) publish(event.currentTarget.value); }} />;
+}
+
+type CanvasInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "defaultValue" | "onChange" | "onCompositionStart" | "onCompositionEnd"> & {
+  value: string;
+  readCurrentValue: () => string;
+  onValueChange: (text: string) => void;
+};
+export function CanvasInput({ value, readCurrentValue, onValueChange, ...props }: CanvasInputProps) {
+  const field = useRef<HTMLInputElement>(null);
+  const initial = useRef(value);
+  const compositionBase = useRef<string | null>(null);
+  const [pending, updateBoard] = useTransition();
+  useLayoutEffect(() => {
+    const input = field.current;
+    if (pending || !input || input.value === value || compositionBase.current !== null || readCurrentValue() !== value) return;
+    const change = changedRange(input.value, value);
+    input.setRangeText(change.text, change.start, change.end, "preserve");
+  }, [pending, value]);
+  function publish(text: string) {
+    updateBoard(() => onValueChange(text));
+  }
+  return <input {...props} ref={field} defaultValue={initial.current}
+    onCompositionStart={event => { compositionBase.current = event.currentTarget.value; }}
+    onCompositionEnd={event => {
+      const base = compositionBase.current;
+      compositionBase.current = null;
+      const input = event.currentTarget;
+      const current = readCurrentValue();
+      if (base !== null && base !== current) {
+        const board = changedRange(base, current), typed = changedRange(base, input.value);
+        // Apply independent board changes after candidate confirmation.
+        if (board.end <= typed.start || board.start >= typed.end) {
+          const shift = board.end <= typed.start ? 0 : input.value.length - base.length;
+          input.setRangeText(board.text, board.start + shift, board.end + shift, "preserve");
+        }
+      }
       if (input.value !== current) publish(input.value);
     }}
     onChange={event => { if (compositionBase.current === null) publish(event.currentTarget.value); }} />;
