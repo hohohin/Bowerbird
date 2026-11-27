@@ -35,6 +35,7 @@ pub struct Plan {
     pub selected: Vec<String>,
     pub results: Results,
     pub threshold: f64,
+    pub hard_cuts_detected: bool,
     pub can_undo: bool,
     pub undo_cuts: Option<Vec<Cut>>,
 }

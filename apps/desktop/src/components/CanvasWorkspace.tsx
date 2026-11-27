@@ -4,7 +4,6 @@ import { optimizeComposerLocalVideo } from "../lib/composerLocalVideo";
 import { GenerationJobPreview, GenerationJobProgress } from "./GenerationJobFeedback";
 import { originalDeletionEpoch, originalDeletionFor, subscribeOriginalDeletionCommits, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { dismissNotices, readDismissedNotices, subscribeDismissedNotices } from "../lib/dismissedNotices";
-import { userErrorMessage } from "../lib/userError";
 import type { DraftDocument } from "../lib/draftDocument";
 import { isTextAsset, isTextPath } from "../lib/textMedia";
 import { readFileContentCards } from "../lib/fileContentCards";
@@ -28,7 +27,7 @@ import { documentToPromptLoad } from "../lib/documentComposer";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import { CanvasArtboardDialog } from "./CanvasArtboardDialog";
 import { CANVAS_ARTBOARD_FROM_IMAGE, artboardComposition, containArtboardImage, intersectArtboard, type ArtboardComposition, type ArtboardImage } from "../lib/canvasArtboard";
-import { CanvasToolbox, type CanvasToolboxTool } from "./CanvasToolbox";
+import { CanvasToolbox } from "./CanvasToolbox";
 import { CanvasToolGroup, CanvasToolGroups, useCanvasToolMemory, type CanvasToolActivation, type CanvasToolGroupId } from "./CanvasToolGroup";
 import { ModalShell } from "./ModalShell";
 import { WORKFLOW_CARD_PRESENTATION } from "./WorkflowLayerPresentation";
@@ -41,16 +40,14 @@ import { canvasConversationCards, canvasConversationGroupTarget } from "../lib/c
 import { CanvasConnectionHandle } from "./CanvasConnectionHandle";
 import { CanvasConversationImages } from "./CanvasConversationImages";
 import { GenerationGroupControls } from "./GenerationGroupControls";
-import { canvasMaterialFilterState, type CanvasMaterialFilterState } from "../lib/canvasMaterialFilter";
+import { canvasMaterialFilterState } from "../lib/canvasMaterialFilter";
 import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds, resolveGenerationCells, canvasSessionImages, workflowGenerationCardProjection, workflowGenerationActivity, workflowGenerationOrigins, type WorkflowGenerationActivity } from "../lib/canvasSessionOutputs";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { resolveWorkflowTaskFocus } from "../lib/workflowTaskFocus";
-import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
-import { restoreCanvasNoteEdit } from "../lib/canvasNoteUndo";
+import { workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
 import { removeWorkflowNodes } from "../lib/workflowRemoval";
 import { WORKFLOW_CARD_DRAG_TYPE, workflowCardWidth, workflowNodeRun, type WorkflowInput, type WorkflowKind, type WorkflowNode } from "../lib/canvasWorkflow";
 
-import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasLibraryResize } from "./CanvasLibraryResize";
 import { useAssetTransferDialogs } from "./AssetTransferMenuItems";
@@ -59,13 +56,13 @@ import { CANVAS_LAYER_STEP_EVENT, stepCanvasLayers, type CanvasLayerStepDetail }
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
 import "./CanvasNotes.css";
 import { CanvasTacticalOverlay } from "./CanvasTacticalOverlay";
-import { TacticalSelect } from "./TacticalSelect";
 import "./CanvasTactical.css";
 import "./CanvasTacticalCards.css";
 import { canvasDocumentHeight, canvasSectionMembers, canvasTextMinSize, emptyCanvasCell, expandCanvasSections, readCanvasNote, SECTION_COLORS, type CanvasNotePayload } from "../lib/canvasNotes";
 import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
 import { notify, notifyError } from "../lib/notify";
 import { arrangeCanvasNodes } from "../lib/canvasArrangement";
+import { CANVAS_ALIGN_NODES_EVENT, computeCanvasAlignment, type CanvasAlignNodesEventDetail } from "../lib/canvasAlignment";
 import { workflowArrangementEdges } from "../lib/canvasOutputPlacement";
 import { canvasCardSourceRects, placeCanvasCardNearSource, newReferencesForCanvasCard, placeNewCanvasReferences, trackNewCanvasReferences } from "../lib/canvasReferencePlacement";
 import { DEFAULT_VIDEO_OPTIONS, isVideoPath, videoModelLabel } from "../lib/videoGeneration";
@@ -101,21 +98,15 @@ import {
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "@tauri-apps/api/core";
 import {
-  Archive,
-  ArchiveRestore,
   Copy,
   ChevronUp,
   Folder,
   FileText,
   Images,
-  LayoutDashboard,
   Layers,
   List,
   LoaderCircle,
-  Maximize2,
   MessageSquarePlus,
-  Magnet,
-  Minus,
   Move,
   MousePointer2,
   MessageCircle,
@@ -127,9 +118,7 @@ import {
   PanelLeftOpen,
   Palette,
   Repeat2,
-  Plus,
   Sparkles,
-  Undo2,
   X,
 } from "lucide-react";
 import { LibraryCatalog } from "./LibraryCatalog";
@@ -154,7 +143,7 @@ import { AgentApprovalToggle } from "./AgentApprovalToggle";
 import { CreativeTimeline, generationStatusLabel } from "./CreativeTimeline";
 import { api } from "../lib/api";
 import { externalFiles } from "../lib/externalFiles";
-import { countCloudAgentResultImages, selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
+import { selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
 import { getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
 import { EXTERNAL_DRAG_ENDED, startExternalDrag } from "../lib/externalDrag";
 import { createCanvasDragHold } from "../lib/canvasDragHold";
@@ -222,7 +211,6 @@ import {
   persistedProjectActiveNodeId,
   rehydrateProjectCanvasAssets,
   type CanvasAssetSnapshot,
-  type ProjectCanvasUiNode,
   canvasOriginalDeletionProjection,
 } from "../lib/creativeCanvas";
 import {
@@ -236,11 +224,20 @@ import { canvasPointerSample, clearDragProjection, useCanvasDrag, type CanvasDra
 import { useCanvasScope, useCanvasScopeValue } from "./canvas/useCanvasScope";
 import { afterCanvasPaint, ENTRY_LIGHT_CARD_LIMIT, EMPTY_ENTRY_CARDS, useCanvasEntryScheduler } from "./canvas/useCanvasEntryScheduler";
 import { useCanvasUndo, type CanvasUndoEntry } from "./canvas/useCanvasUndo";
+import { useCanvasHistoryExecutor } from "./canvas/useCanvasHistoryExecutor";
+import { useCanvasClipboard } from "./canvas/useCanvasClipboard";
+import { FolderPreview } from "./canvas/CanvasFolderPreview";
+import { CanvasWorkspaceHeader, CanvasWorkspaceLoadFailure } from "./canvas/CanvasWorkspaceHeader";
+import {
+  activeFromProject, agentGroupSummary, assetNodeSize, ASSET_WIDTH, baseNodeRect, canvasGeometryDiffers, canvasId,
+  containedNodeIds, DEFAULT_TITLE, groupedAssetNode, isCanvasRedoShortcut, isToolbarToolLocked, promptNodeSummary,
+  provisionalCanvas, sameCanvasGenerationJob, uniqueSnapshots, workflowToolsAllowed,
+  type ActiveCanvasState, type CanvasAssetNode, type CanvasFolderNode, type CanvasNode, type CanvasTool, type CanvasToolbarTool,
+} from "./canvas/canvasWorkspaceHelpers";
 import { registerProjectCanvasCallback } from "../lib/projectCanvasCallbacks";
+import { shallow } from "zustand/shallow";
 import { useStore, type DraftEditorRequest } from "../store";
 import { EXPLORER_CANVAS_DROP_EVENT, prepareExplorerCanvasDrop, type ExplorerCanvasDropDetail } from "../lib/explorerCanvasDrop";
-import { importDroppedMedia, prepareMediaImport, readClipboardMediaPaths } from "../lib/mediaImport";
-import { clipboardEditing, clipboardMediaFiles } from "../lib/clipboardMedia";
 import type {
   Asset,
   AnnotationMeta,
@@ -249,33 +246,16 @@ import type {
   CanvasNode as ProjectGraphNode,
   CreativeThread,
   GenJob,
-  Project,
-  ProjectTitleSource,
   CreativeViewMode,
 } from "../lib/types";
 
 const TextWorkspace = lazyModule(() => import("./TextWorkspace").then(module => ({ default: module.TextWorkspace })));
-const ASSET_WIDTH = 190;
-const EMPTY_WORKFLOW_NODES: WorkflowNode[] = [];
 
-/** Board geometry and results depend on job identity, live preview and saved turns. */
-function sameCanvasGenerationJob(before: GenJob | undefined | null, next: GenJob | undefined | null) {
-  return before === next || !!before && !!next
-    && before.id === next.id && before.projectId === next.projectId && before.conversationId === next.conversationId
-    && before.running === next.running && before.preview === next.preview && before.turns === next.turns
-    && before.provider === next.provider && before.media === next.media && before.videoOptions === next.videoOptions
-    && before.lastPrompt === next.lastPrompt;
-}
-let canvasClipboardText = "";
-let canvasClipboardCopiedAt = 0;
+const EMPTY_WORKFLOW_NODES: WorkflowNode[] = [];
 const FOLDER_WIDTH = 204;
 const FOLDER_HEIGHT = 178;
-const DEFAULT_TITLE = "未命名创作";
-const CANVAS_SNAP_ENABLED_KEY = "bowerbird.canvasSnapEnabled";
 
-type CanvasNode = ProjectCanvasUiNode;
-type CanvasAssetNode = Extract<CanvasNode, { kind: "asset" }>;
-type CanvasFolderNode = Extract<CanvasNode, { kind: "folder" }>;
+const CANVAS_SNAP_ENABLED_KEY = "bowerbird.canvasSnapEnabled";
 
 interface CanvasMarqueePress {
   origin: CanvasPoint;
@@ -291,191 +271,12 @@ interface CanvasMarqueePress {
   sectionIds?: Set<string>;
 }
 
-type CanvasTool = "select" | "pan" | "section" | "artboard" | "bubble" | "document" | Exclude<WorkflowKind, "trigger">;
-type CanvasToolbarTool = CanvasTool | CanvasToolboxTool | "trigger" | "templates";
 type WorkflowToolbarCard = "generation" | "agent" | "instruction" | "trigger" | "loop" | "visual-profile" | "skill" | "planner" | "templates";
-const workflowToolsAllowed = ({ cloudAuth, cloudEntitlement }: ReturnType<typeof useStore.getState>) =>
-  cloudAuth?.logged_in === true && !!cloudAuth.user_id && cloudEntitlement?.user_id === cloudAuth.user_id
-  && (cloudEntitlement.tier === "pro" || cloudEntitlement.tier === "studio")
-  && (cloudEntitlement.offline_state === "fresh" || cloudEntitlement.offline_state === "grace");
-const freeCanvasTools = new Set<CanvasToolbarTool>(["select", "pan", "section", "artboard", "document", "text", "bubble", "generation", "replication", "video-to-doc"]);
-function isToolbarToolLocked(tool: CanvasToolbarTool, pro: boolean, localVideoAllowed: boolean) {
-  return tool === "comfy-video" ? !localVideoAllowed : !pro && !freeCanvasTools.has(tool);
-}
-
-interface ActiveCanvasState {
-  id: string;
-  title: string;
-  titleSource: ProjectTitleSource;
-  draftJson: string;
-  materialized: boolean;
-}
 
 type HoverIntent =
   | { kind: "internal"; key: string; movingId: string; targetId: string }
   | { kind: "external"; key: string; targetId: string; assets: CanvasAssetSnapshot[] }
   | { kind: "cell"; key: string; targetId: string; cellId: string; rect: CanvasRect; source: WorkflowInput; movingId?: string };
-
-function canvasId(prefix: string) {
-  return `${prefix}-${crypto.randomUUID()}`;
-}
-
-function provisionalCanvas(project: Project | null): ActiveCanvasState {
-  return {
-    id: project?.id ?? "",
-    title: project?.name ?? DEFAULT_TITLE,
-    titleSource: project?.title_source ?? "default",
-    draftJson: JSON.stringify({ schema_version: 1 }),
-    materialized: !!project && !project.provisional,
-  };
-}
-
-function activeFromProject(
-  project: Project,
-  draftJson: string,
-): ActiveCanvasState {
-  return {
-    id: project.id,
-    title: project.name,
-    titleSource: project.title_source ?? "default",
-    draftJson,
-    materialized: true,
-  };
-}
-
-function assetNodeSize(asset: CanvasAssetSnapshot) {
-  return canvasAssetNodeSize(asset, ASSET_WIDTH);
-}
-
-function baseNodeRect(node: { x: number; y: number; width: number; height: number; kind?: string }) {
-  // Stored asset geometry includes its caption, independent of this display preference.
-  const caption = node.kind === "asset" && !useStore.getState().settings?.canvas_show_asset_names ? 30 : 0;
-  return { x: node.x, y: node.y, width: node.width, height: node.height - caption };
-}
-
-function containedNodeIds(nodes: CanvasNode[]) {
-  return new Set(nodes.flatMap((node) => node.kind === "asset"
-    ? [node.asset.id]
-    : node.assets.map((asset) => asset.id)));
-}
-
-function uniqueSnapshots(assets: CanvasAssetSnapshot[]) {
-  const seen = new Set<string>();
-  return assets.filter((asset) => {
-    if (seen.has(asset.id)) return false;
-    seen.add(asset.id);
-    return true;
-  });
-}
-
-function groupedAssetNode(asset: CanvasAssetSnapshot, group: CanvasFolderNode, index: number): CanvasAssetNode {
-  const size = assetNodeSize(asset);
-  return {
-    kind: "asset",
-    id: asset.id,
-    asset,
-    x: group.x + (index % 2) * 22,
-    y: group.y + Math.floor(index / 2) * 22,
-    width: size.width,
-    height: size.height,
-    order: group.order + index + 1,
-  };
-}
-
-function promptNodeSummary(node: ProjectGraphNode) {
-  try {
-    const payload = JSON.parse(node.payloadJson) as {
-      job_id?: string;
-      turn_key?: string;
-      text?: string;
-      provider?: string;
-      status?: string;
-    };
-    return {
-      jobId: payload.job_id ?? "",
-      turnKey: payload.turn_key ?? "",
-      text: payload.text?.trim() || "生成指令",
-      provider: payload.provider ?? "provider",
-      status: payload.status ?? "saved",
-    };
-  } catch {
-    return { jobId: "", turnKey: "", text: "生成指令", provider: "provider", status: "saved" };
-  }
-}
-
-function agentGroupSummary(node: ProjectGraphNode) {
-  try {
-    const payload = JSON.parse(node.payloadJson) as {
-      run_id?: string;
-      skill_id?: string;
-      status?: string;
-      current_step?: string;
-      progress?: number;
-      approvals?: Array<{ status?: string }>;
-      clarifications?: Array<{ status?: string }>;
-      artifacts?: Array<{ role?: string; mime?: string; user_visible?: boolean }>;
-    };
-    return {
-      runId: payload.run_id ?? "",
-      skill: payload.skill_id ?? "Bowerbird Agent",
-      status: payload.status ?? "created",
-      currentStep: payload.current_step ?? null,
-      progress: payload.progress ?? null,
-      pendingApprovals: payload.approvals?.filter((item) => item.status === "pending").length ?? 0,
-      pendingClarifications: payload.clarifications?.filter((item) => item.status === "pending").length ?? 0,
-      artifactCount: countCloudAgentResultImages(payload.artifacts ?? []),
-    };
-  } catch {
-    return {
-      runId: "",
-      skill: "Bowerbird Agent",
-      status: "unknown",
-      currentStep: null,
-      progress: null,
-      pendingApprovals: 0,
-      pendingClarifications: 0,
-      artifactCount: 0,
-    };
-  }
-}
-
-function FolderPreview({
-  node,
-  onAssetContextMenu,
-  onAssetPointerDown,
-  filterState,
-}: {
-  node: CanvasFolderNode;
-  filterState: (asset: CanvasAssetSnapshot) => CanvasMaterialFilterState;
-  onAssetContextMenu: (event: React.MouseEvent<HTMLElement>, asset: CanvasAssetSnapshot) => void;
-  onAssetPointerDown: (event: PointerEvent<HTMLElement>, asset: CanvasAssetSnapshot) => void;
-}) {
-  const layerWorkspaceIds = useStore((state) => state.layerWorkspaceIds);
-  return (
-    <div className="canvas-folder-grid" aria-hidden="true">
-      {node.assets.slice(0, 4).map((asset) => {
-        const path = canvasAssetMediaPath(asset);
-        return isVideoPath(asset.storePath) ? <VideoPoster key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} onPointerDown={event => onAssetPointerDown(event, asset)} onContextMenu={event => onAssetContextMenu(event, asset)} /> : path ? (
-          <div key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} className="relative min-h-0" onPointerDown={event => onAssetPointerDown(event, asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
-            <CanvasImage
-              path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height}
-              alt=""
-              draggable={false}
-              loading="lazy"
-            />
-            {asset.assetId && layerWorkspaceIds.has(asset.assetId) && <span className="pointer-events-none absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
-          </div>
-        ) : (
-          <span key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} onPointerDown={event => onAssetPointerDown(event, asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
-            {asset.name.slice(0, 1)}
-          </span>
-        );
-      })}
-      {node.assets.length > 4 && <b>+{node.assets.length - 4}</b>}
-    </div>
-  );
-}
-
 
 export function CanvasWorkspace({
   projectId,
@@ -518,7 +319,7 @@ export function CanvasWorkspace({
   const promptedAssets = useStore((state) => state.promptedAssets);
   const captionedIds = useStore((state) => state.captionedIds);
   const layerWorkspaceIds = useStore((state) => state.layerWorkspaceIds);
-  const projects = useStore((state) => state.projects);
+  const project = useStore((state) => state.projects.find((candidate) => candidate.id === projectId) ?? null);
   const reloadProjects = useStore((state) => state.reloadProjects);
   const openContextMenu = useStore((state) => state.openContextMenu);
   const showAssetNames = useStore((state) => state.settings?.canvas_show_asset_names ?? false);
@@ -550,13 +351,13 @@ export function CanvasWorkspace({
     if (chat) { setWorkflowAgentDetail(null); setSelectedChatId(chat.id); }
   }, [chatSummaries, workflowAgentDetail, projectId]);
   const cloudEntitlement = useStore((state) => state.cloudEntitlement);
-  const cloudAgentRuns = useStore((state) => state.cloudAgentRuns);
+  const cloudAgentRuns = useStore((state) => Object.fromEntries(Object.entries(state.cloudAgentRuns)
+    .filter(([id, run]) => run.projectId === projectId || id === state.activeCloudAgentRunId)), shallow);
   const activeCloudAgentRunId = useStore((state) => state.activeCloudAgentRunId);
   const openCloudAgentRun = useStore((state) => state.openCloudAgentRun);
   const creativeNavigation = useStore((state) => state.creativeNavigation);
   const projectRoutePending = useStore((state) => state.projectRoutePending);
   const projectRouteRevision = useStore((state) => state.projectRouteRevision);
-  const project = projects.find((candidate) => candidate.id === projectId) ?? null;
   const focusedThreadId = useStore((state) => state.focusedThreadId);
   const setFocusedThreadId = useStore((state) => state.setFocusedThreadId);
   const timelineScope = useStore((state) => state.projectTimelineScope);
@@ -723,15 +524,14 @@ export function CanvasWorkspace({
   const snapSizeObserverRef = useRef<ResizeObserver | null>(null);
   const cellHitCacheRef = useRef<ReturnType<typeof createCanvasCellHitCache> | null>(null);
   const lastImportPointRef = useRef<{ projectId: string; routeRevision: number; point: CanvasPoint; at: number } | null>(null);
-  const mediaPasteQueue = useRef(Promise.resolve());
   const pastedNodeIds = useRef(new Set<string>());
   const focusedThreadIdRef = useMemo(() => ({ get current() { return useStore.getState().focusedThreadId; } }), []);
   const timelineScopeRef = useMemo(() => ({ get current() { return useStore.getState().projectTimelineScope; } }), []);
   const sourceWidthRef = useRef(360); // Preserve the legacy saved view field; the library now fills the workspace.
   const groupsRef = useRef(new Map<string, CanvasGroup>());
-  const { undoHistoryRef, canUndo, pushCanvasUndo, popCanvasUndo, removeUndoEntry, clearCanvasUndo, undoCanvasAction } =
+  const { undoHistoryRef, redoHistoryRef, canUndo, canRedo, pushCanvasUndo, clearCanvasRedo, clearCanvasUndo, undoCanvasAction, redoCanvasAction } =
     useCanvasUndo(() => { flushDocumentCard(); return activeCanvasRef.current.id; },
-      applyCanvasUndo, error => notifyError(error, "画板撤销未完成"));
+      (entry, mode, consume) => applyCanvasUndo(entry, mode, consume), (error, mode) => notifyError(error, mode === "undo" ? "画板撤销未完成" : "画板重做未完成"));
   useEffect(() => {
     const onMerge = (event: Event) => {
       const { edit, projectId } = (event as CustomEvent<{ edit: GalleryMerge; projectId: string | null }>).detail;
@@ -793,7 +593,6 @@ export function CanvasWorkspace({
     workflowRef.current?.cancelPlacement();
     setDrawingTool("select");
   }, [chosenToolLocked, setDrawingTool]);
-  const pastingRef = useRef(false);
   const [workflowRevision, setWorkflowRevision] = useState(0);
   const workflow = projectId ? canvasWorkflowController(projectId) : null;
   const [workflowEntry, setWorkflowEntry] = useState<{ projectId: string; revision: number; error: string | null; retry: () => void } | null>(null);
@@ -1176,6 +975,17 @@ export function CanvasWorkspace({
     window.addEventListener(CANVAS_ARRANGE_NODES_EVENT, arrangeRequestedNodes);
     return () => window.removeEventListener(CANVAS_ARRANGE_NODES_EVENT, arrangeRequestedNodes);
   }, [arrangeRequestedNodes]);
+
+  const alignRequestedNodes = useLatestCallback((event: Event) => {
+    const detail = (event as CustomEvent<CanvasAlignNodesEventDetail>).detail;
+    if (!detail || detail.projectId !== activeCanvasRef.current.id || loadingRef.current
+      || viewModeRef.current !== "canvas" || useStore.getState().projectRoutePending) return;
+    alignNodes(detail);
+  });
+  useEffect(() => {
+    window.addEventListener(CANVAS_ALIGN_NODES_EVENT, alignRequestedNodes);
+    return () => window.removeEventListener(CANVAS_ALIGN_NODES_EVENT, alignRequestedNodes);
+  }, [alignRequestedNodes]);
 
   const changeLayers = useLatestCallback((event: Event) => {
     const detail = (event as CustomEvent<CanvasLayerStepDetail>).detail;
@@ -2317,14 +2127,26 @@ export function CanvasWorkspace({
       undoCanvasAction();
       return;
     }
+    if (isCanvasRedoShortcut(event) && (!editing || !!target?.closest(".canvas-text-grid"))
+      && !event.defaultPrevented && !scopedInspectorOpen && viewModeRef.current === "canvas" && !activeDragRef.current
+      && !document.querySelector('[role="dialog"][aria-modal="true"]') && redoHistoryRef.current.length > 0) {
+      event.preventDefault();
+      redoCanvasAction();
+      return;
+    }
     const drawingKey = event.key.toLowerCase();
-    if (["v", "a", "b", "n"].includes(drawingKey)) {
+    const navigationKey = event.shiftKey && ["Digit1", "Digit2", "Digit0"].includes(event.code);
+    if (navigationKey || ["v", "a", "b", "n"].includes(drawingKey)) {
       if (event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.isComposing || event.keyCode === 229
         || editing || exploring || scopedInspectorOpen || viewModeRef.current !== "canvas" || loadingRef.current
         || promptMenu || useStore.getState().contextMenu
         || document.querySelector('[role="menu"], [role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]')) return;
       event.preventDefault();
-      if (drawingKey === "v") chooseCanvasTool("select");
+      if (navigationKey) {
+        if (event.code === "Digit1") fitCanvas();
+        else if (event.code === "Digit0") resetCanvasZoom();
+        else if (selectedCanvasNodeIdsRef.current.size > 0) fitCanvas(selectedCanvasNodeIdsRef.current);
+      } else if (drawingKey === "v") chooseCanvasTool("select");
       else if (drawingKey === "a") chooseCanvasTool("pan");
       else if (drawingKey === "b") activateToolbarTool("workflow", "agent");
       else toggleCanvasSnap();
@@ -2395,10 +2217,18 @@ export function CanvasWorkspace({
     function onKeyUp(event: KeyboardEvent) {
       if (event.code === "Space") releaseSpace();
     }
+    function onGridRedo(event: KeyboardEvent) {
+      // The grid stops these keys from bubbling. Leave its other editor shortcuts alone.
+      if (isCanvasRedoShortcut(event) && event.target instanceof Element && event.target.closest(".canvas-text-grid")) {
+        onWorkspaceKeyDown(event);
+      }
+    }
+    window.addEventListener("keydown", onGridRedo, true);
     window.addEventListener("keydown", onWorkspaceKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", releaseSpace);
     return () => {
+      window.removeEventListener("keydown", onGridRedo, true);
       window.removeEventListener("keydown", onWorkspaceKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", releaseSpace);
@@ -2592,7 +2422,7 @@ export function CanvasWorkspace({
       const rowHeight = useStore.getState().settings?.canvas_show_asset_names ? 164 : 140;
       return { x: node.x, y: node.y, width: Math.max(548, node.width), height: 82 + rows * rowHeight + Math.max(0, rows - 1) * 12 };
     }
-    return baseNodeRect(node);
+    return baseNodeRect(node, node.kind === "asset" && useStore.getState().settings?.canvas_show_asset_names);
   }
 
   function setHover(next: HoverIntent | null) {
@@ -3044,6 +2874,10 @@ export function CanvasWorkspace({
         positions.set(member.id, { x: member.rect.x + position.x - section.x, y: member.rect.y + position.y - section.y });
       }
     }
+    if (positions.size === 1 && anchors.some(({ id, rect }) => {
+      const point = positions.get(id);
+      return point?.x === rect.x && point.y === rect.y;
+    })) return;
     const beforeMaterials = nodesRef.current, beforeGraph = graphNodesRef.current, beforeWorkflow = workflowRef.current?.bounds(true) ?? [];
     const workflowPositions = new Map(positions);
     for (const [id, offset] of pinnedCardOffsets) {
@@ -3062,6 +2896,44 @@ export function CanvasWorkspace({
     pushGeometryUndo(beforeMaterials, beforeGraph, beforeWorkflow);
     setSelectedCanvasNodeIds(new Set(positions.keys()));
     persistGeometries(next.filter(node => positions.has(node.id)), graph.filter(node => node.kind !== "asset" && positions.has(node.id)));
+  }
+
+  function alignNodes({ nodeIds, mode }: CanvasAlignNodesEventDetail) {
+    const selected = new Set(nodeIds);
+    const materialBefore = nodesRef.current;
+    const graphBefore = graphNodesRef.current;
+    const workflow = workflowRef.current;
+    const lockedIds = new Set(graphBefore.filter(node => node.positionLocked).map(node => node.id));
+    const elements = new Map<string, HTMLElement>();
+    for (const element of stageRef.current?.querySelectorAll<HTMLElement>("[data-canvas-node-id], [data-workflow-card]:not([data-workflow-peek])") ?? []) {
+      const id = element.dataset.canvasNodeId ?? element.dataset.workflowCard;
+      if (id && selected.has(id)) elements.set(id, element);
+    }
+    const items = selectionAnchors().filter(({ id }) => selected.has(id) && !lockedIds.has(id)).map(({ id, rect }) => {
+      const element = elements.get(id);
+      return { id, ...rect, width: element?.offsetWidth || rect.width, height: element?.offsetHeight || rect.height };
+    });
+    const positions = computeCanvasAlignment(items, mode);
+    if (!positions.size) return;
+
+    const workflowPositions = new Map(positions);
+    for (const [id, offset] of pinnedCardOffsets) {
+      const point = positions.get(id);
+      if (point) workflowPositions.set(id, { x: point.x - offset.x, y: point.y - offset.y });
+    }
+    for (const [id, anchor] of collapsedGenerationAnchors) {
+      const point = positions.get(anchor.id);
+      if (point && !lockedIds.has(id)) workflowPositions.set(id, point);
+    }
+    const workflowBefore = workflow?.bounds(true).filter(node => workflowPositions.has(node.id)) ?? [];
+    const materials = materialBefore.map(node => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node);
+    const graph = graphBefore.map(node => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node);
+    commitNodes(materials);
+    setGraphNodes(graph);
+    workflow?.position(workflowPositions, true);
+    // Geometry history compares the captured positions with the live ones.
+    pushGeometryUndo(materialBefore.filter(node => positions.has(node.id)), graphBefore.filter(node => positions.has(node.id)), workflowBefore);
+    persistGeometries(materials.filter(node => positions.has(node.id)), graph.filter(node => node.kind !== "asset" && positions.has(node.id)));
   }
 
   useEffect(() => {
@@ -3124,8 +2996,10 @@ export function CanvasWorkspace({
               && route.activeProjectId === projectId && !route.projectRoutePending && (!clipboard || route.projectRouteRevision === placementRevision)) {
               const undo = { kind: "paste" as const, projectId, nodeIds: [node.id], groupIds: [], workflowIds: [] };
               const history = undoHistoryRef.current;
-              if (clipboard && clipboardUndo && history[history.length - 1] === clipboardUndo) clipboardUndo.nodeIds.push(node.id);
-              else {
+              if (clipboard && clipboardUndo && history[history.length - 1] === clipboardUndo) {
+                clearCanvasRedo();
+                clipboardUndo.nodeIds.push(node.id);
+              } else {
                 pushCanvasUndo(undo);
                 if (clipboard) clipboardUndo = undo;
               }
@@ -3241,11 +3115,7 @@ export function CanvasWorkspace({
         break;
       case "paste": {
         const point = menu.point ?? toBoardPoint(menu.x, menu.y);
-        void navigator.clipboard.readText().catch(() => canvasClipboardText).then(text => {
-          const value = parseCanvasClipboard(text);
-          if (value) return pasteCanvasSelection(value, point);
-          notify("剪贴板中没有可粘贴的画板卡片", "info");
-        });
+        void pasteCanvasClipboardAt(point);
         break;
       }
       case "copy":
@@ -4390,8 +4260,9 @@ export function CanvasWorkspace({
     const top = undoHistoryRef.current[undoHistoryRef.current.length - 1];
     if (history === "layout") {
       if (top?.kind === "content" && top.after.id === nodeId && top.after.payloadJson === node.payloadJson) top.after = updated;
-    } else if (history === "typing" && top?.kind === "content" && top.after.id === nodeId
+    } else if (history === "typing" && !redoHistoryRef.current.length && top?.kind === "content" && top.after.id === nodeId
       && top.after.payloadJson === node.payloadJson && top.typedAt && Date.now() - top.typedAt < 800) {
+      clearCanvasRedo();
       top.after = updated; top.typedAt = Date.now();
     } else {
       pushCanvasUndo({ kind: "content", projectId: node.projectId, before: node, after: updated, typedAt: history === "typing" ? Date.now() : undefined });
@@ -4453,8 +4324,9 @@ export function CanvasWorkspace({
     const payloadJson = JSON.stringify({ ...note, title: document.title, text: document.markdown });
     const after = { ...node, payloadJson };
     const top = undoHistoryRef.current[undoHistoryRef.current.length - 1];
-    if (top?.kind === "content" && top.after.id === node.id && top.after.payloadJson === node.payloadJson
+    if (!redoHistoryRef.current.length && top?.kind === "content" && top.after.id === node.id && top.after.payloadJson === node.payloadJson
       && top.typedAt && Date.now() - top.typedAt < 800) {
+      clearCanvasRedo();
       top.after = after; top.typedAt = Date.now();
     } else pushCanvasUndo({ kind: "content", projectId: node.projectId, before: node, after, typedAt: Date.now() });
     setGraphNodes(graphNodesRef.current.map(item => item.id === node.id ? { ...item, payloadJson } : item));
@@ -4895,15 +4767,20 @@ export function CanvasWorkspace({
     }
   }
 
-  function fitCanvas() {
+  function fitCanvas(targetIds?: ReadonlySet<string>) {
     const stage = stageRef.current;
-    const content = [...selectionAnchors().map(anchor => anchor.rect), ...(workflowRef.current?.bounds() ?? []).map(rect => ({ ...rect, y: rect.y - 45, height: rect.height + 45 }))];
+    const anchors = selectionAnchors();
+    const content = targetIds?.size
+      ? anchors.filter(anchor => targetIds.has(anchor.id)).map(anchor => anchor.rect)
+      : [...anchors.map(anchor => anchor.rect), ...(workflowRef.current?.bounds() ?? []).map(rect => ({ ...rect, y: rect.y - 45, height: rect.height + 45 }))];
+    if (targetIds?.size && (!stage || content.length === 0)) return;
     if (!stage || content.length === 0) {
       panRef.current = { x: 0, y: 0 };
       zoomRef.current = 1;
       setPan({ x: 0, y: 0 });
       setZoom(1);
-      markViewDirty();
+      markViewDirty(false);
+      settleCamera();
       return;
     }
     const bounds = content.reduce(
@@ -4927,149 +4804,35 @@ export function CanvasWorkspace({
     panRef.current = nextPan;
     setZoom(nextZoom);
     setPan(nextPan);
-    markViewDirty();
+    markViewDirty(false);
+    settleCamera();
   }
 
-  function captureSelection(ids: Iterable<string>): CanvasClipboard | null {
-    const project = activeCanvasRef.current.id;
-    const groups = nodesRef.current.flatMap(node => {
-      const group = node.kind === "folder" && groupsRef.current.get(node.id);
-      return group ? [{ ...group, ...nodeRect(node), zIndex: node.order }] : [];
-    });
-    const items = nodesRef.current.flatMap(node => node.kind === "folder" ? node.assets.map((asset, ordinal) => ({ projectId: project, groupId: node.id, nodeId: asset.id, ordinal })) : []);
-    const graph = projectGraphNodesWithLiveLayout(graphNodesRef.current, nodesRef.current);
-    for (const node of nodesRef.current) if (node.kind === "asset" && !graph.some(item => item.id === node.id)) graph.push({ ...newProjectCanvasAssetNode(project, node), hiddenAt: null, createdAt: 0, updatedAt: 0 });
-    const value = captureCanvasClipboard(project, expandArtboardSelection(new Set(ids)), graph, groups, items, canvasWorkflowController(project).document.nodes);
-    return value.selection.length ? value : null;
-  }
-
-  async function copyCanvasSelection(ids: Iterable<string>, clipboard?: DataTransfer) {
-    const value = captureSelection(ids);
-    if (!value) { notify("请选择流程卡片、内容卡片或素材", "info"); return; }
-    canvasClipboardText = serializeCanvasClipboard(value);
-    canvasClipboardCopiedAt = performance.now();
-    if (clipboard) clipboard.setData("text/plain", canvasClipboardText);
-    else await navigator.clipboard.writeText(canvasClipboardText).catch(() => {});
-    notify(`已复制 ${value.selection.length} 张卡片`, "success");
-  }
-
-  async function refreshClipboardCanvas(project: string) {
-    const routeRevision = useStore.getState().projectRouteRevision;
-    const readEpoch = originalDeletionEpoch();
-    const snapshot = await api.projectCanvasGet(project);
-    const exact = await api.getAssetsByIds(projectCanvasAssetIds(snapshot.nodes));
-    applySnapshot(snapshot, { restoreView: false, restoreDraft: false }, exact, routeRevision, readEpoch);
-  }
-
-  async function pasteCanvasSelection(value: CanvasClipboard, point?: CanvasPoint) {
-    if (pastingRef.current || !workflowInteractive || !value.selection.length) return;
-    const draft = activeCanvasRef.current, controller = canvasWorkflowController(draft.id);
-    const revision = useStore.getState().projectRouteRevision;
-    if (!controller.ready || controller.error || writeJournalRef.current.failure) { notify("请先完成当前画板的保存重试", "info"); return; }
-    pastingRef.current = true;
-    try {
-      const positions = [...value.nodes, ...value.groups, ...value.workflow.filter(node => node.kind !== "text")];
-      const x = point?.x ?? Math.min(...positions.map(node => node.x)) + 60;
-      const y = point?.y ?? Math.min(...positions.map(node => node.y)) + 60;
-      const cloned = cloneCanvasClipboard(value, draft.id, x, y);
-      let shift = 0;
-      const obstacles = selectionAnchors().map(item => item.rect);
-      while (obstacles.some(rect => x + shift < rect.x + rect.width + 24 && x + shift + cloned.width + 24 > rect.x && y < rect.y + rect.height + 24 && y + cloned.height + 24 > rect.y)) shift += cloned.width + 60;
-      for (const node of [...cloned.nodes, ...cloned.groups, ...cloned.workflow]) node.x += shift;
-      const ids: string[] = cloned.workflow.map(node => node.id);
-      if (controller.document.nodes.length + ids.length > 500) throw new Error("粘贴后工作流卡片超过 500 张，请缩小选区");
-      let completed = false;
-      await enqueueWrite(async () => {
-        await ensureMaterialized(draft);
-        // Retry a partial write using the same identities, never create a second copy.
-        const existing = await api.projectCanvasGet(draft.id);
-        const nodeIds = new Set(existing.nodes.map(item => item.id));
-        const groupIds = new Set(existing.groups.map(item => item.id));
-        const nodesToCreate = cloned.nodes.filter(node => !nodeIds.has(node.id));
-        const groupsToCreate = cloned.groups.filter(group => !groupIds.has(group.id)).map(value => ({
-          value, nodeIds: cloned.items.filter(item => item.groupId === value.id).map(item => item.nodeId),
-        }));
-        if (nodesToCreate.length || groupsToCreate.length) {
-          await api.projectCanvasNodesBatchCreate(draft.id, nodesToCreate, groupsToCreate);
-        }
-        if (ids.length) {
-          if (controller.document.nodes.some(node => ids.includes(node.id))) {
-            if (controller.error) await controller.retrySave();
-          } else await controller.edit([...controller.document.nodes, ...cloned.workflow]);
-        }
-        await refreshClipboardCanvas(draft.id);
-        const route = useStore.getState();
-        if (!completed && activeCanvasRef.current.id === draft.id
-          && isWorkspaceOperationCurrent(draft.id, route.activeProjectId, route.projectRoutePending, revision, route.projectRouteRevision)) {
-          completed = true;
-          pushCanvasUndo({ kind: "paste", projectId: draft.id, nodeIds: cloned.nodes.map(node => node.id), groupIds: cloned.groups.map(group => group.id), workflowIds: ids });
-          setSelectedCanvasNodeIds(new Set(cloned.selection));
-          const bounds = stageRef.current?.getBoundingClientRect();
-          if (bounds) {
-            const next = canvasViewForNewCard({ x: x + shift, y, width: cloned.width, height: cloned.height }, { x: 80, y: 60, width: Math.max(200, bounds.width - 120), height: Math.max(200, bounds.height - 270) }, panRef.current, zoomRef.current, true);
-            if (next) { panRef.current = next.pan; zoomRef.current = next.zoom; setPan(next.pan); setZoom(next.zoom); markViewDirty(); }
-          }
-          stageRef.current?.focus({ preventScroll: true });
-        }
-      });
-    } catch (error) { notifyError(error, "粘贴卡片失败"); }
-    finally { pastingRef.current = false; }
-  }
-
-  useEffect(() => {
-    const allowed = (event: ClipboardEvent) => {
-      const stage = stageRef.current, target = event.target, route = useStore.getState();
-      return !!stage && !event.defaultPrevented && !clipboardEditing(event)
-        && (target === document.body || (target instanceof Node && stage.contains(target)))
-        && viewModeRef.current === "canvas" && !route.projectRoutePending && !loadingRef.current && !loadFailed && !scopedInspectorOpen
-        && route.activeProjectId === activeCanvasRef.current.id && !exploring && !stage.closest("[inert]");
+  function resetCanvasZoom() {
+    const rect = stageRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const centerX = rect.width / 2, centerY = rect.height / 2;
+    const nextPan = {
+      x: centerX - (centerX - panRef.current.x) / zoomRef.current,
+      y: centerY - (centerY - panRef.current.y) / zoomRef.current,
     };
-    const copy = (event: ClipboardEvent) => {
-      if (!allowed(event) || !event.clipboardData || !selectedCanvasNodeIdsRef.current.size) return;
-      if (event.target === document.body && useStore.getState().canvasLibraryOpen) return;
-      if (!captureSelection(selectedCanvasNodeIdsRef.current)) return;
-      event.preventDefault(); event.stopPropagation(); void copyCanvasSelection(selectedCanvasNodeIdsRef.current, event.clipboardData);
-    };
-    const paste = (event: ClipboardEvent) => {
-      const stage = stageRef.current, data = event.clipboardData;
-      if (!stage || !data || !allowed(event)) return;
-      const state = useStore.getState(), projectId = activeCanvasRef.current.id;
-      const savedPoint = lastImportPointRef.current;
-      const click = savedPoint?.projectId === projectId && savedPoint.routeRevision === state.projectRouteRevision ? savedPoint : null;
-      const text = data.getData("text/plain"), value = parseCanvasClipboard(text);
-      if (value) {
-        event.preventDefault(); event.stopPropagation();
-        const point = click && (text !== canvasClipboardText || click.at > canvasClipboardCopiedAt) ? click.point : undefined;
-        void pasteCanvasSelection(value, point);
-        return;
-      }
-      const files = clipboardMediaFiles(data);
-      if (!files.length && !text.trim()) return;
-      event.preventDefault(); event.stopPropagation();
-      const bounds = stage.getBoundingClientRect();
-      const point = click?.point ?? toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
-      if (!files.length) {
-        const size = { width: 320, height: canvasTextMinSize([[emptyCanvasCell()]]).height };
-        const rect = { x: point.x - size.width / 2, y: point.y - size.height / 2, ...size };
-        pastedNodeIds.current.add(createCanvasNote(pasteCardPosition(rect), "text", undefined, text));
-        return;
-      }
-      const place = prepareExplorerCanvasDrop(stage, projectId, bounds.left + panRef.current.x + point.x * zoomRef.current,
-        bounds.top + panRef.current.y + point.y * zoomRef.current, { clipboard: true });
-      if (!place) { notifyError(null, "画布尚未准备好，请稍后再粘贴"); return; }
-      mediaPasteQueue.current = Promise.all([mediaPasteQueue.current, readClipboardMediaPaths(files)]).then(async ([, paths]) => {
-        await prepareMediaImport(projectId, state.projectRouteRevision);
-        for (const file of files) {
-          try { await place(await importDroppedMedia(file, projectId, "clipboard", { paths, multiple: files.length > 1 })); }
-          catch (error) { notifyError(error, "粘贴素材到画布失败"); }
-        }
-      }).catch(error => notifyError(error, "粘贴素材到画布失败"));
-    };
-    window.addEventListener("copy", copy, true); window.addEventListener("paste", paste, true);
-    return () => { window.removeEventListener("copy", copy, true); window.removeEventListener("paste", paste, true); };
-  }, [exploring, loadFailed, scopedInspectorOpen, workflowInteractive]);
+    zoomRef.current = 1;
+    panRef.current = nextPan;
+    setZoom(1);
+    setPan(nextPan);
+    markViewDirty(false);
+    settleCamera();
+  }
 
-  function removeNodes(nodeIds: Iterable<string>, expandConversations = true) {
+  const { copyCanvasSelection, refreshClipboardCanvas, pasteCanvasClipboardAt } = useCanvasClipboard({
+    activeCanvasRef, nodesRef, graphNodesRef, groupsRef, stageRef, panRef, zoomRef, viewModeRef, loadingRef,
+    selectedCanvasNodeIdsRef, lastImportPointRef, pastedNodeIds, writeJournalRef,
+    exploring, loadFailed, scopedInspectorOpen, workflowInteractive,
+    nodeRect, expandArtboardSelection, applySnapshot, selectionAnchors, enqueueWrite, ensureMaterialized,
+    pushCanvasUndo, setSelectedCanvasNodeIds, setPan, setZoom, markViewDirty, toBoardPoint, pasteCardPosition, createCanvasNote,
+  });
+
+  function removeNodes(nodeIds: Iterable<string>, expandConversations = true, replay?: (inverse: CanvasUndoEntry) => void) {
     if (!workflowInteractive) return; // Deletion also checks locks on connected workflow cards.
     const ids = new Set(nodeIds);
     for (const id of [...ids]) {
@@ -5078,24 +4841,26 @@ export function CanvasWorkspace({
     }
     const materials = nodesRef.current.filter((node) => ids.has(node.id));
     for (const node of materials) {
-      if (node.kind === "folder") for (const asset of node.assets) ids.add(asset.id);
+      if (!replay && node.kind === "folder") for (const asset of node.assets) ids.add(asset.id);
     }
     const draft = activeCanvasRef.current;
     const controller = canvasWorkflowController(draft.id);
-    const collapsedToRemove = new Set<string>();
-    for (const [id, anchor] of generationCardProjection.anchors) {
-      if (!ids.has(anchor.id)) continue;
-      if (activeGenerationIds.has(id)) ids.add(id);
-      else if (collapsedGenerationAnchors.has(id)) collapsedToRemove.add(id);
-    }
-    if (collapsedToRemove.size) {
-      const origins = workflowGenerationOrigins(controller.document, graphNodesRef.current);
-      for (const node of graphNodesRef.current) {
-        if (node.kind !== "asset" || node.hiddenAt != null || ids.has(node.id)) continue;
-        const producer = origins.get(node.id);
-        if (producer) collapsedToRemove.delete(producer.id);
+    if (!replay) {
+      const collapsedToRemove = new Set<string>();
+      for (const [id, anchor] of generationCardProjection.anchors) {
+        if (!ids.has(anchor.id)) continue;
+        if (activeGenerationIds.has(id)) ids.add(id);
+        else if (collapsedGenerationAnchors.has(id)) collapsedToRemove.add(id);
       }
-      for (const id of collapsedToRemove) ids.add(id);
+      if (collapsedToRemove.size) {
+        const origins = workflowGenerationOrigins(controller.document, graphNodesRef.current);
+        for (const node of graphNodesRef.current) {
+          if (node.kind !== "asset" || node.hiddenAt != null || ids.has(node.id)) continue;
+          const producer = origins.get(node.id);
+          if (producer) collapsedToRemove.delete(producer.id);
+        }
+        for (const id of collapsedToRemove) ids.add(id);
+      }
     }
     const graph = graphNodesRef.current.filter((node) => ids.has(node.id) && node.hiddenAt == null);
     const workflowIds = new Set(controller.document.nodes.filter(node => ids.has(node.id)).map(node => node.id));
@@ -5104,25 +4869,27 @@ export function CanvasWorkspace({
     }
     if (materials.length === 0 && graph.length === 0 && workflowIds.size === 0) return;
     let workflow: WorkflowEditUndo | null = null;
+    let workflowSave: Promise<void> | undefined;
     if (workflowIds.size) {
       if (controller.error) { notify("请先重试保存工作流，再删除卡片", "info"); return; }
       const before = controller.document;
       const pending = controller.edit(removeWorkflowNodes(before.nodes, workflowIds));
-      void pending.catch(error => notifyError(error, "工作流删除未完成"));
+      workflowSave = pending.catch(error => notifyError(error, "工作流删除未完成"));
       // Validation and running-node locks reject before the optimistic document changes.
       if (controller.document === before) return;
       workflow = workflowEditUndo(before, controller.document);
     }
     const changedFolders = nodesRef.current.filter((node): node is CanvasFolderNode =>
       node.kind === "folder" && !ids.has(node.id) && node.assets.some(asset => ids.has(asset.id)));
-    pushCanvasUndo({ kind: "removal", projectId: draft.id, materials, graph, changedFolders, groups: new Map(groupsRef.current), workflow });
+    const inverse: CanvasUndoEntry = { kind: "removal", projectId: draft.id, materials, graph, changedFolders, groups: new Map(groupsRef.current), workflow };
+    if (replay) replay(inverse); else pushCanvasUndo(inverse);
     commitNodes(nodesRef.current.filter(node => !ids.has(node.id)).map(node =>
       node.kind === "folder" && changedFolders.includes(node) ? { ...node, assets: node.assets.filter(asset => !ids.has(asset.id)) } : node));
     const next = graphNodesRef.current.map((node) => ids.has(node.id) ? { ...node, hiddenAt: Date.now() } : node);
     setGraphNodes(next);
     setSelectedCanvasNodeIds((current) => new Set([...current].filter((id) => !ids.has(id))));
     if (focusedNodeIdRef.current && ids.has(focusedNodeIdRef.current)) setFocusedNodeId(null);
-    void enqueueWrite(async () => {
+    const canvasSave = enqueueWrite(async () => {
       await ensureMaterialized(draft);
       for (const node of materials) {
         if (node.kind === "folder") {
@@ -5133,6 +4900,7 @@ export function CanvasWorkspace({
       const groupIds = new Set(materials.filter((node) => node.kind === "folder").map((node) => node.id));
       for (const id of ids) if (!groupIds.has(id) && !workflowIds.has(id)) await api.projectCanvasNodeRemove(id);
     });
+    if (replay) return Promise.all([canvasSave, workflowSave]).then(() => {});
   }
 
   function promptSessionJobs(node: ProjectGraphNode) {
@@ -5221,222 +4989,15 @@ export function CanvasWorkspace({
   }
 
   /** 画板几何是否发生变化（层级/顺序调整不算几何位移，用于合并连续微调）。 */
-  function canvasGeometryDiffers(
-    before: { x: number; y: number; width: number; height: number },
-    after: { x: number; y: number; width: number; height: number } | undefined,
-  ) {
-    if (!after) return false;
-    return before.x !== after.x || before.y !== after.y || before.width !== after.width || before.height !== after.height;
-  }
 
-  /** 记录一次移动/层级/缩放前的快照；连续层级微调合并为一条撤销记录。 */
-  function pushGeometryUndo(materials: readonly CanvasNode[], graph: readonly ProjectGraphNode[], workflow: WorkflowGeometry[] = []) {
-    const draft = activeCanvasRef.current;
-    const materialBefore = materials.filter((before) => {
-      const after = nodesRef.current.find((node) => node.id === before.id);
-      return !!after && (canvasGeometryDiffers(before, after) || before.order !== after.order);
-    });
-    const graphBefore = graph.filter((before) => {
-      if (before.hiddenAt != null) return false;
-      const after = graphNodesRef.current.find((node) => node.id === before.id);
-      return !!after && (canvasGeometryDiffers(before, after) || before.zIndex !== after.zIndex);
-    });
-    const workflowBefore = workflow.filter(before => { const after = workflowRef.current?.bounds(true).find(node => node.id === before.id); return after && (before.x !== after.x || before.y !== after.y); });
-    if (materialBefore.length === 0 && graphBefore.length === 0 && workflowBefore.length === 0) return;
-    const ids = new Set([...materialBefore, ...graphBefore].map((node) => node.id));
-    const top = undoHistoryRef.current[undoHistoryRef.current.length - 1];
-    if (top?.kind === "geometry" && !workflowBefore.length && !top.workflow.length && top.projectId === draft.id
-      && top.materials.length === materialBefore.length && top.graph.length === graphBefore.length
-      && top.materials.every((node) => ids.has(node.id)) && top.graph.every((node) => ids.has(node.id))
-      && top.materials.every((node) => !canvasGeometryDiffers(node, nodesRef.current.find((live) => live.id === node.id)))
-      && top.graph.every((node) => !canvasGeometryDiffers(node, graphNodesRef.current.find((live) => live.id === node.id)))) {
-      return;
-    }
-    pushCanvasUndo({ kind: "geometry", projectId: draft.id, materials: materialBefore, graph: graphBefore, workflow: workflowBefore });
-  }
 
-  async function applyCanvasUndo(entry: CanvasUndoEntry) {
-    if (entry.kind === "gallery") {
-      await api.undoGenerationGalleryMerge(entry.edit).then(() => removeUndoEntry(entry))
-        .catch(error => notifyError(error, "合组撤销未完成"));
-      return;
-    }
-    if (entry.kind === "names") {
-      const controller = canvasWorkflowController(entry.projectId);
-      const cardNames = { ...controller.document.cardNames };
-      for (const [id, name] of Object.entries(entry.before)) {
-        if (name === undefined) delete cardNames[id]; else cardNames[id] = name;
-      }
-      popCanvasUndo();
-      await controller.save({ ...controller.document, cardNames }).catch(error => notifyError(error, "名称撤销未完成"));
-      return;
-    }
-    if (entry.kind === "content") {
-      const controller = canvasWorkflowController(entry.projectId);
-      if (controller.isLocked(entry.before.id)) return;
-      const live = graphNodesRef.current.find(node => node.id === entry.before.id && node.hiddenAt == null);
-      if (!live) return;
-      popCanvasUndo();
-      const restored = { ...live, payloadJson: restoreCanvasNoteEdit(live.payloadJson, entry.before.payloadJson, entry.after.payloadJson),
-        width: live.width === entry.after.width ? entry.before.width : live.width,
-        height: live.height === entry.after.height ? entry.before.height : live.height };
-      setGraphNodes(graphNodesRef.current.map(node => node.id === live.id ? restored : node));
-      await enqueueWrite(async () => {
-        await api.projectCanvasNoteUpdate(restored.id, restored.payloadJson);
-        await api.projectCanvasNodeUpdate(restored.id, { x: restored.x, y: restored.y, width: restored.width, height: restored.height, zIndex: restored.zIndex, positionLocked: restored.positionLocked });
-        for (const node of entry.restoredMaterials ?? []) await api.projectCanvasNodeRestore(entry.projectId, node.id);
-        if (entry.restoredMaterials?.length) await refreshClipboardCanvas(entry.projectId);
-      });
-      return;
-    }
-    if (entry.kind === "materials") {
-      popCanvasUndo();
-      const affected = new Set([...entry.before, ...entry.after].map(node => node.id));
-      commitNodes([...nodesRef.current.filter(node => !affected.has(node.id)), ...entry.before]);
-      await enqueueWrite(async () => {
-        for (const node of entry.after) if (node.kind === "folder") {
-          await api.projectCanvasGroupDelete(node.id); groupsRef.current.delete(node.id);
-        }
-        const assetNodes = entry.before.flatMap(node => node.kind === "asset" ? [node] : node.assets.map((asset, i) => groupedAssetNode(asset, node, i)));
-        const retained = new Set(assetNodes.map(node => node.id));
-        for (const node of entry.after) for (const id of node.kind === "asset" ? [node.id] : node.assets.map(asset => asset.id)) {
-          if (!retained.has(id)) await api.projectCanvasNodeRemove(id);
-        }
-        if (assetNodes.length) {
-          await api.projectCanvasNodesBatchUpdate(entry.projectId, assetNodes.map(node => ({ nodeId: node.id, value: projectCanvasNodeLayoutUpdate(node) })));
-        }
-        for (const node of entry.before) if (node.kind === "folder") {
-          const original = entry.groups.get(node.id);
-          const group = await api.projectCanvasGroupCreate(original ? projectCanvasGroupUpdate(original, node) : newProjectCanvasGroup(entry.projectId, node), node.assets.map(asset => asset.id));
-          groupsRef.current.set(node.id, group);
-        }
-      });
-      return;
-    }
-    if (entry.kind === "workflow") {
-      const controller = canvasWorkflowController(entry.projectId);
-      if (controller.error) { notify("请先重试保存工作流，再撤销卡片操作", "info"); return; }
-      const before = controller.document;
-      const restored = restoreWorkflowEdit(before.nodes, entry.edit);
-      const pending = controller.edit(restored, entry.edit);
-      if (controller.document !== before) popCanvasUndo();
-      await pending.catch(error => notifyError(error, "工作流撤销未完成"));
-      return;
-    }
-    if (entry.kind === "paste") {
-      const controller = canvasWorkflowController(entry.projectId);
-      if (entry.workflowIds.some(id => controller.isLocked(id))) { notify("请先停止这组卡片的工作流再撤销粘贴", "info"); return; }
-      const references = new Set([...entry.workflowIds, ...entry.nodeIds, ...entry.groupIds]);
-      if (controller.document.nodes.some(node => !entry.workflowIds.includes(node.id) && (
-        [node.textSource, node.textTarget?.nodeId, ...(node.resultNodeIds ?? [])].some(id => id && references.has(id))
-        || Object.values(node.inputs).flat().some(input => [input.nodeId, input.canvasNodeId, input.assetNodeId, input.groupId].some(id => id && references.has(id)))))) {
-        notify("这组卡片已有新的外部连线，请先断开后再撤销粘贴", "info"); return;
-      }
-      popCanvasUndo();
-      await enqueueWrite(async () => {
-        if (controller.error) await controller.retrySave();
-        if (controller.document.nodes.some(node => entry.workflowIds.includes(node.id))) {
-          await controller.edit(controller.document.nodes.filter(node => !entry.workflowIds.includes(node.id)));
-        }
-        for (const id of entry.groupIds) await api.projectCanvasGroupDelete(id);
-        for (const id of entry.nodeIds) await api.projectCanvasNodeRemove(id);
-        await refreshClipboardCanvas(entry.projectId);
-      });
-      return;
-    }
-    let workflowUndo: Promise<void> | undefined;
-    if (entry.kind === "removal" && entry.workflow) {
-      const controller = canvasWorkflowController(entry.projectId);
-      if (controller.error) { notify("请先重试保存工作流，再撤销卡片操作", "info"); return; }
-      const before = controller.document;
-      const pending = controller.edit(restoreWorkflowEdit(before.nodes, entry.workflow), entry.workflow);
-      workflowUndo = pending.then(() => {}, error => { notifyError(error, "工作流撤销未完成"); });
-      if (controller.document === before) return workflowUndo;
-    }
-    popCanvasUndo();
-    if (entry.kind === "geometry") {
-      workflowRef.current?.position(new Map(entry.workflow.map(node => [node.id, node])), true);
-      const materialBefore = new Map(entry.materials.map((node) => [node.id, node]));
-      commitNodes(nodesRef.current.map((node) => {
-        const before = materialBefore.get(node.id);
-        return before ? { ...node, x: before.x, y: before.y, width: before.width, height: before.height, order: before.order } : node;
-      }));
-      const graphBefore = new Map(entry.graph.map((node) => [node.id, node]));
-      const next = graphNodesRef.current.map((node) => {
-        const before = graphBefore.get(node.id);
-        return before ? { ...node, x: before.x, y: before.y, width: before.width, height: before.height, zIndex: before.zIndex } : node;
-      });
-      setGraphNodes(next);
-      persistGeometries(nodesRef.current.filter(node => materialBefore.has(node.id)),
-        next.filter(node => node.kind !== "asset" && graphBefore.has(node.id)));
-      // 分区几何恢复后按还原范围重新圈定成员；等 DOM 提交后再取实际显示尺寸。
-      window.requestAnimationFrame(() => {
-        if (activeCanvasRef.current.id !== entry.projectId) return;
-        for (const node of graphNodesRef.current) {
-          if (node.kind !== "note" || node.hiddenAt != null || !graphBefore.has(node.id)) continue;
-          const value = readCanvasNote(node);
-          if (value.note_type === "section" && !value.workflow_container && !value.artboard) updateCanvasNote(node.id, { ...value, member_ids: claimSectionMembers(node, node.id) }, undefined, "layout");
-        }
-      });
-      await writeQueueRef.current;
-      if (entry.workflow.length) await canvasWorkflowController(entry.projectId).flush();
-      return;
-    }
-    const ids = new Set(entry.graph.map((node) => node.id));
-    const currentIds = new Set(nodesRef.current.map((node) => node.id));
-    const folders = new Map(entry.changedFolders?.map(folder => [folder.id, folder]));
-    commitNodes([...nodesRef.current.map(node => folders.get(node.id) ?? node), ...entry.materials.filter((node) => !currentIds.has(node.id))]);
-    const graphIds = new Set(graphNodesRef.current.map((node) => node.id));
-    const next = [...graphNodesRef.current.map((node) => ids.has(node.id) ? { ...node, hiddenAt: null } : node),
-      ...entry.graph.filter((node) => !graphIds.has(node.id))];
-    setGraphNodes(next);
-    const draft = activeCanvasRef.current;
-    await enqueueWrite(async () => {
-      await ensureMaterialized(draft);
-      const restored = new Set<string>();
-      for (const original of entry.graph) {
-        if (!await api.projectCanvasNodeRestore(entry.projectId, original.id)) {
-          const { hiddenAt: _hidden, createdAt: _created, updatedAt: _updated, ...input } = original;
-          await api.projectCanvasNodeCreate(input);
-        }
-        restored.add(original.id);
-      }
-      for (const folder of folders.values()) await api.projectCanvasGroupSetItems(folder.id, folder.assets.map(asset => asset.id));
-      for (const node of entry.materials) {
-        const assets = node.kind === "asset" ? [node] : node.assets.map((asset, index) => groupedAssetNode(asset, node, index));
-        for (const asset of assets) {
-          if (!restored.has(asset.id) && !await api.projectCanvasNodeRestore(entry.projectId, asset.id)) {
-            await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(entry.projectId, asset));
-          }
-        }
-        if (node.kind === "folder") {
-          const original = entry.groups.get(node.id);
-          const group = await api.projectCanvasGroupCreate(original ? projectCanvasGroupUpdate(original, node) : newProjectCanvasGroup(entry.projectId, node), node.assets.map((asset) => asset.id));
-          groupsRef.current.set(node.id, group);
-        }
-      }
-    });
-    await workflowUndo;
-  }
-
-  const undoGenerationConnection = useLatestCallback((nodeId: string) => {
-    const entry = undoHistoryRef.current[undoHistoryRef.current.length - 1];
-    const route = useStore.getState();
-    if (!entry || entry.kind !== "workflow" || entry.connectedGenerationId !== nodeId
-      || entry.projectId !== activeCanvasRef.current.id || !isWorkspaceOperationCurrent(entry.projectId, route.activeProjectId, route.projectRoutePending)
-      || workspaceRef.current?.closest("[inert]")
-      || scopedInspectorOpen || viewModeRef.current !== "canvas" || activeDragRef.current
-      || document.querySelector('[data-context-owner], [role="dialog"][aria-modal="true"]')) return false;
-    return undoCanvasAction();
+  const { pushGeometryUndo, applyCanvasUndo, undoGenerationConnection, pushMaterialsUndo } = useCanvasHistoryExecutor({
+    activeCanvasRef, nodesRef, graphNodesRef, groupsRef, workflowRef, writeQueueRef,
+    workspaceRef, viewModeRef, activeDragRef, scopedInspectorOpen,
+    undoHistoryRef, pushCanvasUndo, clearCanvasRedo, undoCanvasAction,
+    setGraphNodes, commitNodes, enqueueWrite, ensureMaterialized, persistGeometries,
+    refreshClipboardCanvas, removeNodes, claimSectionMembers, updateCanvasNote,
   });
-
-  function pushMaterialsUndo(before: CanvasNode[], after: CanvasNode[]) {
-    const previous = new Map(before.map(node => [node.id, node])), next = new Map(after.map(node => [node.id, node]));
-    const changed = new Set([...previous.keys(), ...next.keys()].filter(id => previous.get(id) !== next.get(id)
-      && JSON.stringify(previous.get(id)) !== JSON.stringify(next.get(id))));
-    if (changed.size) pushCanvasUndo({ kind: "materials", projectId: activeCanvasRef.current.id,
-      before: before.filter(node => changed.has(node.id)), after: after.filter(node => changed.has(node.id)), groups: new Map(groupsRef.current) });
-  }
 
   function ungroupFolder(id: string) {
     const folder = nodesRef.current.find(node => node.id === id);
@@ -6014,26 +5575,7 @@ export function CanvasWorkspace({
   const stagedCardContext = useCanvasEntryCardContext(entryCardContext, opening, editingCardContext);
 
   if (loadFailed) {
-    return (
-      <div className="canvas-load-failure" role="alert">
-        <div className="canvas-load-failure-card">
-          <span className="panel-kicker">项目画板</span>
-          <h2>未能载入项目</h2>
-          <p>为避免把暂时读取失败误当成空画板，编辑功能已暂停。原项目数据没有被覆盖。</p>
-          {error && <p>{userErrorMessage(error, "画板暂时无法加载，请重新打开项目。")}</p>}
-          <div>
-            <button type="button" className="app-button-primary" onClick={() => setLoadRevision((value) => value + 1)}>
-              重试载入
-            </button>
-            {onExit && (
-              <button type="button" className="app-button-secondary" onClick={onExit}>
-                返回主页
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    );
+    return <CanvasWorkspaceLoadFailure error={error} onRetry={() => setLoadRevision((value) => value + 1)} onExit={onExit} />;
   }
 
   function frequentPickTarget(target: EventTarget | null) {
@@ -6167,150 +5709,21 @@ export function CanvasWorkspace({
           }}
         >{sourceCollapsed ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftClose size={16} aria-hidden="true" />}</button>
         {(boardOpen || genEditing) && <CreationModeIndicator className="canvas-creation-mode-indicator"/>}
-        <div className="canvas-board-toolbar">
-          <div>
-            <span className="canvas-board-title-field" data-title={activeCanvas.title || " "}>
-              <input
-                className="canvas-board-title"
-                aria-label="项目名称"
-                title="点击重命名项目"
-                value={activeCanvas.title}
-                onFocus={(event) => event.currentTarget.select()}
-                onChange={(event) => {
-                  const draft = activeCanvasRef.current;
-                  draft.title = event.target.value;
-                  draft.titleSource = "manual";
-                  replaceActive(draft);
-                }}
-                onBlur={commitProjectTitle}
-                onCompositionStart={titleIme.onCompositionStart}
-                onCompositionEnd={titleIme.onCompositionEnd}
-                onKeyDown={(event) => {
-                  if (titleIme.isComposing(event.nativeEvent)) { event.stopPropagation(); return; }
-                  if (event.key === "Enter") event.currentTarget.blur();
-                }}
-              />
-            </span>
-            <small>
-              {viewMode === "canvas"
-                ? boardOpen || genEditing
-                  ? "创作模式 · 点击素材加入创作"
-                  : "浏览模式 · 双指移动 / 空格 + 左键 / 中键 平移"
-                : "项目内创作线程的顺序投影"}
-            </small>
-            {selectedCanvasNodeIds.size > 0 && (
-              <small className="canvas-selection-count">
-                已选择 {selectedCanvasNodeIds.size} 项 · 拖动可整体移动
-              </small>
-            )}
-            <small className={`canvas-save-state${!opening && savingVisible ? " is-visible" : ""}`} aria-hidden={opening || !savingVisible}>
-              <LoaderCircle size={12} /> 保存中
-            </small>
-            {!loading && currentWorkflowEntry?.error !== null && (currentWorkflowEntry?.error
-              ? <small className="canvas-save-error" role="alert">工作流加载失败
-                  <button type="button" className="ml-2 underline" onClick={currentWorkflowEntry.retry}>{workflow?.ready && workflow.error ? "重试保存工作流" : "重新加载工作流"}</button></small>
-              : <small className="canvas-save-state is-visible" role="status">正在加载工作流…</small>)}
-            {error && <small className="canvas-save-error" title={userErrorMessage(error, "画板未能保存，请重试保存。")}>保存失败，修改仍保留在当前画面
-              {writeJournalRef.current.failure != null && <button type="button" className="ml-2 underline" onClick={() => { void retryPendingWrites().catch(error => notifyError(error, "画板保存失败")); }}>重试保存画板</button>}
-            </small>}
-          </div>
-          <div className="canvas-zoom-controls" role="toolbar" aria-label="画板控制">
-            <button type="button" title="撤销（Ctrl / ⌘ Z）" aria-label="撤销画布操作" disabled={viewMode !== "canvas" || !canUndo}
-              onPointerDown={event => event.preventDefault()} onClick={undoCanvasAction}><Undo2 size={14} /></button>
-            <button type="button" title="磁吸 N" aria-label="吸附对齐" aria-keyshortcuts="N" data-canvas-control="snap"
-              disabled={viewMode !== "canvas"} aria-pressed={snapEnabled} onClick={toggleCanvasSnap}><Magnet size={14} /></button>
-            <span className="canvas-toolbar-divider" aria-hidden="true" />
-            {viewMode === "timeline" && threads.length > 0 && (
-              <TacticalSelect
-                aria-label="时间线范围"
-                value={timelineScope === "all" ? "__all" : focusedThreadId ?? "__all"}
-                onValueChange={(value) => {
-                  if (value === "__all") {
-                    setProjectTimelineScope("all");
-                  } else {
-                    setFocusedThreadId(value);
-                    setProjectTimelineScope("focused");
-                    useStore.getState().clearProjectThreadUnread(activeCanvas.id, value);
-                  }
-                  markViewDirty();
-                }}
-              >
-                <option value="__all">项目全部活动</option>
-                <optgroup label="进行中的线程">
-                  {threads.filter((thread) => thread.archivedAt == null).map((thread) => (
-                    <option key={thread.id} value={thread.id}>{thread.title}</option>
-                  ))}
-                </optgroup>
-                {threads.some((thread) => thread.archivedAt != null) && (
-                  <optgroup label="已归档（选择后可恢复）">
-                    {threads.filter((thread) => thread.archivedAt != null).map((thread) => (
-                      <option key={thread.id} value={thread.id}>{thread.title}</option>
-                    ))}
-                  </optgroup>
-                )}
-              </TacticalSelect>
-            )}
-            {viewMode === "timeline" && timelineScope === "focused" && focusedThreadId && threads.some((thread) => thread.id === focusedThreadId) && (
-              <button
-                type="button"
-                title={focusedThreadIsArchived ? "恢复当前线程" : "归档当前线程"}
-                aria-label={focusedThreadIsArchived ? "恢复当前线程" : "归档当前线程"}
-                onClick={() => void toggleFocusedThreadArchive()}
-              >
-                {focusedThreadIsArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-              </button>
-            )}
-            <button
-              type="button"
-              className={viewMode === "canvas" ? "is-active" : ""}
-              title="画板视图"
-              aria-label="画板视图"
-              aria-pressed={viewMode === "canvas"}
-              onClick={() => selectViewMode("canvas")}
-            >
-              <LayoutDashboard size={14} />
-            </button>
-            <button
-              type="button"
-              className={viewMode === "timeline" ? "is-active" : ""}
-              title="时间线视图"
-              aria-label="时间线视图"
-              aria-pressed={viewMode === "timeline"}
-              onClick={() => selectViewMode("timeline")}
-            >
-              <List size={14} />
-            </button>
-            <span className="canvas-toolbar-divider" aria-hidden="true" />
-            <button
-              type="button"
-              title="缩小"
-              aria-label="缩小"
-              disabled={viewMode !== "canvas"}
-              onClick={() => {
-                const rect = stageRef.current?.getBoundingClientRect();
-                if (rect) zoomAround(rect.left + rect.width / 2, rect.top + rect.height / 2, zoomRef.current - 0.15);
-              }}
-            >
-              <Minus size={14} />
-            </button>
-            <span ref={zoomLabelRef}>{Math.round(zoomRef.current * 100)}%</span>
-            <button
-              type="button"
-              title="放大"
-              aria-label="放大"
-              disabled={viewMode !== "canvas"}
-              onClick={() => {
-                const rect = stageRef.current?.getBoundingClientRect();
-                if (rect) zoomAround(rect.left + rect.width / 2, rect.top + rect.height / 2, zoomRef.current + 0.15);
-              }}
-            >
-              <Plus size={14} />
-            </button>
-            <button type="button" title="适应内容" aria-label="适应内容" disabled={viewMode !== "canvas"} onClick={fitCanvas}>
-              <Maximize2 size={14} />
-            </button>
-          </div>
-        </div>
+        <CanvasWorkspaceHeader
+          activeCanvas={activeCanvas} activeCanvasRef={activeCanvasRef} replaceActive={replaceActive}
+          commitProjectTitle={commitProjectTitle} titleIme={titleIme}
+          viewMode={viewMode} boardOpen={boardOpen} genEditing={genEditing} selectedCanvasNodeIds={selectedCanvasNodeIds}
+          opening={opening} savingVisible={savingVisible} loading={loading} currentWorkflowEntry={currentWorkflowEntry}
+          workflow={workflow} error={error} writeFailed={writeJournalRef.current.failure != null}
+          retryPendingWrites={retryPendingWrites} canUndo={canUndo} canRedo={canRedo}
+          undoCanvasAction={undoCanvasAction} redoCanvasAction={redoCanvasAction}
+          snapEnabled={snapEnabled} toggleCanvasSnap={toggleCanvasSnap}
+          threads={threads} timelineScope={timelineScope} focusedThreadId={focusedThreadId}
+          setProjectTimelineScope={setProjectTimelineScope} setFocusedThreadId={setFocusedThreadId} markViewDirty={markViewDirty}
+          focusedThreadIsArchived={focusedThreadIsArchived} toggleFocusedThreadArchive={toggleFocusedThreadArchive}
+          selectViewMode={selectViewMode} stageRef={stageRef} zoomRef={zoomRef} zoomLabelRef={zoomLabelRef}
+          zoomAround={zoomAround} fitCanvas={fitCanvas} resetCanvasZoom={resetCanvasZoom}
+        />
 
         <div
           ref={stageRef}
@@ -6791,7 +6204,7 @@ export function CanvasWorkspace({
                         </div>
                       </> : <>
                         <FolderPreview node={node} filterState={materialFilterState} onAssetPointerDown={(event, asset) => { beginNodeDrag(event, node); armCanvasAssetHold(event, node.id, asset, true); }} onAssetContextMenu={(event, asset) => openCanvasAssetContextMenu(event, node, asset)} />
-                        <span className="canvas-folder-name"><Folder size={13} /> 素材组 · {node.assets.length}</span>
+                        <span className="canvas-folder-name" onContextMenu={event => openCanvasNodeMenu(event, node.id)}><Folder size={13} /> 素材组 · {node.assets.length}</span>
                       </>}
                     </>
                   )}

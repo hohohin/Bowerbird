@@ -152,7 +152,10 @@ fn rewrite_index_with(conn: &Connection, map: &impl Fn(&str)->Option<String>) ->
             let next = if json { if let Ok(mut value)=serde_json::from_str::<serde_json::Value>(&old) {
                 let original=value.clone(); rewrite_json_with(&mut value,map); if original!=value {Some(serde_json::to_string(&value)?)}else{None}
             }else{None} }else{map(&old)};
-            if let Some(next)=next { conn.execute(&format!("UPDATE {table} SET {column}=?1 WHERE rowid=?2"),params![next,rowid])?; }
+            if let Some(next)=next {
+                let invalidate_runs = if table == "canvas_workflows" { ",runs_synced_revision=NULL" } else { "" };
+                conn.execute(&format!("UPDATE {table} SET {column}=?1{invalidate_runs} WHERE rowid=?2"),params![next,rowid])?;
+            }
         }
     }
     Ok(())

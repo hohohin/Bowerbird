@@ -11,10 +11,10 @@ import { replicationAnalysisNote } from "../lib/replicationAnalysisNote";
 import { userErrorMessage } from "../lib/userError";
 import type { Asset, NewCanvasNode } from "../lib/types";
 
-type Row = { start: number; end: number; index: number; texts: readonly [string, string, string]; speech: string };
+export type ShotDeliveryRow = { start: number; end: number; index: number; texts: readonly [string, string, string]; speech: string };
 interface Props {
   mode: "note" | "workflow";
-  rows: Row[];
+  rows: ShotDeliveryRow[];
   assetId: string;
   sourceHash: string;
   currentProjectId?: string | null;
@@ -36,7 +36,7 @@ async function deliver(projectId: string, { mode, assetId, sourceHash, rows }: P
     mode,
     assetId,
     sourceHash,
-    ...sorted.flatMap((row) => [row.start, row.end]),
+    ...sorted.flatMap((row) => [row.start, row.end, ...row.texts, row.speech]),
   );
   const existing = await invoke<string | null>("video_shots_delivery_get", { projectId, deliveryKey: key });
   if (existing) return { nodeId: existing, existing: true };
@@ -70,7 +70,7 @@ async function deliver(projectId: string, { mode, assetId, sourceHash, rows }: P
     zIndex: 1,
     positionLocked: false,
   });
-  const material = (row: Row) =>
+  const material = (row: ShotDeliveryRow) =>
     invoke<Asset>("video_shots_frame_asset", { assetId, sourceHash, startMs: row.start });
   let focus = "";
   if (mode === "note") {
@@ -104,13 +104,9 @@ async function deliver(projectId: string, { mode, assetId, sourceHash, rows }: P
     );
   } else {
     for (const row of sorted) {
-      const id = await stableId(projectId, assetId, sourceHash, row.start, row.end);
+      const id = await stableId(key, row.start, row.end);
       const imageId = "shot-image-" + id, videoId = "shot-video-" + id, frameId = "shot-frame-" + id;
       focus ||= imageId;
-      if (
-        workflow.document.nodes.some((n) => n.id === imageId || n.id === videoId) ||
-        graph.nodes.some((n) => n.id === frameId)
-      ) continue;
       const frame = await material(row);
       frames.push(
         node(frameId, "asset", frame.id, 168, 106, assetPayloadJson(createCanvasAssetSnapshot(frame, frameId))),
@@ -242,7 +238,7 @@ export function ShotBoardDelivery(props: Props) {
   );
 }
 
-function generationSeconds(row: Row) {
+function generationSeconds(row: ShotDeliveryRow) {
   const [min, max] = videoDurationRange(DEFAULT_VIDEO_OPTIONS.model_version);
   return Math.max(min, Math.min(max, Math.ceil((row.end - row.start) / 1000)));
 }

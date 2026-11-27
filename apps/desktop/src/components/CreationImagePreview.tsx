@@ -506,12 +506,16 @@ export function CreationImagePreview({ asset: originalAsset, projectId, job: pro
             selectAnalysisView("transcript");
           } : undefined}
           onSeek={time => setVideoSeek(previous => ({ key: transcriptKey, time, revision: (previous?.revision ?? 0) + 1 }))}/>
-          : <div className="video-transcript-panel" key={`${transcriptKey}:${workspaceView}`}>
+          : <div className={workspaceView === "replication" ? "video-transcript-panel is-shot-workspace" : "video-transcript-panel video-analysis-panel"} key={`${transcriptKey}:${workspaceView}`}>
             {workspaceView === "replication" ? <LibraryVideoReplication key={transcriptKey} assetId={asset.id} currentProjectId={projectId} video={videoElement}
               onBack={() => selectAnalysisView("analysis")} onTranscript={() => selectAnalysisView("transcript")} onOpenBoard={close}
               onSeek={time => setVideoSeek(previous => ({ key: transcriptKey, time, revision: (previous?.revision ?? 0) + 1 }))}/> : <>
+              <section className="video-analysis-replication" aria-labelledby="video-analysis-replication-title">
+                <h3 id="video-analysis-replication-title">逐镜复刻</h3>
+                <p>调整切点，按镜头分析画面和运镜，生成可编辑的画板分镜。</p>
+                <button type="button" className="app-button-primary" onClick={() => selectAnalysisView("replication")}>打开逐镜复刻</button>
+              </section>
               <VideoVisualAnalysis key={visualAnalysis.owner} assetId={asset.id} state={visualAnalysis}/>
-              <button type="button" className="app-button-primary mt-4" onClick={() => selectAnalysisView("replication")}>复刻</button>
             </>}
           </div>)}
       </section>}

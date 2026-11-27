@@ -1,5 +1,11 @@
 //! Durable incoming originals. Transfer bytes stay outside the indexed directory until verified.
-use super::{external_files, file_workspace::ensure_hidden_dir, library::Asset, paths::LibraryPaths};
+use super::{
+    external_files,
+    file_workspace::ensure_hidden_dir,
+    folder_connections::{registered_path_spelling, ScanTarget},
+    library::Asset,
+    paths::LibraryPaths,
+};
 use crate::{
     db::Database,
     error::{AppError, AppResult},
@@ -80,6 +86,8 @@ pub struct UploadRecord {
     pub state: UploadState,
     pub sha256: Option<String>,
     pub asset_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 impl UploadRecord {
     fn valid_receipt(&self) -> bool {
@@ -101,6 +109,8 @@ pub struct QuickTransferStore {
     root: PathBuf,
     journal: PathBuf,
     staging: PathBuf,
+    project_id: Option<String>,
+    folder_id: Option<String>,
     uploads: BTreeMap<String, UploadRecord>,
 }
 impl Drop for QuickTransferStore {
@@ -109,9 +119,18 @@ impl Drop for QuickTransferStore {
     }
 }
 impl QuickTransferStore {
+    #[cfg(test)]
     pub fn open(receive_dir: &Path) -> AppResult<Self> {
+        Self::open_for_destination(receive_dir, None, None)
+    }
+
+    pub fn open_for_destination(
+        receive_dir: &Path,
+        project_id: Option<String>,
+        folder_id: Option<String>,
+    ) -> AppResult<Self> {
         let root = fs::canonicalize(receive_dir)?;
-        if !root.is_dir() {
+        if !root.is_dir() || (folder_id.is_some() && root != receive_dir) {
             return Err(invalid("请选择已有文件夹接收素材"));
         }
         if !WRITERS.lock().unwrap().insert(root.clone()) {
@@ -122,6 +141,8 @@ impl QuickTransferStore {
             staging: journal.join("staging"),
             root,
             journal,
+            project_id,
+            folder_id,
             uploads: BTreeMap::new(),
         };
         ensure_directory(&store.journal, true)?;
@@ -154,9 +175,18 @@ impl QuickTransferStore {
             state: UploadState::Receiving,
             sha256: None,
             asset_id: None,
+            project_id: self.project_id.clone(),
         };
         self.save(&record)?;
         Ok(record)
+    }
+
+    pub(crate) fn ensure_project_connection(&self, db: &Database) -> AppResult<()> {
+        if self.project_id.is_some() {
+            // Keep the original location selectable for recovery even if the project is deleted.
+            self.connect(db)?;
+        }
+        Ok(())
     }
     /// Persist validated receipt before the transport acknowledges success to its sender.
     pub fn mark_received(&mut self, id: &str) -> AppResult<()> {
@@ -214,10 +244,43 @@ impl QuickTransferStore {
             record.size,
             record.sha256.as_deref().unwrap(),
         )?;
-        let root = self.connect(db)?;
+        let folder = self.folder_id.as_deref().map(|id| db.connected_folder(id)).transpose()?;
+        let root = match &folder {
+            Some(folder) => {
+                if !folder.available || registered_path_spelling(Path::new(&folder.path)) != self.root {
+                    return Err(invalid("接收文件夹已断开或位置已变化，请重新连接原目录"));
+                }
+                folder.root_id.clone()
+            }
+            None => self.connect(db)?,
+        };
         let asset = db.index_connected_file(paths, &record.final_path, None)?;
+        if let Some(project_id) = &record.project_id {
+            // A single statement makes membership idempotent and tolerates deletion during recovery.
+            db.conn.lock().unwrap().execute(
+                "INSERT OR IGNORE INTO project_assets(project_id, asset_id, created_at)
+                 SELECT id, ?2, strftime('%s','now') FROM projects WHERE id=?1",
+                rusqlite::params![project_id, asset.id],
+            )?;
+        }
         // Other damaged files in a connected folder do not undo this original's successful registration.
-        if let Err(error) = db.scan_connection(paths, &root) {
+        let scan_result = match folder {
+            Some(folder) => {
+                let result = db.scan_connection_target(paths, &root, ScanTarget::Folder(&folder.id), |_| {}, || false);
+                let indexed: bool = db.conn.lock().unwrap().query_row(
+                    "SELECT EXISTS(SELECT 1 FROM connected_entries WHERE folder_id=?1 AND asset_id=?2 AND path=?3 AND available=1 AND is_reference=0)",
+                    rusqlite::params![folder.id, asset.id, record.final_path.to_string_lossy()],
+                    |row| row.get(0),
+                )?;
+                if !indexed {
+                    result?;
+                    return Err(invalid("原件已保存，暂未登记到接收文件夹"));
+                }
+                result
+            }
+            None => db.scan_connection(paths, &root),
+        };
+        if let Err(error) = scan_result {
             tracing::warn!("quick transfer collection refresh: {error}");
         }
         record.asset_id = Some(asset.id.clone());

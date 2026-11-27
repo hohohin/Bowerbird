@@ -8,6 +8,7 @@ import { useWorkflowLayerIssue } from "./useWorkflowLayerIssue";
 import type { ProviderIssue } from "../lib/generationAvailability";
 import { forwardRef, memo, startTransition, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore as useSnapshot } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { shallow } from "zustand/shallow";
 import { api } from "../lib/api";
 import { comfyVideoMode } from "../lib/comfyVideo";
@@ -72,7 +73,7 @@ function connectionForType(source: Connection, type?: WorkflowPort["type"]): Con
 }
 export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, WorkflowLayerProps>(function CanvasWorkflowLayer({ projectId, provisional = false, diagnosticTarget = window.document.body, getZoom, settledZoom, opening = false, entryCardIds, deferredCandidateIds, materials, graphNodes, knownAssets, loadAssets = api.getAssetsByIds, visibleGraphNodeIds, conversationCards, selectedConversationOutputs, imageOnlyConversationIds, sessionHeights, generationCardAnchors, generationCardOrigins, generationActivities, activeGenerationIds, pinnedCardOffsets, peekCard, onPeekInteraction, onToggleGenerationPin, onConnectCollapsedGeneration, onUndoGenerationConnection, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onTriggerArmedChange, onEdited, onOpenGeneration, onOpenAgent, getChatCardDefaults, onNewAgentChat, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
-  const [, redraw] = useState(0);
+  const [geometryRevision, redraw] = useState(0);
   const [controllerRevision, setControllerRevision] = useState(0);
   const pendingCards = useRef(new Map<string, PendingConnectionCard>());
   const activeController = useRef<typeof controller | null>(controller);
@@ -168,19 +169,24 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
   }, [document.nodes, state, chatSummaries, projectId, quote, dsh, comfyIssues, voiceIssue]);
   const nodeById = useMemo(() => new Map(document.nodes.map(node => [node.id, node])), [document.nodes]);
   // Pending cards are a view of an in-flight gesture. Only validated nodes enter saves and undo.
-  const pending = [...pendingCards.current.values()].filter(card => card.projectId === projectId && !nodeById.has(card.node.id));
-  const renderedNodes = pending.length ? [...document.nodes, ...pending.map(({ node, inputs }) => ({ ...node, inputs }))] : document.nodes;
-  const collapsedAnchor = (id: string) => activeGenerationIds.has(id) || pinnedCardOffsets?.has(id) ? undefined : generationCardAnchors?.get(id);
-  const cardMounted = (id: string) => entryCardIds === null || entryCardIds.has(id) || (!!deferredCandidateIds && !deferredCandidateIds.has(id));
-  const workflowNodeMounted = (node: WorkflowNode) => activeGenerationIds.has(node.id)
-    || cardMounted(node.textTarget?.nodeId ?? node.textSource ?? collapsedAnchor(node.id)?.id ?? node.id);
+  const pending = useMemo(() => [...pendingCards.current.values()].filter(card => card.projectId === projectId && !nodeById.has(card.node.id)),
+    [geometryRevision, projectId, nodeById]);
+  const renderedNodes = useMemo(() => pending.length ? [...document.nodes, ...pending.map(({ node, inputs }) => ({ ...node, inputs }))] : document.nodes,
+    [document.nodes, pending]);
+  const collapsedAnchor = useCallback((id: string) => activeGenerationIds.has(id) || pinnedCardOffsets?.has(id) ? undefined : generationCardAnchors?.get(id),
+    [activeGenerationIds, pinnedCardOffsets, generationCardAnchors]);
+  const cardMounted = useCallback((id: string) => entryCardIds === null || entryCardIds.has(id) || (!!deferredCandidateIds && !deferredCandidateIds.has(id)),
+    [entryCardIds, deferredCandidateIds]);
+  const workflowNodeMounted = useCallback((node: WorkflowNode) => activeGenerationIds.has(node.id)
+    || cardMounted(node.textTarget?.nodeId ?? node.textSource ?? collapsedAnchor(node.id)?.id ?? node.id),
+    [activeGenerationIds, cardMounted, collapsedAnchor]);
   const collapsedAnchorOwners = useMemo(() => new Map([...(generationCardAnchors ?? [])].flatMap(([id, anchor]) =>
     activeGenerationIds.has(id) || pinnedCardOffsets?.has(id) ? [] : [[anchor.id, id] as const])), [generationCardAnchors, pinnedCardOffsets, activeGenerationIds]);
   const generationAnchorOwners = useMemo(() => new Map([...(generationCardAnchors ?? [])].map(([id, anchor]) => [anchor.id, id])), [generationCardAnchors]);
-  const displayPoint = (node: WorkflowNode) => {
+  const displayPoint = useCallback((node: WorkflowNode) => {
     const offset = pinnedCardOffsets?.get(node.id);
     return offset ? { x: node.x + offset.x, y: node.y + offset.y } : node;
-  };
+  }, [pinnedCardOffsets]);
   const generationResultAnchors = useMemo(() => new Map(document.nodes
     .filter(node => (node.kind === "generation" || node.kind === "comfy-video") && node.outputs.image)
     .map(node => [node.id, workflowGenerationResultAnchor(node, graphNodes, conversationCards)])), [document.nodes, graphNodes, conversationCards]);
@@ -238,10 +244,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
     const pending = failed.length ? failed : run.order.filter(id => run.steps[id]?.status !== "done").slice(0, 1);
     return pending.length > 0 && pending.every(id => document.nodes.some(node => node.id === id && node.textTarget));
   }).map(run => run.id));
-  const nodeDiagnostic = (nodeId: string) => {
+  const nodeDiagnostic = useCallback((nodeId: string) => {
     const failure = controller.cardFailure(nodeId);
     return failure?.dismissed ? undefined : failure?.diagnostic;
-  };
+  }, [controller, controllerRevision]);
   const issueSourceId = issue?.source?.nodeId ?? issue?.source?.canvasNodeId ?? issue?.source?.assetNodeId;
   const issueSourceLabel = (() => {
     if (!issue?.source) return "";
@@ -419,14 +425,25 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
     }
     return targets;
   }, [document.nodes, nodeById, graphById, conversationCards, connection, automatic, currentRows]);
-  const portRect = useWorkflowPortGeometry(wireElement, portTargets, getZoom, settledZoom);
-  const frames = new Map<string, { owner: string; x: number; y: number; width: number; height: number; index: number; total: number }>();
-  for (const [id, row] of currentRows) {
-    const first = portRect(row.source, "cell", row.first);
-    const last = portRect(row.source, "cell", row.last);
-    if (first && last) frames.set(id, { owner: row.source.id, x: first.x - 3, y: first.y, width: last.x + last.width - first.x + 6,
-      height: first.height, index: row.index, total: row.total });
-  }
+  const readPortRect = useWorkflowPortGeometry(wireElement, portTargets, getZoom, settledZoom);
+  // The geometry hook redraws after measurements and returns a fresh reader each time.
+  // Use the measured coordinates to invalidate the wire layer when a port moves.
+  const readPortCoordinates = useShallow((targets: WorkflowPortTarget[]) => targets.flatMap(({ node, kind, port, image }) => {
+    const rect = readPortRect(node, kind, port, image);
+    return [rect?.x, rect?.y, rect?.width, rect?.height];
+  }));
+  const portCoordinates = readPortCoordinates(portTargets);
+  const portRect = useMemo(() => readPortRect, [portTargets, portCoordinates]);
+  const frames = useMemo(() => {
+    const result = new Map<string, { owner: string; x: number; y: number; width: number; height: number; index: number; total: number }>();
+    for (const [id, row] of currentRows) {
+      const first = portRect(row.source, "cell", row.first);
+      const last = portRect(row.source, "cell", row.last);
+      if (first && last) result.set(id, { owner: row.source.id, x: first.x - 3, y: first.y, width: last.x + last.width - first.x + 6,
+        height: first.height, index: row.index, total: row.total });
+    }
+    return result;
+  }, [currentRows, portRect]);
 
   const handle = (promise: Promise<unknown>) => { void promise.catch(error => notifyError(error, "工作流操作未完成")); };
   async function openOptimizationChat(nodeId: string, runId: string) {
@@ -1451,18 +1468,14 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
     },
   }));
 
-  function wireSelected(id: string | undefined) {
+  const wireSelected = useCallback((id: string | undefined) => {
     if (!id) return false;
     const node = nodeById.get(id);
     return selectedIds.has(id) || selectedIds.has(conversationCards?.aliases.get(id) ?? id)
       || !!node?.textSource && selectedIds.has(node.textSource)
       || !!node?.textTarget && selectedIds.has(node.textTarget.nodeId);
-  }
-  function sessionOwnerPoint(id: string) {
-    const owner = sessionOwners.get(id);
-    return owner ? cardPoint(owner.id, "output") : null;
-  }
-  function cardPoint(id: string, side: "input" | "output") {
+  }, [nodeById, selectedIds, conversationCards]);
+  const cardPoint = useCallback((id: string, side: "input" | "output") => {
     id = collapsedAnchor(id)?.id ?? id;
     id = conversationCards?.aliases.get(id) ?? id;
     const node = nodeById.get(id) ?? pendingCards.current.get(id)?.node;
@@ -1477,15 +1490,29 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
     const note = "kind" in card && card.kind === "note" ? readCanvasNote(card) : null;
     const height = sessionHeights?.get(nativeId) ?? (note?.note_type === "document" ? canvasDocumentHeight(card.width) : card.height);
     return { x: card.x + (side === "output" ? card.width : 0), y: card.y + height / 2, owner: card.id, selected: wireSelected(id) };
-  }
-  function scopedPoint(id: string, side: "input" | "output", scope?: string) {
+  }, [collapsedAnchor, conversationCards, nodeById, displayPoint, geometryRevision, materialById, graphById, groupById, sessionHeights, wireSelected]);
+  const sessionOwnerPoint = useCallback((id: string) => {
+    const owner = sessionOwners.get(id);
+    return owner ? cardPoint(owner.id, "output") : null;
+  }, [sessionOwners, cardPoint]);
+  const scopedPoint = useCallback((id: string, side: "input" | "output", scope?: string) => {
     const node = nodeById.get(id);
     if (node?.kind === "trigger") return { x: node.x + (side === "output" ? workflowCardWidth(node) : 0),
       y: workflowPortY(node, side, side === "input" ? "completion" : "signal"), owner: id, selected: wireSelected(id) };
     const rect = scope && portRect(graphById.get(id), "cell", scope);
     return rect ? { x: rect.x + (side === "output" ? rect.width : 0), y: rect.y + rect.height / 2, owner: id, selected: wireSelected(id) } : cardPoint(id, side);
-  }
-  function sourcePoint(binding: WorkflowInput, receiver?: WorkflowNode) {
+  }, [nodeById, wireSelected, portRect, graphById, cardPoint]);
+  const embeddedPoint = useCallback((id: string, input = false) => {
+    const target = conversationCards?.embedded.get(id);
+    if (!target) return null;
+    const table = graphById.get(target.nodeId);
+    const rect = portRect(table, "cell", target.cellId);
+    if (rect) {
+      return { x: rect.x + (input ? 0 : rect.width), y: rect.y + rect.height / 2, owner: target.nodeId, selected: selectedIds.has(target.nodeId) };
+    }
+    return table ? { x: table.x + (input ? 0 : table.width), y: table.y + table.height / 2, owner: target.nodeId, selected: selectedIds.has(target.nodeId) } : null;
+  }, [conversationCards, graphById, portRect, selectedIds]);
+  const sourcePoint = useCallback((binding: WorkflowInput, receiver?: WorkflowNode) => {
     const node = binding.nodeId ? nodeById.get(binding.nodeId) : undefined;
     if (node && receiver && receiver.kind !== "trigger" && !receiver.textTarget && isWorkflowGenerationResult(binding, node)) {
       const result = generationResultAnchors.get(node.id);
@@ -1524,18 +1551,9 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
       && (!binding.assetNodeId || item.id === binding.assetNodeId) && conversationCards?.aliases.has(item.id));
     const anchor = output && conversationCards?.cards.get(conversationCards.aliases.get(output.id)!)?.anchor;
     return (output && embeddedPoint(output.id)) || (anchor && sessionOwnerPoint(anchor.id)) || (anchor ? { x: anchor.x + anchor.width, y: anchor.y + 50, owner: anchor.id, selected: wireSelected(anchor.id) } : null);
-  }
-  function embeddedPoint(id: string, input = false) {
-    const target = conversationCards?.embedded.get(id);
-    if (!target) return null;
-    const table = graphById.get(target.nodeId);
-    const rect = portRect(table, "cell", target.cellId);
-    if (rect) {
-      return { x: rect.x + (input ? 0 : rect.width), y: rect.y + rect.height / 2, owner: target.nodeId, selected: selectedIds.has(target.nodeId) };
-    }
-    return table ? { x: table.x + (input ? 0 : table.width), y: table.y + table.height / 2, owner: table.id, selected: selectedIds.has(table.id) } : null;
-  }
-  function outputPath(from: { x: number; y: number }, to: { x: number; y: number }, drag?: DragOffset) {
+  }, [nodeById, generationResultAnchors, visibleGraphNodeIds, materialById, scopedPoint, wireSelected,
+    embeddedPoint, sessionOwnerPoint, graphById, conversationCards, cardPoint, portRect, groupById, materialByAsset, graphNodes]);
+  const outputPath = useCallback((from: { x: number; y: number }, to: { x: number; y: number }, drag?: DragOffset) => {
     // Compact sibling grids need a lane around earlier columns, not through their media.
     let bottom = -Infinity;
     for (const rect of materials) {
@@ -1547,7 +1565,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
     if (bottom === -Infinity) return path(from, to);
     const lane = bottom + 16;
     return `M${from.x},${from.y} H${from.x + 16} V${lane} H${to.x - 16} V${to.y} H${to.x}`;
-  }
+  }, [materials]);
   updateCursor.current = () => {
     const gesture = automaticRef.current;
     if (gesture && draftElement.current) {
@@ -1739,7 +1757,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
     {Array.from(frames, ([id, frame]) => <WorkflowLoopFrame key={id} {...frame} />)}
     <CanvasConnectionDefinitions />
     <WorkflowWiresLayer
-      automatic={automatic} cardMounted={cardMounted} cardPoint={cardPoint} chooseDisconnect={chooseDisconnect} collapsedAnchor={collapsedAnchor}
+      automatic={automatic} cardMounted={cardMounted} cardPoint={cardPoint} chooseDisconnect={cardChooseDisconnect} collapsedAnchor={collapsedAnchor}
       connection={connection} connectionMenu={connectionMenu} conversationCards={conversationCards} cursor={cursor}
       displayPoint={displayPoint} document={document} draftElement={draftElement} embeddedPoint={embeddedPoint} frames={frames}
       generationResultAnchors={generationResultAnchors} graphById={graphById} sessionOutputsBySessionId={sessionOutputsBySessionId} groupById={groupById} materialById={materialById}
@@ -1747,8 +1765,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Workflow
       scopedPoint={scopedPoint} sourcePoint={sourcePoint} toBoardPoint={toBoardPoint} visibleGraphNodeIds={visibleGraphNodeIds} wireElement={wireElement}
       wireSelected={wireSelected} workflowNodeMounted={workflowNodeMounted} />
     {document.nodes.filter(node => node.textSource && cardMounted(node.textSource) && (node.trigger || node.inputs.signal?.length)).map(node => {
-      const card = graphNodes.find(card => card.id === node.textSource && card.hiddenAt == null);
-      return card && <div key={node.id} className="workflow-material-hotspot workflow-text-key" data-workflow-text-key={card.id} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>{node.inputs.signal?.length ? gearButton(node) : keyButton(node)}</div>;
+      const card = node.textSource ? graphById.get(node.textSource) : undefined;
+      return card && card.hiddenAt == null && <div key={node.id} className="workflow-material-hotspot workflow-text-key" data-workflow-text-key={card.id} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>{node.inputs.signal?.length ? gearButton(node) : keyButton(node)}</div>;
     })}
     {visibleGraphNodes.filter(card => cardMounted(card.id) && card.kind === "prompt" && card.hiddenAt == null && !sessionIds.has(card.id) && !conversationCards?.hiddenIds.has(card.id)).map(card =>
       <div key={`session-${card.id}`} data-workflow-material={card.id} className={`workflow-material-hotspot ${imageOnlyConversationIds?.has(card.id) ? "is-image-session" : ""} ${hoveredMaterial === card.id ? "is-hovered" : ""} ${selectedIds.has(card.id) ? "is-selected" : ""}`} style={{ left: card.x, top: card.y, width: card.width, height: sessionHeights?.get(card.id) ?? card.height }}>

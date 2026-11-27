@@ -19,6 +19,14 @@ export function workflowEditUndo(before: CanvasWorkflow, after: CanvasWorkflow):
   return structuredClone({ nodes, removedRuns: workflowRuns(before).filter(run => !runs.has(run.id)), runOrder: workflowRuns(before).map(run => run.id) });
 }
 
+export function invertWorkflowEditUndo(edit: WorkflowEditUndo): WorkflowEditUndo {
+  return {
+    nodes: edit.nodes.map(({ id, before, after }) => ({ id, before: after, after: before })),
+    removedRuns: [],
+    runOrder: edit.runOrder,
+  };
+}
+
 /** Revert changed fields without rewinding other cards or newer execution results. */
 export function restoreWorkflowEdit(nodes: WorkflowNode[], undo: WorkflowEditUndo): WorkflowNode[] {
   const changes = new Map(undo.nodes.map(change => [change.id, change]));

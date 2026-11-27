@@ -14,7 +14,8 @@ w.calls = [];
 w.addresses = params.has("offline") ? [] : ["192.168.1.23", "10.0.0.9"];
 w.holdStatus = params.has("holdStatus");
 Object.defineProperty(navigator, "clipboard", { value: { writeText: async (value: string) => { w.copiedAddress = value; } } });
-w.snapshot = { revision: 0, active: false, directory: null, url: null, transfers: [] };
+const builtin = { kind: "default", name: "默认快传", directory: "D:\\BowerbirdLibrary\\快传" };
+w.snapshot = { revision: 0, active: false, directory: null, destination: null, url: null, transfers: [] };
 function thumbnail(color: string) {
   const canvas = document.createElement("canvas");
   canvas.width = 32; canvas.height = 24;
@@ -51,7 +52,8 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:event|listen") { eventHandler = args.handler; return eventHandler; }
     if (command === "plugin:event|unlisten") { callbacks.delete(args.eventId); return; }
     if (command === "quick_transfer_addresses") return w.addresses;
-    if (command === "quick_transfer_directory") return "D:\\BowerbirdLibrary\\快传";
+    if (command === "quick_transfer_default_destination") return { builtin, effective: builtin, savedFolder: null, warning: null };
+    if (command === "list_projects" || command === "folder_connections") return [];
     if (command === "get_assets_by_ids") {
       const assets = args.assetIds.map((id: string) => w.assets[id]).filter(Boolean).reverse();
       if (w.holdAssetIds?.some((id: string) => args.assetIds.includes(id))) await new Promise<void>(resolve => w.assetWaiters.push({ ids: args.assetIds, resolve }));
@@ -78,12 +80,12 @@ w.__TAURI_INTERNALS__ = {
     if (command === "quick_transfer_send_stop") { w.emit({ sending: null }); return w.snapshot; }
     if (command === "quick_transfer_start") {
       const snapshot = { ...w.snapshot, revision: w.snapshot.revision + 1, active: true,
-        directory: "D:\\BowerbirdLibrary\\快传", url: `http://${args.address}:53317/?pin=01234567` };
+        directory: builtin.directory, destination: builtin, url: `http://${args.address}:53317/?pin=01234567` };
       w.emit(snapshot);
       if (w.holdStart) await new Promise<void>(resolve => { w.releaseStart = resolve; });
       return snapshot;
     }
-    if (command === "quick_transfer_stop") { w.emit({ active: false, url: null }); return w.snapshot; }
+    if (command === "quick_transfer_stop") { w.emit({ active: false, destination: null, url: null }); return w.snapshot; }
     if (command === "quick_transfer_retry") {
       w.emit({ transfers: w.snapshot.transfers.map((file: any) => file.id === args.id
         ? { ...file, status: "complete", retryable: false, error: null, assetId: "asset-1" } : file) });

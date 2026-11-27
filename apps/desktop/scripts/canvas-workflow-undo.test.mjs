@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { emptyWorkflow, newWorkflowNode, invalidateWorkflow } from '../src/lib/canvasWorkflow.ts';
-import { workflowEditUndo, restoreWorkflowEdit } from '../src/lib/workflowUndo.ts';
+import { invertWorkflowEditUndo, workflowEditUndo, restoreWorkflowEdit } from '../src/lib/workflowUndo.ts';
 
 const node = id => ({ ...newWorkflowNode('generation', 0, 0, 'codex'), id });
 const document = nodes => ({ ...emptyWorkflow(), nodes });
@@ -47,4 +47,22 @@ test('history records only removed runs and ignores a no-op node edit', () => {
   const undo = workflowEditUndo(before, document([]));
   assert.deepEqual(undo.removedRuns, [run]);
   assert.equal(workflowEditUndo(before, structuredClone(before)), null);
+});
+
+test('redo inverts node edits without restoring removed runs or replacing newer outputs', () => {
+  const source = node('source');
+  const dependent = { ...node('dependent'), inputs: { text: [{ nodeId: 'source', portId: 'text' }] },
+    outputs: { text: { type: 'text', text: 'original' } } };
+  const run = { id: 'done', startId: source.id, status: 'done', order: [source.id], steps: {} };
+  const before = { ...document([source, dependent]), run };
+  const after = document([{ ...dependent, inputs: { text: [] }, outputs: {} }, node('added')]);
+  const undo = workflowEditUndo(before, after);
+  const redo = invertWorkflowEditUndo(undo);
+  assert.deepEqual(redo.removedRuns, []);
+  assert.deepEqual(redo.runOrder, undo.runOrder);
+  assert.deepEqual(redo.nodes, undo.nodes.map(({ id, before, after }) => ({ id, before: after, after: before })));
+  const outputs = { text: { type: 'text', text: 'new output' } };
+  const live = [source, { ...dependent, outputs }, node('unrelated')];
+  assert.deepEqual(restoreWorkflowEdit(live, redo), [{ ...after.nodes[0], outputs }, live[2], after.nodes[1]]);
+  assert.deepEqual(undo.removedRuns, [run]);
 });

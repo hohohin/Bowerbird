@@ -96,6 +96,7 @@ pub(in crate::commands) fn fixture() -> (tempfile::TempDir, Database, PathBuf, S
         duration_ms: 30_000,
         revision: 1,
         threshold: 0.35,
+        hard_cuts_detected: false,
         layout: Layout {
             cuts: vec![Cut {
                 at: 15000,
@@ -118,6 +119,56 @@ pub(in crate::commands) fn fixture() -> (tempfile::TempDir, Database, PathBuf, S
 }
 fn texts(label: &str) -> Texts {
     [label.into(), "首帧".into(), "运镜".into()]
+}
+
+#[test]
+fn hard_cut_detection_is_saved_even_without_scene_cuts() {
+    let (_dir, db, path, hash) = fixture();
+    let cuts = vec![Cut {
+        at: 15000,
+        kind: Kind::Long,
+    }];
+    {
+        let conn = db.conn.lock().unwrap();
+        let (id, h) = stored(&conn, "v").unwrap().unwrap();
+        assert!(h.has_detected_hard_cuts());
+        let mut old_payload = serde_json::to_value(h).unwrap();
+        old_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("hardCutsDetected");
+        old_payload["layout"]["cuts"] = serde_json::to_value(&cuts).unwrap();
+        conn.execute(
+            "UPDATE analyses SET payload=?2 WHERE id=?1",
+            params![id, old_payload.to_string()],
+        )
+        .unwrap();
+        assert!(
+            !plan_in(&conn, "v", &path, &hash)
+                .unwrap()
+                .hard_cuts_detected
+        );
+    }
+    let detected = update(
+        &db,
+        "v",
+        &hash,
+        1,
+        Change::Cuts {
+            cuts,
+            threshold: Some(0.35),
+            confirmed: vec![],
+            suppressed_at: None,
+        },
+    )
+    .unwrap();
+    assert!(detected.hard_cuts_detected);
+    let conn = db.conn.lock().unwrap();
+    assert!(
+        plan_in(&conn, "v", &path, &hash)
+            .unwrap()
+            .hard_cuts_detected
+    );
 }
 
 #[test]

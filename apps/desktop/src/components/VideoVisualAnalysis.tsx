@@ -94,6 +94,12 @@ export function VideoVisualAnalysis({ assetId, state }: { assetId: string; state
     <p className="whitespace-pre-wrap break-words">{description}</p>
   </section>;
   if (!running && (progress?.status === "completed" || (quote && !quote.chargeRequired && !pending))) return null;
+  if (!running && !pending && progress?.status !== "interrupted" && !hasVideoAnalysisPrice(quote) && !error && (!owner || available === false)) {
+    return <div className="video-description-status" role="status">
+      <span>画面描述</span>
+      <span>{owner ? "服务暂未开放" : "登录后查看服务状态"}</span>
+    </div>;
+  }
 
   async function start(authorization: PricedVideoAnalysisQuote) {
     if (running || !owner) return;
@@ -125,7 +131,7 @@ export function VideoVisualAnalysis({ assetId, state }: { assetId: string; state
     }
   }
 
-  return <section aria-label="画面描述操作" className="mb-4 space-y-2 border-b border-edge pb-4">
+  return <section aria-label="画面描述操作" className="space-y-2">
     <h3 className="font-medium">画面描述</h3>
     {running ? <>
       <p role="status">{progress?.segmentCount ? `已完成 ${progress.completedSegments} / ${progress.segmentCount} 段` : "正在准备画面分析…"}</p>

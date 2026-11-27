@@ -46,8 +46,22 @@ struct Header {
     duration_ms: i64,
     revision: i64,
     threshold: f64,
+    #[serde(default)]
+    hard_cuts_detected: bool,
     layout: Layout,
     undo: Option<Undo>,
+}
+
+impl Header {
+    fn has_detected_hard_cuts(&self) -> bool {
+        let has_scene = |layout: &Layout| layout.cuts.iter().any(|cut| cut.kind == Kind::Scene);
+        self.hard_cuts_detected
+            || has_scene(&self.layout)
+            || self
+                .undo
+                .as_ref()
+                .is_some_and(|undo| has_scene(&undo.layout))
+    }
 }
 
 fn stored(conn: &Connection, asset: &str) -> AppResult<Option<(String, Header)>> {
@@ -82,6 +96,7 @@ fn read_texts(conn: &Connection, plan_id: &str) -> AppResult<Results> {
     Ok(out)
 }
 fn to_plan(conn: &Connection, id: &str, h: Header) -> AppResult<Plan> {
+    let hard_cuts_detected = h.has_detected_hard_cuts();
     Ok(Plan {
         source_hash: h.source_hash,
         duration_ms: h.duration_ms,
@@ -90,6 +105,7 @@ fn to_plan(conn: &Connection, id: &str, h: Header) -> AppResult<Plan> {
         selected: h.layout.selected,
         results: read_texts(conn, id)?,
         threshold: h.threshold,
+        hard_cuts_detected,
         can_undo: h.undo.is_some(),
         undo_cuts: h.undo.map(|u| u.layout.cuts),
     })
@@ -162,6 +178,7 @@ fn get(db: &Database, asset: &str) -> AppResult<Plan> {
         duration_ms,
         revision: 1,
         threshold: 0.35,
+        hard_cuts_detected: false,
         layout: Layout {
             cuts,
             selected,
@@ -222,6 +239,7 @@ fn change_cuts(
     if removed != confirmed.into_iter().collect() {
         return Err(invalid("受影响的镜头已变化，请重新确认清除范围"));
     }
+    h.hard_cuts_detected = threshold.is_some() || h.has_detected_hard_cuts();
     if h.layout.cuts == cuts && !undo {
         if let Some(value) = threshold {
             h.threshold = value;

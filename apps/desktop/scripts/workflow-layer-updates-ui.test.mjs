@@ -26,8 +26,18 @@ try {
     const controller = canvasWorkflowController('updates');
     await controller.load(true);
     const node = newWorkflowNode('trigger', 400, 50, '');
-    controller.document = { ...controller.document, nodes: [node] };
+    const receiver = newWorkflowNode('generation', 650, 50, '');
+    receiver.inputs.signal = [{ nodeId: node.id, portId: 'signal' }];
+    controller.document = { ...controller.document, nodes: [node, receiver] };
     window.workflowNodeId = node.id;
+    window.wireTargetId = receiver.id;
+    window.wireRenders = 0;
+    const readCardFailure = controller.cardFailure.bind(controller);
+    controller.cardFailure = (id, ...args) => {
+      // The wire layer reads the target diagnostic without a run argument.
+      if (id === receiver.id && args.length === 0) window.wireRenders++;
+      return readCardFailure(id, ...args);
+    };
     const ref = React.createRef(); window.layer = ref;
     const noop = () => {};
     const materials = [{ id: 'source', assetId: 'source-asset', x: 40, y: 50, width: 100, height: 80 }];
@@ -42,6 +52,8 @@ try {
           onSelect: noop, onNodesChanged: noop, onEdited: noop, onOpenGeneration: noop, onOpenAgent: noop, onDragStart: noop, onDragMove: noop,
           onDragEnd: noop, onNodeMenu: noop, onRemove: noop, ensureMaterialized: async () => {}, toBoardPoint: (x, y) => ({ x, y }), onPlaced: noop })))));
     window.changeUnrelated = () => { for (let i = 0; i < 30; i++) useStore.setState({ searchQuery: `unrelated-${i}` }); };
+    window.openBlankMenu = () => flushSync(() => ref.current.openCardMenu(200, 200, { x: 200, y: 200 }));
+    window.moveWireTarget = () => flushSync(() => ref.current.position(new Map([[receiver.id, { x: 700, y: 80 }]])));
     window.moveCursor = (x, y, buttons = 0) => document.body.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', buttons, clientX: x, clientY: y }));
     window.unmountLayer = () => flushSync(() => root.render(null));
     window.renderOpeningBatches = () => {
@@ -74,6 +86,19 @@ try {
   await page.waitForTimeout(80);
   assert.equal(await page.evaluate(() => window.layerCommits), 0, 'unrelated store updates must not commit the workflow tree');
 
+  const targetId = await page.evaluate(() => window.wireTargetId);
+  const wire = page.locator(`.canvas-plane > svg.workflow-wires > [data-workflow-target="${targetId}"]`);
+  await wire.waitFor({ state: 'attached' });
+  const initialPath = await wire.getAttribute('d');
+  await page.evaluate(() => { window.wireRenders = 0; window.openBlankMenu(); });
+  await page.getByRole('menuitem').first().waitFor({ state: 'attached' });
+  assert.equal(await page.evaluate(() => window.wireRenders), 0, 'the blank card menu must not recalculate existing wires');
+  await page.keyboard.press('Escape');
+  await page.getByRole('menuitem').first().waitFor({ state: 'detached' });
+  await page.evaluate(() => { window.wireRenders = 0; window.moveWireTarget(); });
+  assert.notEqual(await wire.getAttribute('d'), initialPath, 'moving a target must update the directly mounted wire path');
+  assert.ok(await page.evaluate(() => window.wireRenders > 0), 'moving a target must recalculate its wire');
+
   await page.locator('[data-workflow-material="source"]').getByRole('button', { name: '添加下游', exact: true }).dispatchEvent('pointerdown', { button: 0, buttons: 1, pointerType: 'mouse', clientX: 158, clientY: 90 });
   await page.locator('.workflow-wires .is-draft').waitFor({ state: 'attached' });
   await page.evaluate(() => window.moveCursor(200, 200, 1));
@@ -103,5 +128,5 @@ try {
     firstBatchCount: 1, secondBatchCount: 2, preparations: [1, 1],
   }, 'the readiness batch prepares only newly mounted workflow cards');
   await page.evaluate(() => window.unmountLayer());
-  console.log('PASS: unrelated store changes, draft cursor bursts, winding-key cursor bursts and equivalent node positions cause zero workflow commits; cancellation and unmount clean up');
+  console.log('PASS: unrelated store changes, cursor bursts, equivalent positions, blank menu wire isolation, wire movement, and unmount cleanup');
 } finally { await browser?.close(); await server.close(); }

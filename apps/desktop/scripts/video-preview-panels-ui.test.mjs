@@ -53,6 +53,7 @@ try {
       h3: { status: 'interrupted', text: '', utterances: [], cloudPending: true },
     };
     window.videoTranscripts = transcripts;
+    window.visualAnalysisAvailable = false;
     let visualStarted = false;
     HTMLElement.prototype.scrollIntoView = function (...args) {
       if (this.dataset.generationTurnKey) window.previewTurns.push(this.dataset.generationTurnKey);
@@ -64,7 +65,7 @@ try {
       }
       window.calls.push({ command, args });
       if (command === 'video_analysis_get') return Promise.resolve(args.assetId === 'plain' ? { text: '窗边近景，暖色光线。' } : null);
-      if (command === 'video_analysis_capabilities') return Promise.resolve({ available: true });
+      if (command === 'video_analysis_capabilities') return Promise.resolve({ available: window.visualAnalysisAvailable });
       if (command === 'video_analysis_quote') return Promise.resolve({ durationMs: 2000, durationSeconds: 2,
         sourceHash: `version-${args.assetId}`, segmentCount: 1, credits: 5, chargeRequired: args.assetId !== 'plain', cloudPending: false, pricingVersion: 4 });
       if (command === 'video_analysis_progress') return Promise.resolve(visualStarted && args.assetId === 'repeat'
@@ -222,6 +223,7 @@ try {
   await close();
 
   const repeatBoundary = await page.evaluate(() => window.calls.length);
+  await page.evaluate(() => { window.visualAnalysisAvailable = true; });
   await open('repeat', false);
   const repeatEntry = detail.getByRole('region', { name: '视频分析', exact: true });
   await repeatEntry.getByText('转录 · 7 Bcoin', { exact: true }).waitFor();
@@ -256,6 +258,7 @@ try {
   await close();
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.evaluate(() => { window.visualAnalysisAvailable = false; });
   await open('generated', false);
   await history.waitFor();
   await history.locator('[data-generation-turn-key="generated"]').getByText('所选视频的原提示词').waitFor();
@@ -279,6 +282,15 @@ try {
   await enterTranscript();
   await transcript.getByText('此视频没有音轨。', { exact: true }).waitFor();
   await history.waitFor({ state: 'hidden' });
+  await workspace.getByRole('button', { name: '分析', exact: true }).click();
+  const replicationEntry = workspace.getByRole('region', { name: '逐镜复刻', exact: true });
+  await replicationEntry.getByRole('button', { name: '打开逐镜复刻' }).waitFor();
+  const unavailableDescription = workspace.locator('.video-description-status');
+  await unavailableDescription.getByText('服务暂未开放', { exact: true }).waitFor();
+  assert.ok((await unavailableDescription.boundingBox()).y > (await replicationEntry.boundingBox()).y);
+  assert.equal(await workspace.getByRole('region', { name: '画面描述操作' }).count(), 0);
+  assert.equal(await page.evaluate(() => window.calls.some(call =>
+    ['video_analysis_quote', 'video_analysis_start'].includes(call.command) && call.args.assetId === 'generated')), false);
   await workspace.getByRole('button', { name: '返回视频预览', exact: true }).click();
   await history.getByText('所选视频的原提示词').waitFor();
   await modal.getByRole('button', { name: '收起生成记录面板' }).click();
@@ -451,7 +463,7 @@ try {
   assert.equal(await detail.getByRole('searchbox', { name: '搜索文稿', exact: true }).count(), 0);
   assert.deepEqual(await page.evaluate(() => window.timingCalls.map(call => call.command)), ['video_transcript_capabilities']);
   await analysisEntry.getByRole('button', { name: '分析', exact: true }).click();
-  await workspace.getByRole('button', { name: '复刻', exact: true }).waitFor();
+  await workspace.getByRole('button', { name: '打开逐镜复刻', exact: true }).waitFor();
   assert.equal(await workspace.getByRole('searchbox', { name: '搜索文稿', exact: true }).count(), 0);
   await workspace.getByRole('button', { name: '转录文稿', exact: true }).click();
   await transcript.getByText('这份文稿只有句级时间，点击句首时间跳转。', { exact: true }).waitFor();
@@ -523,6 +535,9 @@ try {
   await verifyShotBoardDelivery(page,server.resolvedUrls.local[0] + entry + '?source-library');
   assert.deepEqual(errors, []);
   console.log('PASS: distinct workspace entry modes, two videos at the same account quote, account guards, repair, exact seek and responsive layout');
+} catch (error) {
+  if (errors.length) console.error('Browser errors:', errors);
+  throw error;
 } finally {
   await browser.close();
   await server.close();

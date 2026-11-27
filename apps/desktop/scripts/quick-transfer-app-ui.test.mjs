@@ -31,7 +31,9 @@ async function checkToolbar() {
   }
 }
 try {
-  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/quick-transfer-live/preview.html?source-library&detail-route&canvas-library`);
+  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/quick-transfer-live/preview.html?source-library&detail-route&canvas-library`, {
+    waitUntil: 'domcontentloaded', timeout: 60_000,
+  });
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   const trigger = page.getByRole('button', { name: /^快传/ });
   await trigger.waitFor();
@@ -40,9 +42,17 @@ try {
   assert.equal(await page.evaluate(() => window.transferCalls.some(call => call.command === 'quick_transfer_start')), false, 'mounting the App never opens a listener');
   await trigger.click();
   const dialog = page.getByRole('dialog', { name: '快传', exact: true });
+  const destination = dialog.getByRole('combobox', { name: '接收到' });
+  const projectPath = 'D:\\BowerbirdLibrary\\项目\\山野品牌 1-p';
+  const defaultPath = 'D:\\BowerbirdLibrary\\快传';
+  const folderPath = 'D:\\素材收件\\手机';
+  const startArguments = () => page.evaluate(() => window.transferCalls.filter(call => call.command === 'quick_transfer_start').map(call => call.args.destination));
   await dialog.waitFor();
-  await dialog.getByText('D:\\BowerbirdLibrary\\快传', { exact: true }).waitFor();
+  await dialog.getByText(projectPath, { exact: true }).waitFor();
+  assert.match(await destination.innerText(), /山野品牌 1/);
   await page.getByRole('switch', { name: /接收/ }).click();
+  await destination.and(page.locator(':disabled')).waitFor();
+  assert.deepEqual(await startArguments(), [{ kind: 'project', projectId: 'p' }]);
   await dialog.getByText('手机扫码上传', { exact: true }).waitFor();
   await dialog.getByText('电脑浏览器打开', { exact: true }).waitFor();
   await dialog.getByText('01234567', { exact: true }).waitFor();
@@ -67,6 +77,8 @@ try {
   assert.equal(await page.evaluate(() => window.transferCalls.some(call => call.command === 'quick_transfer_stop')), false, 'hiding the entry never stops receiving');
   assert.equal(await page.evaluate(() => window.transferCalls.filter(call => call.command === 'quick_transfer_status').length), 1, 'navigation keeps the receive owner mounted');
   await trigger.click();
+  await dialog.getByText(projectPath, { exact: true }).waitFor();
+  assert.equal(await destination.isDisabled(), true, 'the active project destination survives reopening from the library');
   await dialog.getByText('手机照片.heic', { exact: true }).waitFor();
   await dialog.getByText('已入库', { exact: true }).waitFor();
   const receivedImage = dialog.locator('.quick-transfer-file').filter({ hasText: '手机照片.heic' }).locator('img');
@@ -85,6 +97,43 @@ try {
   await page.getByRole('switch', { name: /接收/ }).click();
   await dialog.getByText('接收已关闭', { exact: true }).first().waitFor();
   assert.equal(await page.evaluate(() => window.transferCalls.filter(call => call.command === 'quick_transfer_stop').length), 1);
+  await dialog.getByText(defaultPath, { exact: true }).waitFor();
+  await destination.click();
+  await page.getByRole('option', { name: '素材收件 / 手机', exact: true }).click();
+  await dialog.getByText(folderPath, { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '设为默认', exact: true }).click();
+  await dialog.getByRole('button', { name: '恢复默认快传', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await trigger.click();
+  await dialog.getByText(folderPath, { exact: true }).waitFor();
+  assert.match(await destination.innerText(), /素材收件 \/ 手机（默认）/);
+  await page.getByRole('switch', { name: /接收/ }).click();
+  await destination.and(page.locator(':disabled')).waitFor();
+  assert.deepEqual(await startArguments(), [{ kind: 'project', projectId: 'p' }, { kind: 'folder', folderId: 'mobile' }]);
+  assert.equal(await destination.innerText(), '手机');
+  await page.getByRole('switch', { name: /接收/ }).click();
+  await dialog.getByText('接收已关闭', { exact: true }).first().waitFor();
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => { window.transferFolders.find(item => item.id === 'mobile').available = false; });
+  await trigger.click();
+  await dialog.getByText('默认接收文件夹「手机」不可用，已回退到默认「快传」。', { exact: true }).waitFor();
+  await dialog.getByText(defaultPath, { exact: true }).waitFor();
+  assert.equal(await page.getByRole('switch', { name: /接收/ }).isEnabled(), true, 'fallback can receive immediately');
+  await dialog.getByRole('button', { name: '恢复默认快传', exact: true }).click();
+  await dialog.getByRole('button', { name: '恢复默认快传', exact: true }).waitFor({ state: 'hidden' });
+  assert.equal(await page.evaluate(() => window.transferDefaultFolderId), null);
+  assert.equal(await dialog.locator('#quick-transfer-default-warning').count(), 0);
+  await destination.click();
+  await page.getByRole('option', { name: '秋日海报 2', exact: true }).click();
+  await dialog.getByText('D:\\BowerbirdLibrary\\项目\\秋日海报 2-home-project-1', { exact: true }).waitFor();
+  await page.getByRole('switch', { name: /接收/ }).click();
+  await destination.and(page.locator(':disabled')).waitFor();
+  assert.deepEqual((await startArguments()).at(-1), { kind: 'project', projectId: 'home-project-1' });
+  await page.getByRole('switch', { name: /接收/ }).click();
+  await dialog.getByText('接收已关闭', { exact: true }).first().waitFor();
   assert.deepEqual(errors, []); assert.deepEqual(remote, []);
-  console.log('PASS actual App quick transfer: one entry, explicit start, directory, QR, collapse, navigation, incoming state and explicit stop');
+  console.log('PASS actual App quick transfer: project and folder starts, destination lock, default persistence and fallback, QR, navigation and incoming preview');
+} catch (error) {
+  console.error(error);
+  throw error;
 } finally { await browser.close(); await server.close(); }

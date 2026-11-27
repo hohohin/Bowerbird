@@ -167,6 +167,14 @@ impl FileWorkspace {
         Ok(root)
     }
 
+    pub fn proposed_project_directory(&self, id: &str, name: &str) -> AppResult<PathBuf> {
+        let config = self.config.lock().unwrap();
+        if let Some(path) = config.projects.get(id) {
+            return Ok(path.clone());
+        }
+        project_path(config.root.as_deref().unwrap_or(&self.default_root), id, name)
+    }
+
     pub fn project_directory(&self, id: &str, name: &str) -> AppResult<PathBuf> {
         if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
             return Err(AppError::Other("无效项目标识".into()));

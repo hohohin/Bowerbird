@@ -11,7 +11,7 @@ async fn sending_and_receiving_have_independent_lifetimes() {
     let send = runtime.start_send(Ipv4Addr::LOCALHOST, vec![original], Arc::new(|_| {})).await.unwrap();
     assert!(!send.active);
     let send_url = send.sending.unwrap().url;
-    let receive = runtime.start(&receive, Ipv4Addr::LOCALHOST, paths, db, Arc::new(|_| {})).await.unwrap();
+    let receive = runtime.start(default_destination(&receive), Ipv4Addr::LOCALHOST, paths, db, Arc::new(|_| {})).await.unwrap();
     assert_eq!(receive.sending.unwrap().url, send_url);
     assert!(receive.active);
     let stopped_send = runtime.stop_send().await.unwrap();
@@ -19,6 +19,11 @@ async fn sending_and_receiving_have_independent_lifetimes() {
     assert!(stopped_send.sending.is_none());
     assert!(stopped_send.revision > receive.revision);
     assert!(!runtime.stop().await.unwrap().active);
+}
+
+fn default_destination(directory: &std::path::Path) -> impl FnOnce() -> AppResult<ReceiveDestination> {
+    let directory = std::fs::canonicalize(directory).unwrap();
+    move || Ok(ReceiveDestination { target: QuickTransferDestination::Default, name: "默认快传".into(), directory })
 }
 
 fn fixture() -> (
@@ -43,7 +48,7 @@ async fn browser_upload_is_saved_and_indexed_before_reporting_library_success() 
     assert!(!runtime.snapshot().active);
     let started = runtime
         .start(
-            &receive,
+            default_destination(&receive),
             Ipv4Addr::LOCALHOST,
             paths,
             db.clone(),
@@ -117,7 +122,7 @@ async fn reopening_rotates_pairing_and_invalid_media_is_not_acknowledged_or_retr
     let runtime = QuickTransfer::default();
     let first = runtime
         .start(
-            &receive,
+            default_destination(&receive),
             Ipv4Addr::LOCALHOST,
             paths.clone(),
             db.clone(),
@@ -127,7 +132,7 @@ async fn reopening_rotates_pairing_and_invalid_media_is_not_acknowledged_or_retr
         .unwrap();
     assert!(runtime
         .start(
-            &receive,
+            || panic!("an active receiver must reject a new destination before preparing it"),
             Ipv4Addr::LOCALHOST,
             paths.clone(),
             db.clone(),
@@ -144,7 +149,7 @@ async fn reopening_rotates_pairing_and_invalid_media_is_not_acknowledged_or_retr
         .into_owned();
     runtime.stop().await.unwrap();
     let next = runtime
-        .start(&receive, Ipv4Addr::LOCALHOST, paths, db, Arc::new(|_| {}))
+        .start(default_destination(&receive), Ipv4Addr::LOCALHOST, paths, db, Arc::new(|_| {}))
         .await
         .unwrap();
     let url = reqwest::Url::parse(next.url.as_deref().unwrap()).unwrap();
@@ -250,7 +255,7 @@ async fn snapshot_revision_never_resets_when_receive_session_reopens() {
     assert_eq!(revision(&runtime.snapshot()), 0);
     let started = runtime
         .start(
-            &receive,
+            default_destination(&receive),
             Ipv4Addr::LOCALHOST,
             paths.clone(),
             db.clone(),
@@ -260,7 +265,7 @@ async fn snapshot_revision_never_resets_when_receive_session_reopens() {
         .unwrap();
     let stopped = runtime.stop().await.unwrap();
     let reopened = runtime
-        .start(&receive, Ipv4Addr::LOCALHOST, paths, db, Arc::new(|_| {}))
+        .start(default_destination(&receive), Ipv4Addr::LOCALHOST, paths, db, Arc::new(|_| {}))
         .await
         .unwrap();
     assert!(revision(&started) > 0);

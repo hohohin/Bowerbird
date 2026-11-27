@@ -12,20 +12,30 @@ export type CanvasUndoEntry =
   | { kind: "content"; projectId: string; before: ProjectGraphNode; after: ProjectGraphNode; typedAt?: number; restoredMaterials?: CanvasNode[] }
   | { kind: "materials"; projectId: string; before: CanvasNode[]; after: CanvasNode[]; groups: Map<string, CanvasGroup> }
   | { kind: "workflow"; projectId: string; edit: WorkflowEditUndo; connectedGenerationId?: string }
-  | { kind: "paste"; projectId: string; nodeIds: string[]; groupIds: string[]; workflowIds: string[] }
-  | { kind: "removal"; changedFolders?: Extract<CanvasNode, { kind: "folder" }>[]; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup>; workflow?: WorkflowEditUndo | null }
+  | { kind: "paste"; projectId: string; nodeIds: string[]; groupIds: string[]; workflowIds: string[]; removal?: WorkflowEditUndo | null }
+  | { kind: "removal"; changedFolders?: Extract<CanvasNode, { kind: "folder" }>[]; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup>; workflow?: WorkflowEditUndo | null; fromPaste?: true }
   | { kind: "geometry"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; workflow: WorkflowGeometry[] };
+
+export type CanvasHistoryMode = "undo" | "redo";
+export type ConsumeCanvasHistory = () => (inverse: CanvasUndoEntry) => void;
 
 export function useCanvasUndo(
   prepareUndo: () => string,
-  applyCanvasUndo: (entry: CanvasUndoEntry) => Promise<void>,
-  reportError: (error: unknown) => void,
+  applyCanvasUndo: (entry: CanvasUndoEntry, mode: CanvasHistoryMode, consume: ConsumeCanvasHistory) => Promise<void>,
+  reportError: (error: unknown, mode: CanvasHistoryMode) => void,
 ) {
   const undoHistoryRef = useRef<CanvasUndoEntry[]>([]);
-  const undoInFlightRef = useRef(false);
+  const redoHistoryRef = useRef<CanvasUndoEntry[]>([]);
+  const historyInFlightRef = useRef(false);
   const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
-  function pushCanvasUndo(entry: CanvasUndoEntry) {
+  function clearCanvasRedo() {
+    redoHistoryRef.current = [];
+    setCanRedo(false);
+  }
+  function pushCanvasUndo(entry: CanvasUndoEntry, { preserveRedo = false } = {}) {
+    if (!preserveRedo) clearCanvasRedo();
     const history = undoHistoryRef.current;
     history.push(entry);
     if (history.length > 80) history.shift();
@@ -34,6 +44,17 @@ export function useCanvasUndo(
   function popCanvasUndo() {
     const entry = undoHistoryRef.current.pop();
     setCanUndo(undoHistoryRef.current.length > 0);
+    return entry;
+  }
+  function pushCanvasRedo(entry: CanvasUndoEntry, index = redoHistoryRef.current.length) {
+    const history = redoHistoryRef.current;
+    history.splice(index, 0, entry);
+    if (history.length > 80) history.shift();
+    setCanRedo(history.length > 0);
+  }
+  function popCanvasRedo() {
+    const entry = redoHistoryRef.current.pop();
+    setCanRedo(redoHistoryRef.current.length > 0);
     return entry;
   }
   function removeUndoEntry(entry: CanvasUndoEntry) {
@@ -47,15 +68,32 @@ export function useCanvasUndo(
   function clearCanvasUndo() {
     undoHistoryRef.current = [];
     setCanUndo(false);
+    clearCanvasRedo();
   }
-  const undoCanvasAction = useLatestCallback(() => {
-    if (undoInFlightRef.current) return false;
+  function runCanvasHistory(mode: CanvasHistoryMode) {
+    if (historyInFlightRef.current) return false;
     const projectId = prepareUndo();
-    const entry = undoHistoryRef.current[undoHistoryRef.current.length - 1];
+    const source = mode === "undo" ? undoHistoryRef.current : redoHistoryRef.current;
+    const entry = source[source.length - 1];
     if (!entry || entry.projectId !== projectId) return false;
-    undoInFlightRef.current = true;
-    void applyCanvasUndo(entry).catch(reportError).finally(() => { undoInFlightRef.current = false; });
+    historyInFlightRef.current = true;
+    void applyCanvasUndo(entry, mode, () => {
+      const redoHistory = redoHistoryRef.current;
+      const redoIndex = redoHistory.length;
+      if (mode === "redo") popCanvasRedo();
+      else if (source[source.length - 1] === entry && source === undoHistoryRef.current) popCanvasUndo();
+      else removeUndoEntry(entry);
+      return inverse => {
+        // An undo queued for retry must not repopulate a discarded redo branch.
+        if (redoHistoryRef.current !== redoHistory) return;
+        if (mode === "redo") pushCanvasUndo(inverse, { preserveRedo: true });
+        else pushCanvasRedo(inverse, redoIndex);
+      };
+    }).catch(error => reportError(error, mode)).finally(() => { historyInFlightRef.current = false; });
     return true;
-  });
-  return { undoHistoryRef, canUndo, pushCanvasUndo, popCanvasUndo, removeUndoEntry, clearCanvasUndo, undoCanvasAction };
+  }
+  const undoCanvasAction = useLatestCallback(() => runCanvasHistory("undo"));
+  const redoCanvasAction = useLatestCallback(() => runCanvasHistory("redo"));
+  return { undoHistoryRef, redoHistoryRef, canUndo, canRedo, pushCanvasUndo, popCanvasUndo, removeUndoEntry,
+    pushCanvasRedo, popCanvasRedo, clearCanvasRedo, clearCanvasUndo, undoCanvasAction, redoCanvasAction };
 }

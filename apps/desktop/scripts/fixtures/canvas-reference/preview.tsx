@@ -308,9 +308,18 @@ w.__TAURI_INTERNALS__ = {
       return;
     }
     if (command === "update_settings") { sessionStorage.setItem("canvas-settings", JSON.stringify(args.settings)); return null; }
-    if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, url: null, transfers: [] };
+    if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, destination: null, url: null, transfers: [] };
     if (command === "quick_transfer_addresses") return [];
-    if (command === "quick_transfer_directory") return "D:\\BowerbirdLibrary\\快传";
+    if (command === "quick_transfer_default_destination") {
+      const builtin = { kind: "default", name: "默认快传", directory: "D:\\BowerbirdLibrary\\快传" };
+      return { builtin, effective: builtin, savedFolder: null, warning: null };
+    }
+    if (command === "quick_transfer_preview_destination") {
+      const target = args.destination;
+      if (target.kind === "folder") return { ...target, name: "测试目录", directory: "/sample" };
+      const name = target.projectId === "q" ? "另一个项目" : project.name;
+      return { ...target, name, directory: `D:\\BowerbirdLibrary\\项目\\${name}-${target.projectId}` };
+    }
     if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
     if (command === "plugin:event|emit") {
       for (const [handler, event] of listeners) if (event === args.event) callbacks.get(handler)?.({ event, id: handler, payload: args.payload });

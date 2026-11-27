@@ -114,6 +114,8 @@ pub struct AppSettings {
     /// 全局素材视图中隐藏已加入任一项目的素材（瀑布流只显示未入项目的素材）。默认 false。
     #[serde(default)]
     pub hide_project_assets: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_transfer_default_folder: Option<QuickTransferDefaultFolder>,
 
     #[serde(default = "default_true")]
     pub semantic_index_automatic: bool,
@@ -198,6 +200,7 @@ impl Default for AppSettings {
             cloud_auto_understand: false,
             board_shift_pick: false,
             hide_project_assets: false,
+            quick_transfer_default_folder: None,
             semantic_index_automatic: true,
             semantic_index_interval_minutes: default_semantic_index_interval_minutes(),
             semantic_index_include_generated: true,
@@ -218,6 +221,14 @@ impl Default for AppSettings {
             agent_ds_mode_enabled: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickTransferDefaultFolder {
+    pub folder_id: String,
+    pub name: String,
+    pub path: String,
 }
 
 /// Tauri 管理的设置状态：内存读写 + 文件持久化。
@@ -294,6 +305,7 @@ impl SettingsState {
     ) -> AppResult<()> {
         self.update_with(|settings| {
             new_settings.canvas_frequent_assets = settings.canvas_frequent_assets.clone();
+            new_settings.quick_transfer_default_folder = settings.quick_transfer_default_folder.clone();
             if !change_shortcuts {
                 new_settings.screenshot_shortcuts = settings.screenshot_shortcuts.clone();
             }

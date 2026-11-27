@@ -3,7 +3,7 @@ import type { VideoTranscript } from "./videoTranscript";
 export type Cut = { at: number; kind: "scene" | "manual" | "long" };
 export type ShotTexts = [string, string, string];
 export type ShotPlan = {
-  sourceHash: string; revision: number; durationMs: number; threshold: number;
+  sourceHash: string; revision: number; durationMs: number; threshold: number; hardCutsDetected: boolean;
   cuts: Cut[]; selected: string[]; results: Record<string, ShotTexts>; canUndo: boolean; undoCuts: Cut[] | null;
 };
 export type ShotChange =

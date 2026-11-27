@@ -161,7 +161,7 @@ export function Toolbar({
             <span className="app-topbar-button-label">{busy ? "连接中" : "建立连接"}</span>
           </button>
         </div>}
-        <QuickTransfer showTrigger={showLibraryActions} />
+        <QuickTransfer showTrigger={showLibraryActions} canvasMode={canvasMode} activeProjectId={activeProjectId} />
         {canvasMode && (
           <button
             type="button"

@@ -9,7 +9,7 @@ import {
 import type { CanvasNode } from "../lib/types";
 import { workflowTriggerMode } from "../lib/workflowTriggerSchedule";
 
-import type { MutableRefObject, RefObject } from "react";
+import { memo, type MutableRefObject, type RefObject } from "react";
 import type { WorkflowDiagnostic } from "../lib/workflowDiagnostics";
 import { disconnectKey } from "./WorkflowLayerPresentation";
 import type { AutomaticGesture, Connection, ConnectionMenuState, DisconnectTarget, MaterialAnchor, PendingConnectionCard, WorkflowLayerProps } from "./WorkflowLayerTypes";
@@ -47,7 +47,7 @@ interface WireLayerProps {
   connectionMenu: ConnectionMenuState | null;
 }
 
-export function WorkflowWiresLayer({
+export const WorkflowWiresLayer = memo(function WorkflowWiresLayer({
   wireElement, document, workflowNodeMounted, collapsedAnchor, generationResultAnchors, conversationCards,
   graphById, embeddedPoint, visibleGraphNodeIds, materialById, cardPoint, cardMounted, wireSelected,
   sessionOutputsBySessionId, outputPath, groupById, renderedNodes, frames, sourcePoint, displayPoint,
@@ -137,4 +137,4 @@ export function WorkflowWiresLayer({
       {automatic?.dragged && !connectionMenu && (() => { const anchor = automatic.completion?.anchor ?? scopedPoint(automatic.id, automatic.side, automatic.scope) ?? toBoardPoint(automatic.start.x, automatic.start.y), point = toBoardPoint(cursor.current.x, cursor.current.y); return <path ref={draftElement} className="is-draft" data-workflow-completion-draft={automatic.completion ? "" : undefined} d={automatic.side === "output" ? path(anchor, point) : path(point, anchor)} />; })()}
     </svg>
   );
-}
+});

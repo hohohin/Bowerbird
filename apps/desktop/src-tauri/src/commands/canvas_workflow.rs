@@ -1,6 +1,6 @@
 //! Versioned, local workflow definitions. Provider jobs keep their existing authority.
 use std::{collections::{HashMap, HashSet}, future::Future, sync::Arc};
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::State;
@@ -39,6 +39,93 @@ fn effective_workflow_runs(document: &Value) -> &[Value] {
         None => document.get("run").filter(|run| !run.is_null())
             .map(std::slice::from_ref).unwrap_or_default(),
     }
+}
+
+pub(crate) fn sync_workflow_runs_tx(
+    tx: &Transaction<'_>,
+    project_id: &str,
+    revision: i64,
+    document: &Value,
+) -> AppResult<bool> {
+    let runs = effective_workflow_runs(document);
+    let mut ids = HashSet::new();
+    let valid = document.is_object()
+        && document.get("runs").is_none_or(Value::is_array)
+        && runs.iter().all(|run| {
+            run["id"].as_str().is_some_and(|id| !id.is_empty() && ids.insert(id))
+        });
+
+    // Replace the project's rows so reordering never collides with a previous ordinal.
+    tx.execute("DELETE FROM canvas_workflow_runs WHERE project_id=?1", [project_id])?;
+    if valid && !runs.is_empty() {
+        let mut insert = tx.prepare_cached(
+            "INSERT INTO canvas_workflow_runs(project_id,run_id,ordinal,document_revision,status,run_json)
+             VALUES(?1,?2,?3,?4,?5,?6)",
+        )?;
+        for (ordinal, run) in runs.iter().enumerate() {
+            insert.execute(params![
+                project_id,
+                run["id"].as_str(),
+                ordinal,
+                revision,
+                run["status"].as_str(),
+                run.to_string(),
+            ])?;
+        }
+    }
+    tx.execute(
+        "UPDATE canvas_workflows SET runs_synced_revision=?2 WHERE project_id=?1",
+        params![project_id, valid.then_some(revision)],
+    )?;
+    Ok(valid)
+}
+
+fn restore_workflow_runs(
+    tx: &Transaction<'_>,
+    project_id: &str,
+    revision: i64,
+    document: &mut Value,
+) -> Option<()> {
+    let expected = effective_workflow_runs(document);
+    if let Some(runs) = document.get("runs") {
+        let last = expected.last().unwrap_or(&Value::Null);
+        if !runs.is_array() || document.get("run").is_some_and(|mirror| mirror != last) {
+            return None;
+        }
+    }
+    let mut stmt = tx.prepare_cached(
+        "SELECT ordinal,run_id,run_json FROM canvas_workflow_runs
+         WHERE project_id=?1 AND document_revision=?2 ORDER BY ordinal ASC",
+    ).ok()?;
+    let mut rows = stmt.query(params![project_id, revision]).ok()?;
+    let mut runs = Vec::with_capacity(expected.len());
+    for (ordinal, original) in expected.iter().enumerate() {
+        let row = rows.next().ok()??;
+        let id: String = row.get(1).ok()?;
+        let raw: String = row.get(2).ok()?;
+        let run: Value = serde_json::from_str(&raw).ok()?;
+        // A same-revision SQL edit can leave the marker intact.
+        if row.get::<_, usize>(0).ok()? != ordinal || id.is_empty()
+            || run["id"].as_str() != Some(id.as_str()) || run != *original
+        {
+            return None;
+        }
+        runs.push(run);
+    }
+    if rows.next().ok()?.is_some() {
+        return None;
+    }
+
+    let object = document.as_object_mut()?;
+    if object.contains_key("runs") {
+        if let Some(mirror) = object.get_mut("run") {
+            *mirror = runs.last().cloned().unwrap_or(Value::Null);
+        }
+        object.insert("runs".into(), Value::Array(runs));
+    } else if let Some(run) = runs.pop() {
+        object.insert("run".into(), run);
+    }
+    Some(())
 }
 
 fn workflow_run_active(run: &Value) -> bool {
@@ -250,41 +337,62 @@ fn ensure_workflow_revision(current: i64, expected: i64) -> AppResult<()> {
 
 impl Database {
     fn workflow_get(&self, project_id: &str) -> AppResult<WorkflowSnapshot> {
-        let value: Option<(i64, String)> = self.with_canvas_reader(|conn| {
-            Ok(conn.query_row(
-                "SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1",
-                [project_id], |r| Ok((r.get(0)?, r.get(1)?)),
-            ).optional()?)
-        })?;
-        match value {
-            Some((revision, raw)) => Ok(WorkflowSnapshot { revision, document: serde_json::from_str(&raw)? }),
-            None => Ok(WorkflowSnapshot { revision: 0, document: json!({"schema_version":1,"nodes":[],"run":null}) }),
-        }
+        self.with_canvas_reader(|conn| {
+            let tx = conn.transaction()?;
+            let value: Option<(i64, String, Option<i64>)> = tx.query_row(
+                "SELECT revision,document_json,runs_synced_revision FROM canvas_workflows WHERE project_id=?1",
+                [project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            ).optional()?;
+            let Some((revision, raw, synced_revision)) = value else {
+                return Ok(WorkflowSnapshot { revision: 0, document: json!({"schema_version":1,"nodes":[],"run":null}) });
+            };
+            let mut document = serde_json::from_str(&raw)?;
+            if synced_revision == Some(revision) {
+                let _ = restore_workflow_runs(&tx, project_id, revision, &mut document);
+            }
+            Ok(WorkflowSnapshot { revision, document })
+        })
     }
+    #[cfg(test)]
     fn workflow_save(&self, project_id: &str, revision: i64, document: Value) -> AppResult<i64> {
         self.workflow_save_with_content(project_id, revision, document, None)
     }
+
+    #[cfg(test)]
     fn workflow_save_with_content(&self, project_id: &str, revision: i64, document: Value, created_content: Option<&NewCanvasNode>) -> AppResult<i64> {
-        let assets = validate(&document)?;
-        if let Some(card) = created_content {
-            let payload: Value = serde_json::from_str(&card.payload_json)?;
-            if card.project_id != project_id || card.kind != crate::core::creative_session_contract::CreativeNodeKind::Note
-                || card.thread_id.is_some() || card.asset_id.is_some() || card.role.is_some()
-                || payload["note_type"] != "text"
-                || !document["nodes"].as_array().unwrap().iter().any(|node| node["kind"] == "text"
-                    && node["textTarget"]["nodeId"] == card.id && node["textTarget"]["image"] == true) {
-                return Err(invalid());
-            }
-        }
+        let assets = validate_workflow_save(project_id, &document, created_content)?;
+        self.with_workflow_save_transaction(project_id, revision, |tx, previous| {
+            Self::write_workflow(tx, project_id, revision, &document, created_content, &assets, previous)
+        })
+    }
+
+    fn with_workflow_save_transaction<T>(
+        &self,
+        project_id: &str,
+        revision: i64,
+        save: impl FnOnce(Transaction<'_>, &Value) -> AppResult<T>,
+    ) -> AppResult<T> {
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (current, previous): (i64, Option<String>) = tx.query_row(
+        let (current, previous_raw): (i64, Option<String>) = tx.query_row(
             "SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1",
             [project_id], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?.unwrap_or((0, None));
         ensure_workflow_revision(current, revision)?;
-        let previous = previous.as_deref().map(serde_json::from_str).transpose()?.unwrap_or(Value::Null);
-        validate_schedule_claims(&previous, &document)?;
+        let previous = previous_raw.as_deref().map(serde_json::from_str).transpose()?.unwrap_or(Value::Null);
+        save(tx, &previous)
+    }
+
+    fn write_workflow(
+        tx: Transaction<'_>,
+        project_id: &str,
+        revision: i64,
+        document: &Value,
+        created_content: Option<&NewCanvasNode>,
+        assets: &HashSet<String>,
+        previous: &Value,
+    ) -> AppResult<i64> {
+        validate_schedule_claims(previous, document)?;
         // Conversation history keeps its native row. Its single visible Agent projection
         // owns placement and visibility, including undo of a removed card.
         for node in document["nodes"].as_array().unwrap() {
@@ -307,7 +415,7 @@ impl Database {
             touch_canvas_tx(&tx, project_id, now)?;
             insert_node_tx(&tx, card, now)?;
         }
-        let existing_assets = saved_workflow_assets(&previous);
+        let existing_assets = saved_workflow_assets(previous);
         let added: Vec<_> = assets.iter().filter(|asset| !existing_assets.contains(asset.as_str())).collect();
         if !added.is_empty() {
             // An unchanged reference must respect a later explicit project removal.
@@ -317,10 +425,27 @@ impl Database {
                 params![project_id, serde_json::to_string(&added)?],
             )?;
         }
-        tx.execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES (?1,?2,?3) ON CONFLICT(project_id) DO UPDATE SET revision=excluded.revision,document_json=excluded.document_json", params![project_id, revision + 1, document.to_string()])?;
+        let next_revision = revision + 1;
+        tx.execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES (?1,?2,?3) ON CONFLICT(project_id) DO UPDATE SET revision=excluded.revision,document_json=excluded.document_json", params![project_id, next_revision, document.to_string()])?;
+        sync_workflow_runs_tx(&tx, project_id, next_revision, document)?;
         tx.commit()?;
-        Ok(revision + 1)
+        Ok(next_revision)
     }
+}
+
+fn validate_workflow_save(project_id: &str, document: &Value, created_content: Option<&NewCanvasNode>) -> AppResult<HashSet<String>> {
+    let assets = validate(document)?;
+    if let Some(card) = created_content {
+        let payload: Value = serde_json::from_str(&card.payload_json)?;
+        if card.project_id != project_id || card.kind != crate::core::creative_session_contract::CreativeNodeKind::Note
+            || card.thread_id.is_some() || card.asset_id.is_some() || card.role.is_some()
+            || payload["note_type"] != "text"
+            || !document["nodes"].as_array().unwrap().iter().any(|node| node["kind"] == "text"
+                && node["textTarget"]["nodeId"] == card.id && node["textTarget"]["image"] == true) {
+            return Err(invalid());
+        }
+    }
+    Ok(assets)
 }
 
 #[tauri::command]
@@ -345,16 +470,26 @@ async fn save_workflow_with_authorization<F>(
 where
     F: Future<Output = AppResult<()>>,
 {
-    let before = run_canvas_db(db, {
-        let project_id = project_id.clone();
-        move |db| db.workflow_get(&project_id)
+    let (saved, project_id, document, created_content, assets) = run_canvas_db(db, move |db| {
+        let assets = validate_workflow_save(&project_id, &document, created_content.as_ref())?;
+        let saved = db.with_workflow_save_transaction(&project_id, revision, |tx, previous| {
+            if workflow_save_requires_pro(previous, &document, created_content.is_some()) {
+                // Dropping the uncommitted transaction releases the writer before authorization.
+                return Ok(None);
+            }
+            Database::write_workflow(tx, &project_id, revision, &document, created_content.as_ref(), &assets, previous).map(Some)
+        })?;
+        Ok((saved, project_id, document, created_content, assets))
     }).await?;
-    ensure_workflow_revision(before.revision, revision)?;
-    if workflow_save_requires_pro(&before.document, &document, created_content.is_some()) {
-        authorize().await?;
+    if let Some(revision) = saved {
+        return Ok(revision);
     }
+
+    authorize().await?;
     run_canvas_db(db, move |db| {
-        db.workflow_save_with_content(&project_id, revision, document, created_content.as_ref())
+        db.with_workflow_save_transaction(&project_id, revision, |tx, previous| {
+            Database::write_workflow(tx, &project_id, revision, &document, created_content.as_ref(), &assets, previous)
+        })
     }).await
 }
 
@@ -381,6 +516,203 @@ mod tests {
     fn gate_run(id: &str, card_id: &str, status: &str) -> Value {
         json!({"id":id, "startId":card_id, "threadId":"thread", "order":[card_id],
             "status":status, "steps":{(card_id):{"status":"pending"}}})
+    }
+
+    fn assert_workflow_run_rows(db: &Database, revision: i64, marker: Option<i64>, runs: &[Value]) {
+        let conn = db.lock_conn().unwrap();
+        let saved: (i64, Option<i64>) = conn.query_row(
+            "SELECT revision,runs_synced_revision FROM canvas_workflows WHERE project_id='p'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(saved, (revision, marker));
+        let mut stmt = conn.prepare(
+            "SELECT run_id,ordinal,document_revision,status,run_json FROM canvas_workflow_runs
+             WHERE project_id='p' ORDER BY ordinal",
+        ).unwrap();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?, row.get::<_, i64>(2)?,
+                row.get::<_, Option<String>>(3)?, row.get::<_, String>(4)?))
+        }).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(rows.len(), runs.len());
+        for (ordinal, ((id, position, row_revision, status, raw), run)) in rows.iter().zip(runs).enumerate() {
+            assert_eq!(Some(id.as_str()), run["id"].as_str());
+            assert_eq!(*position, ordinal);
+            assert_eq!(Some(*row_revision), marker);
+            assert_eq!(status.as_deref(), run["status"].as_str());
+            assert_eq!(serde_json::from_str::<Value>(raw).unwrap(), *run);
+        }
+    }
+
+    #[test]
+    fn workflow_shadow_tracks_cas_saves_reordering_and_removal() {
+        let db = workflow_gate_database();
+        let mut first = gate_run("first", "draw", "waiting");
+        first["steps"]["draw"] = json!({"status":"waiting","jobId":"accepted-job"});
+        let second = gate_run("second", "draw", "done");
+        let mut document = json!({"schema_version":1,"nodes":[node("draw", json!({}))],
+            "runs":[first, second],"run":second,"unknown":{"keep":true}});
+        assert_eq!(db.workflow_save("p", 0, document.clone()).unwrap(), 1);
+        assert_workflow_run_rows(&db, 1, Some(1), &[first.clone(), second.clone()]);
+        assert_eq!(db.workflow_get("p").unwrap().document, document);
+
+        first["status"] = json!("done");
+        first["steps"]["draw"]["status"] = json!("done");
+        first["unknown"] = json!({"nested":[1, null, "keep"]});
+        document["runs"] = json!([second, first]);
+        document["run"] = first.clone();
+        assert_eq!(db.workflow_save("p", 1, document.clone()).unwrap(), 2);
+        assert_workflow_run_rows(&db, 2, Some(2), &[second, first.clone()]);
+        assert_eq!(db.workflow_get("p").unwrap().document, document);
+
+        document["runs"] = json!([first]);
+        assert!(db.workflow_save("p", 1, document.clone()).is_err());
+        assert_eq!(db.workflow_save("p", 2, document.clone()).unwrap(), 3);
+        assert_workflow_run_rows(&db, 3, Some(3), &[first]);
+        assert_eq!(db.workflow_get("p").unwrap().document, document);
+
+        document["runs"] = json!([]);
+        document["run"] = Value::Null;
+        assert_eq!(db.workflow_save("p", 3, document.clone()).unwrap(), 4);
+        assert_workflow_run_rows(&db, 4, Some(4), &[]);
+        assert_eq!(db.workflow_get("p").unwrap().document, document);
+    }
+
+    #[test]
+    fn workflow_shadow_failure_rolls_back_document_and_rows() {
+        let db = workflow_gate_database();
+        let first = gate_run("first", "draw", "done");
+        let second = gate_run("second", "draw", "done");
+        let original = json!({"schema_version":1,"nodes":[node("draw", json!({}))],"run":first});
+        db.workflow_save("p", 0, original.clone()).unwrap();
+        db.lock_conn().unwrap().execute_batch(
+            "CREATE TEMP TRIGGER fail_second_run BEFORE INSERT ON canvas_workflow_runs
+             WHEN NEW.run_id='second' BEGIN SELECT RAISE(ABORT,'injected run failure'); END;",
+        ).unwrap();
+        let mut updated = original.clone();
+        updated["runs"] = json!([first, second]);
+        updated["run"] = second;
+        let error = db.workflow_save("p", 1, updated).unwrap_err();
+        assert!(error.to_string().contains("injected run failure"));
+        assert_workflow_run_rows(&db, 1, Some(1), &[first]);
+        assert_eq!(db.workflow_get("p").unwrap().document, original);
+    }
+
+    #[test]
+    fn workflow_shadow_falls_back_after_legacy_write_and_repairs_on_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workflow.sqlite");
+        let db = Database::open(&path).unwrap();
+        db.migrate().unwrap();
+        db.lock_conn().unwrap().execute(
+            "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)",
+            [],
+        ).unwrap();
+        let first = gate_run("first", "draw", "done");
+        let original = json!({"schema_version":1,"nodes":[node("draw", json!({}))],"run":first});
+        db.workflow_save("p", 0, original.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, original);
+        let mut remote = original.clone();
+        remote["run"]["steps"]["draw"]["jobId"] = json!("remote-job");
+        let old_client = rusqlite::Connection::open(&path).unwrap();
+        old_client.execute(
+            "UPDATE canvas_workflows SET revision=2,document_json=?1 WHERE project_id='p'",
+            [remote.to_string()],
+        ).unwrap();
+        assert_workflow_run_rows(&db, 2, Some(1), &[first]);
+        let saved = db.workflow_get("p").unwrap();
+        assert_eq!(saved.revision, 2);
+        assert_eq!(saved.document, remote);
+
+        assert_eq!(db.workflow_save("p", 2, remote.clone()).unwrap(), 3);
+        assert_workflow_run_rows(&db, 3, Some(3), &[remote["run"].clone()]);
+        assert_eq!(db.workflow_get("p").unwrap().document, remote);
+    }
+
+    #[test]
+    fn workflow_shadow_falls_back_on_same_revision_edits_and_missing_or_invalid_rows() {
+        let db = workflow_gate_database();
+        let run = gate_run("first", "draw", "done");
+        let mut document = json!({"schema_version":1,"nodes":[node("draw", json!({}))],"runs":[run]});
+        db.workflow_save("p", 0, document.clone()).unwrap();
+        {
+            let mut conn = db.lock_conn().unwrap();
+            let tx = conn.transaction().unwrap();
+            assert!(restore_workflow_runs(&tx, "p", 1, &mut document.clone()).is_some());
+        }
+        document["runs"][0]["unknown"] = json!("same-revision change");
+        db.lock_conn().unwrap().execute(
+            "UPDATE canvas_workflows SET document_json=?1 WHERE project_id='p'", [document.to_string()],
+        ).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, document);
+        db.workflow_save("p", 1, document.clone()).unwrap();
+        for sql in [
+            "UPDATE canvas_workflow_runs SET run_json='null' WHERE project_id='p'",
+            "DELETE FROM canvas_workflow_runs WHERE project_id='p'",
+        ] {
+            db.lock_conn().unwrap().execute(sql, []).unwrap();
+            assert_eq!(db.workflow_get("p").unwrap().document, document);
+        }
+    }
+
+    #[test]
+    fn workflow_shadow_clears_rows_when_legacy_id_is_empty() {
+        let db = workflow_gate_database();
+        let run = gate_run("first", "draw", "done");
+        let mut document = json!({"schema_version":1,"nodes":[node("draw", json!({}))],"run":run});
+        db.workflow_save("p", 0, document.clone()).unwrap();
+        document["run"]["id"] = json!("");
+        assert_eq!(db.workflow_save("p", 1, document.clone()).unwrap(), 2);
+        assert_workflow_run_rows(&db, 2, None, &[]);
+        assert_eq!(db.workflow_get("p").unwrap().document, document);
+    }
+
+    #[test]
+    fn workflow_shadow_preserves_nonmatching_legacy_mirror() {
+        let db = workflow_gate_database();
+        let run = gate_run("first", "draw", "done");
+        let document = json!({"schema_version":1,"nodes":[node("draw", json!({}))],
+            "runs":[run],"run":{"status":"done","unknown":true}});
+        db.workflow_save("p", 0, document.clone()).unwrap();
+        assert_workflow_run_rows(&db, 1, Some(1), &[run]);
+        assert_eq!(db.workflow_get("p").unwrap().document, document);
+    }
+
+    #[test]
+    fn workflow_shadow_is_invalidated_by_workspace_path_rewrite() {
+        use crate::core::{file_workspace::FileWorkspace, file_workspace_move};
+        use std::fs;
+
+        let db = workflow_gate_database();
+        let directory = tempfile::tempdir().unwrap();
+        let index = directory.path().join("index");
+        let parent = directory.path().join("target");
+        fs::create_dir(&index).unwrap();
+        fs::create_dir(&parent).unwrap();
+        let files = FileWorkspace::open(
+            index.join("file-workspace.json"), directory.path().join("BowerbirdLibrary"),
+        ).unwrap();
+        let source = files.ensure_root().unwrap().join("input.png");
+        fs::write(&source, b"fixture").unwrap();
+        let mut run = gate_run("first", "draw", "done");
+        run["frozenInputPath"] = json!(source);
+        let mut document = json!({"schema_version":1,"nodes":[node("draw", json!({}))],"run":run});
+        db.workflow_save("p", 0, document.clone()).unwrap();
+
+        let preview = file_workspace_move::preview(&files, &parent, &index).unwrap();
+        file_workspace_move::schedule(&files, &db, &parent, &index, &preview.token).unwrap();
+        file_workspace_move::resume(&files, &db).unwrap();
+        let marker: Option<i64> = db.lock_conn().unwrap().query_row(
+            "SELECT runs_synced_revision FROM canvas_workflows WHERE project_id='p'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(marker, None);
+        document["run"]["frozenInputPath"] = json!(preview.target.join("input.png"));
+        let saved = db.workflow_get("p").unwrap();
+        assert_eq!(saved.revision, 1);
+        assert_eq!(saved.document, document);
+
+        assert_eq!(db.workflow_save("p", 1, document.clone()).unwrap(), 2);
+        assert_workflow_run_rows(&db, 2, Some(2), &[document["run"].clone()]);
     }
 
     async fn save_as_free(db: &Arc<Database>, revision: i64, document: Value) -> AppResult<i64> {
@@ -535,6 +867,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workflow_save_free_edit_skips_authorization() {
+        let db = workflow_gate_database();
+        let document = json!({"schema_version":1,"nodes":[paid_card()],"run":null});
+        let calls = std::cell::Cell::new(0);
+        let revision = save_workflow_with_authorization(&db, "p".into(), 0, document.clone(), None, || {
+            calls.set(calls.get() + 1);
+            std::future::ready(Ok(()))
+        }).await.unwrap();
+        assert_eq!(calls.get(), 0);
+        let saved = db.workflow_get("p").unwrap();
+        assert_eq!(revision, 1);
+        assert_eq!(saved.revision, 1);
+        assert_eq!(saved.document, document);
+    }
+
+    #[tokio::test]
+    async fn workflow_save_paid_run_commits_only_after_authorization() {
+        let db = workflow_gate_database();
+        let initial = json!({"schema_version":1,"nodes":[paid_card()],"run":null});
+        assert_eq!(db.workflow_save("p", 0, initial.clone()).unwrap(), 1);
+        let mut paid = initial.clone();
+        paid["run"] = gate_run("paid", "instruction", "running");
+        let calls = std::cell::Cell::new(0);
+        let denied = save_workflow_with_authorization(&db, "p".into(), 1, paid.clone(), None, || async {
+            calls.set(calls.get() + 1);
+            Err(AppError::Other("运行工作流卡片需要 Pro。已有结果仍可查看和导出".into()))
+        }).await.unwrap_err();
+        assert_eq!(denied.to_string(), "运行工作流卡片需要 Pro。已有结果仍可查看和导出");
+        let saved = db.workflow_get("p").unwrap();
+        assert_eq!(saved.revision, 1);
+        assert_eq!(saved.document, initial);
+        assert_eq!(calls.get(), 1);
+
+        let revision = save_workflow_with_authorization(&db, "p".into(), 1, paid.clone(), None, || async {
+            calls.set(calls.get() + 1);
+            Ok(())
+        }).await.unwrap();
+        let saved = db.workflow_get("p").unwrap();
+        assert_eq!(calls.get(), 2);
+        assert_eq!(revision, 2);
+        assert_eq!(saved.revision, 2);
+        assert_eq!(saved.document, paid);
+    }
+
+    #[tokio::test]
     async fn workflow_save_checks_revision_before_and_after_authorization() {
         let db = Arc::new(Database::open_in_memory().unwrap());
         db.migrate().unwrap();
@@ -550,7 +927,7 @@ mod tests {
             calls.set(calls.get() + 1);
             Ok(())
         }).await.unwrap_err();
-        assert!(stale.to_string().contains("工作流已被其他窗口修改"));
+        assert_eq!(stale.to_string(), "工作流已被其他窗口修改，请重新打开项目");
         assert_eq!(calls.get(), 0);
 
         let raced = save_workflow_with_authorization(&db, "p".into(), 1, paid, None, || async {
@@ -558,7 +935,7 @@ mod tests {
             assert_eq!(db.workflow_save("p", 1, empty.clone()).unwrap(), 2);
             Ok(())
         }).await.unwrap_err();
-        assert!(raced.to_string().contains("工作流已被其他窗口修改"));
+        assert_eq!(raced.to_string(), "工作流已被其他窗口修改，请重新打开项目");
         assert_eq!(calls.get(), 1);
         let saved = db.workflow_get("p").unwrap();
         assert_eq!(saved.revision, 2);

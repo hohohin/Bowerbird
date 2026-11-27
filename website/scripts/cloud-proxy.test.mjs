@@ -66,21 +66,25 @@ test('Agent downloads preserve signed download flag and reject private diagnosti
   assert.equal((await large.send(path)).status, 502);
 });
 
-test('file speech accepts only the immutable signed MP3 upload without account credentials', async t => {
+test('understanding accepts only bounded immutable signed audio and video inputs', async t => {
   const { send, calls } = await fixture(t);
-  const path = `/storage/v1/object/upload/sign/generation-temp/understand/${JOB}/inputs/speech-audio.mp3?token=signed%2Btoken`;
-  const mime = { 'Content-Type': 'audio/mpeg' };
-  assert.equal((await send(path, 'PUT', 'mp3 audio', { ...mime, ...AUTH, apikey: 'key', 'x-upsert': 'true' })).status, 200);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url.search, '?token=signed%2Btoken');
-  assert.equal(calls[0].headers.Authorization, undefined);
-  assert.equal(calls[0].headers.apikey, undefined);
-  assert.equal(calls[0].headers['x-upsert'], undefined);
-  assert.equal((await send(path, 'PUT', undefined, { ...mime, 'Content-Length': 32000001 })).status, 413);
-  assert.equal((await send(path, 'PUT', 'wav', { 'Content-Type': 'audio/wav' })).status, 415);
-  assert.equal((await send(path.replace('speech-audio.mp3', 'request.json'), 'PUT', 'manifest', mime)).status, 404);
-  assert.equal((await send(path.replace('upload/sign', 'sign'), 'GET')).status, 404);
-  assert.equal(calls.length, 1);
+  for (const [file, type] of [['speech-audio.mp3', 'audio/mpeg'], ['visual-input.mp4', 'video/mp4']]) {
+    const path = `/storage/v1/object/upload/sign/generation-temp/understand/${JOB}/inputs/${file}?token=signed%2Btoken`;
+    const mime = { 'Content-Type': type };
+    assert.equal((await send(path, 'PUT', 'media bytes', { ...mime, ...AUTH, apikey: 'key', 'x-upsert': 'true' })).status, 200);
+    const { url, headers, body } = calls.at(-1);
+    assert.equal(url.search, '?token=signed%2Btoken');
+    assert.equal(headers.Authorization, undefined);
+    assert.equal(headers.apikey, undefined);
+    assert.equal(headers['x-upsert'], undefined);
+    assert.equal(body.toString(), 'media bytes');
+    assert.equal((await send(path, 'PUT', undefined, { ...mime, 'Content-Length': 32000001 })).status, 413);
+    assert.equal((await send(path, 'PUT', 'media', { 'Content-Type': 'application/octet-stream' })).status, 415);
+    assert.equal((await send(path.replace(file, 'request.json'), 'PUT', 'manifest', mime)).status, 404);
+    assert.equal((await send(path.replace(JOB, 'invalid'), 'PUT', 'media', mime)).status, 404);
+    assert.equal((await send(path.replace('upload/sign', 'sign'), 'GET')).status, 404);
+  }
+  assert.equal(calls.length, 2);
 });
 
 test('the signed-in understanding path returns a full long transcript while other bounded routes retain their limit', async t => {

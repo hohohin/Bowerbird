@@ -11,10 +11,10 @@ use crate::{
     db::Database,
     error::{AppError, AppResult},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     net::Ipv4Addr,
-    path::Path,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 use tokio::sync::mpsc;
@@ -26,9 +26,28 @@ pub struct Snapshot {
     pub revision: u64,
     pub active: bool,
     pub directory: Option<String>,
+    pub destination: Option<ReceiveDestination>,
     pub url: Option<String>,
     pub transfers: Vec<Transfer>,
     pub sending: Option<send::SendSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum QuickTransferDestination {
+    #[default]
+    Default,
+    Project { project_id: String },
+    Folder { folder_id: String },
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiveDestination {
+    #[serde(flatten)]
+    pub target: QuickTransferDestination,
+    pub name: String,
+    pub directory: PathBuf,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -113,7 +132,7 @@ impl QuickTransfer {
     }
     pub async fn start(
         &self,
-        directory: &Path,
+        prepare: impl FnOnce() -> AppResult<ReceiveDestination> + Send + 'static,
         ip: Ipv4Addr,
         paths: Arc<LibraryPaths>,
         db: Arc<Database>,
@@ -128,9 +147,25 @@ impl QuickTransfer {
         if let Some(previous) = active.take() {
             shutdown(previous).await;
         }
-        let directory = std::fs::canonicalize(directory)?;
-        let root = directory.clone();
-        let store = blocking(move || QuickTransferStore::open(&root)).await?;
+        let destination_db = db.clone();
+        let (destination, store) = {
+            let _gate = crate::commands::folder_connections::GATE
+                .acquire()
+                .await
+                .map_err(|error| AppError::Other(error.to_string()))?;
+            blocking(move || {
+                let destination = prepare()?;
+                let (project_id, folder_id) = match &destination.target {
+                    QuickTransferDestination::Default => (None, None),
+                    QuickTransferDestination::Project { project_id } => (Some(project_id.clone()), None),
+                    QuickTransferDestination::Folder { folder_id } => (None, Some(folder_id.clone())),
+                };
+                let store = QuickTransferStore::open_for_destination(&destination.directory, project_id, folder_id)?;
+                store.ensure_project_connection(&destination_db)?;
+                Ok((destination, store))
+            })
+            .await?
+        };
         let context = Arc::new(Context {
             store: Arc::new(Mutex::new(store)),
             paths,
@@ -161,7 +196,8 @@ impl QuickTransfer {
             *view = Snapshot {
                 revision: 0,
                 active: true,
-                directory: Some(directory.to_string_lossy().into_owned()),
+                directory: Some(destination.directory.to_string_lossy().into_owned()),
+                destination: Some(destination),
                 url: Some(url),
                 transfers,
                 sending: view.sending.clone(),
@@ -235,6 +271,7 @@ impl Context {
     fn stopped(&self) {
         self.update(|view| {
             view.active = false;
+            view.destination = None;
             view.url = None;
             for file in &mut view.transfers {
                 if file.status == TransferStatus::Receiving {

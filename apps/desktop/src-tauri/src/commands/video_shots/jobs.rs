@@ -6,6 +6,7 @@ use crate::{
     db::Database,
     error::{AppError, AppResult},
 };
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -549,14 +550,11 @@ async fn remote(
                 scratch,
             )
             .await;
-        let (status, reply) = svc
+        // A failed PUT can mean a previous attempt already stored the immutable proxy.
+        let committed = svc
             .request(json!({"action":"library-shot-commit","job_id":job.job_id}))
-            .await?;
-        if !status.is_success() {
-            uploaded?;
-            return Err(err("云端未确认代理，按原任务恢复"));
-        }
-        value = reply;
+            .await;
+        value = committed_proxy(uploaded, committed, &job.job_id)?;
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1800);
     loop {
@@ -590,14 +588,11 @@ async fn remote(
                     field("motion_prompt")?,
                 ]);
             }
-            Some("failed")
-                if value.pointer("/charge/refunded").and_then(Value::as_bool) == Some(true) =>
-            {
-                q.status = "failed".into();
-                return Err(err("此镜头任务失败，原预留已退回"));
-            }
-            Some("queued" | "running" | "leased") if tokio::time::Instant::now() < deadline => {}
-            _ => return Err(err("镜头结果待核对，请按原任务查询")),
+            _ => poll_pending(
+                &value,
+                &mut q.status,
+                tokio::time::Instant::now() < deadline,
+            )?,
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
         let (status, reply) = svc
@@ -607,6 +602,65 @@ async fn remote(
             return Err(err("暂时无法查询原任务"));
         }
         value = reply;
+    }
+}
+
+fn committed_proxy(
+    uploaded: AppResult<()>,
+    committed: AppResult<(StatusCode, Value)>,
+    job_id: &str,
+) -> AppResult<Value> {
+    let (status, reply) = match committed {
+        Ok(response) => response,
+        Err(failure) => {
+            uploaded?;
+            return Err(failure);
+        }
+    };
+    if !status.is_success() {
+        uploaded?;
+        return Err(err("云端未确认代理，按原任务恢复"));
+    }
+    if reply["job_id"] != job_id
+        || !matches!(
+            reply["status"].as_str(),
+            Some(
+                "queued"
+                    | "running"
+                    | "leased"
+                    | "processing"
+                    | "succeeded"
+                    | "failed"
+                    | "outcome_unknown"
+            )
+        )
+    {
+        uploaded?;
+    }
+    Ok(reply)
+}
+
+fn poll_pending(value: &Value, queue_status: &mut String, before_deadline: bool) -> AppResult<()> {
+    match value["status"].as_str() {
+        Some("uploading") => Err(err("镜头代理尚未上传完成，请按原任务恢复以重试上传")),
+        Some("outcome_unknown") => Err(err("镜头结果待核对，请按原任务查询")),
+        Some("failed") => {
+            *queue_status = "failed".into();
+            let reason = value
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .filter(|message| !message.trim().is_empty())
+                .unwrap_or("此镜头任务失败");
+            if value.pointer("/charge/refunded").and_then(Value::as_bool) == Some(true) {
+                return Err(err(&format!("{reason}，原预留已退回")));
+            }
+            Err(err(reason))
+        }
+        Some("queued" | "running" | "leased" | "processing") if before_deadline => Ok(()),
+        Some("queued" | "running" | "leased" | "processing") => {
+            Err(err("等待镜头分析超时，请按原任务查询"))
+        }
+        _ => Err(err("云端返回了无法识别的镜头状态，请按原任务查询")),
     }
 }
 

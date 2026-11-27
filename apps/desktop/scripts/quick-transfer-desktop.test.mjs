@@ -33,7 +33,7 @@ try {
   await page.getByText("接收已开启", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("局域网地址").isDisabled(), true);
   const request = await page.evaluate(() => window.calls.find(call => call.command === "quick_transfer_start").args);
-  assert.deepEqual(request, { address: "10.0.0.9" }, "the backend resolves the current library root at start time");
+  assert.deepEqual(request, { address: "10.0.0.9", destination: { kind: "default" } }, "the backend resolves the current library root at start time");
   assert.equal(await commandCount("plugin:dialog|open"), 0);
 
   const qr = page.getByRole("img", { name: "扫码上传到 Bowerbird" });
@@ -70,7 +70,7 @@ try {
   assert.equal(await dialog.locator(".app-modal-title").evaluate(node => getComputedStyle(node).fontSize), "24px");
   await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
 
-  const focusable = dialog.locator("button:not(:disabled),select:not(:disabled),[tabindex='0']");
+  const focusable = dialog.locator("button:not(:disabled):not([tabindex='-1']),select:not(:disabled),[tabindex='0']");
   await focusable.last().focus(); await page.keyboard.press("Tab");
   assert.equal(await focusable.first().evaluate(node => node === document.activeElement), true);
   await page.keyboard.press("Shift+Tab");
@@ -122,10 +122,13 @@ try {
   await button("快传").click();
   await page.waitForFunction(() => !!window.releaseStatus);
   await page.evaluate(() => {
-    window.emit({ active: true, directory: "D:\\素材\\手机快传", url: "http://192.168.1.23:53317/?pin=new-session" });
+    const directory = "D:\\素材\\手机快传";
+    window.emit({ active: true, directory, destination: { kind: "folder", folderId: "mobile", name: "手机快传", directory },
+      url: "http://192.168.1.23:53317/?pin=new-session" });
     window.holdStatus = false; window.releaseStatus();
   });
   await page.getByText("接收已开启", { exact: true }).waitFor();
+  await page.getByText("D:\\素材\\手机快传", { exact: true }).waitFor();
   assert.equal(await page.getByRole("switch", { name: "接收开关" }).getAttribute("aria-checked"), "true", "late initial status cannot undo the event");
   await page.getByRole("switch", { name: "接收开关" }).click();
   await page.evaluate(() => { window.holdStart = true; });

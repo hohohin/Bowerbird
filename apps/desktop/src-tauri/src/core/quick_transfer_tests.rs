@@ -40,6 +40,34 @@ impl Fixture {
 }
 
 #[test]
+fn project_receipts_only_register_membership_from_the_record() {
+    let f = Fixture::new();
+    f.db.create_project("p1", "目标", "", "blank:p1", "blank").unwrap();
+    f.db.create_project("p2", "其他", "", "blank:p2", "blank").unwrap();
+    let directory = fs::canonicalize(&f.receive).unwrap();
+    let mut store = QuickTransferStore::open_for_destination(&directory, Some("p1".into()), None).unwrap();
+    let bytes = b"project original";
+    let record = store.prepare("project-note", "note.txt", bytes.len() as u64).unwrap();
+    fs::write(&record.staging_path, bytes).unwrap();
+    store.mark_received(&record.id).unwrap();
+    drop(store);
+
+    let mut reopened = QuickTransferStore::open_for_destination(&directory, Some("p2".into()), None).unwrap();
+    let recovered = reopened.recover(&f.paths, &f.db);
+    let asset = recovered[0].1.as_ref().unwrap();
+    assert_eq!(fs::read(&record.final_path).unwrap(), bytes);
+    assert_eq!(reopened.complete(&record.id, &f.paths, &f.db).unwrap().id, asset.id);
+    let conn = f.db.conn.lock().unwrap();
+    let membership: String = conn.query_row(
+        "SELECT group_concat(project_id) FROM project_assets WHERE asset_id=?1",
+        [&asset.id], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(membership, "p1");
+    let nodes: i64 = conn.query_row("SELECT COUNT(*) FROM canvas_nodes", [], |row| row.get(0)).unwrap();
+    assert_eq!(nodes, 0);
+}
+
+#[test]
 fn transfer_rejects_paths_untrusted_types_and_conflicting_identity() {
     let f = Fixture::new();
     let mut store = QuickTransferStore::open(&f.receive).unwrap();

@@ -113,7 +113,38 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0062_connected_scan_key.sql")),
         M::up(include_str!("../../sql/0063_video_shots.sql")),
         M::up(include_str!("../../sql/0064_video_shot_queue.sql")),
+        M::up_with_hook(
+            include_str!("../../sql/0065_canvas_workflow_runs.sql"),
+            backfill_workflow_runs,
+        ),
     ])
+}
+
+fn backfill_workflow_runs(tx: &rusqlite::Transaction<'_>) -> rusqlite_migration::HookResult {
+    use crate::commands::canvas_workflow::sync_workflow_runs_tx;
+    use rusqlite_migration::HookError;
+
+    // Finish scanning before updating canvas_workflows. Load one document at a time.
+    let projects = {
+        let mut stmt = tx.prepare("SELECT project_id FROM canvas_workflows")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    let mut stmt = tx.prepare("SELECT revision, document_json FROM canvas_workflows WHERE project_id=?1")?;
+    for project_id in projects {
+        let (revision, document) = stmt.query_row([&project_id], |row| {
+            let document = row.get_ref(1)?.as_str().ok()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .unwrap_or(serde_json::Value::Null);
+            Ok((row.get(0)?, document))
+        })?;
+        if !sync_workflow_runs_tx(tx, &project_id, revision, &document)
+            .map_err(|error| HookError::Hook(format!("workflow run backfill for {project_id}: {error}")))?
+        {
+            tracing::warn!(%project_id, "Skipping workflow run backfill for an invalid legacy document or run ID");
+        }
+    }
+    Ok(())
 }
 
 /// 扫描存量资产，把 dHash 距离 ≤ [`crate::media::phash::DEDUP_HAMMING_MAX`] 的近重复对中
@@ -274,6 +305,85 @@ mod tests {
         assert_eq!(count, 2);
     }
     use super::*;
+
+    #[test]
+    fn workflow_runs_upgrade_backfills_in_order_and_preserves_legacy_documents() {
+        use rusqlite::params;
+        use serde_json::{json, Value};
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        let ms = migrations();
+        ms.to_version(&mut conn, 64).unwrap();
+        let legacy = json!({"id":"legacy","status":"waiting","steps":{"draw":{"jobId":"accepted"}}});
+        let first = json!({"id":"z-first","status":"done","unknown":{"inputs":["asset",null]}});
+        let second = json!({"id":"a-last","steps":{"deliver":{"pending":true}}});
+        let unreadable = format!(r#"{{"schema_version":1,"extra":{}0{}}}"#, "[".repeat(160), "]".repeat(160));
+        assert!(serde_json::from_str::<Value>(&unreadable).is_err());
+        let fixtures = [
+            ("single", json!({"schema_version":1,"run":legacy}).to_string(), Some(vec![legacy])),
+            ("multiple", json!({"schema_version":1,"runs":[first,second],"run":second}).to_string(), Some(vec![first,second])),
+            ("empty", r#"{ "schema_version": 1, "runs": [], "run": {"id":"ignored"} }"#.into(), Some(vec![])),
+            ("duplicate", r#"{"schema_version":1,"runs":[{"id":"dup"},{"id":"dup"}]}"#.into(), None),
+            ("missing-id", r#"{"schema_version":1,"runs":[{"id":"valid"},{"status":"waiting"}]}"#.into(), None),
+            ("empty-id", r#"{"schema_version":1,"run":{"id":""}}"#.into(), None),
+            ("wrong-id-type", r#"{"schema_version":1,"run":{"id":7}}"#.into(), None),
+            ("wrong-runs-type", r#"{"schema_version":1,"runs":{},"run":{"id":"ignored"}}"#.into(), None),
+            ("unreadable", unreadable, None),
+        ];
+        for (index, (id, document, _)) in fixtures.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES(?1,?1,?1,?1,1)",
+                [id],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES(?1,?2,?3)",
+                params![id, index + 1, document],
+            ).unwrap();
+        }
+
+        ms.to_latest(&mut conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 65);
+        let verify = |conn: &rusqlite::Connection| {
+            for (index, (id, document, expected)) in fixtures.iter().enumerate() {
+                let revision = (index + 1) as i64;
+                let (saved, marker): (String, Option<i64>) = conn.query_row(
+                    "SELECT document_json,runs_synced_revision FROM canvas_workflows WHERE project_id=?1",
+                    [id], |row| Ok((row.get(0)?, row.get(1)?)),
+                ).unwrap();
+                assert_eq!(&saved, document, "{id}");
+                assert_eq!(marker, expected.as_ref().map(|_| revision), "{id}");
+                let mut stmt = conn.prepare(
+                    "SELECT run_id,ordinal,document_revision,status,run_json FROM canvas_workflow_runs
+                     WHERE project_id=?1 ORDER BY ordinal",
+                ).unwrap();
+                let rows = stmt.query_map([id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?, row.get::<_, i64>(2)?,
+                        row.get::<_, Option<String>>(3)?, row.get::<_, String>(4)?))
+                }).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+                let expected = expected.as_deref().unwrap_or_default();
+                assert_eq!(rows.len(), expected.len(), "{id}");
+                for (ordinal, ((run_id, position, row_revision, status, raw), run)) in rows.iter().zip(expected).enumerate() {
+                    assert_eq!(Some(run_id.as_str()), run["id"].as_str());
+                    assert_eq!((*position, *row_revision), (ordinal, revision));
+                    assert_eq!(status.as_deref(), run["status"].as_str());
+                    assert_eq!(serde_json::from_str::<Value>(raw).unwrap(), *run);
+                }
+            }
+        };
+        verify(&conn);
+        let tx = conn.transaction().unwrap();
+        backfill_workflow_runs(&tx).unwrap();
+        tx.commit().unwrap();
+        verify(&conn);
+
+        conn.execute("DELETE FROM projects WHERE id='multiple'", []).unwrap();
+        assert_eq!(conn.query_row(
+            "SELECT count(*) FROM canvas_workflow_runs WHERE project_id='multiple'", [],
+            |row| row.get::<_, i64>(0),
+        ).unwrap(), 0);
+        assert_eq!(conn.query_row("SELECT count(*) FROM canvas_workflow_runs", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    }
 
     #[test]
     fn project_delete_upgrade_removes_existing_task_vetoes() {

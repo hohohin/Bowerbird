@@ -165,7 +165,7 @@ try {
   const detail = preview().getByRole('region', { name: '视频详情', exact: true });
   const analysisEntry = detail.getByRole('region', { name: '视频分析', exact: true });
   await analysisEntry.getByRole('button', { name: '分析', exact: true }).click();
-  await workspace().getByRole('button', { name: '复刻', exact: true }).waitFor();
+  await workspace().getByRole('button', { name: '打开逐镜复刻', exact: true }).waitFor();
   assert.equal(await workspace().getByRole('searchbox', { name: '搜索文稿', exact: true }).count(), 0);
   await page.keyboard.press('Escape');
   await workspace().waitFor({ state: 'hidden' });

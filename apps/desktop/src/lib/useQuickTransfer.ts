@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { acceptQuickTransferSnapshot, EMPTY_QUICK_TRANSFER, type QuickTransferSnapshot } from "./quickTransferState";
+import { acceptQuickTransferSnapshot, EMPTY_QUICK_TRANSFER, type QuickTransferDestination, type QuickTransferSnapshot } from "./quickTransferState";
 import { userErrorMessage } from "./userError";
 
 function observeQuickTransfer(accept: (snapshot: QuickTransferSnapshot) => void, onReady: (ready: boolean) => void, onError: (message: string) => void) {
@@ -63,7 +63,7 @@ export function useQuickTransfer() {
     startSend: (address: string, files: string[]) => run("quick_transfer_send_start", { address, files }, "未能开启发送，请检查文件和网络后重试。"),
     stopSend: () => run("quick_transfer_send_stop", undefined, "暂时无法确认发送已关闭，请查看状态后重试。"),
     reconnect: () => setConnection(value => value + 1),
-    start: (address: string) => run("quick_transfer_start", { address }, "未能开启接收，请检查资料目录和网络后重试。"),
+    start: (address: string, destination: QuickTransferDestination) => run("quick_transfer_start", { address, destination }, "未能开启接收，请检查资料目录和网络后重试。"),
     stop: () => run("quick_transfer_stop", undefined, "暂时无法确认接收已关闭，请查看状态后重试。"),
     retry: (id: string) => run("quick_transfer_retry", { id }, "文件仍保留在接收目录中，请稍后重试入库。"),
   };

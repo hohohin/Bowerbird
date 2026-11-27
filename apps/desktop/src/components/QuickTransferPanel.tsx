@@ -2,11 +2,11 @@ import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Info, Smartphone, X } from "lucide-react";
 import { useQuickTransfer } from "../lib/useQuickTransfer";
-import { useQuickTransferAddresses, useQuickTransferDirectory } from "../lib/quickTransferDestination";
+import { useQuickTransferAddresses, useQuickTransferDestinations } from "../lib/quickTransferDestination";
 import { userErrorMessage } from "../lib/userError";
 import { ModalShell } from "./ModalShell";
 import { OverlayScrollArea } from "./CollectionScrollArea";
-import { QuickTransferFolder, QuickTransferNetwork } from "./QuickTransferDestination";
+import { QuickTransferNetwork, QuickTransferReceiveDestination } from "./QuickTransferDestination";
 import { QuickTransferConnection } from "./QuickTransferConnection";
 import { QuickTransferQueue } from "./QuickTransferQueue";
 import { QuickTransferSend } from "./QuickTransferSend";
@@ -56,7 +56,9 @@ function QuickTransferTabs({ mode, onChange, receiving, sending }: {
 }
 
 /** One persistent toolbar owner: closing the modal never changes the native receiver. */
-export function QuickTransfer({ showTrigger = true }: { showTrigger?: boolean }) {
+export function QuickTransfer({ showTrigger = true, canvasMode = false, activeProjectId = null }: {
+  showTrigger?: boolean; canvasMode?: boolean; activeProjectId?: string | null;
+}) {
   const transfer = useQuickTransfer();
   const { snapshot, ready, busy } = transfer;
   const [visible, setVisible] = useState(false);
@@ -65,7 +67,7 @@ export function QuickTransfer({ showTrigger = true }: { showTrigger?: boolean })
   const [paths, setPaths] = useState<string[]>([]);
   const [picking, setPicking] = useState(false);
   const blocked = !!busy || !ready || picking;
-  const directory = useQuickTransferDirectory(visible, setLocalError);
+  const destinations = useQuickTransferDestinations(visible && ready && !snapshot.active, canvasMode ? activeProjectId : null);
   const network = useQuickTransferAddresses(visible, setLocalError);
   const disabled = blocked;
   const sending = mode === "send";
@@ -85,7 +87,7 @@ export function QuickTransfer({ showTrigger = true }: { showTrigger?: boolean })
   function toggle() {
     setLocalError("");
     if (snapshot.active) void transfer.stop();
-    else void transfer.start(network.address);
+    else if (destinations.location) void transfer.start(network.address, destinations.selected);
   }
 
   return <>
@@ -98,8 +100,9 @@ export function QuickTransfer({ showTrigger = true }: { showTrigger?: boolean })
         {sending ? <QuickTransferSend sending={snapshot.sending} paths={paths} disabled={disabled} canStart={!cannotStart && paths.length > 0}
           onPick={() => void pickFiles()} onRemove={path => setPaths(current => current.filter(item => item !== path))}
           onStart={() => void transfer.startSend(network.address, paths)} onStop={() => void transfer.stopSend()} /> : <>
-        <QuickTransferSwitch active={snapshot.active} ready={ready} busy={busy} disabled={disabled || (!snapshot.active && cannotStart)} onToggle={toggle} />
-        <QuickTransferFolder directory={snapshot.active ? snapshot.directory : directory} />
+        <QuickTransferSwitch active={snapshot.active} ready={ready} busy={busy}
+          disabled={disabled || (!snapshot.active && (cannotStart || destinations.saving || !destinations.location))} onToggle={toggle} />
+        <QuickTransferReceiveDestination destinations={destinations} active={snapshot.destination} locked={snapshot.active} disabled={disabled} />
         </>}
         <QuickTransferNetwork network={network} activeAddress={activeAddress} active={!!activeUrl} disabled={disabled} />
         <QuickTransferError error={localError || transfer.error} ready={ready} reconnect={transfer.reconnect} />

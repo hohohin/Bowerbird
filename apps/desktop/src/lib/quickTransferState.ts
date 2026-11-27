@@ -15,17 +15,44 @@ export function quickTransferFileSize(bytes: number) {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
+export type QuickTransferDestination =
+  | { kind: "default" }
+  | { kind: "project"; projectId: string }
+  | { kind: "folder"; folderId: string };
+
+export type QuickTransferLocation = QuickTransferDestination & { name: string; directory: string };
+
+export function quickTransferDestinationKey(target: QuickTransferDestination) {
+  switch (target.kind) {
+    case "default": return "default";
+    case "project": return `project:${target.projectId}`;
+    case "folder": return `folder:${target.folderId}`;
+  }
+}
+
+export function initialQuickTransferDestination(
+  activeProjectId: string | null,
+  projects: { id: string }[],
+  effective: QuickTransferDestination,
+): QuickTransferDestination {
+  if (activeProjectId && projects.some(project => project.id === activeProjectId)) {
+    return { kind: "project", projectId: activeProjectId };
+  }
+  return effective.kind === "folder" ? { kind: "folder", folderId: effective.folderId } : { kind: "default" };
+}
+
 export type QuickTransferSnapshot = {
   revision: number;
   active: boolean;
   directory: string | null;
+  destination: QuickTransferLocation | null;
   url: string | null;
   transfers: QuickTransferFile[];
   sending?: { url: string; files: { id: string; name: string; size: number }[] } | null;
 };
 
 export const EMPTY_QUICK_TRANSFER: QuickTransferSnapshot = {
-  revision: -1, active: false, directory: null, url: null, transfers: [],
+  revision: -1, active: false, directory: null, destination: null, url: null, transfers: [],
 };
 
 /** IPC replies and emitted events can arrive out of order. */

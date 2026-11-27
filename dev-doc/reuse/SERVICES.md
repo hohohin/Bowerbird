@@ -51,6 +51,7 @@
 - **用途／关键词**：LocalSend、扫码、浏览器下载、原件发送。
 - **入口**：[quick_transfer.rs](../../apps/desktop/src-tauri/src/commands/quick_transfer.rs) 管理 start／stop IPC，[send.rs](../../apps/desktop/src-tauri/src/quick_transfer/send.rs) 复用固定下载协议。
 - **调用**：通过 quick_transfer_send_start(address, files)／quick_transfer_send_stop 发送，二维码及链接复用 QuickTransferConnection。
+- **接收落点**：快传 IPC 统一解析默认快传、项目及已连接文件夹，复用 `FileWorkspace` 和连接式索引。默认文件夹、只读预览及会话快照见[快传接收契约](../QUICK-TRANSFER.md#接收契约)。
 - **边界／状态**：状态单调、收发独立，仅交付显式选择的原件。[权限与生命周期](../QUICK-TRANSFER.md)。
 
 ## 读取或修改本机业务数据

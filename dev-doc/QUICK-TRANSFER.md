@@ -4,7 +4,9 @@
 
 ## 接收契约
 
-- 桌面显式开启会话，默认由 `FileWorkspace` 当前根解析 `BowerbirdLibrary/快传`；只读展示不建目录，开启时才创建，尊重已迁移根、离线不回退，拒绝同名普通文件或指向外部的链接。无需选择收件目录；应用启动不监听局域网，不复用浏览器扩展的 loopback 服务。
+- 接收关闭时可选「默认快传」、现有项目或已连接文件夹（含子目录）。默认快传由 `FileWorkspace` 当前根解析 `BowerbirdLibrary/快传`，沿用资料根迁移，资料根离线时保留原配置。项目落点复用 `FileWorkspace::project_directory`，原件写入受管的 `BowerbirdLibrary/项目/<项目名>-<id>`，沿用已登记的项目目录。文件夹只接受登记 ID，核对连接可用状态、规范路径及写权限，在原路径接收。
+- 打开面板时，若接收关闭，画板内优先预选当前有效项目，其余页面预选默认接收文件夹。用户可将当前已连接文件夹设为默认，也可恢复默认快传。已保存的文件夹失联、离线、缺失、不可写或路径非法时，面板显示 `默认接收文件夹「…」不可用，已回退到默认「快传」。` 并允许继续选择。回退保留原设置，原连接恢复后可再次成为默认。
+- 预览和默认解析只读，开启时才准备落点及收据目录，并为实际落点授权本机素材预览。接收开启后，原生快照记录落点类型、标识、名称和路径，面板锁定落点。收起面板、切换页面或切到发送页签均沿用同一接收会话。应用启动不监听局域网，不复用浏览器扩展的 loopback 服务。
 - 本机私有IPv4优先推荐正常联网网卡，默认路由帮助选择，虚拟／VPN网卡降级但保留备选；UDP connect仅查询OS选路，不发送包或依赖外网响应。用户本机WLAN为192.168.1.5，旧排序默认选WSL 172.28.192.1造成手机扫码空白；本轮真实监听与用户扫码地址已交叉确认。自定义未知VPN名称等仍可能需要手动选择。
 - LocalSend v1.18.2，固定上游 `af0416be50770a97760f7070684bc667b759a15c`，Apache-2.0。核心源码随仓库固定，使用 Rust `http` 能力；不打包 Flutter、不调用公网信令/中继。
 - 网页与接口同源，静态资源由本机提供；本次会话随机8位数字配对码进入二维码，关闭后轮换。电脑可手输短地址，在页面填写配对码；复制完整链接仍可免输入。无配对码根页面只展示配对表单，不授予上传权限。现有LocalSend限制每IP三次错误，之后返回429直至本次接收重开；不添加云中继、账号或额外发现服务。限定 Host/Origin，关闭下载/目录浏览/其他协议入口；本机IPC独立控制开启、状态、重试入库和停止。
@@ -18,8 +20,8 @@
 
 1. 生成独立上传ID，校验文件名/类型/声明长度；manifest和暂存在收件目录 `.bowerbird-quick-transfer` 下，连接扫描跳过此区域。
 2. 流式写入、长度/可选发送方哈希检查、刷盘关闭句柄；接收方再验证媒体内容与SHA-256，将Ready记录原子保存。只有这一事实持久化后，网络请求才可返回成功。
-3. 无覆盖发布到收件目录，保存Saved记录，再沿现有连接式素材索引登记，成功保存Asset ID。窗口切换不改变目标目录。
-4. 入库失败保留已收到文件，可重试登记；重启后再次在原目录开启接收，恢复Ready/Saved记录。BowerbirdLibrary迁移对`.bowerbird-quick-transfer`中的JSON绝对路径沿现有规则重写，已确认收件随新根恢复；迁移仍在下次启动、接收服务启动前执行。半文件不会自动入库，清理范围只限本功能的暂存记录。
+3. 无覆盖发布到收件目录，保存 Saved 记录，再沿现有连接式素材索引登记。项目落点的收据保存项目标识，入库后幂等登记为项目成员，再保存 Asset ID。不创建画板实例。旧收据无项目标识时沿原流程恢复。
+4. 入库失败保留已收到文件，可重试登记。重启后在原目录开启接收会恢复 Ready/Saved 记录。项目已删除时，可从原已连接文件夹开启接收，仍登记原件并跳过项目成员关系。BowerbirdLibrary 迁移对 `.bowerbird-quick-transfer` 中的 JSON 绝对路径沿现有规则重写，迁移仍在下次启动、接收服务启动前执行。半文件不会自动入库，清理范围只限本功能的暂存记录。
 
 HEIC保留接收原件，PNG仅用于兼容验证/预览；不走旧 `ingest_new_file` 转换保存链路。不额外同步`.bowerbird`跨设备创作资料、画板或账号。来自手机的实际字节受手机文件选择器行为影响，不承诺自动取得Live Photo全部组成。
 
@@ -53,6 +55,7 @@ HEIC保留接收原件，PNG仅用于兼容验证/预览；不走旧 `ingest_new
 - `src-tauri/src/quick_transfer/addresses.rs`：本机LAN网卡推荐与纯排序回归。
 - `src-tauri/src/core/quick_transfer.rs`：原件、持久记录与索引。
 - `src-tauri/src/quick_transfer/mod.rs`、`commands/quick_transfer.rs`：单会话生命周期、IPC和状态事件。
+- `quick_transfer_default_destination` 读取有效默认落点及回退提示，`quick_transfer_preview_destination` 只读解析所选落点，`quick_transfer_set_default_folder` 保存或清除默认文件夹，`quick_transfer_start` 按落点类型和标识准备会话。
 - `src/components/QuickTransferPanel.tsx`、`src/lib/useQuickTransfer.ts`：正式桌面入口、收件面板和会话状态客户端；Toolbar 持续挂载，通过 `showTrigger={showLibraryActions}` 在项目管理页隐藏按钮，不卸载接收状态。收起或切页不中止接收，只有显式关闭才停止。入口范围回归见 [2026-11-04 记录](../project_logs/2026-11-04-project-quick-transfer.md)。
 - `src-tauri/src/quick_transfer/upload.html`：手机同源接收页面，进度由真实上传驱动，网络成功表示已传到电脑；入库完成以桌面状态为准。
 - `scripts/fixtures/quick-transfer-preview/preview.html`：已确认并冻结的电脑/手机独立示意，二维码和进度不连接真实服务。正式App隔离验证入口为 `scripts/fixtures/quick-transfer-live/preview.html`。

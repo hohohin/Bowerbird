@@ -247,6 +247,8 @@ mod tests {
             (false, "sign/generation-temp/jobs/11111111-2222-4333-8444-555555555555/outputs/result.png"),
             (false, "sign/generation-temp/jobs/11111111-2222-4333-8444-555555555555/outputs/result.json"),
             (true, "upload/sign/generation-temp/jobs/11111111-2222-4333-8444-555555555555/inputs/video-0.mov"),
+            (true, "upload/sign/generation-temp/understand/11111111-2222-4333-8444-555555555555/inputs/speech-audio.mp3"),
+            (true, "upload/sign/generation-temp/understand/11111111-2222-4333-8444-555555555555/inputs/visual-input.mp4"),
         ] {
             let source = format!("https://example.supabase.co/storage/v1/object/{path}?token=a%2Bb.c%2Fd");
             assert_eq!(config.generation_transfer_url(&source, upload).unwrap(), source.replace("https://example.supabase.co", "https://bowerbird.cn/api/cloud"));
@@ -267,5 +269,13 @@ mod tests {
             assert_eq!(config.generation_transfer_url(&bad, false), None, "{bad}");
         }
         assert_eq!(config.generation_transfer_url(source, true), None);
+        let visual = "https://example.supabase.co/storage/v1/object/upload/sign/generation-temp/understand/11111111-2222-4333-8444-555555555555/inputs/visual-input.mp4?token=signed";
+        for bad in [
+            visual.replace("visual-input.mp4", "visual-input.mov"),
+            visual.replace("11111111", "invalid"),
+        ] {
+            assert_eq!(config.generation_transfer_url(&bad, true), None);
+        }
+        assert_eq!(config.generation_transfer_url(visual, false), None);
     }
 }
